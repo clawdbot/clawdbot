@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -11,6 +12,37 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+
+async function expectChatBubbleAbove(page: Page, upperText: string, lowerText: string) {
+  const thread = page.locator(".chat-thread-inner");
+  await expect
+    .poll(() =>
+      thread.evaluate(
+        (element, texts) => {
+          const bubbles = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble"));
+          const matches = texts.map((text) =>
+            bubbles.filter((bubble) => bubble.textContent?.includes(text)),
+          );
+          const counts = matches.map((matchingBubbles) => matchingBubbles.length);
+          const upperBubble = matches[0]?.[0];
+          const lowerBubble = matches[1]?.[0];
+          if (counts.some((count) => count !== 1) || !upperBubble || !lowerBubble) {
+            return { counts, lowerTop: null, ordered: false, upperTop: null };
+          }
+          const upperTop = upperBubble.getBoundingClientRect().top;
+          const lowerTop = lowerBubble.getBoundingClientRect().top;
+          return { counts, lowerTop, ordered: upperTop < lowerTop, upperTop };
+        },
+        [upperText, lowerText],
+      ),
+    )
+    .toEqual({
+      counts: [1, 1],
+      lowerTop: expect.any(Number),
+      ordered: true,
+      upperTop: expect.any(Number),
+    });
+}
 
 suite.define(() => {
   it("opens a git-backed agent draft from the sidebar new-session action", async () => {
@@ -574,19 +606,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-thread .chat-group.user", { hasText: followUp }).count())
         .toBe(1);
-      await expect
-        .poll(() =>
-          page.locator(".chat-thread-inner").evaluate(
-            (thread, texts) => {
-              const bubbles = Array.from(thread.querySelectorAll(".chat-bubble"));
-              return texts.map((text) =>
-                bubbles.findIndex((bubble) => bubble.textContent?.includes(text)),
-              );
-            },
-            [originalPrompt, followUp],
-          ),
-        )
-        .toEqual([0, 1]);
+      await expectChatBubbleAbove(page, originalPrompt, followUp);
       if (artifactDir) {
         await page.screenshot({
           path: `${artifactDir}/steer-after-persistence.png`,
@@ -952,7 +972,9 @@ suite.define(() => {
         sessionKey: "main",
         state: "final",
       });
-      await page.waitForTimeout(250);
+      await row.waitFor({ state: "detached", timeout: 10_000 });
+      await page.getByText(steerText, { exact: true }).waitFor({ timeout: 10_000 });
+      await expectChatBubbleAbove(page, "keep this run active", steerText);
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/steer-landed.png`, fullPage: true });
       }
@@ -962,21 +984,6 @@ suite.define(() => {
         backgroundColor: pendingPresentation.infoSubtle,
         iconPoints: "15 10 20 15 15 20",
       });
-      expect(await row.count()).toBe(0);
-      await page.getByText(steerText, { exact: true }).waitFor({ timeout: 10_000 });
-      await expect
-        .poll(() =>
-          page.locator(".chat-thread-inner").evaluate(
-            (thread, texts) => {
-              const bubbles = Array.from(thread.querySelectorAll(".chat-bubble"));
-              return texts.map((text) =>
-                bubbles.findIndex((bubble) => bubble.textContent?.includes(text)),
-              );
-            },
-            ["keep this run active", steerText],
-          ),
-        )
-        .toEqual([0, 1]);
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
