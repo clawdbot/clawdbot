@@ -116,14 +116,15 @@ function renderChatQueueItem(
   const steered = isSteeredQueueItem(item) && !failed;
   const reconnecting = item.sendState === "waiting-reconnect";
   const busy = item.sendState === "executing-command" || isInflightSteer(item);
+  const editing = props.editingId === item.id;
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) &&
     !failed &&
-    steerableQueuedMessage([item]) === item;
+    steerableQueuedMessage([item]) === item &&
+    !editing;
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);
   const move = props.onQueueMove;
-  const editing = props.editingId === item.id;
   // Queue-level: once any row can move, every row reserves the handle column so
   // the pill and text stay on one x whatever state a row is in. Row-level: only
   // a row that may actually move gets a live handle.

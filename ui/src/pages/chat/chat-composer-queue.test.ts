@@ -199,11 +199,18 @@ describe("chat composer queue reordering", () => {
 
   it("renders the inline editor while keeping other rows actionable", () => {
     const onQueueEdit = vi.fn();
+    const onQueueSteer = vi.fn();
     const onQueueRemove = vi.fn();
     const container = renderQueue({
-      queue: [waiting("a", 1), waiting("b", 2), waiting("c", 3)],
+      canAbort: true,
+      queue: [
+        { id: "a", text: "a", createdAt: 1, sendState: "waiting-idle" },
+        { id: "b", text: "b", createdAt: 2, sendState: "waiting-idle" },
+        { id: "c", text: "c", createdAt: 3, sendState: "waiting-idle" },
+      ],
       editingId: "b",
       onQueueEdit,
+      onQueueSteer,
       onQueueMove: vi.fn(),
       onQueueRemove,
     });
@@ -217,6 +224,13 @@ describe("chat composer queue reordering", () => {
     expect(rows[1]?.querySelector(".chat-queue__edit-input")).not.toBeNull();
     expect(rows[1]?.querySelector(".chat-queue__edit-submit")).not.toBeNull();
     expect(rows[1]?.querySelector(".chat-queue__edit-cancel")).not.toBeNull();
+    // Steer must not send the row's original payload while its unsubmitted
+    // draft is owned by the inline editor.
+    expect(rows.map((row) => row.querySelector(".chat-queue__steer") !== null)).toEqual([
+      true,
+      false,
+      true,
+    ]);
 
     // One edit at a time, so the other pencils wait; removing another row is
     // still safe while the inline editor remains open.
