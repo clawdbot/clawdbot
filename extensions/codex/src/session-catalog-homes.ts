@@ -8,6 +8,7 @@ import {
   resolveCodexAppServerLocalHomeDir,
 } from "./app-server/auth-start-options.js";
 import {
+  readCodexPluginConfig,
   resolveCodexAppServerUserHomeDir,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./app-server/config.js";
@@ -35,6 +36,15 @@ function canonicalCatalogHome(value: string): string {
   }
 }
 
+function existingCanonicalCatalogHome(value: string): string | undefined {
+  try {
+    const codexHome = fs.realpathSync.native(path.resolve(value));
+    return fs.statSync(codexHome).isDirectory() ? codexHome : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function catalogHomeId(codexHome: string): string {
   return createHash("sha256")
     .update("openclaw:codex-session-catalog-home:v1\0")
@@ -51,6 +61,7 @@ function resolveCodexCatalogHomes(params: {
 }): CodexCatalogHome[] {
   const { config, env, ownerAgentId, pluginConfig } = params;
   const ownerAgentDir = resolveAgentDir(config, ownerAgentId, env);
+  const configuredHomes = readCodexPluginConfig(pluginConfig).sessionCatalog?.homes ?? [];
   const base = resolveCodexSupervisionAppServerRuntimeOptions({
     pluginConfig,
     env,
@@ -88,6 +99,20 @@ function resolveCodexCatalogHomes(params: {
         );
         return fs.existsSync(codexHome)
           ? [{ codexHome, label: `Local Codex · ${agentId}`, usesProcessHomeFallback: false }]
+          : [];
+      }),
+    );
+    candidates.push(
+      ...configuredHomes.flatMap((value, index) => {
+        const codexHome = existingCanonicalCatalogHome(value);
+        return codexHome
+          ? [
+              {
+                codexHome,
+                label: `Local Codex · configured ${index + 1}`,
+                usesProcessHomeFallback: false,
+              },
+            ]
           : [];
       }),
     );

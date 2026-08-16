@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "./types.openclaw.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "./types.openclaw.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -8,8 +8,8 @@ const MODEL_CONTEXT_TOKENS_REPLACEMENT = "models.providers.<provider>.models[].c
 type ContextBudgetConfigMigration<T = unknown> = {
   config: T;
   changed: boolean;
-  changes: string[];
-  warnings: string[];
+  changes: ConfigValidationIssue[];
+  warnings: ConfigValidationIssue[];
 };
 
 function hasLegacyContextBudgetConfig(root: JsonRecord): boolean {
@@ -45,53 +45,44 @@ function hasLegacyContextBudgetConfig(root: JsonRecord): boolean {
   );
 }
 
-function removeAgentContextTokens(root: JsonRecord, changes: string[], warnings: string[]): void {
+function removeAgentContextTokens(
+  root: JsonRecord,
+  changes: ConfigValidationIssue[],
+  warnings: ConfigValidationIssue[],
+): void {
   const agents = root.agents;
   if (!isRecord(agents)) {
     return;
   }
-  const defaults = agents.defaults;
-  if (isRecord(defaults) && Object.hasOwn(defaults, "contextTokens")) {
-    delete defaults.contextTokens;
-    changes.push("Removed agents.defaults.contextTokens.");
-    warnings.push(
-      `agents.defaults.contextTokens cannot be represented per model; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
-    );
-  }
+  const removeContextTokens = (record: unknown, path: string): void => {
+    if (!isRecord(record) || !Object.hasOwn(record, "contextTokens")) {
+      return;
+    }
+    delete record.contextTokens;
+    changes.push({ path, message: `Removed ${path}.` });
+    warnings.push({
+      path,
+      message: `${path} cannot be represented per model; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
+    });
+  };
+  removeContextTokens(agents.defaults, "agents.defaults.contextTokens");
   const entries = agents.entries;
   if (isRecord(entries)) {
     for (const [agentId, entry] of Object.entries(entries)) {
-      if (!isRecord(entry) || !Object.hasOwn(entry, "contextTokens")) {
-        continue;
-      }
-      delete entry.contextTokens;
-      const path = `agents.entries.${agentId}.contextTokens`;
-      changes.push(`Removed ${path}.`);
-      warnings.push(
-        `${path} cannot be represented per model; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
-      );
+      removeContextTokens(entry, `agents.entries.${agentId}.contextTokens`);
     }
   }
-  if (!Array.isArray(agents.list)) {
-    return;
-  }
-  for (const [index, entry] of agents.list.entries()) {
-    if (!isRecord(entry) || !Object.hasOwn(entry, "contextTokens")) {
-      continue;
+  if (Array.isArray(agents.list)) {
+    for (const [index, entry] of agents.list.entries()) {
+      removeContextTokens(entry, `agents.list[${index}].contextTokens`);
     }
-    delete entry.contextTokens;
-    const path = `agents.list[${index}].contextTokens`;
-    changes.push(`Removed ${path}.`);
-    warnings.push(
-      `${path} cannot be represented per model; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
-    );
   }
 }
 
 function migrateProviderContextBudgets(
   root: JsonRecord,
-  changes: string[],
-  warnings: string[],
+  changes: ConfigValidationIssue[],
+  warnings: ConfigValidationIssue[],
 ): void {
   const providers = isRecord(root.models) ? root.models.providers : undefined;
   if (!isRecord(providers)) {
@@ -112,17 +103,24 @@ function migrateProviderContextBudgets(
             continue;
           }
           model[key] = provider[key];
-          changes.push(`${sourcePath} → models.providers.${providerId}.models[${index}].${key}.`);
+          changes.push({
+            path: sourcePath,
+            message: `${sourcePath} → models.providers.${providerId}.models[${index}].${key}.`,
+          });
         }
         delete provider[key];
-        changes.push(`Removed ${sourcePath} after baking it into explicit model entries.`);
+        changes.push({
+          path: sourcePath,
+          message: `Removed ${sourcePath} after baking it into explicit model entries.`,
+        });
         continue;
       }
       delete provider[key];
-      changes.push(`Removed ${sourcePath}.`);
-      warnings.push(
-        `${sourcePath} had no explicit model entries to receive its value; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
-      );
+      changes.push({ path: sourcePath, message: `Removed ${sourcePath}.` });
+      warnings.push({
+        path: sourcePath,
+        message: `${sourcePath} had no explicit model entries to receive its value; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
+      });
     }
   }
 }
@@ -137,8 +135,8 @@ export function migrateLegacyContextBudgetConfig(raw: unknown): ContextBudgetCon
     return { config: raw, changed: false, changes: [], warnings: [] };
   }
   const next = structuredClone(raw);
-  const changes: string[] = [];
-  const warnings: string[] = [];
+  const changes: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [];
   migrateProviderContextBudgets(next, changes, warnings);
   removeAgentContextTokens(next, changes, warnings);
   return changes.length > 0

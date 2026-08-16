@@ -5,7 +5,6 @@ import {
   addApprovalReactionHintToText,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
-  extractApprovalReactionPromptBinding,
   hasApprovalReactionHintText,
   listApprovalReactionBindings,
   resolveTypedApprovalReactionTarget,
@@ -369,36 +368,6 @@ export function addSignalApprovalReactionHintToText(params: {
   return addApprovalReactionHintToText(params);
 }
 
-function resolveStandaloneApprovalPromptKind(text: string): ApprovalKind | null {
-  // Strip bold markers (**Exec approval required**) before matching the header.
-  const firstLine = text
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\*\*/g, "").trim())
-    .find(Boolean);
-  if (/^(?:🔒\s*)?Exec approval required$/.test(firstLine ?? "")) {
-    return "exec";
-  }
-  if (/^(?:(?:🛡️|🛡|🚨|ℹ️|ℹ)\s*)?Plugin approval required$/.test(firstLine ?? "")) {
-    return "plugin";
-  }
-  return null;
-}
-
-function isStandaloneApprovalPromptText(text: string): boolean {
-  return resolveStandaloneApprovalPromptKind(text) !== null;
-}
-
-function extractSignalApprovalPromptBinding(text: string): {
-  approvalId: string;
-  approvalKind: ApprovalKind;
-  allowedDecisions: ExecApprovalReplyDecision[];
-} | null {
-  const approvalKind = resolveStandaloneApprovalPromptKind(text);
-  return approvalKind
-    ? extractApprovalReactionPromptBinding({ text, approvalKind, replyInstructionOnly: true })
-    : null;
-}
-
 function buildTargetRoute(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -438,68 +407,6 @@ function buildTargetRoute(params: {
   })
     ? route
     : null;
-}
-
-function shouldAppendSignalApprovalReactionHintForOutboundMessage(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  text: string;
-  targetAuthor?: string | null;
-  targetAuthorUuid?: string | null;
-  agentId?: string | null;
-  sessionKey?: string | null;
-}): boolean {
-  const binding = extractSignalApprovalPromptBinding(params.text);
-  if (!binding) {
-    return false;
-  }
-  if (resolveSignalApprovalTargetAuthorKeys(params).length === 0) {
-    return false;
-  }
-  if (!hasSignalApprovalReactionApprovers({ cfg: params.cfg, accountId: params.accountId })) {
-    return false;
-  }
-  return Boolean(
-    buildTargetRoute({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      to: params.to,
-      approvalId: binding.approvalId,
-      approvalKind: binding.approvalKind,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    }),
-  );
-}
-
-export function appendSignalApprovalReactionHintForOutboundMessage(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  text: string;
-  targetAuthor?: string | null;
-  targetAuthorUuid?: string | null;
-  agentId?: string | null;
-  sessionKey?: string | null;
-}): string {
-  if (!isStandaloneApprovalPromptText(params.text)) {
-    return params.text;
-  }
-  const binding = extractSignalApprovalPromptBinding(params.text);
-  if (
-    !binding ||
-    !shouldAppendSignalApprovalReactionHintForOutboundMessage({
-      ...params,
-      text: params.text,
-    })
-  ) {
-    return params.text;
-  }
-  return addSignalApprovalReactionHintToText({
-    text: params.text,
-    allowedDecisions: binding.allowedDecisions,
-  });
 }
 
 export function hasSignalApprovalReactionApprovers(params: {
@@ -724,64 +631,6 @@ export function registerSignalApprovalReactionTargetForDeliveredPayload(params: 
       ) || registered;
   }
   return registered;
-}
-
-export function registerSignalApprovalReactionTargetForOutboundMessage(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  to: string;
-  messageId: string;
-  text: string;
-  targetAuthor?: string | null;
-  targetAuthorUuid?: string | null;
-  agentId?: string | null;
-  sessionKey?: string | null;
-  ttlMs?: number;
-}): boolean {
-  if (!isStandaloneApprovalPromptText(params.text)) {
-    return false;
-  }
-  const binding = extractSignalApprovalPromptBinding(params.text);
-  if (!binding) {
-    return false;
-  }
-  if (!hasSignalApprovalReactionApprovers({ cfg: params.cfg, accountId: params.accountId })) {
-    return false;
-  }
-  const targetAuthorKeys = resolveSignalApprovalTargetAuthorKeys(params);
-  if (targetAuthorKeys.length === 0) {
-    return false;
-  }
-  const conversationKey = resolveSignalApprovalConversationKey(params.to);
-  if (!conversationKey) {
-    return false;
-  }
-  const route = buildTargetRoute({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    to: params.to,
-    approvalId: binding.approvalId,
-    approvalKind: binding.approvalKind,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  if (!route) {
-    return false;
-  }
-  return Boolean(
-    registerSignalApprovalReactionTarget({
-      accountId: params.accountId,
-      conversationKey,
-      messageId: params.messageId,
-      approvalId: binding.approvalId,
-      approvalKind: binding.approvalKind,
-      allowedDecisions: binding.allowedDecisions,
-      targetAuthorKeys,
-      route,
-      routeAllowed: true,
-      ttlMs: params.ttlMs,
-    }),
-  );
 }
 
 export function unregisterSignalApprovalReactionTarget(params: {

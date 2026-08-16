@@ -19,6 +19,9 @@ import type { WorkerEnvironmentStore } from "./store.js";
 export type { WorkerConnectionIdentity } from "./connection-identity.js";
 export type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
 
+export const STALE_WORKER_BUILD_REASON =
+  "Worker build does not match the current Gateway build; redispatch the session so its worker can bootstrap the current build before retrying.";
+
 /** True only for bundles that accept the exact admitted execution carrier. */
 export function supportsWorkerExecutionContextLaunch(
   handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,

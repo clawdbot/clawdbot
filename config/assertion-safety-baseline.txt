@@ -636,7 +636,6 @@ extensions/line/src/markdown-to-line.ts	7
 extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	6
-extensions/line/src/reply-payload-transform.ts	1
 extensions/line/src/rich-menu.ts	1
 extensions/line/src/send.ts	2
 extensions/line/src/setup-core.ts	1

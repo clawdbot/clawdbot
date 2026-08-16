@@ -1758,6 +1758,42 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.messageId).toBe("m1");
 
     expect(sendMatrix).toHaveBeenCalled();
+    // The lost write-ahead durability must leave a recorded reason: a crash
+    // mid-send now loses the message with no queue row to recover.
+    const warnLines = logMocks.warn.mock.calls.map((call) => String(call[0]));
+    const queueWarn = warnLines.find((line) => line.includes("outbound queue write failed"));
+    expect(queueWarn).toBeDefined();
+    expect(queueWarn).toContain("channel=matrix");
+    expect(queueWarn).toContain("queue offline");
+  });
+
+  it("emits one message_sent failure per payload when batch preparation fails", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sent" || hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockRejectedValueOnce(new Error("modifier exploded"));
+    const sendMatrix = vi.fn();
+
+    await expect(
+      deliverMatrix({
+        payloads: [{ text: "first payload" }, { text: "second payload" }],
+        deps: { matrix: sendMatrix },
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "matrix",
+          context: { channelId: "matrix", conversationId: "!room:example" },
+        },
+      }),
+    ).rejects.toThrow("modifier exploded");
+
+    expect(sendMatrix).not.toHaveBeenCalled();
+    // Preparation aborts the whole batch: hooks must see every logical
+    // payload fail, matching the per-payload audit terminals.
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(2);
+    const contents = hookMocks.runner.runMessageSent.mock.calls.map(
+      (call) => (call[0] as { content?: string }).content,
+    );
+    expect(contents).toEqual(["first payload", "second payload"]);
   });
 
   it("runs afterCommit hooks after best-effort queue fallback direct sends", async () => {

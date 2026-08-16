@@ -325,11 +325,12 @@ export async function ensureConfigReady(
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const { formatConfigIssueLines } = await import("../../config/issue-format.js");
+  const [{ formatConfigIssueLines }, { renderConfigValidationIssueLines }] = await Promise.all([
+    import("../../config/issue-format.js"),
+    import("../../config/issue-location.js"),
+  ]);
   const issues =
-    snapshot.exists && !snapshot.valid
-      ? formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })
-      : [];
+    snapshot.exists && !snapshot.valid ? renderConfigValidationIssueLines(snapshot) : [];
   const legacyIssues =
     snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
 
@@ -420,9 +421,7 @@ export async function ensureConfigReady(
           })
         ).snapshot;
         if (retrySnapshot.exists && !retrySnapshot.valid) {
-          const retryIssues = formatConfigIssueLines(retrySnapshot.issues, "-", {
-            normalizeRoot: true,
-          });
+          const retryIssues = renderConfigValidationIssueLines(retrySnapshot);
           throw createInvalidConfigError(
             retrySnapshot.path,
             retryIssues.join("\n") || "Unknown validation issue.",

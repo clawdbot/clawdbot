@@ -14,7 +14,7 @@ import {
   type WorkerSshEndpoint,
   type WorkerSshIdentity,
 } from "../../plugins/types.js";
-import { verifyWorkerAdmissionHandshake } from "./admission.js";
+import { STALE_WORKER_BUILD_REASON, verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
@@ -381,6 +381,19 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     return finishProvenDestroy(destroying);
   };
 
+  const recordStaleBuildDestroy = (record: WorkerEnvironmentRecord) => {
+    // Attached sessions need the build cause after teardown so placement reconciliation can
+    // persist an actionable terminal reason instead of inferring from destroyed environment state.
+    return record.state === "attached"
+      ? store.requestDestroy({
+          environmentId: record.environmentId,
+          state: record.state,
+          terminalState: "failed",
+          lastError: STALE_WORKER_BUILD_REASON,
+        })
+      : record;
+  };
+
   const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
     let record = initialRecord;
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
@@ -492,7 +505,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         // A stale node environment cannot be upgraded in place because its credential and
         // placement ownership bind the old build. Retire it; reprovisioning reuses the installed
         // content-addressed bundle without another transfer.
-        await finishDestroy(record, provider).catch(() => undefined);
+        await finishDestroy(recordStaleBuildDestroy(record), provider).catch(() => undefined);
       }
       return;
     }
@@ -505,7 +518,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         // A new Gateway build rejects the old worker at admission. This is expected lifecycle
         // teardown, not a bootstrap failure. `leaseId` above came from this record, so provider
         // inspection and destruction share the same durable lease identity.
-        await finishDestroy(record, provider).catch(() => undefined);
+        await finishDestroy(recordStaleBuildDestroy(record), provider).catch(() => undefined);
       }
       return;
     }

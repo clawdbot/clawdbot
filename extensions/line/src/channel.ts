@@ -20,7 +20,7 @@ import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
-import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
+import { lineMessageActions } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { lineSetupContract } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
@@ -97,12 +97,6 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
         });
       },
       resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
-      transformReplyPayload: ({ payload }) => {
-        if (!payload.text || !hasLineDirectives(payload.text)) {
-          return payload;
-        }
-        return parseLineDirectives(payload);
-      },
       targetResolver: {
         looksLikeId: (id) => {
           const trimmed = id?.trim();
@@ -119,6 +113,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
     message: lineMessageAdapter,
+    actions: lineMessageActions,
     bindings: lineBindingsAdapter,
     conversationBindings: {
       defaultTopLevelPlacement: "current",
@@ -126,50 +121,10 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     agentPrompt: {
       messageToolHints: () => [
         "",
-        "### LINE Rich Messages",
-        "LINE supports rich visual messages. Use these directives in your reply when appropriate:",
-        "",
-        "**Quick Replies** (bottom button suggestions):",
-        "  [[quick_replies: Option 1, Option 2, Option 3]]",
-        "",
-        "**Location** (map pin):",
-        "  [[location: Place Name | Address | latitude | longitude]]",
-        "",
-        "**Confirm Dialog** (yes/no prompt):",
-        "  [[confirm: Question text? | Yes Label | No Label]]",
-        "",
-        "**Button Menu** (title + text + buttons):",
-        "  [[buttons: Title | Description | Btn1:action1, Btn2:https://url.com]]",
-        "",
-        "**Media Player Card** (music status):",
-        "  [[media_player: Song Title | Artist Name | Source | https://albumart.url | playing]]",
-        "  - Status: 'playing' or 'paused' (optional)",
-        "",
-        "**Event Card** (calendar events, meetings):",
-        "  [[event: Event Title | Date | Time | Location | Description]]",
-        "  - Time, Location, Description are optional",
-        "",
-        "**Agenda Card** (multiple events/schedule):",
-        "  [[agenda: Schedule Title | Event1:9:00 AM, Event2:12:00 PM, Event3:3:00 PM]]",
-        "",
-        "**Device Control Card** (smart devices, TVs, etc.):",
-        "  [[device: Device Name | Device Type | Status | Control1:data1, Control2:data2]]",
-        "",
-        "**Apple TV Remote** (full D-pad + transport):",
-        "  [[appletv_remote: Apple TV | Playing]]",
-        "",
-        "**Auto-converted**: Markdown tables become Flex cards, code blocks become styled cards.",
-        "",
-        "When to use rich messages:",
-        "- Use [[quick_replies:...]] when offering 2-4 clear options",
-        "- Use [[confirm:...]] for yes/no decisions",
-        "- Use [[buttons:...]] for menus with actions/links",
-        "- Use [[location:...]] when sharing a place",
-        "- Use [[media_player:...]] when showing what's playing",
-        "- Use [[event:...]] for calendar event details",
-        "- Use [[agenda:...]] for a day's schedule or event list",
-        "- Use [[device:...]] for smart device status/controls",
-        "- Tables/code in your response auto-convert to visual cards",
+        "### LINE structured output",
+        "Use `presentation.blocks` for buttons, yes/no choices, and selectable options; LINE maps them to Flex controls or quick replies.",
+        "Use `channelData.line.location` for a location pin and `channelData.line.card` for one LINE-specific card. Supported card types are `media_player`, `event`, `agenda`, `device`, and `appletv_remote`.",
+        "Send rich output with the structured message fields. Double-bracket marker text has no special meaning.",
       ],
     },
   },

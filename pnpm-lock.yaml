@@ -1085,6 +1085,9 @@ importers:
       '@line/bot-sdk':
         specifier: 11.2.0
         version: 11.2.0
+      typebox:
+        specifier: 1.3.6
+        version: 1.3.6
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -2366,6 +2369,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@noble/hashes':
+        specifier: 2.2.0
+        version: 2.2.0
       '@novnc/novnc':
         specifier: 1.7.0
         version: 1.7.0

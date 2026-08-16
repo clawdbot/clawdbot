@@ -4,7 +4,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
-import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -332,18 +332,8 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       if (opts.json) {
         writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
       } else {
-        const displayIssues = attachConfigIssueDiagnostics(issues, {
-          raw: snapshot.raw,
-          parsed: snapshot.parsed,
-          effective: snapshot.sourceConfig,
-          configPath: snapshot.path,
-          formatPathForDisplay: true,
-          includeReceivedValueHint: true,
-        });
         runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
-        for (const line of formatConfigIssueLines(displayIssues, danger("×"), {
-          normalizeRoot: true,
-        })) {
+        for (const line of renderConfigValidationIssueLines(snapshot, danger("×"))) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");

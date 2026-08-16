@@ -1,5 +1,6 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_HOST_COUNT } from "./session-catalog-parsing.js";
 import {
   tempDirs,
   createCodexSessionCatalogControl,
@@ -285,7 +286,7 @@ describe("Codex supervision catalog", () => {
     });
   });
 
-  it("discovers every existing Codex home while retaining the route owner directory", async () => {
+  it("discovers configured and automatic Codex homes while retaining the route owner", async () => {
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-catalog-homes-")),
     );
@@ -295,11 +296,21 @@ describe("Codex supervision catalog", () => {
     const processCodexHome = path.join(root, "process-codex-home");
     const alphaCodexHome = resolveCodexAppServerHomeDir(alphaAgentDir);
     const betaCodexHome = resolveCodexAppServerHomeDir(betaAgentDir);
+    const configuredCodexHomes = Array.from({ length: MAX_HOST_COUNT }, (_, index) =>
+      path.join(root, "configured-codex-home", String(index)),
+    );
+    const configuredCodexHome = configuredCodexHomes[0]!;
+    const configuredCodexHomeAlias = path.join(root, "configured-codex-home-alias");
+    const configuredFile = path.join(root, "not-a-codex-home");
     await Promise.all(
-      [processCodexHome, alphaCodexHome, betaCodexHome].map((dir) =>
+      [processCodexHome, alphaCodexHome, betaCodexHome, ...configuredCodexHomes].map((dir) =>
         fs.mkdir(dir, { recursive: true }),
       ),
     );
+    await Promise.all([
+      fs.symlink(configuredCodexHome, configuredCodexHomeAlias, "dir"),
+      fs.writeFile(configuredFile, "not a directory"),
+    ]);
     const runtimeConfig = {
       agents: {
         ownership: "explicit",
@@ -315,21 +326,34 @@ describe("Codex supervision catalog", () => {
       config: runtimeConfig,
       env,
       getRuntimeConfig: () => runtimeConfig,
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getPluginConfig: () => ({
+        supervision: { enabled: true },
+        sessionCatalog: {
+          homes: [
+            configuredCodexHome,
+            configuredCodexHomeAlias,
+            alphaCodexHome,
+            path.join(root, "missing-codex-home"),
+            configuredFile,
+            ...configuredCodexHomes.slice(1),
+          ],
+        },
+      }),
     });
     const homes = control.homesForAgent("beta");
 
-    expect(
-      new Set(
-        homes.map((home) =>
-          resolveCodexAppServerLocalHomeDir(home.appServer.start, home.agentDir, env),
-        ),
-      ),
-    ).toEqual(new Set([processCodexHome, alphaCodexHome, betaCodexHome]));
-    expect(homes.map((home) => home.agentDir)).toEqual([betaAgentDir, betaAgentDir, betaAgentDir]);
+    const resolvedHomes = homes.map((home) =>
+      resolveCodexAppServerLocalHomeDir(home.appServer.start, home.agentDir, env),
+    );
+    expect(homes).toHaveLength(MAX_HOST_COUNT);
+    expect(resolvedHomes.slice(0, 3)).toEqual([processCodexHome, betaCodexHome, alphaCodexHome]);
+    expect(resolvedHomes.filter((home) => configuredCodexHomes.includes(home))).toHaveLength(
+      MAX_HOST_COUNT - 3,
+    );
+    expect(homes.map((home) => home.agentDir)).toEqual(Array(MAX_HOST_COUNT).fill(betaAgentDir));
     expect(homes[0]?.hostId).toBe(CODEX_LOCAL_SESSION_HOST_ID);
     expect(homes.slice(1).every((home) => home.hostId.startsWith("gateway:local:"))).toBe(true);
-    expect(new Set(homes.map((home) => home.sourceHomeId)).size).toBe(3);
+    expect(new Set(homes.map((home) => home.sourceHomeId)).size).toBe(MAX_HOST_COUNT);
     expect(
       JSON.stringify(homes.map(({ hostId, sourceHomeId }) => ({ hostId, sourceHomeId }))),
     ).not.toContain(root);
@@ -338,18 +362,18 @@ describe("Codex supervision catalog", () => {
     pinnedConnectionMocks.request.mockResolvedValue({
       thread: idleThread({ id: "thread-source" }),
     });
-    const alphaSource = homes.find(
+    const configuredSource = homes.find(
       (home) =>
         resolveCodexAppServerLocalHomeDir(home.appServer.start, home.agentDir, env) ===
-        alphaCodexHome,
+        configuredCodexHome,
     );
-    expect(alphaSource).toBeDefined();
+    expect(configuredSource).toBeDefined();
 
-    const alphaFingerprint = buildCodexAppServerConnectionFingerprint(
-      alphaSource!.appServer,
-      alphaSource!.agentDir,
+    const configuredFingerprint = buildCodexAppServerConnectionFingerprint(
+      configuredSource!.appServer,
+      configuredSource!.agentDir,
     );
-    const boundControl = control.forUpstream("beta", alphaFingerprint);
+    const boundControl = control.forUpstream("beta", configuredFingerprint);
     expect(boundControl).toBeDefined();
     expect(control.forUpstream("beta", "unknown-fingerprint")).toBeUndefined();
     await boundControl!.listPage({});
@@ -359,13 +383,13 @@ describe("Codex supervision catalog", () => {
 
     expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]).toMatchObject({
       agentDir: betaAgentDir,
-      startOptions: { env: { CODEX_HOME: alphaCodexHome } },
+      startOptions: { env: { CODEX_HOME: configuredCodexHome } },
     });
     expect(pinnedConnectionMocks.getClient).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: betaAgentDir,
         startOptions: expect.objectContaining({
-          env: expect.objectContaining({ CODEX_HOME: alphaCodexHome }),
+          env: expect.objectContaining({ CODEX_HOME: configuredCodexHome }),
         }),
       }),
     );

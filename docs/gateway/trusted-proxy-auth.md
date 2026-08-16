@@ -203,12 +203,12 @@ Enabling this option delegates new browser device enrollment entirely to the rev
 
 ## Control UI pairing behavior
 
-When `gateway.auth.mode = "trusted-proxy"` is active and the request passes trusted-proxy checks, Control UI WebSocket sessions can connect without device pairing identity.
+Browsers attach a device identity on every origin, including plain HTTP, so first connects follow the standard pairing flow: automatic approval when [`deviceAutoApprove`](#automatic-device-approval) is enabled, otherwise a one-time approval on the Gateway host. When `gateway.auth.mode = "trusted-proxy"` is active and the request passes trusted-proxy checks, only Control UI sessions from browsers that cannot supply a device identity at all are admitted device-less.
 
 Scope implications:
 
 - Device-less Control UI WebSocket sessions cannot self-declare permissions. OpenClaw clears their requested scope list to `[]`, then applies any matching server-side `identityScopes` grant after proxy identity verification.
-- If methods fail with `missing scope` after a successful WebSocket connect, use HTTPS so the browser can generate device identity and complete pairing. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+- If methods fail with `missing scope` after a successful WebSocket connect, reload so the browser pairs its device identity, or approve the pending device request. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
 
 Reverse-proxy scope capping: if your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps device enrollment or upgrade requests and the final union of device-authorized and identity-granted session scopes. This header does not grant scopes; it only narrows authority. When `deviceAutoApprove.enabled` is true, the cap also limits the persistent device grant written by [automatic device approval](#automatic-device-approval).
 
@@ -537,7 +537,7 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
     Fix:
 
-    - For Control UI, use HTTPS so the browser can generate device identity and complete pairing.
+    - For Control UI, reload the dashboard so the browser generates device identity and completes pairing (works over HTTP too).
     - For custom automation, use device identity/pairing, the reserved direct-local `gateway-client` backend helper path, or [admin HTTP RPC](/plugins/admin-http-rpc).
     - Do not add the retired `gateway.controlUi.dangerouslyDisableDeviceAuth` key to current config; it is ignored and `openclaw doctor --fix` removes it.
 

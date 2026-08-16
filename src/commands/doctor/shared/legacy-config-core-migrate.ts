@@ -136,12 +136,12 @@ export function normalizeCompatibilityConfigValues(
   if (options.sourceConfigBeforeMigrations === undefined) {
     const migration = migrateLegacyContextBudgetConfig(cfg);
     contextBudgetConfig = migration.config;
-    changes.push(...migration.changes);
-    contextBudgetWarnings = migration.warnings;
+    changes.push(...migration.changes.map(({ message }) => message));
+    contextBudgetWarnings = migration.warnings.map(({ message }) => message);
   } else {
     const migration = migrateLegacyContextBudgetConfig(options.sourceConfigBeforeMigrations);
-    changes.push(...migration.changes);
-    contextBudgetWarnings = migration.warnings;
+    changes.push(...migration.changes.map(({ message }) => message));
+    contextBudgetWarnings = migration.warnings.map(({ message }) => message);
   }
   const reservedMcpServerNames = migrateReservedMcpServerNames(
     contextBudgetConfig,

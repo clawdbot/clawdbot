@@ -624,9 +624,10 @@ jobs:
         working-directory: selected
         run: |
           set -euo pipefail
-          output_dir="${GITHUB_WORKSPACE}/selected/.artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/${QA_SHARD_ID}"
-          mkdir -p "$output_dir"
-          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+          qa_output_dir=".artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/${QA_SHARD_ID}"
+          published_output_dir="${GITHUB_WORKSPACE}/selected/${qa_output_dir}"
+          mkdir -p "$qa_output_dir"
+          echo "output_dir=${published_output_dir}" >> "$GITHUB_OUTPUT"
           mapfile -t scenario_ids < <(jq -er '.[]' <<<"$SCENARIO_IDS_JSON")
           scenario_args=()
           for scenario_id in "${scenario_ids[@]}"; do
@@ -664,7 +665,7 @@ jobs:
               --qa-profile "$QA_PROFILE" \
               --concurrency 3 \
               --fast \
-              --output-dir "$output_dir" \
+              --output-dir "$qa_output_dir" \
               "${scenario_args[@]}" \
             3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?
 
@@ -680,7 +681,7 @@ jobs:
             echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and was terminated; partial evidence will still be uploaded."
           fi
 
-          QA_EXIT_CODE="$qa_exit_code" TIMEOUT_OUTCOME="$timeout_outcome" OUTPUT_DIR="$output_dir" \
+          QA_EXIT_CODE="$qa_exit_code" TIMEOUT_OUTCOME="$timeout_outcome" OUTPUT_DIR="$published_output_dir" \
             node --input-type=module <<'NODE'
           import fs from "node:fs";
           import path from "node:path";

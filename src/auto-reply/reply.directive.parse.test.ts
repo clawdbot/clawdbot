@@ -184,6 +184,17 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("parses identical exec directives deterministically", () => {
+    const input = "/exec host=node security=allowlist ask=always node=worker-1";
+    const first = extractExecDirective(input);
+
+    expect(Array.from({ length: 3 }, () => extractExecDirective(input))).toEqual([
+      first,
+      first,
+      first,
+    ]);
+  });
+
   it("captures invalid exec host values", () => {
     const res = extractExecDirective("/exec host=spaceship");
     expect(res.hasDirective).toBe(true);

@@ -3238,12 +3238,14 @@ td.data-table-key-col {
    =========================================== */
 
 .exec-approval-card {
+  --exec-approval-accent: var(--border);
+
   width: 100%;
   max-height: inherit;
   display: flex;
   flex-direction: column;
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--exec-approval-accent) 5%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--exec-approval-accent) 45%, var(--border));
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: scale-in 0.2s var(--ease-out);
@@ -3259,9 +3261,19 @@ td.data-table-key-col {
 
 .exec-approval-card--inline {
   padding: 14px 16px;
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
-  background: color-mix(in srgb, var(--warn) 5%, var(--card));
   animation: none;
+}
+
+.exec-approval-card--severity-info {
+  --exec-approval-accent: var(--border);
+}
+
+.exec-approval-card--severity-warning {
+  --exec-approval-accent: var(--warn);
+}
+
+.exec-approval-card--severity-danger {
+  --exec-approval-accent: var(--danger);
 }
 
 .exec-approval-header {
@@ -3282,13 +3294,25 @@ td.data-table-key-col {
   margin-top: 4px;
 }
 
-.exec-approval-queue {
+.exec-approval-queue,
+.exec-approval-chip {
   font-size: 12px; /* was 11px */
   font-weight: 500;
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 4px 10px;
+}
+
+.exec-approval-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.exec-approval-chip {
+  padding: 2px 8px;
 }
 
 .exec-approval-command {
@@ -3332,6 +3356,21 @@ td.data-table-key-col {
   font-family: var(--mono);
   overflow-wrap: anywhere;
   text-align: right;
+}
+
+.exec-approval-details {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exec-approval-details summary {
+  width: fit-content;
+  cursor: var(--cursor-action);
+}
+
+.exec-approval-details .exec-approval-meta {
+  margin-top: 8px;
 }
 
 .exec-approval-error {

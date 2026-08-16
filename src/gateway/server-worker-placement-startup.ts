@@ -133,6 +133,12 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
   const workspaceConflictHandlers = createWorkerWorkspaceConflictTranscriptHandlers(
     loadWorkerPlacementSessionRuntimeModule,
   );
+  const nodeWorkspaceRetention = createNodeWorkspaceRetainCoordinator({
+    gatewayNamespace: params.gatewayNamespace,
+    placements: params.placements,
+    environments: params.environments,
+    warn: params.warn,
+  });
   const resolveWorkspacePath = async ({
     sessionId,
     sessionKey,
@@ -333,6 +339,11 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         }
         return activePlacement;
       },
+      onActivated: (request) => {
+        if (request.deviceId) {
+          void nodeWorkspaceRetention.schedule(request.deviceId);
+        }
+      },
       runReclaimBarrier: async ({ sessionId, sessionKey, agentId, reclaim }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const { resolveGatewaySessionStoreTargetWithStore } = sessionRuntime;
@@ -409,17 +420,11 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     createSessionEvidenceResolver: createWorkerPlacementSessionEvidenceResolver,
     warn: params.warn,
   });
-  const nodeWorkspaceRetention = createNodeWorkspaceRetainCoordinator({
-    gatewayNamespace: params.gatewayNamespace,
-    placements: params.placements,
-    environments: params.environments,
-    warn: params.warn,
-  });
   const admissionProvider = createWorkerSessionTurnPlacementProvider({
     environments: params.environments,
     placements: params.placements,
     resolveWorkspacePath,
-    recoverPendingWorkspaceResult: async (environmentId) =>
+    reconcileActivePlacement: async (environmentId) =>
       await dispatchService.reconcileActive(environmentId),
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
