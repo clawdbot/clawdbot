@@ -763,37 +763,36 @@ describe("processEvent (functional)", () => {
       coreSession: { mainKey: "work" },
       expectedSessionKey: () => "agent:main:work",
     },
-  ])("assigns $sessionScope session keys to inbound calls", ({
-    sessionScope,
-    coreSession,
-    expectedSessionKey,
-  }) => {
-    const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
-        enabled: true,
-        provider: "plivo",
-        fromNumber: "+15550000000",
-        inboundPolicy: "open",
-        sessionScope,
-      }),
-      coreSession,
-    });
-    const event: NormalizedEvent = {
-      id: "evt-inbound-session-scope",
-      type: "call.initiated",
-      callId: "CA-inbound-session-scope",
-      providerCallId: "CA-inbound-session-scope",
-      timestamp: Date.now(),
-      direction: "inbound",
-      from: "+15554444444",
-      to: "+15550000000",
-    };
+  ])(
+    "assigns $sessionScope session keys to inbound calls",
+    ({ sessionScope, coreSession, expectedSessionKey }) => {
+      const ctx = createContext({
+        config: VoiceCallConfigSchema.parse({
+          enabled: true,
+          provider: "plivo",
+          fromNumber: "+15550000000",
+          inboundPolicy: "open",
+          sessionScope,
+        }),
+        coreSession,
+      });
+      const event: NormalizedEvent = {
+        id: "evt-inbound-session-scope",
+        type: "call.initiated",
+        callId: "CA-inbound-session-scope",
+        providerCallId: "CA-inbound-session-scope",
+        timestamp: Date.now(),
+        direction: "inbound",
+        from: "+15554444444",
+        to: "+15550000000",
+      };
 
-    processEvent(ctx, event);
+      processEvent(ctx, event);
 
-    const call = requireFirstActiveCall(ctx);
-    expect(call.sessionKey).toBe(expectedSessionKey(call));
-  });
+      const call = requireFirstActiveCall(ctx);
+      expect(call.sessionKey).toBe(expectedSessionKey(call));
+    },
+  );
 
   it("applies per-number inbound greeting and stores the matched route key", () => {
     const ctx = createContext({
