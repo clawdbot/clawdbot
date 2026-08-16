@@ -33,7 +33,6 @@ import type {
   SessionEntryProvenance,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
-export type { SessionDiffBaselineCapture } from "./session-diff-baseline-capture.js";
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
