@@ -188,6 +188,17 @@ describe("parseExecAutoReviewResponse", () => {
     });
   });
 
+  it("handles malformed key strings in duplicate key detection without throwing", async () => {
+    // A key with an unescaped control character that makes JSON.parse fail
+    // should not crash the duplicate-key scanner.
+    const malformed = '{"decision":"allow","risk":"low"}';
+    await expect(reviewExecResponse(malformed)).resolves.toEqual({
+      decision: "allow-once",
+      risk: "low",
+      rationale: expect.any(String),
+    });
+  });
+
   it("preserves valid rationale containing JSON-shaped quoted text", async () => {
     const rationale = 'Read-only output mentions "decision": "ask" as literal text.';
 
