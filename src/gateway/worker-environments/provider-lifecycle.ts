@@ -63,7 +63,7 @@ type WorkerProviderLifecycleOptions = {
   ) => Promise<T>;
   callProvider: <T>(environmentId: string, run: () => Promise<T>, timeoutMs?: number) => Promise<T>;
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
-  isServiceError: (error: unknown, code: string) => boolean;
+  isServiceError: (error: unknown, code: "invalid_profile") => boolean;
   isStopping: () => boolean;
   move: (
     record: WorkerEnvironmentRecord,
