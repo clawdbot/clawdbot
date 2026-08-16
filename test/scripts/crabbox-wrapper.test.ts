@@ -1952,17 +1952,31 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("prefers Azure for unqualified Windows runs", () => {
-    const { output, result } = runSuccessfulWrapper(azureProviderHelp, [
-      "run",
-      "--target",
-      "windows",
-      "--windows-mode",
-      "wsl2",
-      "--",
-      "corepack",
-      "pnpm",
-      "check:changed",
-    ]);
+    const dirtyTree = "dirty-wsl2-tree-123";
+    const { output, result } = runSuccessfulWrapper(
+      azureProviderHelp,
+      [
+        "run",
+        "--target",
+        "windows",
+        "--windows-mode",
+        "wsl2",
+        "--",
+        "corepack",
+        "pnpm",
+        "check:changed",
+      ],
+      {
+        env: {
+          OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE: dirtyTree,
+          OPENCLAW_FAKE_GIT_WORKTREE_TREE_SHA: dirtyTree,
+        },
+        gitResponses: {
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: " M scripts/crabbox-wrapper.mts\n" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
 
     const remoteCommand = normalizeShellLineEndings(output.scriptContent!);
     expect(output.args.slice(0, 7)).toEqual([
@@ -1984,9 +1998,12 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("corepack enable --install-directory");
     expect(remoteCommand).toContain("pnpm install --frozen-lockfile");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_wsl2_js || exit $?");
+    expectChangedGateGitBootstrap(remoteCommand);
     expect(remoteCommand).toContain(
       `{ openclaw_crabbox_env ${remoteChangedGateEnvPrefix} corepack pnpm check:changed\n}`,
     );
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
+    expect(result.stderr).toContain("overlaying the local worktree as changes from abc123");
     expect(result.stderr).toContain("provider=azure");
   });
 

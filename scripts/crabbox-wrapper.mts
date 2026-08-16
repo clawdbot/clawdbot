@@ -3200,7 +3200,13 @@ function analyzeRemoteCommand(invocation: RunInvocation) {
   };
 }
 
-function prepareRemoteWsl2JsBootstrapScript(run: RunInvocation, facts: RunFacts, provider: string) {
+function prepareRemoteWsl2JsBootstrapScript(
+  run: RunInvocation,
+  facts: RunFacts,
+  provider: string,
+  changedGateBase: string,
+  changedGateAlias: string,
+) {
   const runtimeEntrypoint = awsMacosBunEntrypoints.has(facts.runtimeEntrypoint)
     ? ""
     : facts.runtimeEntrypoint;
@@ -3220,7 +3226,7 @@ function prepareRemoteWsl2JsBootstrapScript(run: RunInvocation, facts: RunFacts,
   const originalShellCommand = facts.scopedEnvCommand?.shellCommand ?? renderRunShellCommand(run);
   const script = `${remoteWsl2JsBootstrap({
     packageManager: facts.packageManager,
-  })} || exit $?\n{ ${originalShellCommand}\n}\n`;
+  })} || exit $?\n${facts.changedGate && changedGateBase ? `${remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias)} || exit $?\n` : ""}{ ${originalShellCommand}\n}\n`;
   writeFileSync(scriptPath, script, "utf8");
   chmodSync(scriptPath, 0o700);
 
@@ -3419,7 +3425,7 @@ function shouldUseFullCheckoutForRemoteSync(commandArgs: string[], _providerName
   }
 
   const changedGate = isChangedGateCommand(parseRunInvocation(help.text, commandArgs).commandArgs);
-  if (changedGate && !isWindowsRemoteTarget(commandArgs)) {
+  if (changedGate && !isNativeWindowsRemoteTarget(commandArgs)) {
     return true;
   }
   return isWorktreeClean() && (isSparseCheckout() || changedGate);
@@ -3774,6 +3780,8 @@ function applyRunTransforms(
     invocation,
     facts,
     options.provider,
+    options.changedGateBase,
+    options.changedGateAlias,
   );
   let transformedArgs = wsl2ScriptBootstrap.args;
   invocation = parseRunInvocation(help.text, transformedArgs);
