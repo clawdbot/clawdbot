@@ -87,7 +87,7 @@ export async function runGatewayHealthJsonRoute(
       error,
       config: rpc.config ?? (await readBestEffortConfig()),
       runtime,
-      timeoutMs: Number(rpc.timeout ?? "10000"),
+      timeoutMs: Number.isFinite(Number(rpc.timeout ?? "10000")) ? Number(rpc.timeout ?? "10000") : 10_000,
       token: rpc.token,
       password: rpc.password,
       localPortOverride: rpc.localPortOverride,
