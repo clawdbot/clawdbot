@@ -2,17 +2,14 @@
 import { Command, type ErrorOptions } from "commander";
 import { getCommanderSubcommandFact, setCommanderErrorCommand } from "./commander-parse-facts.js";
 
-type CommanderHelpInternals = Command & {
-  _outputHelpIfRequested(args: string[]): void;
-};
-
-/* oxlint-disable eslint/no-underscore-dangle -- The identifier is Commander 15.0.0's own hook name; package.json pins that exact version. */
-/* oxlint-disable typescript/unbound-method -- Commander omits the hook from its types; the call site restores the receiver. */
-// SAFETY: Commander 15.0.0's runtime class defines this pinned private hook with the signature exposed above.
-const commanderOutputHelpIfRequested = (Command.prototype as CommanderHelpInternals)
-  ._outputHelpIfRequested;
-/* oxlint-enable typescript/unbound-method */
-/* oxlint-enable eslint/no-underscore-dangle */
+// Commander 15 declares this help hook only in its runtime class, not its types.
+// Declaring it here lets the subclass override and delegate through `super`
+// instead of re-binding a captured prototype method.
+declare module "commander" {
+  interface Command {
+    _outputHelpIfRequested(args: string[]): void;
+  }
+}
 
 export class OpenClawCommand extends Command {
   override createCommand(name?: string): Command {
@@ -30,7 +27,7 @@ export class OpenClawCommand extends Command {
 
   // Commander 15 checks this internal hook before dispatching actions.
   // Defer only marked lazy placeholders so their real command tree can decide.
-  _outputHelpIfRequested(args: string[]): void {
+  override _outputHelpIfRequested(args: string[]): void {
     const subcommandFact = getCommanderSubcommandFact(this, args);
     if (subcommandFact?.kind === "defer") {
       return;
@@ -40,6 +37,7 @@ export class OpenClawCommand extends Command {
         code: "commander.unknownCommand",
       });
     }
-    commanderOutputHelpIfRequested.call(this, args);
+    // oxlint-disable-next-line eslint/no-underscore-dangle -- Commander 15.0.0 owns this hook name; package.json pins that exact version.
+    super._outputHelpIfRequested(args);
   }
 }
