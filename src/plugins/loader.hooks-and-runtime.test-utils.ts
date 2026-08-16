@@ -234,7 +234,11 @@ function loadSourceExternalArtifactScenario(params: {
     writeFixtureText(rootBuildDir, "index.js", params.rootBuildBody);
   }
   if (params.runtimeOverlayBody) {
-    writeFixtureText(repoRoot, `dist-runtime/extensions/${id}/index.js`, params.runtimeOverlayBody);
+    writeFixtureText(
+      repoRoot,
+      path.join("dist-runtime", "extensions", id, "index.js"),
+      params.runtimeOverlayBody,
+    );
   }
 
   const config = {
