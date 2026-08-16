@@ -467,7 +467,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -531,7 +530,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         sessionKey,
         storePath,
         defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 200_000,
         resolvedVerboseLevel: "off",
         isNewSession: false,
         blockStreamingEnabled: false,
@@ -596,7 +594,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionKey,
       storePath,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -735,7 +732,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -791,7 +787,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -881,7 +876,6 @@ describe("runReplyAgent auto-compaction token update", () => {
           sessionStore: { [sessionKey]: sessionEntry },
           sessionKey,
           defaultModel: "anthropic/claude-opus-4-6",
-          agentCfgContextTokens: 200_000,
           resolvedVerboseLevel: "off",
           isNewSession: false,
           blockStreamingEnabled: false,
@@ -1944,7 +1938,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       sessionKey,
       storePath,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -2695,11 +2688,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
     prompt?: string;
   };
 
-  function createRun(params?: {
-    sessionEntry?: SessionEntry;
-    sessionKey?: string;
-    agentCfgContextTokens?: number;
-  }) {
+  function createRun(params?: { sessionEntry?: SessionEntry; sessionKey?: string }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "whatsapp",
@@ -2750,7 +2739,6 @@ describe("runReplyAgent fallback reasoning tags", () => {
       sessionEntry: params?.sessionEntry,
       sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: params?.agentCfgContextTokens,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -3462,7 +3450,6 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         sessionKey,
         storePath,
         defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 200_000,
         resolvedVerboseLevel: params.resolvedVerboseLevel ?? "off",
         isNewSession: params.isNewSession ?? false,
         blockStreamingEnabled: false,

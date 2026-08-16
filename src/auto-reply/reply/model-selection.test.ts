@@ -751,6 +751,7 @@ describe("createModelSelectionState catalog loading", () => {
           },
         },
       } as OpenClawConfig,
+      agentCfg: undefined,
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
       provider: "openai",

@@ -1672,7 +1672,7 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://aiplatform.googleapis.com");
   });
 
-  it("clamps inherited fallback maxTokens to the configured context window", () => {
+  it("clamps per-model maxTokens to the per-model context window", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",
       id: "mimo-v2.5-pro",
@@ -1688,7 +1688,14 @@ describe("resolveModel", () => {
     const cfg = makeProviderConfig("xiaomi-token-plan", {
       baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
       api: "openai-completions",
-      contextWindow: 16_000,
+      models: [
+        {
+          id: "mimo-v2.5-pro",
+          name: "Xiaomi MiMo V2.5 Pro",
+          contextWindow: 16_000,
+          maxTokens: 32_000,
+        },
+      ],
     });
 
     const result = resolveModelForTest("xiaomi-token-plan", "mimo-v2.5-pro", "/tmp/agent", cfg);
@@ -1698,7 +1705,7 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
     expect(model.contextWindow).toBe(16_000);
     expect(model.maxTokens).toBe(16_000);
-    expectRecordFields(model, { maxTokensSource: "discovered" });
+    expectRecordFields(model, { maxTokensSource: "configured" });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "xiaomi-token-plan",
       modelId: "mimo-v2.5-pro",
@@ -1962,7 +1969,7 @@ describe("resolveModel", () => {
     expect(model.thinkingLevelMap).toEqual({ off: null });
   });
 
-  it("keeps provider token overrides ahead of bundled static fallback metadata", () => {
+  it("keeps per-model token overrides ahead of bundled static fallback metadata", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",
       id: "mimo-v2.5-pro",
@@ -1979,9 +1986,15 @@ describe("resolveModel", () => {
     const cfg = makeProviderConfig("xiaomi-token-plan", {
       baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
       api: "openai-completions",
-      contextWindow: 100_000,
-      contextTokens: 90_000,
       maxTokens: 512,
+      models: [
+        {
+          id: "mimo-v2.5-pro",
+          name: "Xiaomi MiMo V2.5 Pro",
+          contextWindow: 100_000,
+          contextTokens: 90_000,
+        },
+      ],
     });
 
     const result = resolveModelForTest("xiaomi-token-plan", "mimo-v2.5-pro", "/tmp/agent", cfg);
