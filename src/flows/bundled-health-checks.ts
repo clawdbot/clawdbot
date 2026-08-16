@@ -1,5 +1,6 @@
 // Bundled health checks define built-in doctor checks for runtime readiness.
 import { asOptionalObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
@@ -16,6 +17,9 @@ type EmbeddingProviderSetupInspectionResult =
 
 // Bridges bundled plugin doctor checks into the core health registry.
 type BundledHealthApi = {
+  registerCodexManagedAppServerDoctorChecks?: (host: {
+    registerHealthCheck: typeof registerHealthCheck;
+  }) => void;
   pluginStateIsolatedDoctorCheckIds?: readonly string[];
   registerCuaDriverDoctorChecks?: (host: {
     registerHealthCheck: typeof registerHealthCheck;
@@ -105,6 +109,12 @@ export function registerBundledHealthChecks(params: {
     },
     memoryCoreActive: isMemoryCoreActive(params.cfg),
   });
+  if (shouldRegisterCodexManagedHealth(params.cfg)) {
+    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+      dirName: "codex",
+      artifactBasename: "api.js",
+    }).registerCodexManagedAppServerDoctorChecks?.({ registerHealthCheck });
+  }
   if (shouldRegisterPolicyHealth(params)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
       dirName: "policy",
@@ -117,6 +127,19 @@ export function registerBundledHealthChecks(params: {
       artifactBasename: "api.js",
     }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
   }
+}
+
+function shouldRegisterCodexManagedHealth(cfg: OpenClawConfig): boolean {
+  if (!collectConfiguredAgentHarnessRuntimes(cfg).includes("codex")) {
+    return false;
+  }
+  if (cfg.plugins?.entries?.codex?.enabled === false) {
+    return false;
+  }
+  return passesManifestOwnerBasePolicy({
+    plugin: { id: "codex" },
+    normalizedConfig: normalizePluginsConfig(cfg.plugins),
+  });
 }
 
 function isMemoryCoreActive(cfg: OpenClawConfig): boolean {

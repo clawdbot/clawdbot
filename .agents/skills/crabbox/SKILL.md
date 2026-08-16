@@ -18,28 +18,49 @@ Backends:
 Always report provider, id, run URL, command, result. Never call Testbox “AWS
 Crabbox.”
 
+## Host Gate
+
+Do not acquire a remote Linux lease before classifying the current execution
+host. A dedicated Linux worker is isolated/disposable, headless, assigned to the
+current task, and safe for trusted repository code. Run suitable trusted Linux
+tests, builds, Docker/package work, and heavy checks directly there; nesting
+Crabbox only creates another machine with the same role.
+
+Use generic properties only: Linux, no interactive desktop/user session, and a
+virtualized/containerized boundary. For equivalent bare-metal or hidden
+virtualization, `AGENT_HOST_ROLE=worker` is the explicit signal;
+`AGENT_HOST_ROLE=workstation` opts out. Never match a session vendor, agent
+runtime, hostname brand, or provider-specific environment variable. Ambiguity
+means workstation. Explicit remote requests still win.
+
+Use Crabbox from a dedicated worker only when proof needs a distinct capability
+or boundary: another OS/device, desktop/browser support the worker lacks,
+clean-room handling of untrusted source, credentials absent from the worker,
+release/CI parity, or a user-requested remote backend.
+
 ## Route First
 
-Source trust before test size.
+Source trust, then current host, then test size/capability.
 
 - Trusted + one/few focused tests + ready deps: local.
-- Trusted + heavy proof: Blacksmith Testbox.
+- Trusted + dedicated Linux worker + suitable Linux proof: current worker.
+- Trusted + workstation + heavy proof: Blacksmith Testbox.
 - Untrusted contributor/fork: secretless fork CI or sanitized direct AWS.
 - Never untrusted code on credential-hydrated Testbox.
 - Never run untrusted repo wrapper/config locally.
 - No speculative warmup. Acquire when first heavy command ready. Reuse id. Stop
-  before handoff. Local proof fanning out/expensive: stop local, go remote.
+  before handoff. Workstation proof fanning out/expensive: stop local, go remote.
 - Remote backend unavailable (broker/DNS/network/lease): trusted-source proof
   falls back to local — including heavy suites/gates — instead of blocking.
   Note fallback + reason in the proof summary. Untrusted source never falls
   back to local.
 
 Need direct AWS semantics? Pass `--provider aws`. Need normal trusted OpenClaw
-heavy proof? Pass `--provider blacksmith-testbox`.
+remote proof from a workstation? Pass `--provider blacksmith-testbox`.
 
 ## Preflight
 
-Run from repo root.
+Run from repo root only after the host gate says remote proof is needed.
 
 ```sh
 command -v crabbox

@@ -12,6 +12,7 @@ import {
 } from "./placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import { placementTurnOwner } from "./placement-record.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementReclaimRequest,
@@ -311,18 +312,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           agentId: current.agentId,
           claimId: reclaimClaimId,
           runId: reclaimClaimId,
-          owner:
-            current.executionMode === "remote-exec"
-              ? {
-                  kind: "local",
-                  environmentId: current.environmentId,
-                  ownerEpoch: current.activeOwnerEpoch,
-                }
-              : {
-                  kind: "worker",
-                  environmentId: current.environmentId,
-                  ownerEpoch: current.activeOwnerEpoch,
-                },
+          owner: placementTurnOwner(current),
         });
         const reclaimResultRef = workerWorkspaceResultRef(reclaimClaim.claimId);
         let manifestAccepted = false;
