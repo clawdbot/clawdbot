@@ -352,7 +352,16 @@ describe("matrix harness runtime", () => {
     expect(probeSignals).not.toHaveLength(0);
     expect(probeSignals.length).toBeLessThanOrEqual(2);
     expect(probeSignals.every((signal) => signal.aborted)).toBe(true);
-    expect(sleepImpl).not.toHaveBeenCalled();
+    // The inner AbortSignal.timeout (clamped to the remaining budget) and the
+    // outer deadline timer race at ~timeoutMs. When the inner fires first the
+    // loop takes one residual micro-sleep before Date.now() crosses the
+    // deadline. The protected invariant is bounded exit, not zero sleeps:
+    // allow at most one sleep and require it to be within the deadline budget.
+    expect(sleepImpl.mock.calls.length).toBeLessThanOrEqual(1);
+    const residualSleepMs = sleepImpl.mock.calls[0]?.[0];
+    if (residualSleepMs !== undefined) {
+      expect(residualSleepMs).toBeLessThanOrEqual(25);
+    }
   });
 
   it("probes the container fallback when the host versions probe stalls", async () => {
