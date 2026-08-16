@@ -17,6 +17,7 @@ import {
 } from "../embedded-agent-runner/run-state.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 import {
+  isExternalRestartRecoveryOwner,
   isMainRestartRecoveryCandidate,
   normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
@@ -48,6 +49,13 @@ async function markRecoveryStore(params: {
         const plan = params.plan(entry, sessionKey);
         if (!plan) {
           continue;
+        }
+        if (isExternalRestartRecoveryOwner(entry)) {
+          mainSessionRecoveryLog.info("skipping main-session restart recovery", {
+            phase: "mark",
+            reason: "external_owner",
+            sessionKey,
+          });
         }
         if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
           counts.skipped++;

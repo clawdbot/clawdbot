@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { MAX_RECOVERY_RETRIES } from "../../agents/main-session-recovery/main-session-restart-recovery-shared.js";
@@ -24,6 +25,7 @@ import {
 } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { isCompetingSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
@@ -154,6 +156,7 @@ export async function persistAgentSessionPhase(params: {
     let deletedDuringStoreUpdateError: string | undefined;
     let restoredCronContinuationError: string | undefined;
     let restartRecoveryReservationConflict: string | undefined;
+    let restartRecoveryOwnerConflict: string | undefined;
     try {
       persisted =
         (await patchSessionEntryTarget(
@@ -186,9 +189,36 @@ export async function persistAgentSessionPhase(params: {
               throw new Error(archivedError);
             }
             const internalFreshEntry = freshEntry as InternalSessionEntry | undefined;
+            const requestedRestartRecoveryOwner = params.request.restartRecoveryOwner;
+            const currentRestartRecoveryOwner =
+              internalFreshEntry?.restartRecoveryOwner ?? "openclaw";
+            const restartRecoveryOwnerChanged =
+              requestedRestartRecoveryOwner !== undefined &&
+              requestedRestartRecoveryOwner !== currentRestartRecoveryOwner;
+            const restartRecoveryClearPatch =
+              requestedRestartRecoveryOwner !== undefined &&
+              (requestedRestartRecoveryOwner === "external" || restartRecoveryOwnerChanged)
+                ? buildMainSessionRecoveryClearPatch(internalFreshEntry)
+                : {};
+            const retiresRestartRecoveryState = Object.keys(restartRecoveryClearPatch).length > 0;
+            if (
+              (restartRecoveryOwnerChanged || retiresRestartRecoveryState) &&
+              isCompetingSessionWorkAdmissionActive(params.storePath, [
+                params.canonicalSessionKey,
+                freshEntry?.sessionId,
+              ])
+            ) {
+              restartRecoveryOwnerConflict = restartRecoveryOwnerChanged
+                ? `Session "${params.canonicalSessionKey}" restart recovery owner cannot change ` +
+                  "while another turn is active; retry after it settles."
+                : `Session "${params.canonicalSessionKey}" restart recovery state cannot be ` +
+                  "retired while another turn is active; retry after it settles.";
+              throw new Error(restartRecoveryOwnerConflict);
+            }
             if (
               !params.isRestartRecoveryResumeRun &&
               internalFreshEntry &&
+              !retiresRestartRecoveryState &&
               (internalFreshEntry.mainRestartRecovery?.tombstone ||
                 (internalFreshEntry.status === "running" &&
                   internalFreshEntry.abortedLastRun === true &&
@@ -292,10 +322,19 @@ export async function persistAgentSessionPhase(params: {
                   ...lifecyclePatch,
                   ...buildSessionCreationStamp(params.creation),
                 };
+            const effectivePatchWithRecoveryOwner = {
+              ...effectivePatch,
+              ...(requestedRestartRecoveryOwner
+                ? {
+                    ...restartRecoveryClearPatch,
+                    restartRecoveryOwner: requestedRestartRecoveryOwner,
+                  }
+                : {}),
+            };
             createdNewEntry = freshEntry === undefined;
             const merged = withSqliteSessionFileMarker({
               agentId: params.sessionAgentId,
-              entry: mergeSessionEntry(entryForPatch, effectivePatch),
+              entry: mergeSessionEntry(entryForPatch, effectivePatchWithRecoveryOwner),
               sessionKey: params.canonicalSessionKey,
               storePath: params.storePath,
             });
@@ -392,6 +431,14 @@ export async function persistAgentSessionPhase(params: {
           false,
           undefined,
           errorShape(ErrorCodes.UNAVAILABLE, restartRecoveryReservationConflict),
+        );
+        return undefined;
+      }
+      if (restartRecoveryOwnerConflict) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, restartRecoveryOwnerConflict),
         );
         return undefined;
       }

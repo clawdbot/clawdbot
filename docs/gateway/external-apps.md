@@ -53,6 +53,17 @@ terminal result. For durable conversation state, use the `sessions.*` methods.
 For UI integrations, subscribe to Gateway events and render only the event
 families your app understands.
 
+If your app also persists its own timeout and retry state, set
+`restartRecoveryOwner: "external"` on its `agent` requests. The ownership marker
+persists through Gateway restarts so OpenClaw does not independently resume the
+same work. It is scoped to the current session generation: a session-ID rotation
+returns recovery to OpenClaw, and the first `agent` request for a replacement
+generation must send `"external"` again when the app still owns recovery. Omit
+the field to preserve the current generation's owner, or send
+`restartRecoveryOwner: "openclaw"` to return recovery to OpenClaw. See
+[Restart recovery](/gateway/restart-recovery#external-recovery-owners) for the
+full contract, `operator.admin` requirement, and failure-mode guidance.
+
 ## Cooperative host suspension
 
 Hosting controllers that freeze or snapshot a running process can use the

@@ -126,6 +126,9 @@ function recordLifecycleFence(entry: SessionEntry, run: RestartRecoveryRun): voi
 }
 
 export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: string): boolean {
+  if (isExternalRestartRecoveryOwner(entry)) {
+    return false;
+  }
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
     return false;
   }
@@ -137,6 +140,10 @@ export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: 
     !isCronSessionKey(sessionKey) &&
     !isAcpSessionKey(sessionKey)
   );
+}
+
+export function isExternalRestartRecoveryOwner(entry: SessionEntry): boolean {
+  return entry.restartRecoveryOwner === "external";
 }
 
 export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: string): boolean {

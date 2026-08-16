@@ -47,6 +47,7 @@ export const AgentControlProtocolSchemas = {
   MessageActionParams: agent.MessageActionParamsSchema,
   SendParams: agent.SendParamsSchema,
   PollParams: agent.PollParamsSchema,
+  RestartRecoveryOwner: agent.RestartRecoveryOwnerSchema,
   AgentParams: agent.AgentParamsSchema,
   AgentIdentityParams: agent.AgentIdentityParamsSchema,
   AgentIdentityResult: agent.AgentIdentityResultSchema,

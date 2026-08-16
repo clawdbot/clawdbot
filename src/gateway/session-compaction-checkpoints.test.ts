@@ -8,7 +8,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test } from "vitest";
-import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import type { InternalSessionEntry, SessionCompactionCheckpoint } from "../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptEvent,
@@ -143,6 +143,8 @@ describe("session-compaction-checkpoints", () => {
       updatedAt: Date.now(),
       compactionCheckpoints: [checkpoint],
     });
+    const ownerPatch: Partial<InternalSessionEntry> = { restartRecoveryOwner: "external" };
+    await updateSessionEntry(scope, () => ownerPatch);
 
     const store = createFileBackedCompactionCheckpointStore();
     const branchKey = "agent:main:checkpoint-branch";
@@ -167,6 +169,8 @@ describe("session-compaction-checkpoints", () => {
     }
     expect(branched.entry).not.toHaveProperty("sessionFile");
     expect(restored.entry).not.toHaveProperty("sessionFile");
+    expect((branched.entry as InternalSessionEntry).restartRecoveryOwner).toBeUndefined();
+    expect((restored.entry as InternalSessionEntry).restartRecoveryOwner).toBeUndefined();
     expect(fsSync.readdirSync(dir).some((file) => file.endsWith(".jsonl"))).toBe(false);
 
     const branchEvents = await loadTranscriptEvents({

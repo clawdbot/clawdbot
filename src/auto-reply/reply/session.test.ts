@@ -610,6 +610,7 @@ describe("initSessionState thread forking", () => {
         totalTokens: 0,
         totalTokensFresh: true,
         abortedLastRun: true,
+        restartRecoveryOwner: "external",
         restartRecoveryRuns: [{ runId: "old-run", lifecycleGeneration: "old-generation" }],
         mainRestartRecovery: {
           cycleId: "old-cycle",
@@ -650,6 +651,7 @@ describe("initSessionState thread forking", () => {
     expect(first.sessionEntry.totalTokens).toBeUndefined();
     expect(first.sessionEntry.totalTokensFresh).toBe(false);
     expect(first.sessionEntry.abortedLastRun).toBe(false);
+    expect((first.sessionEntry as SessionEntry).restartRecoveryOwner).toBeUndefined();
     expect(first.sessionEntry.restartRecoveryRuns).toBeUndefined();
     expect((first.sessionEntry as SessionEntry).mainRestartRecovery).toBeUndefined();
 
@@ -666,6 +668,7 @@ describe("initSessionState thread forking", () => {
     expect(second.sessionEntry.forkedFromParent).toBe(true);
     expect(second.sessionEntry.totalTokens).toBeUndefined();
     expect(second.sessionEntry.totalTokensFresh).toBe(false);
+    expect((second.sessionEntry as SessionEntry).restartRecoveryOwner).toBeUndefined();
     expect(second.sessionEntry.restartRecoveryRuns).toBeUndefined();
     expect((second.sessionEntry as SessionEntry).mainRestartRecovery).toBeUndefined();
     warn.mockRestore();

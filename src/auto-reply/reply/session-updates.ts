@@ -7,7 +7,10 @@ import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
-import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   patchSessionEntryCore,
@@ -373,6 +376,7 @@ export async function incrementCompactionCount(params: {
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
   if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;
+    updates.restartRecoveryOwner = undefined;
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     updates.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),

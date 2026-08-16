@@ -22,6 +22,11 @@ const AGENT_INTERNAL_EVENT_SOURCES = [
 const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as const;
 const CONVERSATION_REF_PATTERN = "^conv_[a-f0-9]{32}$";
 
+export const RestartRecoveryOwnerSchema = Type.Union([
+  Type.Literal("openclaw"),
+  Type.Literal("external"),
+]);
+
 /** Generated media/file attachment metadata carried by internal agent events. */
 const AgentGeneratedAttachmentSchema = closedObject({
   type: Type.Optional(Type.String({ enum: ["image", "audio", "video", "file"] })),
@@ -287,6 +292,9 @@ export const AgentParamsSchema = closedObject({
   replyTo: Type.Optional(Type.String()),
   sessionId: Type.Optional(Type.String()),
   sessionKey: Type.Optional(Type.String()),
+  // Durable owner for restart recovery of this session. Missing values preserve
+  // the current owner, and legacy sessions default to OpenClaw ownership.
+  restartRecoveryOwner: Type.Optional(RestartRecoveryOwnerSchema),
   // Backend-owned continuations can bind work to an already-admitted transcript.
   expectedExistingSessionId: Type.Optional(NonEmptyString),
   thinking: Type.Optional(Type.String()),
@@ -390,6 +398,7 @@ export const WakeParamsSchema = Type.Object(
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type AgentEvent = Static<typeof AgentEventSchema>;
+export type RestartRecoveryOwner = Static<typeof RestartRecoveryOwnerSchema>;
 export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
 export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
 export type ConversationListParams = Static<typeof ConversationListParamsSchema>;

@@ -223,6 +223,8 @@ describe("SQLite session message cuts", () => {
     "%s invalidates the source cache and lists the resulting branch",
     async (mode) => {
       const { env, scope } = await createSession();
+      const ownerPatch: Partial<InternalSessionEntry> = { restartRecoveryOwner: "external" };
+      await updateSessionEntry(scope, () => ownerPatch);
       const aliasKey = `${sessionKey}:alias`;
       const targetKey = `${sessionKey}:fork`;
       const sourceEntry = loadSessionEntry(scope);
@@ -256,6 +258,15 @@ describe("SQLite session message cuts", () => {
                 targetKey,
               });
       expect(result.status).toBe("created");
+      expect(
+        (
+          loadSessionEntry({
+            agentId,
+            env,
+            sessionKey: mode === "fork" ? targetKey : sessionKey,
+          }) as InternalSessionEntry | undefined
+        )?.restartRecoveryOwner,
+      ).toBeUndefined();
 
       const loadsBeforeAliasRead = fullTranscriptLoads();
       await listSessionBranches({ agentId, env, sessionKey: aliasKey });

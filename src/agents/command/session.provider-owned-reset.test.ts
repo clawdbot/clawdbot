@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
@@ -91,6 +91,30 @@ describe("command resolveSession provider-owned daily reset", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("old-session-id");
     expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
+  });
+
+  it("clears external restart recovery ownership across a daily rotation", () => {
+    const sessionKey = "agent:main:cli";
+    const startedAt = Date.now() - DAY_MS;
+    hoisted.store = {
+      [sessionKey]: {
+        sessionId: "externally-owned-session-id",
+        updatedAt: startedAt,
+        sessionStartedAt: startedAt,
+        lastInteractionAt: startedAt,
+        restartRecoveryOwner: "external",
+      },
+    };
+
+    const result = resolveSession({
+      cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
+      sessionKey,
+      agentId: "main",
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe("externally-owned-session-id");
+    expect(result.sessionEntry?.restartRecoveryOwner).toBeUndefined();
   });
 
   it("keeps a model-locked session across the daily boundary", () => {

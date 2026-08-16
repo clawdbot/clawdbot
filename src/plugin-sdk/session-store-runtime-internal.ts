@@ -27,7 +27,9 @@ export function toSessionAccessScope(params: SessionStoreReadParams): SessionAcc
 
 export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionEntry {
   const {
+    lifecycleRunId: _lifecycleRunId,
     activeWriterRunId: _activeWriterRunId,
+    restartRecoveryOwner: _restartRecoveryOwner,
     mainRestartRecovery: _mainRestartRecovery,
     ...publicEntry
   } = entry;
@@ -43,7 +45,9 @@ export function projectPluginSessionEntryPatch(
   patch: Partial<InternalSessionEntry>,
 ): Partial<SessionEntry> {
   const {
+    lifecycleRunId: _lifecycleRunId,
     activeWriterRunId: _activeWriterRunId,
+    restartRecoveryOwner: _restartRecoveryOwner,
     mainRestartRecovery: _mainRestartRecovery,
     ...publicPatch
   } = patch;
@@ -61,32 +65,54 @@ export function projectPluginSessionStore(
   );
 }
 
-export function activeRecoveryFieldsForSameSession(
+export function internalFieldsForSameSession(
   existingEntry: InternalSessionEntry | undefined,
   nextSessionId: string | undefined,
 ): Partial<InternalSessionEntry> | undefined {
-  if (
-    !existingEntry ||
-    existingEntry.sessionId !== nextSessionId ||
-    existingEntry.mainRestartRecovery === undefined
-  ) {
+  if (!existingEntry || existingEntry.sessionId !== nextSessionId) {
     return undefined;
   }
   return {
-    activeWriterRunId: existingEntry.activeWriterRunId,
-    abortedLastRun: existingEntry.abortedLastRun,
-    restartRecoveryRuns: existingEntry.restartRecoveryRuns,
-    mainRestartRecovery: existingEntry.mainRestartRecovery,
+    ...(existingEntry.lifecycleRunId !== undefined
+      ? { lifecycleRunId: existingEntry.lifecycleRunId }
+      : {}),
+    ...(existingEntry.activeWriterRunId !== undefined
+      ? { activeWriterRunId: existingEntry.activeWriterRunId }
+      : {}),
+    ...(existingEntry.restartRecoveryOwner !== undefined
+      ? { restartRecoveryOwner: existingEntry.restartRecoveryOwner }
+      : {}),
+    ...(existingEntry.mainRestartRecovery !== undefined
+      ? {
+          abortedLastRun: existingEntry.abortedLastRun,
+          restartRecoveryRuns: existingEntry.restartRecoveryRuns,
+          mainRestartRecovery: existingEntry.mainRestartRecovery,
+        }
+      : {}),
   };
 }
 
-export function clearRecoveryStateForRotatedSessionPatch(
+export function clearInternalStateForRotatedSessionPatch(
+  existingEntry: InternalSessionEntry,
+  publicPatch: SessionEntry,
+): InternalSessionEntry;
+export function clearInternalStateForRotatedSessionPatch(
+  existingEntry: InternalSessionEntry,
+  publicPatch: Partial<SessionEntry>,
+): Partial<InternalSessionEntry>;
+export function clearInternalStateForRotatedSessionPatch(
   existingEntry: InternalSessionEntry,
   publicPatch: Partial<SessionEntry>,
 ): Partial<InternalSessionEntry> {
   return Object.hasOwn(publicPatch, "sessionId") &&
     publicPatch.sessionId !== existingEntry.sessionId
-    ? { ...publicPatch, ...MAIN_SESSION_RECOVERY_CLEAR_PATCH }
+    ? {
+        ...publicPatch,
+        ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
+        lifecycleRunId: undefined,
+        activeWriterRunId: undefined,
+        restartRecoveryOwner: undefined,
+      }
     : publicPatch;
 }
 
@@ -101,16 +127,16 @@ export function reconcilePluginSessionStore(params: {
   }
   for (const [sessionKey, publicEntry] of Object.entries(params.publicStore)) {
     const projectedEntry = projectPluginSessionEntry(publicEntry as InternalSessionEntry);
-    const existingRecovery = activeRecoveryFieldsForSameSession(
+    const existingInternalFields = internalFieldsForSameSession(
       params.internalStore[sessionKey],
       projectedEntry.sessionId,
     );
     const existingEntry = params.internalStore[sessionKey];
     params.internalStore[sessionKey] =
       existingEntry && existingEntry.sessionId !== projectedEntry.sessionId
-        ? { ...projectedEntry, ...MAIN_SESSION_RECOVERY_CLEAR_PATCH }
-        : existingRecovery
-          ? { ...projectedEntry, ...existingRecovery }
+        ? clearInternalStateForRotatedSessionPatch(existingEntry, projectedEntry)
+        : existingInternalFields
+          ? { ...projectedEntry, ...existingInternalFields }
           : projectedEntry;
   }
 }

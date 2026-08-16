@@ -416,49 +416,60 @@ export function createAgentTurnService({
         if (respondToGatewayAdmissionOutcome()) {
           return;
         }
-        const persistedSession = await persistAgentSessionPhase({
-          request,
-          cfg: cfgLocal,
-          storePath,
-          storeKeys,
-          entry,
-          canonicalSessionKey,
-          sessionAgentId,
-          mainSessionKey,
-          creation: resolveAgentRunSessionCreation(principal),
-          lifecycleGeneration,
-          isRestartRecoveryResumeRun,
-          runId,
-          agentId,
-          suppressVisibleSessionEffects,
-          restoredCronContinuationIdentity,
-          initialPatchBuild: patchBuild,
-          buildSessionPatch,
-          initialSessionEntry: sessionEntry,
-          initialResolvedSessionId: resolvedSessionId,
-          initialSessionPersistedBeforeGatewayAdmission: sessionPersistedBeforeGatewayAdmission,
-          initialSupersededSessionId: supersededSessionId,
-          touchInteraction,
-          requestedBestEffortDeliver,
-          bestEffortDeliver,
-          expectedSession,
-          maintenanceConfig: sessionMaintenanceConfig,
-          abortForLifecycleRotation,
-          assertGatewayWorkAdmissionAllowed,
-          respondToGatewayAdmissionOutcome,
-          updateAdmissionState: (state) => {
-            resolvedSessionId = state.resolvedSessionId;
-            admittedSessionId = state.admittedSessionId;
-            supersededSessionId = state.supersededSessionId;
-            sessionPersistedBeforeGatewayAdmission = state.sessionPersistedBeforeGatewayAdmission;
-          },
-          getAdmittedSessionId: () => admittedSessionId,
-          setCronContinuationClaim: cronContinuation.setClaim,
-          setMainRestartRecoveryOwnerLease: (lease) => {
-            mainRestartRecoveryOwnerLease = lease;
-          },
-          respond,
-        });
+        const sessionWorkAdmission = admissionController.getAdmission();
+        if (!sessionWorkAdmission) {
+          io.emitAcceptance([
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, "agent session admission failed"),
+          ]);
+          return;
+        }
+        const persistSession = () =>
+          persistAgentSessionPhase({
+            request,
+            cfg: cfgLocal,
+            storePath,
+            storeKeys,
+            entry,
+            canonicalSessionKey,
+            sessionAgentId,
+            mainSessionKey,
+            creation: resolveAgentRunSessionCreation(principal),
+            lifecycleGeneration,
+            isRestartRecoveryResumeRun,
+            runId,
+            agentId,
+            suppressVisibleSessionEffects,
+            restoredCronContinuationIdentity,
+            initialPatchBuild: patchBuild,
+            buildSessionPatch,
+            initialSessionEntry: sessionEntry,
+            initialResolvedSessionId: resolvedSessionId,
+            initialSessionPersistedBeforeGatewayAdmission: sessionPersistedBeforeGatewayAdmission,
+            initialSupersededSessionId: supersededSessionId,
+            touchInteraction,
+            requestedBestEffortDeliver,
+            bestEffortDeliver,
+            expectedSession,
+            maintenanceConfig: sessionMaintenanceConfig,
+            abortForLifecycleRotation,
+            assertGatewayWorkAdmissionAllowed,
+            respondToGatewayAdmissionOutcome,
+            updateAdmissionState: (state) => {
+              resolvedSessionId = state.resolvedSessionId;
+              admittedSessionId = state.admittedSessionId;
+              supersededSessionId = state.supersededSessionId;
+              sessionPersistedBeforeGatewayAdmission = state.sessionPersistedBeforeGatewayAdmission;
+            },
+            getAdmittedSessionId: () => admittedSessionId,
+            setCronContinuationClaim: cronContinuation.setClaim,
+            setMainRestartRecoveryOwnerLease: (lease) => {
+              mainRestartRecoveryOwnerLease = lease;
+            },
+            respond,
+          });
+        const persistedSession = await sessionWorkAdmission.run(persistSession);
         if (!persistedSession) {
           return;
         }

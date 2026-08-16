@@ -2878,6 +2878,7 @@ describe("recordCliCompactionInStore", () => {
         [sessionKey]: {
           sessionId,
           updatedAt: 1,
+          restartRecoveryOwner: "external",
         },
       };
       await seedSessionStore(storePath, sessionStore);
@@ -2893,10 +2894,12 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.sessionId).toBe(nextSessionId);
       expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
       expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual([sessionId, nextSessionId]);
+      expect(sessionStore[sessionKey]?.restartRecoveryOwner).toBeUndefined();
       expect(sessionStore[sessionKey]).not.toHaveProperty("sessionFile");
 
       const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.sessionId).toBe(nextSessionId);
+      expect(persisted[sessionKey]?.restartRecoveryOwner).toBeUndefined();
       expect(persisted[sessionKey]).not.toHaveProperty("sessionFile");
     });
   });

@@ -230,6 +230,7 @@ export function buildAgentSessionPatch(params: {
         }
       : {}),
     ...automaticRecoveryClearPatch,
+    ...(shouldClearRotatedState ? { restartRecoveryOwner: undefined } : {}),
     delivery,
     ...(labelValue ? { label: labelValue } : {}),
     ...(freshSpawnedBy ? { spawnedBy: freshSpawnedBy } : {}),

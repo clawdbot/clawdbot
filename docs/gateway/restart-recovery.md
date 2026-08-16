@@ -10,7 +10,7 @@ title: "Restart recovery"
 Restarting the gateway does not lose agent state. Conversations, transcripts,
 scheduled jobs, background task records, and queued outbound messages all live
 on disk, and work that was interrupted mid-turn is detected and resumed
-automatically after the gateway comes back up. Recovery is always on and
+automatically after the gateway comes back up. Recovery is on by default and
 normally needs no manual intervention. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may quarantine one session
 until you inspect or replace it.
@@ -103,6 +103,40 @@ the gateway explicitly rejects the request before acceptance, and retains the
 charge when a post-dispatch result is uncertain to avoid replaying work.
 Foreground work that already owns the session keeps automatic recovery out
 until that work settles.
+
+### External recovery owners
+
+An external orchestrator that durably owns its own timeout and retry policy can
+opt a Gateway session out of OpenClaw's automatic main-session recovery. Send
+`restartRecoveryOwner` on the `agent` RPC that starts or continues the session:
+
+```json
+{
+  "message": "Run this orchestrated task",
+  "sessionKey": "agent:main:orchestrated-task",
+  "restartRecoveryOwner": "external",
+  "idempotencyKey": "orchestration-run-42"
+}
+```
+
+The setting is scoped to the current session generation and survives Gateway
+restarts. A session-ID rotation clears it, so the first `agent` request for a
+replacement generation must send `"restartRecoveryOwner": "external"` again
+when the orchestrator still owns recovery. Omitting the field preserves the
+current generation's owner; new or rotated generations remain OpenClaw-owned
+for backward compatibility. Send
+`"restartRecoveryOwner": "openclaw"` to transfer automatic restart recovery
+back to OpenClaw. Changing the owner requires `operator.admin` and is rejected
+while another turn owns the session; retry after that turn settles. A successful
+transfer retires recovery state from the previous owner so an old interrupted
+cycle cannot run under the new policy.
+
+Externally owned sessions are skipped during restart-drain marking, startup
+orphan reconciliation, and recovery dispatch. The
+`main-session-restart-recovery` log records those decisions with
+`reason=external_owner`. Use this setting only when the external orchestrator
+will reliably reconcile interrupted work; OpenClaw will not resume it as a
+fallback.
 
 After the durable budget is exhausted, the session is tombstoned instead of
 looping forever. Inspect the failed session and use `/new` or `/reset` to start a
@@ -258,8 +292,9 @@ channels.start --params '{"channel":"<id>"}'`
 
 - Sessions excluded from main-session recovery because another owner already
   handles them: subagent sessions (subagent recovery), cron sessions (the
-  scheduler re-runs on schedule), and ACP-managed sessions (the connected IDE
-  or client owns the resume).
+  scheduler re-runs on schedule), ACP-managed sessions (the connected IDE or
+  client owns the resume), and sessions whose `restartRecoveryOwner` is
+  `external`.
 - Work that was never admitted: messages arriving during the drain window are
   rejected with an explicit restart error rather than silently queued into a
   dying process.

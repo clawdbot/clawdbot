@@ -70,6 +70,31 @@ const musicCompletionEvent: AgentInternalEvent = {
 };
 
 describe("AgentParamsSchema", () => {
+  it.each(["openclaw", "external"])(
+    "accepts %s restart recovery ownership",
+    (restartRecoveryOwner) => {
+      expect(
+        Value.Check(AgentParamsSchema, {
+          message: "run under the selected recovery owner",
+          sessionKey: "agent:main:main",
+          restartRecoveryOwner,
+          idempotencyKey: `recovery-owner-${restartRecoveryOwner}`,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects unknown restart recovery ownership", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "run under an unknown recovery owner",
+        sessionKey: "agent:main:main",
+        restartRecoveryOwner: "scheduler",
+        idempotencyKey: "recovery-owner-unknown",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts the backend expected-session binding", () => {
     expect(
       Value.Check(AgentParamsSchema, {

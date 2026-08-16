@@ -76,7 +76,10 @@ import {
 } from "../subagent-test-fixtures.test-helpers.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
-import { resolveRestartRecoveryStorePaths } from "./main-session-restart-recovery-shared.js";
+import {
+  mainSessionRecoveryLog,
+  resolveRestartRecoveryStorePaths,
+} from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
   markRestartAbortedMainSessions,
@@ -619,6 +622,68 @@ describe("main-session-restart-recovery", () => {
       }),
     ).resolves.toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(gatewayParams()).toMatchObject({ agentId: "main", sessionKey: "global" });
+  });
+
+  it("never marks or resumes externally owned sessions across repeated restarts", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeMainSession({
+      sessionsDir,
+      restartRecoveryOwner: "external",
+      abortedLastRun: false,
+    });
+    const infoSpy = vi.spyOn(mainSessionRecoveryLog, "info").mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        markRestartAbortedMainSessions({
+          stateDir: tmpDir,
+          sessionKeys: ["agent:main:main"],
+        }),
+      ).resolves.toEqual({ marked: 0, skipped: 1 });
+      await expect(
+        markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir }),
+      ).resolves.toEqual({ marked: 0, skipped: 1 });
+      await expect(
+        markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir }),
+      ).resolves.toEqual({ marked: 0, skipped: 1 });
+
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        restartRecoveryOwner: "external",
+        status: "running",
+      });
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery,
+      ).toBeUndefined();
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.abortedLastRun).toBe(
+        false,
+      );
+
+      await writeMainSession({
+        sessionsDir,
+        restartRecoveryOwner: "external",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "legacy-recovery-cycle",
+          revision: 1,
+          chargedAttempts: 0,
+        },
+      });
+      await expectRecovery({ recovered: 0, failed: 0, skipped: 1 });
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(infoSpy).toHaveBeenCalledWith("skipping main-session restart recovery", {
+        phase: "mark",
+        reason: "external_owner",
+        sessionKey: "agent:main:main",
+      });
+      expect(infoSpy).toHaveBeenCalledWith("skipping main-session restart recovery", {
+        phase: "dispatch",
+        reason: "external_owner",
+        sessionKey: "agent:main:main",
+      });
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 
   it("persists abort-registry runs after their event context was cleared", async () => {

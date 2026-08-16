@@ -25,7 +25,10 @@ import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../embedded-agent-runner/run-state.js";
-import { isMainRestartRecoveryCandidate } from "./main-session-recovery-state.js";
+import {
+  isExternalRestartRecoveryOwner,
+  isMainRestartRecoveryCandidate,
+} from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
   hasRestartRecoveryMessageActionAuthority,
@@ -288,6 +291,13 @@ export async function recoverStore(params: {
     let entry = loadedEntry;
     if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
       continue;
+    }
+    if (isExternalRestartRecoveryOwner(entry)) {
+      mainSessionRecoveryLog.info("skipping main-session restart recovery", {
+        phase: "dispatch",
+        reason: "external_owner",
+        sessionKey,
+      });
     }
     if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
       result.skipped++;

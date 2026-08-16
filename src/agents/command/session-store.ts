@@ -6,7 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   SESSION_TOTAL_TOKENS_VERSION,
   setSessionRuntimeModel,
-  type SessionEntry,
+  type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -521,6 +521,7 @@ export async function recordCliCompactionInStore(params: {
   if (newSessionId && newSessionId !== entry.sessionId) {
     delete (next as { sessionFile?: unknown }).sessionFile;
     next.sessionId = newSessionId;
+    next.restartRecoveryOwner = undefined;
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     next.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -786,6 +786,7 @@ describe("incrementCompactionCount", () => {
       sessionId: "old-session-id",
       updatedAt: Date.now(),
       compactionCount: 1,
+      restartRecoveryOwner: "external",
     } as SessionEntry;
     const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
@@ -800,6 +801,8 @@ describe("incrementCompactionCount", () => {
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
     expect(requireStoredSession(stored, sessionKey).sessionId).toBe("new-session-id");
     expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(2);
+    expect(sessionStore[sessionKey]?.restartRecoveryOwner).toBeUndefined();
+    expect(requireStoredSession(stored, sessionKey).restartRecoveryOwner).toBeUndefined();
   });
 
   it("keeps sessionId when newSessionId matches current sessionId", async () => {
@@ -807,6 +810,7 @@ describe("incrementCompactionCount", () => {
       sessionId: "same-id",
       updatedAt: Date.now(),
       compactionCount: 0,
+      restartRecoveryOwner: "external",
     } as SessionEntry;
     const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
@@ -821,6 +825,7 @@ describe("incrementCompactionCount", () => {
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
     expect(requireStoredSession(stored, sessionKey).sessionId).toBe("same-id");
     expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).restartRecoveryOwner).toBe("external");
   });
 
   it("marks totalTokens stale when tokensAfter is not provided", async () => {

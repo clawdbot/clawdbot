@@ -3,10 +3,12 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
@@ -300,6 +302,274 @@ describe("gateway server agent", () => {
     expect(stored?.claudeCliSessionId).toBe("cli-session-123");
   });
 
+  test("agent persists restart recovery ownership across unrelated session updates", async () => {
+    await useTempSessionStorePath();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-external-recovery-owner",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const setExternal = await rpcReq(ws, "agent", {
+      message: "start externally orchestrated work",
+      sessionKey: "main",
+      restartRecoveryOwner: "external",
+      idempotencyKey: "idem-agent-recovery-owner-external",
+    });
+    expect(setExternal.ok).toBe(true);
+    await readAgentCommandCall({ runId: "idem-agent-recovery-owner-external" });
+
+    const sessionStorePath = testState.sessionStorePath;
+    if (!sessionStorePath) {
+      throw new Error("expected session store path");
+    }
+    const loadStored = () =>
+      loadSessionEntry({
+        sessionKey: "agent:main:main",
+        storePath: sessionStorePath,
+      }) as InternalSessionEntry | undefined;
+    expect(loadStored()?.restartRecoveryOwner).toBe("external");
+
+    const updateMetadata = await rpcReq(ws, "agent", {
+      message: "continue without changing recovery ownership",
+      sessionKey: "main",
+      label: "externally orchestrated",
+      idempotencyKey: "idem-agent-recovery-owner-preserved",
+    });
+    expect(updateMetadata.ok).toBe(true);
+    await readAgentCommandCall({ runId: "idem-agent-recovery-owner-preserved" });
+    expect(loadStored()?.restartRecoveryOwner).toBe("external");
+
+    const externalEntry = loadStored();
+    if (!externalEntry) {
+      throw new Error("expected externally owned session entry");
+    }
+    const interruptedExternalEntry: InternalSessionEntry = {
+      ...externalEntry,
+      status: "running",
+      abortedLastRun: true,
+      mainRestartRecovery: {
+        cycleId: "stale-external-cycle",
+        revision: 2,
+        chargedAttempts: 1,
+      },
+    };
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:main", storePath: sessionStorePath },
+      interruptedExternalEntry,
+    );
+
+    const returnToOpenClaw = await rpcReq(ws, "agent", {
+      message: "return restart recovery to OpenClaw",
+      sessionKey: "main",
+      restartRecoveryOwner: "openclaw",
+      idempotencyKey: "idem-agent-recovery-owner-openclaw",
+    });
+    expect(returnToOpenClaw.ok).toBe(true);
+    await readAgentCommandCall({ runId: "idem-agent-recovery-owner-openclaw" });
+    expect(loadStored()?.restartRecoveryOwner).toBe("openclaw");
+    expect(loadStored()?.abortedLastRun).toBe(false);
+    expect(loadStored()?.mainRestartRecovery).toBeUndefined();
+  });
+
+  test("agent validates malformed recovery ownership before admin authorization", async () => {
+    const writerWs = await connectWebchatClient({ port, scopes: ["operator.write"] });
+    try {
+      const malformed = await rpcReq(writerWs, "agent", {
+        message: "reject malformed recovery ownership",
+        sessionKey: "main",
+        restartRecoveryOwner: "scheduler",
+        idempotencyKey: "idem-agent-recovery-owner-malformed",
+      });
+      expect(malformed.ok).toBe(false);
+      expect(malformed.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("invalid agent params"),
+      });
+
+      const valid = await rpcReq(writerWs, "agent", {
+        message: "require admin for valid recovery ownership",
+        sessionKey: "main",
+        restartRecoveryOwner: "external",
+        idempotencyKey: "idem-agent-recovery-owner-admin",
+      });
+      expect(valid.ok).toBe(false);
+      expect(valid.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("operator.admin"),
+      });
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    } finally {
+      writerWs.close();
+    }
+  });
+
+  test("agent clears restart recovery ownership when rotating the session generation", async () => {
+    await useTempSessionStorePath();
+    const sessionStorePath = testState.sessionStorePath;
+    if (!sessionStorePath) {
+      throw new Error("expected session store path");
+    }
+    const externalEntry: InternalSessionEntry = {
+      sessionId: "sess-external-owner-old-generation",
+      updatedAt: 0,
+      restartRecoveryOwner: "external",
+    };
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:main", storePath: sessionStorePath },
+      externalEntry,
+    );
+
+    const runId = "idem-agent-recovery-owner-rotation";
+    const res = await rpcReq(ws, "agent", {
+      message: "start a fresh OpenClaw-owned generation",
+      sessionKey: "main",
+      idempotencyKey: runId,
+    });
+    expect(res.ok).toBe(true);
+    const call = await readAgentCommandCall({ runId });
+    expect(call.sessionId).toEqual(expect.any(String));
+    expect(call.sessionId).not.toBe("sess-external-owner-old-generation");
+
+    const stored = loadSessionEntry({
+      sessionKey: "agent:main:main",
+      storePath: sessionStorePath,
+    }) as InternalSessionEntry | undefined;
+    expect(stored?.sessionId).toBe(call.sessionId);
+    expect(stored?.restartRecoveryOwner).toBeUndefined();
+  });
+
+  test.each([
+    {
+      name: "tombstoned",
+      entry: {
+        abortedLastRun: false,
+        mainRestartRecovery: {
+          chargedAttempts: 3,
+          cycleId: "tombstoned-cycle",
+          revision: 4,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+        sessionId: "sess-tombstoned-recovery-owner",
+        status: "failed",
+        updatedAt: 10,
+      } satisfies InternalSessionEntry,
+    },
+    {
+      name: "exhausted",
+      entry: {
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          chargedAttempts: 3,
+          cycleId: "exhausted-cycle",
+          revision: 4,
+        },
+        sessionId: "sess-exhausted-recovery-owner",
+        status: "running",
+        updatedAt: 10,
+      } satisfies InternalSessionEntry,
+    },
+  ])("agent transfers $name recovery quarantine to an external owner", async ({ name, entry }) => {
+    await useTempSessionStorePath();
+    const sessionStorePath = testState.sessionStorePath;
+    if (!sessionStorePath) {
+      throw new Error("expected session store path");
+    }
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:main", storePath: sessionStorePath },
+      entry,
+    );
+
+    const runId = `idem-agent-recovery-owner-${name}`;
+    const transfer = await rpcReq(ws, "agent", {
+      message: `transfer ${name} recovery to the external orchestrator`,
+      sessionKey: "main",
+      restartRecoveryOwner: "external",
+      idempotencyKey: runId,
+    });
+    expect(transfer.ok).toBe(true);
+    await readAgentCommandCall({ runId });
+    const settled = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 5_000 });
+    expect(settled.ok).toBe(true);
+
+    const stored = loadSessionEntry({
+      sessionKey: "agent:main:main",
+      storePath: sessionStorePath,
+    }) as InternalSessionEntry | undefined;
+    expect(stored?.restartRecoveryOwner).toBe("external");
+    expect(stored?.abortedLastRun).toBe(false);
+    expect(stored?.mainRestartRecovery).toBeUndefined();
+    expect(stored?.restartRecoveryRuns).toBeUndefined();
+  });
+
+  test("agent rejects restart recovery ownership changes during active work", async () => {
+    await writeMainSessionEntry({ sessionId: "sess-active-recovery-owner" });
+    const runCompletion = createDeferred();
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
+      await runCompletion.promise;
+    });
+
+    const firstRun = await rpcReq(ws, "agent", {
+      message: "keep this OpenClaw-owned turn active",
+      sessionKey: "main",
+      idempotencyKey: "idem-agent-recovery-owner-active",
+    });
+    expect(firstRun.ok).toBe(true);
+    await readAgentCommandCall({ runId: "idem-agent-recovery-owner-active" });
+
+    const conflictingChange = await rpcReq(ws, "agent", {
+      message: "change ownership while the prior turn is active",
+      sessionKey: "main",
+      restartRecoveryOwner: "external",
+      idempotencyKey: "idem-agent-recovery-owner-conflict",
+    });
+    expect(conflictingChange.ok).toBe(false);
+    expect(conflictingChange.error).toMatchObject({
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("cannot change while another turn is active"),
+    });
+
+    const sessionStorePath = testState.sessionStorePath;
+    if (!sessionStorePath) {
+      throw new Error("expected session store path");
+    }
+    expect(
+      (
+        loadSessionEntry({
+          sessionKey: "agent:main:main",
+          storePath: sessionStorePath,
+        }) as InternalSessionEntry | undefined
+      )?.restartRecoveryOwner,
+    ).toBeUndefined();
+
+    runCompletion.resolve();
+    const settled = await rpcReq(ws, "agent.wait", {
+      runId: "idem-agent-recovery-owner-active",
+      timeoutMs: 5_000,
+    });
+    expect(settled.ok).toBe(true);
+
+    const idleChange = await rpcReq(ws, "agent", {
+      message: "change ownership after the prior turn settles",
+      sessionKey: "main",
+      restartRecoveryOwner: "external",
+      idempotencyKey: "idem-agent-recovery-owner-idle",
+    });
+    expect(idleChange.ok).toBe(true);
+    await readAgentCommandCall({ runId: "idem-agent-recovery-owner-idle" });
+    expect(
+      (
+        loadSessionEntry({
+          sessionKey: "agent:main:main",
+          storePath: sessionStorePath,
+        }) as InternalSessionEntry | undefined
+      )?.restartRecoveryOwner,
+    ).toBe("external");
+  });
+
   test("agent accepts built-in channel alias (imsg)", async () => {
     const registry = createRegistry([
       {
@@ -440,6 +710,23 @@ describe("gateway server agent", () => {
       });
       expect(viaAgent.ok).toBe(false);
       expect(viaAgent.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
+
+      const recoveryOwnerChange = await rpcReq(writeWs, "agent", {
+        message: "start externally orchestrated work",
+        sessionKey: "main",
+        restartRecoveryOwner: "external",
+        idempotencyKey: "idem-agent-write-recovery-owner",
+      });
+      expect(recoveryOwnerChange.ok).toBe(false);
+      expect(recoveryOwnerChange.error).toMatchObject({
         code: "FORBIDDEN",
         message: "missing scope: operator.admin",
         details: {

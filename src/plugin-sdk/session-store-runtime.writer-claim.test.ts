@@ -9,13 +9,23 @@ import type { SessionEntry } from "./session-store-runtime.js";
 const sessionEntryKeepsWriterClaimPrivate: "activeWriterRunId" extends keyof SessionEntry
   ? false
   : true = true;
+const sessionEntryKeepsLifecycleOwnerPrivate: "lifecycleRunId" extends keyof SessionEntry
+  ? false
+  : true = true;
+const sessionEntryKeepsRecoveryOwnerPrivate: "restartRecoveryOwner" extends keyof SessionEntry
+  ? false
+  : true = true;
 void sessionEntryKeepsWriterClaimPrivate;
+void sessionEntryKeepsLifecycleOwnerPrivate;
+void sessionEntryKeepsRecoveryOwnerPrivate;
 
-describe("plugin session writer claim projection", () => {
-  it("excludes the durable writer claim from entries and patches", () => {
+describe("plugin internal session projection", () => {
+  it("excludes durable lifecycle and recovery owners from entries and patches", () => {
     const entry: InternalSessionEntry = {
       activeWriterRunId: "run-writer",
+      lifecycleRunId: "run-lifecycle",
       model: "gpt-5.6",
+      restartRecoveryOwner: "external",
       sessionId: "session-writer",
       updatedAt: 10,
     };
@@ -26,7 +36,12 @@ describe("plugin session writer claim projection", () => {
       updatedAt: 10,
     });
     expect(
-      projectPluginSessionEntryPatch({ activeWriterRunId: "run-next", model: "gpt-5.5" }),
+      projectPluginSessionEntryPatch({
+        activeWriterRunId: "run-next",
+        lifecycleRunId: "run-next-lifecycle",
+        model: "gpt-5.5",
+        restartRecoveryOwner: "openclaw",
+      }),
     ).toEqual({ model: "gpt-5.5" });
   });
 });

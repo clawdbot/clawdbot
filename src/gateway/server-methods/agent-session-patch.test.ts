@@ -61,4 +61,36 @@ describe("agent session patch", () => {
   it("keeps the existing label when the request has none", () => {
     expect(buildPatch(false, { label: "Existing" }).label).toBe("Existing");
   });
+
+  it("clears restart recovery ownership when rotating the session generation", () => {
+    const entry: SessionEntry = {
+      sessionId: "session-old",
+      updatedAt: 0,
+      restartRecoveryOwner: "external",
+    };
+
+    const result = buildAgentSessionPatch({
+      freshEntry: entry,
+      initialEntry: entry,
+      cfg: {},
+      sessionAgentId: "main",
+      canonicalSessionKey: "agent:main:main",
+      storePath: "/tmp/openclaw-recovery-owner-rotation-test.json",
+      normalizedSpawned: {},
+      requestDeliveryHint: undefined,
+      hasRestoredCronContinuation: false,
+      resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
+      now: 1_000,
+      isSystemGatewayRun: false,
+      visibleRequest: true,
+      fallbackSessionId: "session-new",
+      touchInteraction: true,
+      failedSessionTranscriptMissing: () => false,
+    });
+
+    expect(result).toMatchObject({ isNewSession: true, rotatedSessionId: true });
+    expect(result.patch.sessionId).toBe("session-new");
+    expect(Object.hasOwn(result.patch, "restartRecoveryOwner")).toBe(true);
+    expect(result.patch.restartRecoveryOwner).toBeUndefined();
+  });
 });
