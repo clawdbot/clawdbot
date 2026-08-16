@@ -189,22 +189,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         workspacePluginRootPresent,
         context,
       );
-      if (staleDynamicOwner) {
-        // Existing leases retain their immutable snapshot. Publish a distinct owner so their release
-        // cannot delete the replacement generation admitted for new work at the same dynamic key.
-        snapshot = await publishModelRuntimeSnapshot(
-          input,
-          context.owners,
-          context.agentBuildCompletions,
-          context.getBuildTimeoutMs(),
-          undefined,
-          provenance,
-          options.catalogMode,
-          reusablePluginGeneration,
-        );
-      } else if (existing) {
+      if (existing && !staleDynamicOwner) {
         snapshot = await context.prepareSnapshot(input);
       } else {
+        // Fresh keys publish a first generation; stale dynamic owners publish a distinct
+        // replacement owner because existing leases retain their immutable snapshot, so
+        // their release cannot delete the generation admitted for new work at this key.
         snapshot = await publishModelRuntimeSnapshot(
           input,
           context.owners,

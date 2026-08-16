@@ -83,6 +83,9 @@ function readCiWorkflow() {
 function evaluateWorkflowExpression(
   expression: unknown,
   context: {
+    // Runner routing keys off contributor trust, so pull-request cases default
+    // to CONTRIBUTOR: same-repo PRs always come from someone with write access.
+    authorAssociation?: string;
     eventName: "pull_request" | "push" | "workflow_dispatch";
     headRepository?: string;
     matrix?: Record<string, unknown>;
@@ -103,17 +106,25 @@ function evaluateWorkflowExpression(
     throw new Error(`workflow expression has no body: ${expression}`);
   }
   return runInNewContext(source, {
+    // GitHub expression builtins the runner-routing clauses use.
+    contains: (haystack: unknown, needle: unknown) =>
+      Array.isArray(haystack)
+        ? haystack.includes(needle)
+        : String(haystack).includes(String(needle)),
+    fromJSON: (value: string) => JSON.parse(value) as unknown,
     github: {
       event_name: context.eventName,
       repository: context.repository,
       run_attempt: context.runAttempt,
-      event: context.headRepository
-        ? {
-            pull_request: {
-              head: { repo: { full_name: context.headRepository } },
-            },
-          }
-        : {},
+      event:
+        context.headRepository || context.eventName === "pull_request"
+          ? {
+              pull_request: {
+                author_association: context.authorAssociation ?? "CONTRIBUTOR",
+                head: { repo: { full_name: context.headRepository ?? context.repository } },
+              },
+            }
+          : {},
     },
     matrix: context.matrix ?? {},
     vars: {
@@ -2956,7 +2967,7 @@ NODE
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(androidJob.name).toBe("${{ matrix.check_name }}");
     expect(androidJob["runs-on"]).toBe(
-      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
     );
     expect(runStep.env.CI_RUNNER_BACKEND).toContain(
       "vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1",
@@ -3121,14 +3132,29 @@ NODE
         }),
         jobName,
       ).toBe(evaluateWorkflowExpression(expression, canonicalPullRequest));
+      // Authors with no landed commit stay on free hosted infrastructure, so an
+      // unreviewed PR cannot spend Blacksmith capacity.
       expect(
         evaluateWorkflowExpression(expression, {
           ...canonicalPullRequest,
+          authorAssociation: "NONE",
           headRepository: "contributor/openclaw",
           runnerBackend: "hybrid",
         }),
-        jobName,
+        `${jobName}: untrusted fork`,
       ).toBe(hostedRunner);
+      // A fork PR from someone who already landed a commit routes exactly like a
+      // maintainer PR. Maintainers report CONTRIBUTOR here too (org membership is
+      // concealed), so this case also protects their own routing.
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...canonicalPullRequest,
+          authorAssociation: "CONTRIBUTOR",
+          headRepository: "contributor/openclaw",
+          runnerBackend: "hybrid",
+        }),
+        `${jobName}: returning-contributor fork`,
+      ).toBe(expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners]);
     }
 
     const widenedHybridMatrixRows = [
@@ -3212,11 +3238,12 @@ NODE
       expect(
         evaluateWorkflowExpression(expression, {
           ...canonicalPullRequest,
+          authorAssociation: "NONE",
           headRepository: "contributor/openclaw",
           matrix,
           runnerBackend: "hybrid",
         }),
-        `${jobName}: fork pull request`,
+        `${jobName}: untrusted fork pull request`,
       ).toBe("ubuntu-24.04");
       expect(
         evaluateWorkflowExpression(expression, {
@@ -6394,7 +6421,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         setup: uiE2eSetup,
         blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
         runsOn:
-          "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+          "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
       },
       {
         job: uiE2eRealGateway,
@@ -6403,7 +6430,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         setup: realGatewaySetup,
         blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
         runsOn:
-          "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+          "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
       },
     ] as const;
     const routingScenarios = [
@@ -6450,8 +6477,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
       },
       {
-        name: "fork pull request",
+        // Runner routing follows contributor trust; the exact dependency cache
+        // stays fork-gated either way, so a fork never writes what main reads.
+        name: "fork pull request from returning contributor",
         context: {
+          authorAssociation: "CONTRIBUTOR",
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        expected: { blacksmith: true, dependencyCache: "false", useActionsCache: "true" },
+      },
+      {
+        name: "fork pull request from unknown author",
+        context: {
+          authorAssociation: "NONE",
           eventName: "pull_request",
           headRepository: "contributor/openclaw",
           repository: "openclaw/openclaw",

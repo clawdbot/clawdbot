@@ -1,7 +1,7 @@
 // Skill tool dispatch routes runtime skill tool calls through the active session context.
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
-import { createOpenClawTools } from "../../agents/openclaw-tools.runtime.js";
+import type { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
@@ -45,29 +45,36 @@ type SkillDispatchMessageContext = {
   memberRoleIds?: string[];
 };
 
+export type SkillToolDispatchDependencies = {
+  createOpenClawTools: typeof createOpenClawTools;
+};
+
 /**
  * Policy-enforcement seam for skill `command-dispatch: tool` invocations.
  * Keep this aligned with normal tool surfaces across sender, group, sandbox,
  * and subagent policy layers.
  */
-export function resolveSkillDispatchTools(params: {
-  message: SkillDispatchMessageContext;
-  cfg: OpenClawConfig;
-  agentId: string;
-  agentDir?: string;
-  sessionEntry?: SessionEntry;
-  sessionKey: string;
-  workspaceDir: string;
-  provider: string;
-  model: string;
-  senderIsOwner: boolean;
-  senderId?: string;
-  currentChannelId?: string;
-  skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
-    toolName?: string;
-  };
-  groupId?: string;
-}): AnyAgentTool[] {
+export function resolveSkillDispatchTools(
+  params: {
+    message: SkillDispatchMessageContext;
+    cfg: OpenClawConfig;
+    agentId: string;
+    agentDir?: string;
+    sessionEntry?: SessionEntry;
+    sessionKey: string;
+    workspaceDir: string;
+    provider: string;
+    model: string;
+    senderIsOwner: boolean;
+    senderId?: string;
+    currentChannelId?: string;
+    skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
+      toolName?: string;
+    };
+    groupId?: string;
+  },
+  dependencies: SkillToolDispatchDependencies,
+): AnyAgentTool[] {
   const channel =
     resolveGatewayMessageChannel(params.message.surface) ??
     resolveGatewayMessageChannel(params.message.provider) ??
@@ -155,7 +162,7 @@ export function resolveSkillDispatchTools(params: {
         },
       }
     : undefined;
-  const tools = createOpenClawTools({
+  const tools = dependencies.createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
     agentAccountId: params.message.accountId,
