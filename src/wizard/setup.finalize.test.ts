@@ -1310,9 +1310,9 @@ describe("finalizeSetupWizard", () => {
       expect.stringContaining("managed Mock Platform Service setup failed"),
     );
     expectNoteContains(prompter, "openclaw gateway status --deep", "Gateway");
-    expectNoteContains(prompter, "openclaw gateway restart", "Gateway");
+    expectNoteContains(prompter, "openclaw gateway install --force", "Gateway");
     expectNoteNotContains(prompter, "openclaw gateway run");
-    expectNoteNotContains(prompter, "openclaw gateway install --force");
+    expectNoteNotContains(prompter, "openclaw gateway restart");
   });
 
   it.each([
