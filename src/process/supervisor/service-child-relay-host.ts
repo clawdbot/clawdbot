@@ -156,6 +156,7 @@ export async function createServiceChildRelayAdapter(params: {
     distWorkerPath: "process/supervisor/service-child-relay.js",
   });
   const stdio: StdioEntry[] = [params.stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
+  // SAFETY: stdio contains only SpawnStdioEntry values until lifecycle descriptors are reserved.
   addSecretInputStdio(stdio as Parameters<typeof addSecretInputStdio>[0], params.secretInput);
   const controlFd = reserveStdioEntry(stdio, "pipe");
   reserveStdioEntry(stdio, "ipc");
@@ -169,6 +170,7 @@ export async function createServiceChildRelayAdapter(params: {
   retainedRelays.set(generation, relay);
   relay.unref();
 
+  // SAFETY: controlFd was reserved as a pipe in this exact spawn stdio array.
   const control = relay.stdio[controlFd] as Duplex | null;
   if (!relay.connected || !control || !relay.stdout || !relay.stderr) {
     relay.kill("SIGKILL");
@@ -258,6 +260,7 @@ export async function createServiceChildRelayAdapter(params: {
       pending = pending.slice(newline + 1);
       let message: ServiceChildAnchorMessage;
       try {
+        // SAFETY: this private anchor channel only writes encoded anchor protocol messages.
         message = JSON.parse(line) as ServiceChildAnchorMessage;
       } catch {
         loseIdentity("invalid anchor message");
@@ -307,6 +310,7 @@ export async function createServiceChildRelayAdapter(params: {
   });
 
   relay.on("message", (raw: unknown) => {
+    // SAFETY: the spawned relay is the sole sender on this private IPC channel.
     const message = raw as ServiceChildRelayMessage;
     if (!message || typeof message !== "object" || message.generation !== generation) {
       return;
@@ -333,6 +337,7 @@ export async function createServiceChildRelayAdapter(params: {
     command: params.command,
     args: params.args,
     cwd: params.cwd,
+    // SAFETY: createChildAdapter normalizes defined environment values before this boundary.
     env: params.env as Record<string, string> | undefined,
     stdinMode: params.stdinMode,
     secretFd: params.secretInput?.fd,

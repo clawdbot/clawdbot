@@ -51,6 +51,7 @@ export function runServiceChildRelay(): void {
   process.once("SIGTERM", notifyParentLoss);
   process.once("SIGINT", notifyParentLoss);
   process.once("message", (raw: unknown) => {
+    // SAFETY: the spawned host is the sole sender on this private IPC channel.
     const start = raw as ServiceChildStart;
     if (!start || start.type !== "start" || !start.generation) {
       process.exitCode = 1;

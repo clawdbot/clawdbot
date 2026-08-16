@@ -89,12 +89,13 @@ export function runServiceChildGroupAnchor(): void {
     }
     sequence += 1;
     await new Promise<void>((resolve) => {
+      const framed = {
+        ...message,
+        generation: start!.generation,
+        sequence,
+      };
       control!.write(
-        encodeServiceChildMessage({
-          ...message,
-          generation: start!.generation,
-          sequence,
-        } as ServiceChildAnchorMessage),
+        encodeServiceChildMessage(framed as ServiceChildAnchorMessage), // SAFETY: typed payload plus live envelope forms the protocol union.
         () => resolve(),
       );
     });
@@ -203,6 +204,7 @@ export function runServiceChildGroupAnchor(): void {
         const line = pending.slice(0, newline);
         pending = pending.slice(newline + 1);
         try {
+          // SAFETY: the private host control channel only writes encoded control messages.
           onControlMessage(JSON.parse(line) as ServiceChildControlMessage);
         } catch {
           void requestCleanup("parent-lost");
@@ -233,6 +235,7 @@ export function runServiceChildGroupAnchor(): void {
       await reportStartupFailure(error instanceof Error ? error.message : String(error));
       return;
     }
+    // SAFETY: lineageFd was reserved as a pipe in this exact command stdio array.
     const lineage = command.stdio[lineageFd] as Readable | null;
     if (!lineage) {
       await send({ type: "startup-error", error: "command lineage pipe was not created" });
@@ -339,6 +342,7 @@ export function runServiceChildGroupAnchor(): void {
     }
   });
   process.on("message", (raw: unknown) => {
+    // SAFETY: the spawned relay is the sole sender on this private IPC channel.
     const message = raw as ServiceChildStart | { type: "parent-loss"; generation?: string };
     if (message.type === "start" && state === "starting") {
       void startCommand(message);
