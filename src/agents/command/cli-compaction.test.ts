@@ -9,7 +9,6 @@ import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/se
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import type { AgentMessage } from "../runtime/index.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   resetCliCompactionTestDeps,
@@ -1228,263 +1227,23 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
   });
 
-  it("excludes pre-compaction messages from the post-turn estimator", async () => {
-    const sessionKey = "agent:main:compaction-boundary";
-    const sessionId = "session-compaction-boundary";
-    const storePath = path.join(tmpDir, "sessions-compaction-boundary.sqlite");
-    const sessionEntry: SessionEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      contextTokens: 1_000,
-      totalTokens: 950,
-      totalTokensFresh: true,
-    };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await persistSessionEntry({ sessionKey, storePath, entry: sessionEntry });
-
-    const capturedMessages: Array<AgentMessage[]> = [];
-    setCliCompactionTestDeps({
-      openSessionManager: () =>
-        SessionManager.fromEntries([
-          {
-            type: "session",
-            version: CURRENT_SESSION_VERSION,
-            id: sessionId,
-            timestamp: new Date(0).toISOString(),
-            cwd: tmpDir,
-          },
-          {
-            type: "message",
-            id: "old",
-            parentId: null,
-            timestamp: new Date(0).toISOString(),
-            message: { role: "user", content: "old large message", timestamp: 1 },
-          },
-          {
-            type: "message",
-            id: "kept",
-            parentId: "old",
-            timestamp: new Date(0).toISOString(),
-            message: { role: "user", content: "retained", timestamp: 2 },
-          },
-          {
-            type: "compaction",
-            id: "compaction",
-            parentId: "kept",
-            timestamp: new Date(0).toISOString(),
-            summary: "compacted context",
-            firstKeptEntryId: "kept",
-            tokensBefore: 900,
-          },
-          {
-            type: "message",
-            id: "new",
-            parentId: "compaction",
-            timestamp: new Date(0).toISOString(),
-            message: { role: "user", content: "new turn", timestamp: 3 },
-          },
-        ]),
-      resolveContextEngine: async () => buildContextEngine({ compactCalls: [] }),
-      createPreparedEmbeddedAgentSettingsManager: async () => ({
-        getCompactionReserveTokens: () => 200,
-        getCompactionKeepRecentTokens: () => 0,
-        applyOverrides: () => {},
-      }),
-      shouldPreemptivelyCompactBeforePrompt: (params) => {
-        capturedMessages.push(params.messages);
-        return {
-          route: "fits",
-          shouldCompact: false,
-          estimatedPromptTokens: 100,
-          promptBudgetBeforeReserve: 800,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          effectiveReserveTokens: 200,
-        };
-      },
-      resolveLiveToolResultMaxChars: () => 20_000,
-    });
-
-    await runCliTurnCompactionLifecycle({
-      cfg: {} as OpenClawConfig,
-      sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      workspaceDir: tmpDir,
-      agentDir: tmpDir,
-      provider: "claude-cli",
-      model: "opus",
-    });
-
-    expect(capturedMessages).toHaveLength(1);
-    const messages = capturedMessages[0]!;
-    const roles = messages.map((m: AgentMessage) => m.role);
-    expect(roles).toContain("compactionSummary");
-    expect(roles).toContain("user");
-    const contents = messages.map((m: AgentMessage) => (m as { content?: unknown }).content);
-    expect(contents).not.toContain("old large message");
-    expect(contents).toContain("retained");
-    expect(contents).toContain("new turn");
-  });
-
-  it("excludes non-user/assistant messages from the reset kept tail in the post-turn estimator", async () => {
-    const sessionKey = "agent:main:reset-boundary";
-    const sessionId = "session-reset-boundary";
-    const storePath = path.join(tmpDir, "sessions-reset-boundary.sqlite");
-    const sessionEntry: SessionEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      contextTokens: 1_000,
-      totalTokens: 950,
-      totalTokensFresh: true,
-    };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await persistSessionEntry({ sessionKey, storePath, entry: sessionEntry });
-
-    const capturedMessages: Array<AgentMessage[]> = [];
-    setCliCompactionTestDeps({
-      openSessionManager: () =>
-        SessionManager.fromEntries([
-          {
-            type: "session",
-            version: CURRENT_SESSION_VERSION,
-            id: sessionId,
-            timestamp: new Date(0).toISOString(),
-            cwd: tmpDir,
-          },
-          {
-            type: "message",
-            id: "discarded",
-            parentId: null,
-            timestamp: new Date(0).toISOString(),
-            message: { role: "user", content: "discarded", timestamp: 1 },
-          },
-          {
-            type: "message",
-            id: "kept-user",
-            parentId: "discarded",
-            timestamp: new Date(0).toISOString(),
-            message: { role: "user", content: "kept question", timestamp: 2 },
-          },
-          {
-            type: "message",
-            id: "kept-tool",
-            parentId: "kept-user",
-            timestamp: new Date(0).toISOString(),
-            message: {
-              role: "toolResult",
-              toolCallId: "call-1",
-              toolName: "read",
-              content: [{ type: "text", text: "large tool output" }],
-              isError: false,
-              timestamp: 3,
-            },
-          },
-          {
-            type: "message",
-            id: "kept-assistant",
-            parentId: "kept-tool",
-            timestamp: new Date(0).toISOString(),
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "kept answer" }],
-              provider: "test-provider",
-              model: "test-model",
-              usage: {
-                input: 1,
-                output: 1,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 2,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "stop",
-              timestamp: 4,
-            },
-          },
-          {
-            type: "reset",
-            id: "reset",
-            parentId: "kept-assistant",
-            timestamp: new Date(0).toISOString(),
-            reason: "new",
-            firstKeptEntryId: "kept-user",
-          },
-          {
-            type: "message",
-            id: "new",
-            parentId: "reset",
-            timestamp: new Date(0).toISOString(),
-            message: { role: "user", content: "new turn", timestamp: 5 },
-          },
-        ]),
-      resolveContextEngine: async () => buildContextEngine({ compactCalls: [] }),
-      createPreparedEmbeddedAgentSettingsManager: async () => ({
-        getCompactionReserveTokens: () => 200,
-        getCompactionKeepRecentTokens: () => 0,
-        applyOverrides: () => {},
-      }),
-      shouldPreemptivelyCompactBeforePrompt: (params) => {
-        capturedMessages.push(params.messages);
-        return {
-          route: "fits",
-          shouldCompact: false,
-          estimatedPromptTokens: 100,
-          promptBudgetBeforeReserve: 800,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          effectiveReserveTokens: 200,
-        };
-      },
-      resolveLiveToolResultMaxChars: () => 20_000,
-    });
-
-    await runCliTurnCompactionLifecycle({
-      cfg: {} as OpenClawConfig,
-      sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      workspaceDir: tmpDir,
-      agentDir: tmpDir,
-      provider: "claude-cli",
-      model: "opus",
-    });
-
-    expect(capturedMessages).toHaveLength(1);
-    const messages = capturedMessages[0]!;
-    const roles = messages.map((m: AgentMessage) => m.role);
-    expect(roles).toEqual(["user", "assistant", "user"]);
-    const serialized = JSON.stringify(messages);
-    expect(serialized).not.toContain("discarded");
-    expect(serialized).not.toContain("large tool output");
-    expect(serialized).toContain("kept question");
-    expect(serialized).toContain("kept answer");
-    expect(serialized).toContain("new turn");
-  });
-
-  it("skips compaction for a persisted reset boundary through the real lifecycle and token-snapshot gate", async () => {
+  it("does not compact reset-discarded tool output in the post-turn lifecycle", async () => {
     const sessionKey = "agent:main:reset-lifecycle-proof";
     const sessionId = "session-reset-lifecycle-proof";
     const storePath = path.join(tmpDir, "sessions-reset-lifecycle.sqlite");
-    // contextTokens drives the estimator budget; totalTokens is the persisted
-    // token snapshot that the lifecycle compares via Math.max before returning.
     const sessionEntry: SessionEntry = {
       sessionId,
       updatedAt: Date.now(),
       contextTokens: 4_096,
       totalTokens: 400,
       totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await persistSessionEntry({ sessionKey, storePath, entry: sessionEntry });
 
     const bigOutput = "x".repeat(20_000);
+    const compactCalls: CompactParams[] = [];
     const recordCliCompactionInStore = vi.fn(async () => sessionEntry);
     setCliCompactionTestDeps({
       openSessionManager: () =>
@@ -1555,7 +1314,7 @@ describe("runCliTurnCompactionLifecycle", () => {
             message: { role: "user", content: "new turn after reset", timestamp: 4 },
           },
         ]),
-      resolveContextEngine: async () => buildContextEngine({ compactCalls: [] }),
+      resolveContextEngine: async () => buildContextEngine({ compactCalls }),
       createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 512,
         getCompactionKeepRecentTokens: () => 0,
@@ -1564,9 +1323,6 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveLiveToolResultMaxChars: () => 20_000,
       recordCliCompactionInStore,
     });
-    // shouldPreemptivelyCompactBeforePrompt is NOT overridden: the real
-    // estimator runs against the canonical projection (buildSessionContext).
-
     const result = await runCliTurnCompactionLifecycle({
       cfg: {} as OpenClawConfig,
       sessionId,
@@ -1581,12 +1337,8 @@ describe("runCliTurnCompactionLifecycle", () => {
       model: "opus",
     });
 
-    // The canonical projection excludes the reset-kept toolResult, so the real
-    // estimator reports shouldCompact=false with estimated tokens well under the
-    // 4096 budget. The persisted token snapshot (400) is also under budget, so
-    // Math.max(estimated, snapshot) <= promptBudgetBeforeReserve holds and the
-    // lifecycle returns the original entry without scheduling compaction.
     expect(result).toBe(sessionEntry);
+    expect(compactCalls).toEqual([]);
     expect(recordCliCompactionInStore).not.toHaveBeenCalled();
   });
 });
