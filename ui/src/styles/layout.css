@@ -1421,7 +1421,7 @@ body.update-dialog-open .sidebar-update-card__status {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
-  margin: 0 -8px;
+  margin-inline: -8px 0;
   /* Sessions are app chrome, not hyperlinks: the whole region follows the
      base.css cursor policy so it tracks the window it is running in. */
   cursor: var(--cursor-action);
