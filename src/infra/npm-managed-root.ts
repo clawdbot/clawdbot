@@ -319,8 +319,12 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
     }
     const hostManifest = manifest as HostPackageManifest;
     const overrides = await readHostWorkspaceOverrides(packageRoot);
+    // Filter out pnpm-only parent-child selectors before they reach npm.
+    const filteredOverrides = filterUnsupportedManagedNpmRootOverrides(overrides, {
+      pnpmParentChildSelectors: true,
+    });
     return Object.fromEntries(
-      Object.entries(overrides).map(([key, value]) => [
+      Object.entries(filteredOverrides).map(([key, value]) => [
         key,
         resolveHostOverrideReferences(value, hostManifest),
       ]),

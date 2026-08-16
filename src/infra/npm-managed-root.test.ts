@@ -540,7 +540,13 @@ describe("managed npm root", () => {
       axios: "1.18.1",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     });
-    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual(expectedOverrides);
+    // pnpm parent-child selectors are filtered out for npm compatibility.
+    const result = await readOpenClawManagedNpmRootOverrides();
+    expect(result).toMatchObject({
+      axios: "1.18.1",
+      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+    });
+    expect(result).not.toHaveProperty("werift-ice@0.2.2>ip");
   });
 
   it("resolves workspace pnpm overrides from packaged dist chunks", async () => {
