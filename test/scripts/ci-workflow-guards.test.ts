@@ -7857,6 +7857,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
     });
 
+    const maturityPermissionStep = expectDefined(
+      maturityWorkflow.jobs.validate_selected_ref.steps.find(
+        (step: WorkflowStep) => step.name === "Require authorized workflow actor",
+      ),
+      "maturity workflow actor authorization",
+    );
     const workflowStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
       (step: WorkflowStep) => step.name === "Resolve job workflow identity",
     );
@@ -7866,6 +7872,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const validateRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
       (step: WorkflowStep) => step.name === "Validate selected ref",
     );
+    expect(maturityPermissionStep).toMatchObject({
+      uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+      env: {
+        CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
+        JOB_CONTEXT: "${{ toJSON(job) }}",
+      },
+    });
+    expect(maturityPermissionStep.with?.script).toContain("getCollaboratorPermissionLevel");
+    expect(maturityPermissionStep.with?.script).toContain(
+      "callerWorkflowRef !== calledWorkflowRef",
+    );
+    expect(maturityPermissionStep.with?.script).toContain(`"${MATURITY_SCORECARD_WORKFLOW_REF}"`);
+    expect(maturityPermissionStep.with?.script).toContain(
+      'job.workflow_repository === "openclaw/openclaw"',
+    );
+    expect(maturityPermissionStep.with?.script).toContain("job.workflow_ref === calledWorkflowRef");
     expect(workflowStep.env.JOB_CONTEXT).toBe("${{ toJSON(job) }}");
     expect(workflowStep.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
     expect(authorizeStep.env).toEqual({
