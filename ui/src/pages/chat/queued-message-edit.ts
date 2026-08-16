@@ -36,6 +36,9 @@ type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
 /** Closed outcomes so the page owns the operator-visible wording. */
 type QueuedMessageEditResult = "started" | "unavailable";
 
+export const QUEUED_MESSAGE_EDIT_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before removing it.";
+
 /**
  * The edit belongs to the scope it started in — session and agent, the pair every
  * outbox is keyed by. Reading it through here is what makes that true everywhere:
@@ -56,6 +59,11 @@ export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMess
  */
 export function isQueuedMessageBeingEdited(host: QueuedMessageEditHost, id: string): boolean {
   return anyChatOutboxPaneMatches(host, (pane) => activeQueuedMessageEdit(pane)?.id === id);
+}
+
+/** Removal is a conflicting shared-outbox action while any pane owns the row draft. */
+export function isQueuedMessageRemovalBlocked(host: QueuedMessageEditHost, id: string): boolean {
+  return isQueuedMessageBeingEdited(host, id);
 }
 
 export function beginQueuedMessageEdit(

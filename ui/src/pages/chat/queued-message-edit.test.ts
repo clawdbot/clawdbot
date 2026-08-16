@@ -15,6 +15,7 @@ import {
   beginQueuedMessageEdit,
   cancelQueuedMessageEdit,
   isQueuedMessageBeingEdited,
+  isQueuedMessageRemovalBlocked,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
@@ -321,6 +322,23 @@ describe("queued message edit round-trip", () => {
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
     expect(host.chatMessage).toBe("");
     unsubscribe();
+  });
+
+  it("blocks peer removal while a pane owns the row edit", () => {
+    const original = { id: "queued-1", text: "message 1", createdAt: 1_000 };
+    const { host, unsubscribe } = queueHost([original]);
+    const peer = makeChatHost({ sessionKey: SESSION_KEY, connected: false, chatQueue: [original] });
+    const stopPeer = subscribeChatOutboxProjection(peer as never);
+
+    try {
+      beginQueuedMessageEdit(host as never, original.id);
+
+      expect(isQueuedMessageBeingEdited(peer as never, original.id)).toBe(true);
+      expect(isQueuedMessageRemovalBlocked(peer as never, original.id)).toBe(true);
+    } finally {
+      stopPeer();
+      unsubscribe();
+    }
   });
 
   it("does not collapse same-payload row and composer sends", async () => {
