@@ -11,6 +11,8 @@ type FormatCliFailureOptions = {
   includeDoctorHint?: boolean;
 };
 
+type CliFailureDebugOptions = Pick<FormatCliFailureOptions, "argv" | "env">;
+
 export type CliJsonFailure = {
   ok: false;
   error: {
@@ -20,12 +22,15 @@ export type CliJsonFailure = {
 };
 
 /** Canonical machine-readable failure envelope for CLI-owned errors. */
-export function formatCliJsonFailure(error: unknown): CliJsonFailure {
+export function formatCliJsonFailure(
+  error: unknown,
+  options: CliFailureDebugOptions = {},
+): CliJsonFailure {
   return {
     ok: false,
     error: {
       type: "cli_error",
-      message: formatErrorMessage(error),
+      message: formatCliOperatorError(error, options),
     },
   };
 }
@@ -43,8 +48,21 @@ function hasDebugArg(argv: string[] | undefined): boolean {
   return false;
 }
 
-function shouldShowStack(argv: string[] | undefined, env: NodeJS.ProcessEnv): boolean {
+function shouldShowDebugDetails(
+  argv: string[] | undefined = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   return hasDebugArg(argv) || isTruthyEnvValue(env.OPENCLAW_DEBUG);
+}
+
+export function formatCliOperatorError(
+  error: unknown,
+  options: CliFailureDebugOptions = {},
+): string {
+  const includeCause = shouldShowDebugDetails(options.argv, options.env);
+  const value =
+    !includeCause && error instanceof Error ? error.message || error.name || "Error" : error;
+  return formatErrorMessage(value);
 }
 
 function pushPrefixed(out: string[], value: string): void {
@@ -56,14 +74,18 @@ function pushPrefixed(out: string[], value: string): void {
 }
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
-  // Default output stays terse; stack traces require explicit debug intent.
+  // Default output stays terse; causes and stack traces require explicit debug intent.
   const env = options.env ?? process.env;
+  const showDebugDetails = shouldShowDebugDetails(options.argv, env);
   const lines = [
     `[openclaw] ${options.title}`,
-    `[openclaw] Reason: ${formatErrorMessage(options.error)}`,
+    `[openclaw] Reason: ${formatCliOperatorError(options.error, {
+      argv: options.argv,
+      env,
+    })}`,
   ];
 
-  if (shouldShowStack(options.argv, env)) {
+  if (showDebugDetails) {
     lines.push("[openclaw] Stack:");
     pushPrefixed(lines, formatUncaughtError(options.error));
   } else {

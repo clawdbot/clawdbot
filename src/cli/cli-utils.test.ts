@@ -40,7 +40,7 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
-  it("surfaces cause chains and error codes through the default runtime", async () => {
+  it("keeps cause chains and error codes behind debug intent", async () => {
     const messages: string[] = [];
     const exits: number[] = [];
     const cause = Object.assign(new Error("invalid onRequestStart method"), {
@@ -48,22 +48,36 @@ describe("runCommandWithRuntime", () => {
     });
     const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
 
-    await runCommandWithRuntime(
-      {
-        error: (message) => messages.push(message),
-        exit: (code) => exits.push(code),
-      },
-      async () => {
-        throw fetchError;
-      },
-    );
+    const run = async () =>
+      await runCommandWithRuntime(
+        {
+          error: (message) => messages.push(message),
+          exit: (code) => exits.push(code),
+        },
+        async () => {
+          throw fetchError;
+        },
+      );
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("fetch failed");
-    expect(messages[0]).not.toContain("TypeError:");
-    expect(messages[0]).toContain("invalid onRequestStart method");
-    expect(messages[0]).toContain("UND_ERR_INVALID_ARG");
-    expect(exits).toEqual([1]);
+    const originalDebug = process.env.OPENCLAW_DEBUG;
+    delete process.env.OPENCLAW_DEBUG;
+    try {
+      await run();
+      process.env.OPENCLAW_DEBUG = "1";
+      await run();
+    } finally {
+      if (originalDebug === undefined) {
+        delete process.env.OPENCLAW_DEBUG;
+      } else {
+        process.env.OPENCLAW_DEBUG = originalDebug;
+      }
+    }
+
+    expect(messages).toEqual([
+      "fetch failed",
+      "fetch failed | invalid onRequestStart method | UND_ERR_INVALID_ARG",
+    ]);
+    expect(exits).toEqual([1, 1]);
   });
 
   it("bubbles JSON-mode failures to the process-level owner", async () => {
