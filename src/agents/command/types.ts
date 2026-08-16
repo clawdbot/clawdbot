@@ -181,9 +181,6 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */
   cwd?: string;
-  /** Gateway-prepared session permission facts; public ingress cannot author these. */
-  permissionMode?: import("../../config/sessions/types.js").SessionEntry["permissionMode"];
-  sessionRoot?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */
@@ -242,8 +239,6 @@ export type AgentCommandIngressOpts = Omit<
   | "operationalRunInstance"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
-  | "permissionMode"
-  | "sessionRoot"
 > & {
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
   senderIsOwner?: boolean;
@@ -262,6 +257,4 @@ export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
     | "operationalRunInstance"
     | "cronCreatorAuthorityCapability"
     | "onAdmittedRunContext"
-    | "permissionMode"
-    | "sessionRoot"
   >;

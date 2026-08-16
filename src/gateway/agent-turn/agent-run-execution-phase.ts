@@ -357,8 +357,6 @@ export function startAgentRunExecution(params: {
             requestedCwd: params.request.cwd,
             sessionEntry: params.sessionEntry,
           }),
-          permissionMode: params.sessionEntry?.permissionMode,
-          sessionRoot: params.sessionEntry?.sessionRoot,
           allowGatewaySubagentBinding: true,
           ...(params.mainRestartRecoveryOwnerLease
             ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }

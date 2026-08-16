@@ -292,6 +292,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,

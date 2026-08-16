@@ -159,8 +159,6 @@ export function sanitizePublicAgentCommandIngressOpts(
     operationalRunInstance: undefined,
     cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
-    permissionMode: undefined,
-    sessionRoot: undefined,
   };
 }
 
