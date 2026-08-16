@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeSessionIconValue,
   SESSION_AGENT_ATTENTION_ICON_IDS,
@@ -34,5 +34,34 @@ describe("session icon grammar", () => {
   it("keeps persistent glyph ids disjoint from temporary attention ids", () => {
     const attentionIds = new Set<string>(SESSION_AGENT_ATTENTION_ICON_IDS);
     expect(SESSION_ICON_GLYPH_IDS.filter((id) => attentionIds.has(id))).toEqual([]);
+  });
+});
+
+describe("session icon grammar without Unicode Sets support", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("loads and falls back to the grapheme heuristic when the v flag throws", async () => {
+    const NativeRegExp = RegExp;
+    // Mimic a pre-Unicode-Sets browser engine: `v`-flag construction throws.
+    const ThrowingRegExp = function (this: unknown, pattern: string, flags?: string) {
+      if (flags?.includes("v")) {
+        throw new SyntaxError("Invalid flags supplied to RegExp constructor 'v'");
+      }
+      return new NativeRegExp(pattern, flags);
+    } as unknown as RegExpConstructor;
+    vi.stubGlobal("RegExp", ThrowingRegExp);
+    vi.resetModules();
+
+    const fallback = await import("./session-agent-status.js");
+    expect(fallback.normalizeSessionIconValue("🦞")).toBe("🦞");
+    expect(fallback.normalizeSessionIconValue("braces")).toBe("braces");
+    expect(fallback.normalizeSessionIconValue("hammer")).toBeNull();
+    expect(fallback.normalizeSessionIconValue("a")).toBeNull();
+    // Known heuristic looseness on such engines: single non-ASCII text graphemes
+    // pass client pre-validation; the Gateway still rejects them exactly.
+    expect(fallback.normalizeSessionIconValue("漢")).toBe("漢");
   });
 });
