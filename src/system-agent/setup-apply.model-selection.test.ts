@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applySystemAgentModelSelection } from "./setup-apply.js";
+import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 
 describe("applySystemAgentModelSelection", () => {
   it("rejects an unrepresentable explicit agent instead of updating main", async () => {
