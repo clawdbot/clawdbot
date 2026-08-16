@@ -15,11 +15,18 @@ import type {
   ExecutionIdentityContextV1,
   PrincipalRefV1,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  AUDIT_ACTIVITY_DIRECTIONS,
+  AUDIT_ACTIVITY_KINDS,
+  AUDIT_ACTIVITY_STATUSES,
+} from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parsePositiveAuditCursor } from "../audit/audit-cursor.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { formatHumanList } from "../shared/human-list.js";
 
 const DEFAULT_AUDIT_LIMIT = 100;
 const MAX_AUDIT_LIMIT = 500;
@@ -161,10 +168,23 @@ function hasMessageSpecificFilters(options: AuditListCommandOptions): boolean {
   );
 }
 
-function validateAuditKind(kind: AuditListCommandOptions["kind"]): void {
-  if (kind !== undefined && kind !== "agent_run" && kind !== "tool_action" && kind !== "message") {
-    throw new Error("--kind must be agent_run, tool_action, or message.");
+function validateAuditFilter(
+  value: string | undefined,
+  flag: string,
+  allowed: readonly string[],
+): void {
+  if (value !== undefined && !allowed.includes(value)) {
+    throw new Error(`${flag} must be ${formatHumanList(allowed)}.`);
   }
+}
+
+function formatAuditGatewayError(error: unknown): Error {
+  const message = formatErrorMessage(error);
+  const operatorMessage =
+    message === "invalid audit.activity.list range or cursor"
+      ? "--cursor must be a continuation token returned by a previous audit result."
+      : message;
+  return new Error(operatorMessage);
 }
 
 function toLegacyAuditListParams(params: AuditActivityListParams): AuditListParams {
@@ -192,7 +212,7 @@ async function queryAuditActivity(
     });
   } catch (error) {
     if (!isUnsupportedActivityMethodError(error)) {
-      throw error;
+      throw formatAuditGatewayError(error);
     }
     if (hasMessageSpecificFilters(options)) {
       throw new Error(
@@ -237,7 +257,7 @@ async function queryAuditRunInspection(
     return await callGateway<AuditRunInspectResult>({ method: "audit.run.inspect", params });
   } catch (error) {
     if (!isUnsupportedRunInspectMethodError(error)) {
-      throw error;
+      throw formatAuditGatewayError(error);
     }
     return unsupportedRunInspection(
       typeof params.runId === "string"
@@ -503,7 +523,9 @@ export async function auditListCommand(
   if (options.executionId) {
     throw new Error("--execution requires --explain.");
   }
-  validateAuditKind(options.kind);
+  validateAuditFilter(options.kind, "--kind", AUDIT_ACTIVITY_KINDS);
+  validateAuditFilter(options.status, "--status", AUDIT_ACTIVITY_STATUSES);
+  validateAuditFilter(options.direction, "--direction", AUDIT_ACTIVITY_DIRECTIONS);
   const after = parseAuditTimestamp(options.after, "--after");
   const before = parseAuditTimestamp(options.before, "--before");
   if (after !== undefined && before !== undefined && after > before) {
