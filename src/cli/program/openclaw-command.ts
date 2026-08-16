@@ -6,9 +6,12 @@ type CommanderHelpInternals = Command & {
   _outputHelpIfRequested(args: string[]): void;
 };
 
-// SAFETY: Commander 15 owns this prototype method; the adapter preserves its receiver and args.
+/* oxlint-disable eslint/no-underscore-dangle -- The identifier is Commander 15.0.0's own hook name; package.json pins that exact version. */
+/* oxlint-disable typescript/unbound-method -- Commander omits the hook from its types; the call site restores the receiver. */
 const commanderOutputHelpIfRequested = (Command.prototype as CommanderHelpInternals)
   ._outputHelpIfRequested;
+/* oxlint-enable typescript/unbound-method */
+/* oxlint-enable eslint/no-underscore-dangle */
 
 export class OpenClawCommand extends Command {
   override createCommand(name?: string): Command {
