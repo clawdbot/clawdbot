@@ -3043,14 +3043,8 @@ install_openclaw() {
     if ! install_openclaw_npm "${install_spec}"; then
         ui_warn "npm install failed; retrying"
         cleanup_npm_openclaw_paths
-        install_openclaw_npm "${install_spec}"
-    fi
-
-    if [[ "${OPENCLAW_VERSION}" == "latest" && "${package_name}" == "openclaw" ]]; then
-        if ! resolve_openclaw_bin &> /dev/null; then
-            ui_warn "npm install openclaw@latest failed; retrying openclaw@next"
-            cleanup_npm_openclaw_paths
-            install_openclaw_npm "openclaw@next"
+        if ! install_openclaw_npm "${install_spec}"; then
+            return 1
         fi
     fi
 

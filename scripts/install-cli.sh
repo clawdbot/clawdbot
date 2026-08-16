@@ -1283,22 +1283,8 @@ install_openclaw() {
     fix_npm_prefix_if_needed
   fi
 
-  if [[ "${requested}" == "latest" ]]; then
-    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"; then
-      log "npm install openclaw@latest failed; retrying openclaw@next"
-      emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"retry\",\"version\":\"next\"}"
-      resolved_requested="next"
-      if [[ -n "${REQUIRED_COMPATIBLE_VERSION:-}" ]]; then
-        resolved_requested="$(resolve_npm_openclaw_version next)"
-        if [[ -z "$resolved_requested" ]]; then
-          fail "Could not resolve OpenClaw next before compatibility checking."
-        fi
-        require_openclaw_version_compatible "$resolved_requested"
-      fi
-      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"
-      requested="next"
-    fi
-  else
+  if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"; then
+    log "npm install openclaw@${resolved_requested} failed; retrying once"
     env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"
   fi
 

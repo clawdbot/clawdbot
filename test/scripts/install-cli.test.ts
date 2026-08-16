@@ -19,6 +19,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
+  writeNpmInstallRetryFixture,
 } from "./install-npm-fixtures.js";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
@@ -1597,6 +1598,88 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("npm installs do not support OpenClaw GitHub source targets");
     expect(result.stdout).toContain("--install-method git --version main");
   });
+
+  it.each([
+    { requested: "latest", outcome: "success", error: "", calls: 1, status: 0 },
+    {
+      requested: "beta",
+      outcome: "transient",
+      error: "ECONNRESET socket hang up",
+      calls: 2,
+      status: 0,
+    },
+    {
+      requested: "next",
+      outcome: "transient",
+      error: "ECONNRESET socket hang up",
+      calls: 2,
+      status: 0,
+    },
+    {
+      requested: "2026.8.1",
+      outcome: "transient",
+      error: "ECONNRESET socket hang up",
+      calls: 2,
+      status: 0,
+    },
+    {
+      requested: "latest",
+      outcome: "persistent",
+      error: "EACCES permission denied",
+      calls: 2,
+      status: 1,
+    },
+    {
+      requested: "beta",
+      outcome: "persistent",
+      error: "ENOSPC no space left",
+      calls: 2,
+      status: 1,
+    },
+  ])(
+    "keeps openclaw@$requested immutable across $outcome npm installs",
+    ({ requested, outcome, error, calls: expectedCalls, status }) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-npm-retry-"));
+      const fakeNpm = join(tmp, "npm");
+      const calls = join(tmp, "calls");
+      const nodeDir = join(tmp, "node");
+      const prefix = join(tmp, "prefix");
+      writeNpmInstallRetryFixture(fakeNpm);
+
+      try {
+        const result = runInstallCliShell(
+          [
+            "set -euo pipefail",
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `npm_bin() { printf '%s\\n' ${JSON.stringify(fakeNpm)}; }`,
+            `node_dir() { printf '%s\\n' ${JSON.stringify(nodeDir)}; }`,
+            "npm_config_has_raw_key() { return 1; }",
+            `PREFIX=${JSON.stringify(prefix)}`,
+            `OPENCLAW_VERSION=${requested}`,
+            "install_openclaw",
+          ].join("\n"),
+          {
+            NPM_FAKE_CALLS: calls,
+            NPM_FAKE_ERROR: error,
+            NPM_FAKE_OUTCOME: outcome,
+          },
+        );
+
+        expect(result.status).toBe(status);
+        expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(
+          Array.from({ length: expectedCalls }, () => `openclaw@${requested}`),
+        );
+        if (status !== 0) {
+          expect(result.stderr).toContain(`${error} (attempt 2)`);
+        }
+        if (requested !== "next") {
+          expect(`${result.stdout}\n${result.stderr}`).not.toContain("openclaw@next");
+        }
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("does not emit before args when npmrc min-release-age computes a before cutoff", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-freshness-"));
