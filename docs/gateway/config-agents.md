@@ -958,14 +958,20 @@ noVNC observer access is password-protected and brokered through a one-time, aut
 
 Browser sandboxing requires the Docker engine. `sandbox.docker.binds` applies to both the Docker and Podman backends.
 
-Build images (from a source checkout):
+After configuring Docker sandboxing, build missing configured OpenClaw default/common and browser images:
+
+```bash
+openclaw doctor
+```
+
+From a source checkout, you can also build them directly:
 
 ```bash
 scripts/sandbox-setup.sh           # main sandbox image
 scripts/sandbox-browser-setup.sh   # optional browser image
 ```
 
-For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
+Doctor does not build arbitrary custom images or Podman images. See [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for the full flow and the older-release fallback.
 
 ### `agents.entries` (per-agent overrides)
 

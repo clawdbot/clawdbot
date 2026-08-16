@@ -296,6 +296,28 @@ function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string
 }
 
 describe("docker build helper", () => {
+  it("ships sandbox image builders in the npm package", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      files: string[];
+    };
+
+    expect(packageJson.files).toEqual(
+      expect.arrayContaining([
+        "scripts/sandbox-setup.sh",
+        "scripts/sandbox-common-setup.sh",
+        "scripts/sandbox-browser-setup.sh",
+        "scripts/sandbox-browser-entrypoint.sh",
+        "scripts/lib/docker-build.sh",
+        "scripts/lib/docker-e2e-logs.sh",
+        "scripts/lib/docker-e2e-container.sh",
+        "scripts/lib/docker-e2e-resource-diagnostics.sh",
+        "scripts/docker/sandbox/Dockerfile",
+        "scripts/docker/sandbox/Dockerfile.common",
+        "scripts/docker/sandbox/Dockerfile.browser",
+      ]),
+    );
+  });
+
   it("allows deployments to build an immutable sandbox image tag", () => {
     const script = readFileSync("scripts/sandbox-setup.sh", "utf8");
     expect(script).toContain(

@@ -172,6 +172,33 @@ describe("maybeRepairSandboxImages", () => {
     expect(dockerUnavailableWarning).toBeUndefined();
   });
 
+  it("does not offer the default browser builder for a custom browser image", async () => {
+    runExec.mockImplementation(async (command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "image") {
+        throw Object.assign(new Error("No such image: custom-browser:latest"), {
+          stderr: "Error response from daemon: No such image: custom-browser:latest",
+        });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const cfg = createSandboxConfig("all");
+    cfg.agents!.defaults!.sandbox!.browser = {
+      enabled: true,
+      image: "custom-browser:latest",
+    };
+
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+
+    expect(note).toHaveBeenCalledWith(
+      "Sandbox browser image missing: custom-browser:latest. Build or pull it first.",
+      "Sandbox",
+    );
+    expect(mockPrompter.confirmRuntimeRepair).not.toHaveBeenCalledWith({
+      message: "Build browser sandbox image now?",
+      initialValue: true,
+    });
+  });
+
   it("validates the explicit Podman target before checking images", async () => {
     const cfg = createSandboxConfig("all");
     cfg.agents!.defaults!.sandbox!.backend = "podman";

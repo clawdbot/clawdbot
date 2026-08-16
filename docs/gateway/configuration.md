@@ -319,7 +319,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    Build the image first - from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
+    Run `openclaw doctor` to build a missing configured OpenClaw Docker sandbox image. See [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for direct source-checkout commands, custom/Podman images, and the older-release fallback.
 
     See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 

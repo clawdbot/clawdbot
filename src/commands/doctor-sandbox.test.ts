@@ -87,9 +87,8 @@ describe("resolveSandboxScript", () => {
   });
 
   it("keeps searching cwd when the launcher resolves to a package root without the script", () => {
-    // Installed/published openclaw package root: it carries the package.json marker but not
-    // scripts/sandbox-setup.sh, because the npm files allowlist drops scripts/. It resolves from
-    // argv1 before cwd, so stopping at the first root would miss the source checkout below.
+    // Simulate an older or incomplete installed package root that carries the package marker but
+    // not the requested script. It resolves before cwd, so the search must continue.
     const installed = mkTmp("ocsbx-installed-");
     fs.writeFileSync(path.join(installed, "package.json"), JSON.stringify({ name: "openclaw" }));
     const entry = path.join(installed, "openclaw.mjs");
