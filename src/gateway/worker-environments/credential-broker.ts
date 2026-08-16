@@ -2,7 +2,11 @@ import {
   type WorkerAdmissionHandshake,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { verifyWorkerAdmissionHandshake, type ExpectedWorkerBuild } from "./admission.js";
+import {
+  StaleWorkerBuildError,
+  verifyWorkerAdmissionHandshake,
+  type ExpectedWorkerBuild,
+} from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   createWorkerCredentialMaterial,
@@ -224,10 +228,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
         !current.bootstrapReceipt ||
         !verifyWorkerAdmissionHandshake(current.bootstrapReceipt, currentBuild)
       ) {
-        throw serviceError(
-          "invalid_state",
-          "Worker must bootstrap the current build before attach",
-        );
+        throw new StaleWorkerBuildError();
       }
       const material = credentialMaterial();
       let attached: WorkerEnvironmentRecord;
