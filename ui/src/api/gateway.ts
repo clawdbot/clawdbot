@@ -431,8 +431,9 @@ export class GatewayBrowserClient {
 
     // Device identity signs with pure-JS Ed25519, so it works on any origin,
     // including plain-HTTP LAN dashboards where crypto.subtle is unavailable.
-    // Blocked storage (for example some private-browsing modes) degrades to a
-    // device-less connect instead of failing the handshake.
+    // Blocked storage yields an ephemeral in-memory identity; only a failed
+    // mint (no WebCrypto RNG) degrades to a device-less connect instead of
+    // failing the handshake.
     let selectedAuth: GatewayConnectAuthSelection = {
       authToken: explicitGatewayToken,
       authPassword: explicitPassword,
