@@ -1,5 +1,8 @@
 // Raw WebSocket proof for the pre-registration Control UI build admission boundary.
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
@@ -80,6 +83,35 @@ vi.mock("../../../version.js", async (importOriginal) => {
 
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
+// A stale Control UI browser still owns a device identity; the build check is
+// only reachable once the device passes connect auth and silent local pairing.
+async function buildSignedControlUiDevice(nonce: string) {
+  const { buildDeviceAuthPayload } = await import("../../device-auth.js");
+  const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+    await import("../../../infra/device-identity.js");
+  const identity = loadOrCreateDeviceIdentity({
+    path: path.join(tmpdir(), `openclaw-build-admission-${randomUUID()}.sqlite`),
+  });
+  const signedAtMs = Date.now();
+  const payload = buildDeviceAuthPayload({
+    deviceId: identity.deviceId,
+    clientId: "openclaw-control-ui",
+    clientMode: "webchat",
+    role: "operator",
+    scopes: [],
+    signedAtMs,
+    token: "test-token",
+    nonce,
+  });
+  return {
+    id: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    signature: signDevicePayload(identity.privateKeyPem, payload),
+    signedAt: signedAtMs,
+    nonce,
+  };
+}
+
 function createLogger() {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
@@ -147,7 +179,6 @@ describe("Control UI build admission over WebSocket", () => {
         requestOrigin:
           typeof request.headers.origin === "string" ? request.headers.origin : undefined,
         connectNonce: "legacy-build-nonce",
-        isControlUiDeviceAuthMigrationPending: () => true,
         getResolvedAuth: () => ({
           mode: "token",
           token: "test-token",
@@ -156,7 +187,7 @@ describe("Control UI build admission over WebSocket", () => {
         gatewayMethods: [],
         events: [],
         extraHandlers: {},
-        buildRequestContext: () => ({}) as GatewayRequestContext,
+        buildRequestContext: () => ({ broadcast: vi.fn() }) as unknown as GatewayRequestContext,
         nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
         refreshHealthSnapshot: vi.fn(),
         send,
@@ -190,6 +221,7 @@ describe("Control UI build admission over WebSocket", () => {
       });
     });
 
+    const device = await buildSignedControlUiDevice("legacy-build-nonce");
     const ws = new WebSocket(`ws://127.0.0.1:${address.port}`, {
       headers: {
         origin,
@@ -234,6 +266,7 @@ describe("Control UI build admission over WebSocket", () => {
             role: "operator",
             caps: [],
             auth: { token: "test-token" },
+            device,
           },
         }),
       );

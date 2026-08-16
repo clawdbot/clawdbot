@@ -583,26 +583,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         .tabIndex=${-1}
       >
         ${renderScopeUpgradeBanner(host, gatewaySnapshot)}
-        ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
-          ? // The migration banner is registered by a rare-flow dynamic import after first render.
-            customElements.get("openclaw-device-auth-migration-banner")
-            ? html`<openclaw-device-auth-migration-banner
-                .props=${{
-                  state: overlaySnapshot.deviceAuthMigration,
-                  onSecure: () => void context.overlays.secureThisBrowser(),
-                }}
-              ></openclaw-device-auth-migration-banner>`
-            : html`<openclaw-update-banner
-                .props=${{
-                  statusBanner: {
-                    tone: overlaySnapshot.deviceAuthMigration.error ? "danger" : "warn",
-                    text:
-                      overlaySnapshot.deviceAuthMigration.error ??
-                      t("login.deviceAuthMigration.banner"),
-                  },
-                }}
-              ></openclaw-update-banner>`
-          : nothing}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           onboarding,

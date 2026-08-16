@@ -127,11 +127,6 @@ export const HelloOkSchema = closedObject({
     ),
   ),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
-  deviceAuthMigration: Type.Optional(
-    closedObject({
-      pending: Type.Literal(true),
-    }),
-  ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
     recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),

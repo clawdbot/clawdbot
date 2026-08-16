@@ -21,10 +21,6 @@ import {
 } from "../lib/device-pair-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
-  createDeviceAuthMigrationLoader,
-  EMPTY_DEVICE_AUTH_MIGRATION,
-} from "./device-auth-migration-loader.ts";
-import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
   enqueueExecApprovalPrompt,
@@ -95,7 +91,6 @@ export function createApplicationOverlays(
     devicePairSetupOpen: false,
     devicePairSetupLifecycle: { phase: "selection", access: "full" },
     devicePairPendingCount: 0,
-    deviceAuthMigration: EMPTY_DEVICE_AUTH_MIGRATION,
   };
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
@@ -166,19 +161,6 @@ export function createApplicationOverlays(
     activeClient === client &&
     gateway.snapshot.client === client &&
     gateway.snapshot.phase === "connected";
-
-  const isCurrentDeviceAuthMigration = (client: NonNullable<typeof activeClient>, epoch: number) =>
-    epoch === connectedEpoch &&
-    isCurrentClient(client) &&
-    gateway.snapshot.hello?.deviceAuthMigration?.pending === true;
-  const deviceAuthMigration = createDeviceAuthMigrationLoader({
-    gateway,
-    isCurrent: isCurrentDeviceAuthMigration,
-    onChange: (next) => {
-      snapshot = { ...snapshot, deviceAuthMigration: next };
-      publish();
-    },
-  });
 
   const refreshApprovals = createOverlayApprovalRefresher({
     gateway,
@@ -289,7 +271,6 @@ export function createApplicationOverlays(
     if (previousClient !== next.client || !connected) {
       approvalDecision = null;
       pairingPendingCount.invalidate({ clear: true });
-      deviceAuthMigration.reset();
       closeDevicePairSetupState(devicePairSetupState);
     }
     if (connected && !operatorAccess.canReviewApprovals) {
@@ -356,7 +337,6 @@ export function createApplicationOverlays(
       if (operatorAccess.canReviewApprovals) {
         void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
       }
-      void deviceAuthMigration.refresh(next.client, connectedEpoch);
       void updateVerification.verify(next.client, connectedEpoch);
     } else if (accessTransition.reviewChanged && operatorAccess.canReviewApprovals) {
       void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
@@ -384,9 +364,6 @@ export function createApplicationOverlays(
     }
     if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
       void pairingPendingCount.refresh();
-      if (activeClient) {
-        void deviceAuthMigration.refresh(activeClient, connectedEpoch);
-      }
       return;
     }
     if (event.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
@@ -676,15 +653,11 @@ export function createApplicationOverlays(
       closeDevicePairSetupState(devicePairSetupState);
       publish();
     },
-    async secureThisBrowser() {
-      await deviceAuthMigration.secure(activeClient, connectedEpoch);
-    },
     dispose() {
       disposed = true;
       approvalDecision = null;
       updateRunGeneration += 1;
       pairingPendingCount.invalidate();
-      deviceAuthMigration.dispose();
       updateVerification.cancel();
       updateCampaignPoller.stop();
       closeDevicePairSetupState(devicePairSetupState);

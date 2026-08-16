@@ -96,7 +96,6 @@ type GatewayWsSharedHandlerParams = {
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
   isStartupPending?: () => boolean;
-  isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -190,7 +189,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     browserRateLimiter,
     nodeReapprovalCoordinator,
     isStartupPending,
-    isControlUiDeviceAuthMigrationPending,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -708,7 +706,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       browserRateLimiter,
       nodeReapprovalCoordinator,
       isStartupPending,
-      isControlUiDeviceAuthMigrationPending,
       gatewayMethods,
       events,
       extraHandlers,

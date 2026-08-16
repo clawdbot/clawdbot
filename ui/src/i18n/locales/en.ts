@@ -4516,15 +4516,6 @@ export const en: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
-    deviceAuthMigration: {
-      banner: "This browser still needs one-time device approval after the update.",
-      action: "Secure this browser",
-      secureContextRequired:
-        "This legacy browser remains available temporarily. Reopen it over HTTPS or localhost to secure it with device identity.",
-      pendingUnavailable: "The browser pairing request is not available yet. Retry in a moment.",
-      loadFailed: "Could not load this browser's pairing request: {error}",
-      approvalFailed: "Could not secure this browser: {error}",
-    },
     passwordPlaceholder: "optional",
     showToken: "Show token",
     hideToken: "Hide token",

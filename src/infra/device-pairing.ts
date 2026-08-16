@@ -124,7 +124,6 @@ type DevicePairingForbiddenReason =
   | "caller-scopes-required"
   | "caller-missing-scope"
   | "scope-outside-requested-roles"
-  | "effective-operator-already-paired"
   | "bootstrap-role-not-allowed"
   | "bootstrap-scope-not-allowed";
 
@@ -161,36 +160,6 @@ const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"])
 const BROWSER_DEVICE_CLIENT_MODE = "webchat";
 
 const withLock = createAsyncLock();
-export type EffectiveOperatorDeviceIdentity = Pick<PairedDevice, "deviceId" | "publicKey"> & {
-  scopes: string[];
-};
-
-const effectiveOperatorPairingListeners = new Set<
-  (device: EffectiveOperatorDeviceIdentity) => void
->();
-
-/** Subscribe to canonical pairing mutations that establish an effective operator. */
-export function onEffectiveOperatorDevicePaired(
-  listener: (device: EffectiveOperatorDeviceIdentity) => void,
-): () => void {
-  effectiveOperatorPairingListeners.add(listener);
-  return () => effectiveOperatorPairingListeners.delete(listener);
-}
-
-function notifyEffectiveOperatorDevicePaired(device: PairedDevice): void {
-  const identity = resolveEffectiveOperatorDeviceIdentity(device);
-  if (!identity) {
-    return;
-  }
-  for (const listener of effectiveOperatorPairingListeners) {
-    try {
-      listener(identity);
-    } catch {
-      // Pairing is already durable; observer failures cannot roll it back.
-    }
-  }
-}
-
 /** Format a device-pairing authorization failure for CLI/API callers. */
 export function formatDevicePairingForbiddenMessage(result: DevicePairingForbiddenResult): string {
   switch (result.reason) {
@@ -200,8 +169,6 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
       return `missing scope: ${result.scope ?? "unknown"}`;
     case "scope-outside-requested-roles":
       return `invalid scope for requested roles: ${result.scope ?? "unknown"}`;
-    case "effective-operator-already-paired":
-      return "an effective operator device is already paired";
     case "bootstrap-role-not-allowed":
       return `bootstrap profile does not allow role: ${result.role ?? "unknown"}`;
     case "bootstrap-scope-not-allowed":
@@ -329,40 +296,6 @@ export function hasEffectivePairedDeviceRole(
     return false;
   }
   return listEffectivePairedDeviceRoles(device).includes(normalized);
-}
-
-function hasEffectivePairedDeviceScope(
-  device: Pick<PairedDevice, "role" | "roles" | "tokens">,
-  role: string,
-  scope: string,
-): boolean {
-  const normalizedRole = normalizeRole(role);
-  const token = normalizedRole ? device.tokens?.[normalizedRole] : undefined;
-  return Boolean(
-    normalizedRole &&
-    token &&
-    !token.revokedAtMs &&
-    hasEffectivePairedDeviceRole(device, normalizedRole) &&
-    roleScopesAllow({
-      role: normalizedRole,
-      requestedScopes: [scope],
-      allowedScopes: token.scopes,
-    }),
-  );
-}
-
-export function resolveEffectiveOperatorDeviceIdentity(
-  device: PairedDevice,
-): EffectiveOperatorDeviceIdentity | null {
-  const token = device.tokens?.[OPERATOR_ROLE];
-  if (!token || token.revokedAtMs || !hasEffectivePairedDeviceRole(device, OPERATOR_ROLE)) {
-    return null;
-  }
-  return {
-    deviceId: device.deviceId,
-    publicKey: device.publicKey,
-    scopes: normalizeDeviceAuthScopes(token.scopes),
-  };
 }
 
 /** Resolve the authenticated node pairing independently of surface approval. */
@@ -1022,19 +955,6 @@ export async function approveDevicePairing(
   return await approveDevicePairingWithOptions(requestId, options, baseDir);
 }
 
-/** Approve the legacy Control UI migration only while no pairing-capable operator is paired. */
-export async function approveControlUiDeviceAuthMigrationPairing(
-  requestId: string,
-  options: { callerScopes: readonly string[] },
-  baseDir?: string,
-): Promise<ApproveDevicePairingResult> {
-  return await approveDevicePairingWithOptions(
-    requestId,
-    { ...options, requireNoPairingCapableOperator: true },
-    baseDir,
-  );
-}
-
 async function approveDevicePairingWithOptions(
   requestId: string,
   options:
@@ -1046,7 +966,6 @@ async function approveDevicePairingWithOptions(
           "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
         >;
         autoApproveNewDeviceScopes?: readonly string[];
-        requireNoPairingCapableOperator?: boolean;
       }
     | undefined,
   baseDir?: string,
@@ -1056,14 +975,6 @@ async function approveDevicePairingWithOptions(
     const pendingRecord = state.pendingById[requestId];
     if (!pendingRecord) {
       return null;
-    }
-    if (
-      options?.requireNoPairingCapableOperator &&
-      Object.values(state.pairedByDeviceId).some((device) =>
-        hasEffectivePairedDeviceScope(device, OPERATOR_ROLE, "operator.pairing"),
-      )
-    ) {
-      return { status: "forbidden", reason: "effective-operator-already-paired" };
     }
     const autoApproveScopes = options?.autoApproveNewDeviceScopes;
     const requestedRoles = resolveRequestedRoles(pendingRecord);
@@ -1182,7 +1093,6 @@ async function approveDevicePairingWithOptions(
       "both",
       installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
     );
-    notifyEffectiveOperatorDevicePaired(device);
     return {
       status: "approved",
       requestId,
@@ -1303,7 +1213,6 @@ export async function approveBootstrapDevicePairing(
       "both",
       installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
     );
-    notifyEffectiveOperatorDevicePaired(device);
     return {
       status: "approved",
       requestId,
