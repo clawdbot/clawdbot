@@ -54,6 +54,11 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   globalRoot: string | null;
   packageRoot: string | null;
   directNodeModulesRoot?: boolean;
+  npmOwner?: {
+    version: string | null;
+    lifecyclePolicy: NpmLifecyclePolicy | null;
+    probeError?: string;
+  };
 };
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
@@ -93,6 +98,26 @@ export function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy |
     return "unflagged";
   }
   return parsed.minor >= 16 ? "allow-scripts" : "unsupported-transition";
+}
+
+async function resolveNpmOwner(params: {
+  command: string;
+  runCommand: CommandRunner;
+  timeoutMs: number;
+}): Promise<NonNullable<ResolvedGlobalInstallTarget["npmOwner"]>> {
+  const result = await params
+    .runCommand([params.command, "--version"], { timeoutMs: params.timeoutMs })
+    .catch((error: unknown) => ({
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+      code: 1,
+    }));
+  const version = result.code === 0 ? readPackageManagerProbeValue(result.stdout) : "";
+  return {
+    version: version || null,
+    lifecyclePolicy: version ? resolveNpmLifecyclePolicy(version) : null,
+    ...(result.code === 0 || !result.stderr ? {} : { probeError: result.stderr }),
+  };
 }
 
 function normalizePackageTarget(value: string): string {
@@ -1106,6 +1131,14 @@ export async function resolveGlobalInstallTarget(params: {
       ? (pnpmIsolatedPackage?.packageRoot ??
         (verifiedPnpmIsolatedGlobalRoot && params.pkgRoot ? params.pkgRoot : fallbackPackageRoot))
       : fallbackPackageRoot;
+  const npmOwner =
+    command.manager === "npm"
+      ? await resolveNpmOwner({
+          command: command.command,
+          runCommand: params.runCommand,
+          timeoutMs: params.timeoutMs,
+        })
+      : null;
   // Preserve metadata-backed pnpm ownership when the invoking project link is gone.
   // The update preflight must reject that orphan instead of falling through to npm.
   return {
@@ -1119,6 +1152,7 @@ export async function resolveGlobalInstallTarget(params: {
       : {}),
     globalRoot: targetGlobalRoot,
     packageRoot,
+    ...(npmOwner ? { npmOwner } : {}),
     ...(honoredPackageRootGlobalRoot &&
     targetGlobalRoot === honoredPackageRootGlobalRoot &&
     honoredDirectNpmRoot

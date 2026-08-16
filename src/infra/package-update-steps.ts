@@ -24,7 +24,6 @@ import {
   readPackageManagerProbeValue,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
-  resolveNpmLifecyclePolicy,
   resolvePnpmIsolatedInstallOwner,
   resolvePnpmGlobalDirFromGlobalRoot,
   resolveExpectedInstalledVersionFromSpec,
@@ -88,9 +87,6 @@ const PACKAGE_PREINSTALL_SCRIPT_PATH = path.join(
 
 async function resolveNpmUpdateLifecyclePolicy(params: {
   installTarget: ResolvedGlobalInstallTarget;
-  runCommand: CommandRunner;
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
 }): Promise<{
   policy: "unflagged" | "allow-scripts" | null;
   failedStep: PackageUpdateStepResult | null;
@@ -99,19 +95,8 @@ async function resolveNpmUpdateLifecyclePolicy(params: {
     return { policy: null, failedStep: null };
   }
   const argv = [params.installTarget.command, "--version"];
-  const startedAt = Date.now();
-  const result = await params
-    .runCommand(argv, {
-      timeoutMs: params.timeoutMs,
-      env: params.env,
-    })
-    .catch((error: unknown) => ({
-      stdout: "",
-      stderr: formatErrorMessage(error),
-      code: 1,
-    }));
-  const version = readPackageManagerProbeValue(result.stdout);
-  const policy = result.code === 0 ? resolveNpmLifecyclePolicy(version) : null;
+  const version = params.installTarget.npmOwner?.version ?? "";
+  const policy = params.installTarget.npmOwner?.lifecyclePolicy ?? null;
   if (policy === "unflagged" || policy === "allow-scripts") {
     return { policy, failedStep: null };
   }
@@ -122,12 +107,12 @@ async function resolveNpmUpdateLifecyclePolicy(params: {
       name: "npm lifecycle policy preflight",
       command: argv.join(" "),
       cwd: process.cwd(),
-      durationMs: Date.now() - startedAt,
+      durationMs: 0,
       exitCode: 1,
-      stdoutTail: result.stdout || null,
+      stdoutTail: version || null,
       stderrTail: transition
         ? `npm ${version} cannot safely approve OpenClaw lifecycle scripts. Upgrade the owning npm to 11.16 or newer before updating; no package changes were made.`
-        : `Unable to determine the owning npm version before updating; no package changes were made.${result.stderr ? ` ${result.stderr}` : ""}`,
+        : `Unable to determine the owning npm version before updating; no package changes were made.${params.installTarget.npmOwner?.probeError ? ` ${params.installTarget.npmOwner.probeError}` : ""}`,
     },
   };
 }
@@ -889,7 +874,9 @@ export async function runGlobalPackageUpdateSteps(params: {
   let packedInstallDir: string | null = null;
 
   try {
-    const npmPreflight = await resolveNpmUpdateLifecyclePolicy(params);
+    const npmPreflight = await resolveNpmUpdateLifecyclePolicy({
+      installTarget: params.installTarget,
+    });
     if (npmPreflight.failedStep) {
       return {
         steps: [npmPreflight.failedStep],

@@ -72,6 +72,9 @@ function createNpmRootRunner(params: {
   overrideNpmRoot?: string;
 }): CommandRunner {
   return async (argv) => {
+    if (argv[1] === "--version") {
+      return { stdout: "12.0.0\n", stderr: "", code: 0 };
+    }
     if (argv[0] === "npm") {
       return { stdout: `${params.defaultNpmRoot}\n`, stderr: "", code: 0 };
     }
@@ -216,6 +219,48 @@ describe("update global helpers", () => {
       manager: "npm",
       globalRoot,
       packageRoot: path.join(globalRoot, "@kevins8", "openclaw"),
+    });
+  });
+
+  it("binds lifecycle policy to the npm executable that owns the install", async () => {
+    await withTestDir({ prefix: "openclaw-npm-owner-" }, async (prefix) => {
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const owningNpm = path.join(prefix, "bin", "npm");
+      await Promise.all([
+        fs.mkdir(packageRoot, { recursive: true }),
+        fs.mkdir(path.dirname(owningNpm), { recursive: true }),
+      ]);
+      await fs.writeFile(owningNpm, "", "utf8");
+      const calls: string[][] = [];
+      const runCommand: CommandRunner = async (argv) => {
+        calls.push(argv);
+        if (argv[0] === owningNpm && argv[1] === "root") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (argv[0] === owningNpm && argv[1] === "--version") {
+          return { stdout: "11.15.1\n", stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot: packageRoot,
+          packageName: "openclaw",
+        }),
+      ).resolves.toMatchObject({
+        command: owningNpm,
+        npmOwner: {
+          version: "11.15.1",
+          lifecyclePolicy: "unsupported-transition",
+        },
+      });
+      expect(calls).toContainEqual([owningNpm, "--version"]);
+      expect(calls).not.toContainEqual(["npm", "--version"]);
     });
   });
 
@@ -378,6 +423,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot: nvmRoot,
           packageRoot: pkgRoot,
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
       });
     });
@@ -416,6 +462,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot: nvmRoot,
           packageRoot: pkgRoot,
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
       });
     });
@@ -443,6 +490,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot: nvmRoot,
           packageRoot: path.join(nvmRoot, "openclaw"),
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
       });
     });
@@ -469,6 +517,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot,
           packageRoot: pkgRoot,
+          npmOwner: { version: null, lifecyclePolicy: null },
         });
       });
     });
@@ -511,6 +560,9 @@ describe("update global helpers", () => {
       await fs.mkdir(path.join(otherPnpmRoot, "openclaw"), { recursive: true });
 
       const runCommand: CommandRunner = async (argv) => {
+        if (argv[1] === "--version") {
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
+        }
         if (argv[0] === "npm" || argv[0] === customNpm) {
           return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
         }
@@ -534,6 +586,7 @@ describe("update global helpers", () => {
         globalRoot: managedNpmRoot,
         packageRoot: pkgRoot,
         directNodeModulesRoot: true,
+        npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
       });
       await expect(
         resolveGlobalInstallTarget({
@@ -549,6 +602,7 @@ describe("update global helpers", () => {
         globalRoot: managedNpmRoot,
         packageRoot: pkgRoot,
         directNodeModulesRoot: true,
+        npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
       });
 
       expect(

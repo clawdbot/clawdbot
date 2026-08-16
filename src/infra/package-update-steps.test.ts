@@ -47,6 +47,10 @@ function createNpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
     command: "npm",
     globalRoot,
     packageRoot: path.join(globalRoot, "openclaw"),
+    npmOwner: {
+      version: "12.0.0",
+      lifecyclePolicy: "allow-scripts",
+    },
   };
 }
 
@@ -165,14 +169,16 @@ describe("npm lifecycle policy preflight", () => {
     { version: null, message: "Unable to determine the owning npm version" },
   ])("stops before mutation for npm $version", async ({ version, message }) => {
     const runStep = vi.fn();
-    const runCommand = vi.fn<CommandRunner>(async () => ({
-      stdout: version ? `${version}\n` : "",
-      stderr: version ? "" : "version probe failed",
-      code: version ? 0 : 1,
-    }));
+    const runCommand = vi.fn<CommandRunner>();
+    const installTarget = createNpmTarget("/tmp/npm-policy-test/lib/node_modules");
+    installTarget.npmOwner = {
+      version,
+      lifecyclePolicy: version ? "unsupported-transition" : null,
+      ...(version ? {} : { probeError: "version probe failed" }),
+    };
 
     const result = await runGlobalPackageUpdateSteps({
-      installTarget: createNpmTarget("/tmp/npm-policy-test/lib/node_modules"),
+      installTarget,
       installSpec: "openclaw@2.0.0",
       packageName: "openclaw",
       runCommand,
@@ -180,7 +186,7 @@ describe("npm lifecycle policy preflight", () => {
       timeoutMs: 1000,
     });
 
-    expect(runCommand).toHaveBeenCalledWith(["npm", "--version"], expect.any(Object));
+    expect(runCommand).not.toHaveBeenCalled();
     expect(result.failedStep?.stderrTail).toContain(message);
     expect(runStep).not.toHaveBeenCalled();
   });

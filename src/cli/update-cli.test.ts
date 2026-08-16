@@ -1267,6 +1267,9 @@ describe("update-cli", () => {
 
   const mockNpmGlobalRoot = (nodeModules: string) => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -1410,6 +1413,9 @@ describe("update-cli", () => {
       },
     });
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (argv[0] === "npm" && argv[1] === "pack") {
         const destination = argv[argv.indexOf("--pack-destination") + 1];
         if (destination) {
@@ -4392,6 +4398,9 @@ describe("update-cli", () => {
     });
     readPackageVersion.mockResolvedValue("2026.3.23");
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: nodeModules });
       }
@@ -4415,6 +4424,9 @@ describe("update-cli", () => {
     readPackageVersion.mockResolvedValue("2026.4.20");
     primeNpmChannelTag("latest", "2026.4.25");
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -4505,6 +4517,9 @@ describe("update-cli", () => {
     primeNpmChannelTag("latest", "2026.4.21");
     mockFileBackedPathExists();
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -4571,6 +4586,9 @@ describe("update-cli", () => {
     primeNpmChannelTag("latest", "2026.4.21");
     mockFileBackedPathExists();
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -4613,6 +4631,9 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (!Array.isArray(argv)) {
         return commandResult();
+      }
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
       }
       if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
@@ -4834,6 +4855,9 @@ describe("update-cli", () => {
     mockFileBackedPathExists();
     mockNpmGlobalRoot(nodeModules);
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
         throw new Error("package replacement failed");
       }
@@ -4872,6 +4896,9 @@ describe("update-cli", () => {
     mockFileBackedPathExists();
     mockNpmGlobalRoot(nodeModules);
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
         throw new Error("package replacement failed");
       }
@@ -5019,6 +5046,9 @@ describe("update-cli", () => {
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
         throw new Error("update invariant broke");
       }
@@ -5438,6 +5468,9 @@ describe("update-cli", () => {
     });
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${nodeModules}\n` });
       }
@@ -5502,6 +5535,9 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (!Array.isArray(argv)) {
         return commandResult();
+      }
+      if (isOwningNpmCommand(argv[0]) && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
       }
       if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${pathNpmRoot}\n` });
@@ -5763,6 +5799,13 @@ describe("update-cli", () => {
       if (
         Array.isArray(argv) &&
         (argv[0] === serviceNpm || argv[0] === serviceNpmReal) &&
+        argv[1] === "--version"
+      ) {
+        return commandResult({ stdout: "12.0.0\n" });
+      }
+      if (
+        Array.isArray(argv) &&
+        (argv[0] === serviceNpm || argv[0] === serviceNpmReal) &&
         argv[1] === "root" &&
         argv[2] === "-g"
       ) {
@@ -5926,6 +5969,9 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === serviceNode && argv[1] === "--version") {
         return commandResult({ stdout: "v24.14.0\n" });
+      }
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "--version") {
+        return commandResult({ stdout: "12.0.0\n" });
       }
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         // PATH npm returns Node-B's root, NOT the service root.
