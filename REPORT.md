@@ -242,6 +242,7 @@ The cron lifecycle interrupt at `src/cron/isolated-agent/run.ts` aborts the runn
 ## LOC and publication
 
 Follow-up commit classification: production `+14/-15` (net `-1`); tests `+17/-6`. Commit `0bd0599487b` (`fix(cron): preserve coded abort reasons`) was force-with-lease pushed over prior PR head `77ab08e4f5d`. PR #124511 remains open and unlanded.
+
 # PR #124670 follow-up: strict-agent-id CI gates
 
 ## Outcome
