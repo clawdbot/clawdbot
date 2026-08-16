@@ -368,7 +368,7 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
         message:
-          "cloud worker retains unreconciled workspace changes; use Stop cloud worker and confirm permanent abandonment before redispatch",
+          "cloud worker retains unreconciled workspace changes; call environments.destroy with force=true (or use Stop cloud worker and confirm permanent abandonment) before reclaim or redispatch",
       }),
     );
   });

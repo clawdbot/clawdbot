@@ -80,12 +80,12 @@ export class WorkerSessionPlacementRetirementBlockedError extends Error {
   }
 }
 
-class WorkerSessionPlacementRedispatchBlockedError extends Error {
+class WorkerSessionPlacementRecoveryBlockedError extends Error {
   readonly code = "invalid_state";
 
-  constructor(sessionId: string) {
+  constructor(sessionId: string, operation: "reclaim" | "redispatch") {
     super(
-      `Worker session placement ${sessionId} retains cloud workspace recovery that must be force-abandoned before redispatch; use Stop cloud worker and confirm permanent abandonment`,
+      `Worker session placement ${sessionId} retains cloud workspace recovery that must be force-abandoned before ${operation}; call environments.destroy with force=true`,
     );
   }
 }
@@ -330,7 +330,7 @@ export function createWorkerSessionPlacementStore(
         if (current.state === "failed" && hasWorkerWorkspaceRecovery(db, identity.sessionId)) {
           // Redispatch cannot replace the placement generation while its durable
           // recovery rows still own the only copy of unreconciled workspace changes.
-          throw new WorkerSessionPlacementRedispatchBlockedError(identity.sessionId);
+          throw new WorkerSessionPlacementRecoveryBlockedError(identity.sessionId, "redispatch");
         }
         const updatedAtMs = now();
         // Preserve an in-flight local claim while closing admission. Reclaimed
@@ -397,6 +397,15 @@ export function createWorkerSessionPlacementStore(
         }
         if (current.turnClaim) {
           throw new Error(`Cannot transition session ${sessionId} during an active turn`);
+        }
+        if (
+          current.state === "failed" &&
+          input.to === "local" &&
+          hasWorkerWorkspaceRecovery(db, sessionId)
+        ) {
+          // Reclaim must not erase the environment owner needed by explicit
+          // forced abandonment of unreconciled workspace changes.
+          throw new WorkerSessionPlacementRecoveryBlockedError(sessionId, "reclaim");
         }
         return updateTransition(db, current, input.to, input.patch ?? {}, now());
       });

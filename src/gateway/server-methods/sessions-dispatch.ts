@@ -35,6 +35,9 @@ type InternalTransitionDispatchService = {
   ): ReturnType<WorkerPlacementDispatchContract["dispatch"]>;
 };
 
+const TERMINAL_RECOVERY_INSTRUCTION =
+  "cloud worker retains unreconciled workspace changes; call environments.destroy with force=true (or use Stop cloud worker and confirm permanent abandonment) before reclaim or redispatch";
+
 function respondInvalidWorkerSession(respond: RespondFn, message: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
@@ -182,10 +185,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     }
     const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
     if (existingPlacement?.state === "failed" && existingPlacement.terminalRecovery) {
-      respondInvalidWorkerSession(
-        respond,
-        "cloud worker retains unreconciled workspace changes; use Stop cloud worker and confirm permanent abandonment before redispatch",
-      );
+      respondInvalidWorkerSession(respond, TERMINAL_RECOVERY_INSTRUCTION);
       return;
     }
     if (
@@ -271,6 +271,10 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     }
     const { target, entry, sessionId } = resolved;
     const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    if (existingPlacement?.state === "failed" && existingPlacement.terminalRecovery) {
+      respondInvalidWorkerSession(respond, TERMINAL_RECOVERY_INSTRUCTION);
+      return;
+    }
     if (existingPlacement?.state === "reclaimed") {
       respondWorkerPlacement({
         respond,

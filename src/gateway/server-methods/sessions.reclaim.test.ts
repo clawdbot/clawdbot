@@ -129,6 +129,39 @@ describe("sessions.reclaim", () => {
     );
   });
 
+  it("requires permanent abandonment before reclaiming retained workspace recovery", async () => {
+    const reclaim = vi.fn();
+    const failed = {
+      ...makeReclaimedPlacement(),
+      state: "failed",
+      recoveryError: "workspace recovery requires operator action",
+      terminalReason: "workspace recovery requires operator action",
+      terminalRecovery: {
+        action: "force-destroy-environment",
+        dataLoss: "unreconciled-workspace-result",
+      },
+    } as WorkerSessionPlacementRecord;
+    const respond = await invokeSessionReclaim(
+      makeDispatchTestContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+        workerSessionPlacementService: {
+          getMany: () => new Map([[dispatchTestSessionId, failed]]),
+        },
+      }),
+    );
+
+    expect(reclaim).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          "cloud worker retains unreconciled workspace changes; call environments.destroy with force=true (or use Stop cloud worker and confirm permanent abandonment) before reclaim or redispatch",
+      }),
+    );
+  });
+
   it("rejects a missing placement", async () => {
     const reclaim = vi.fn();
     const respond = await invokeSessionReclaim(

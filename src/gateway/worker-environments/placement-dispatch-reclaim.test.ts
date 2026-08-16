@@ -307,7 +307,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it.each(["pending result", "retained workspace journal"] as const)(
-    "refuses to retire a failed placement with a %s owner",
+    "refuses to retire, reclaim, or redispatch a failed placement with a %s owner",
     async (recoveryOwner) => {
       const harness = createHarness(placementStore);
       const active = harness.placements.seedActive(7);
@@ -387,6 +387,22 @@ describe("worker placement dispatch reclaim", () => {
       expect(placementStore.listWorkspaceReconciliationOwners().length).toBe(
         recoveryOwner === "retained workspace journal" ? 1 : 0,
       );
+
+      harness.markEnvironmentDestroyed();
+      await expect(
+        harness.service.reclaim({
+          sessionId: REQUEST.sessionId,
+          sessionKey: REQUEST.sessionKey,
+          agentId: REQUEST.agentId,
+        }),
+      ).rejects.toThrow("must be force-abandoned before reclaim");
+      expect(() => placementStore.startDispatch(REQUEST)).toThrow(
+        "must be force-abandoned before redispatch",
+      );
+      expect(placementStore.get(active.sessionId)).toMatchObject({
+        state: "failed",
+        terminalRecovery: { action: "force-destroy-environment" },
+      });
     },
   );
 
