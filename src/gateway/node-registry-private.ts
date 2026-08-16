@@ -9,6 +9,7 @@ import {
 } from "../infra/node-commands.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
   type NodeRunnerInventoryIssue,
@@ -251,7 +252,8 @@ function resolveNodeRunnerIssue(
     declaration.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
     declaration.clientMode === "node" &&
     declaration.protocolFeatures.length === 1 &&
-    declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
+    (declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
+      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE)
     ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
     : undefined;
 }

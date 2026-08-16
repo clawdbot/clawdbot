@@ -4,6 +4,7 @@ import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src
 import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
@@ -181,7 +182,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-1");
   });
 
-  it("keeps exact v1 inventory diagnostic-only until disconnect and v2 reconnect", async () => {
+  it("keeps exact v1 inventory diagnostic-only until disconnect and v3 reconnect", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
@@ -259,6 +260,36 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       }),
     ]);
     runtime.nodeRegistry.unregister("conn-v2");
+  });
+
+  it("routes the shipped v2 build-shaped inventory to update recovery", async () => {
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    const client = createWorkerSupervisorNodeClient();
+    runtime.nodeRegistry.register(client, {
+      pairingIdentity: "identity-1",
+      pairingGeneration: "generation-1",
+    });
+    const opts = runnerInventoryOptions({
+      nodeRegistry: runtime.nodeRegistry,
+      client,
+      declaration: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE],
+        workerRuns: { ...LEGACY_WORKER_RUNS, bundlePrewarm: 1 },
+      },
+    });
+
+    await runnerInventoryHandler(opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("openclaw update") }),
+    );
+    expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toEqual(
+      NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+    );
+    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    runtime.nodeRegistry.unregister("conn-1");
   });
 
   it.each([

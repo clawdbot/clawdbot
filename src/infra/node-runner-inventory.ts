@@ -3,7 +3,8 @@ import { validateWorkerAdmissionHandshake } from "../../packages/gateway-protoco
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
-export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
+export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v3";
+export const NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
 export const NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
@@ -25,7 +26,12 @@ export type NodeWorkerHostDeclaration =
 
 export type NodeRunnerInventoryDeclaration =
   | { protocolFeatures: readonly [] }
-  | { protocolFeatures: readonly [typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE] }
+  | {
+      protocolFeatures: readonly [
+        | typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
+        | typeof NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
+      ];
+    }
   | {
       protocolFeatures: readonly [typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE];
       workerHost: NodeWorkerHostDeclaration;
@@ -74,7 +80,10 @@ export function parseNodeRunnerInventoryDeclaration(
     return null;
   }
   const feature = value.protocolFeatures[0];
-  if (feature === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE) {
+  if (
+    feature === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
+    feature === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE
+  ) {
     if (
       keys.length < 1 ||
       keys.length > 2 ||
@@ -83,9 +92,9 @@ export function parseNodeRunnerInventoryDeclaration(
     ) {
       return null;
     }
-    // v1 carried the node-local package build in inventory. Keep wire validation
-    // only so shipped nodes receive the explicit update path; never retain it.
-    return { protocolFeatures: [NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE] };
+    // v1/v2 carried the node-local package build in inventory. Keep wire
+    // validation only so shipped nodes receive the explicit update path.
+    return { protocolFeatures: [feature] };
   }
   if (feature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE || keys.length !== 2) {
     return null;
