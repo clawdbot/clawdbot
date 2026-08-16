@@ -11,6 +11,25 @@ type FormatCliFailureOptions = {
   includeDoctorHint?: boolean;
 };
 
+export type CliJsonFailure = {
+  ok: false;
+  error: {
+    type: "cli_error";
+    message: string;
+  };
+};
+
+/** Canonical machine-readable failure envelope for CLI-owned errors. */
+export function formatCliJsonFailure(error: unknown): CliJsonFailure {
+  return {
+    ok: false,
+    error: {
+      type: "cli_error",
+      message: formatErrorMessage(error),
+    },
+  };
+}
+
 function hasDebugArg(argv: string[] | undefined): boolean {
   for (const arg of argv ?? []) {
     // Arguments after the terminator belong to the child, not root stack-trace policy.

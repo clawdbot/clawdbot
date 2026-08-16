@@ -25,6 +25,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatLookupMiss } from "../error-format.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+import { isJsonOutputModeActive } from "../json-output-mode.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
 function parseCronArgv(value: unknown, flag: string): string[] | undefined {
@@ -213,6 +214,9 @@ export function handleCronCliError(err: unknown) {
         valueLabel: "automation id",
       })
     : formatErrorMessage(err);
+  if (isJsonOutputModeActive(process.argv)) {
+    throw new Error(message);
+  }
   defaultRuntime.error(danger(message));
   defaultRuntime.exit(1);
 }

@@ -3,7 +3,8 @@
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { formatCliFailureLines } from "./cli/failure-output.js";
+import { formatCliFailureLines, formatCliJsonFailure } from "./cli/failure-output.js";
+import { isJsonOutputModeActive } from "./cli/json-output-mode.js";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { formatUncaughtError } from "./infra/errors.js";
@@ -99,7 +100,7 @@ if (!isMain) {
 }
 
 if (isMain && !handledRootVersion) {
-  const { restoreRuntimeTerminalState } = await import("./runtime.js");
+  const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -115,6 +116,9 @@ if (isMain && !handledRootVersion) {
         formatUncaughtError(error),
       );
       return;
+    }
+    if (isJsonOutputModeActive(process.argv)) {
+      defaultRuntime.writeJson(formatCliJsonFailure(error));
     }
     for (const line of formatCliFailureLines({
       title: "OpenClaw hit an unexpected runtime error.",
@@ -137,6 +141,9 @@ if (isMain && !handledRootVersion) {
         retainConsoleRoutingUntilProcessExit: true,
       }),
     onError: (err) => {
+      if (isJsonOutputModeActive(process.argv)) {
+        defaultRuntime.writeJson(formatCliJsonFailure(err));
+      }
       for (const line of formatCliFailureLines({
         title: "The CLI command failed.",
         error: err,

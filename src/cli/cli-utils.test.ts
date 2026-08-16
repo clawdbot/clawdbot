@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
+import {
+  applyResolvedCommandOutputMode,
+  withConsoleLogsRoutedToStderrForJson,
+} from "./json-output-mode.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
 import {
@@ -60,6 +64,27 @@ describe("runCommandWithRuntime", () => {
     expect(messages[0]).toContain("invalid onRequestStart method");
     expect(messages[0]).toContain("UND_ERR_INVALID_ARG");
     expect(exits).toEqual([1]);
+  });
+
+  it("bubbles JSON-mode failures to the process-level owner", async () => {
+    const originalArgv = process.argv;
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+    process.argv = ["node", "openclaw", "backup", "verify", "missing.tgz", "--json"];
+    try {
+      await withConsoleLogsRoutedToStderrForJson(process.argv, async () => {
+        applyResolvedCommandOutputMode(true);
+        await expect(
+          runCommandWithRuntime(runtime, async () => {
+            throw new Error("archive missing");
+          }),
+        ).rejects.toThrow("archive missing");
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
 

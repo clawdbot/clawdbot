@@ -240,8 +240,12 @@ describe("agents delete command", () => {
       expect(runtime.error).not.toHaveBeenCalled();
       expect(readJsonLogs()).toEqual([
         {
-          error:
-            'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
+          ok: false,
+          error: {
+            type: "cli_error",
+            message:
+              'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
+          },
         },
       ]);
       expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
@@ -645,7 +649,13 @@ describe("agents delete command", () => {
 
       expect(runtime.error).not.toHaveBeenCalled();
       expect(readJsonLogs()).toEqual([
-        { error: 'Agent "ops" is the only configured agent and cannot be deleted.' },
+        {
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: 'Agent "ops" is the only configured agent and cannot be deleted.',
+          },
+        },
       ]);
       expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
       expectSessionStore(cfg, {

@@ -1,6 +1,22 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
-import { formatCliFailureLines } from "./failure-output.js";
+import { formatCliFailureLines, formatCliJsonFailure } from "./failure-output.js";
+
+describe("formatCliJsonFailure", () => {
+  it("uses the canonical typed envelope and redacts the message", () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    const payload = formatCliJsonFailure(new Error(`Authorization: Bearer ${token}`));
+
+    expect(payload).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("Authorization: Bearer"),
+      },
+    });
+    expect(payload.error.message).not.toContain(token);
+  });
+});
 
 describe("formatCliFailureLines", () => {
   it("shows a concise reason and recovery commands by default", () => {

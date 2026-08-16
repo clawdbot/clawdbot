@@ -31,6 +31,7 @@ import { formatCliCommand } from "./command-format.js";
 import type { ConfigSetOperation } from "./config-cli-input.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type { ConfigSetDryRunError } from "./config-set-dryrun.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 
 function formatInvalidConfigRepairHint(
   snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "warnings" | "legacyIssues">,
@@ -54,7 +55,7 @@ export async function loadValidConfig(
   }
   if (options.json) {
     writeRuntimeJson(runtime, {
-      error: `OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`,
+      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
       issues: normalizeConfigIssues(snapshot.issues),
     });
     runtime.exit(1);

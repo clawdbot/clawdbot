@@ -801,6 +801,16 @@ describe("tasks commands", () => {
       const lookupRuntime = createRuntime();
       await tasksShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
       expectSafeTaskOutput(lookupRuntime, "error");
+
+      const jsonLookupRuntime = createRuntime();
+      await tasksShowCommand({ lookup: `missing${unsafe}`, json: true }, jsonLookupRuntime);
+      expect(readFirstJsonLog(jsonLookupRuntime)).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining("Task not found: missing"),
+        },
+      });
     });
   });
 

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
 import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
+import { formatCliJsonFailure } from "../failure-output.js";
+import { runCliWithExitFinalization } from "../one-shot-exit.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
@@ -248,6 +250,29 @@ function supportsJsonOutput(path: string, command: Command): boolean {
   return hasOwnJsonOption(command) || JSON_OUTPUT_ROUTE_FIRST.has(path);
 }
 
+function requiredCommandArgs(command: Command): string[] {
+  const args = command.registeredArguments.flatMap((argument) => {
+    if (!argument.required) {
+      return [];
+    }
+    return argument.variadic ? ["guard-value"] : ["guard-value"];
+  });
+  for (const option of command.options) {
+    if (!option.mandatory) {
+      continue;
+    }
+    const flag = option.long ?? option.short;
+    if (!flag) {
+      continue;
+    }
+    args.push(flag);
+    if (option.required || option.optional) {
+      args.push(option.argChoices?.[0] ?? "guard-value");
+    }
+  }
+  return args;
+}
+
 function collectRegisteredCommandPaths(...programs: Command[]): Set<string> {
   return new Set(
     programs.flatMap((program) =>
@@ -402,5 +427,40 @@ describe("root command descriptions", () => {
       staleRouteFirstSupport,
       "route-first JSON entries must exist and remain absent from Commander options",
     ).toEqual([]);
+  });
+
+  it("routes every registered JSON command failure through the canonical envelope", async () => {
+    const program = await registerAllBuiltInCommands();
+    const contexts = collectShellCompletionCommandTree(program).descendants.filter((context) => {
+      const path = context.pathVariants[0]?.join(" ") ?? "";
+      return supportsJsonOutput(path, context.command);
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    expect(contexts.length).toBeGreaterThan(0);
+    for (const context of contexts) {
+      const path = context.pathVariants[0]?.join(" ") ?? "";
+      const failure = new Error(`synthetic failure for ${path}`);
+      const payloads: unknown[] = [];
+      context.command.action(async () => {
+        throw failure;
+      });
+      const args = requiredCommandArgs(context.command);
+      if (hasOwnJsonOption(context.command)) {
+        args.push("--json");
+      }
+
+      await runCliWithExitFinalization({
+        runtime,
+        run: async () => {
+          await context.command.parseAsync(args, { from: "user" });
+        },
+        onError: (error) => {
+          payloads.push(formatCliJsonFailure(error));
+        },
+      });
+
+      expect(payloads, path).toEqual([formatCliJsonFailure(failure)]);
+    }
   });
 });
