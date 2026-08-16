@@ -333,7 +333,7 @@ describe("matrix harness runtime", () => {
           probeSignal.addEventListener("abort", rejectAborted, { once: true });
         }),
     );
-    const sleepImpl = vi.fn(async () => {});
+    const sleepImpl = vi.fn(async (_ms: number) => {});
     const startedAt = Date.now();
 
     await expect(
