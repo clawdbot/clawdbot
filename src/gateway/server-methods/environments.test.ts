@@ -7,7 +7,10 @@ import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
-import { getNodeRunnerInventoryIssue, isNodeRunnerSessionHost } from "../node-registry-private.js";
+import {
+  collectNodeRunnerIssuesByNodeId,
+  isNodeRunnerSessionHost,
+} from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
@@ -22,7 +25,7 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 }));
 
 vi.mock("../node-registry-private.js", () => ({
-  getNodeRunnerInventoryIssue: vi.fn(() => undefined),
+  collectNodeRunnerIssuesByNodeId: vi.fn(() => new Map()),
   isNodeRunnerSessionHost: vi.fn(() => false),
 }));
 
@@ -203,7 +206,7 @@ class FakeWorkerServiceError extends Error {
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   vi.mocked(isNodeRunnerSessionHost).mockReturnValue(false);
-  vi.mocked(getNodeRunnerInventoryIssue).mockReturnValue(undefined);
+  vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(new Map());
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({
     paired: [
@@ -311,8 +314,8 @@ describe("environment gateway methods", () => {
   });
 
   it("projects the same current-node update issue through list and status", async () => {
-    vi.mocked(getNodeRunnerInventoryIssue).mockImplementation(({ nodeId }) =>
-      nodeId === "node-live" ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE : undefined,
+    vi.mocked(collectNodeRunnerIssuesByNodeId).mockReturnValue(
+      new Map([["node-live", [NODE_RUNNER_UPDATE_REQUIRED_ISSUE]]]),
     );
 
     const [, listPayload] = await callEnvironmentMethod("environments.list", {});

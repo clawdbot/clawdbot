@@ -120,7 +120,6 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       ...(unavailableReason ? { unavailableReason } : {}),
     };
   };
-  const isAvailable = async (deviceId: string) => (await resolveAvailability(deviceId)).available;
   const provider: WorkerProvider = {
     id: DEVICE_WORKER_PROVIDER_ID,
     provisionBeforeInstallation: true,
@@ -166,7 +165,6 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
 
   return {
     provider,
-    isAvailable,
     resolveAvailability,
     launchNodeWorker: launchAdapter.launch,
     getNodeTransport: () => nodeTransport,

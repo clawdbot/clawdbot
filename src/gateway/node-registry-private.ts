@@ -637,7 +637,7 @@ export function isNodeRunnerSessionHost(params: {
   );
 }
 
-export function getNodeRunnerInventoryIssue(params: {
+function getNodeRunnerInventoryIssue(params: {
   registry: object;
   nodeId: string;
   connId: string;
@@ -647,6 +647,23 @@ export function getNodeRunnerInventoryIssue(params: {
   return state && node?.connId === params.connId
     ? resolveNodeRunnerIssue(node, state.runnerInventoryByConn)
     : undefined;
+}
+
+/** Shared node/environments read-projection shape: nodeId -> runner issues. */
+export function collectNodeRunnerIssuesByNodeId(
+  registry: object,
+  connectedNodes: ReadonlyArray<{ nodeId: string; connId: string }>,
+): Map<string, NodeRunnerInventoryIssue[]> {
+  return new Map(
+    connectedNodes.flatMap((node) => {
+      const issue = getNodeRunnerInventoryIssue({
+        registry,
+        nodeId: node.nodeId,
+        connId: node.connId,
+      });
+      return issue ? [[node.nodeId, [issue]] as const] : [];
+    }),
+  );
 }
 
 export function isNodeRegistryPendingInvokeConnectionActive(params: {
