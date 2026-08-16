@@ -80,6 +80,23 @@ export class WorkerSessionPlacementRetirementBlockedError extends Error {
   }
 }
 
+class WorkerSessionPlacementRedispatchBlockedError extends Error {
+  readonly code = "invalid_state";
+
+  constructor(sessionId: string) {
+    super(
+      `Worker session placement ${sessionId} retains cloud workspace recovery that must be force-abandoned before redispatch; use Stop cloud worker and confirm permanent abandonment`,
+    );
+  }
+}
+
+function hasWorkerWorkspaceRecovery(db: DatabaseSync, sessionId: string): boolean {
+  return (
+    hasWorkerWorkspacePendingResult(db, sessionId) ||
+    hasWorkerWorkspaceReconciliation(db, sessionId)
+  );
+}
+
 function exactConflictPath(value: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error("Worker placement conflict path is required");
@@ -246,8 +263,7 @@ export function createWorkerSessionPlacementStore(
           current?.state === "failed" &&
           current.generation === input.expectedGeneration &&
           current.turnClaim === null &&
-          (hasWorkerWorkspacePendingResult(db, sessionId) ||
-            hasWorkerWorkspaceReconciliation(db, sessionId))
+          hasWorkerWorkspaceRecovery(db, sessionId)
         ) {
           throw new WorkerSessionPlacementRetirementBlockedError(
             sessionId,
@@ -310,6 +326,11 @@ export function createWorkerSessionPlacementStore(
           throw new Error(
             `Cannot dispatch session ${identity.sessionId} from placement ${current.state}`,
           );
+        }
+        if (current.state === "failed" && hasWorkerWorkspaceRecovery(db, identity.sessionId)) {
+          // Redispatch cannot replace the placement generation while its durable
+          // recovery rows still own the only copy of unreconciled workspace changes.
+          throw new WorkerSessionPlacementRedispatchBlockedError(identity.sessionId);
         }
         const updatedAtMs = now();
         // Preserve an in-flight local claim while closing admission. Reclaimed

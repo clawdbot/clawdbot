@@ -343,6 +343,36 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("requires permanent abandonment before redispatching retained workspace recovery", async () => {
+    mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
+    const dispatch = vi.fn();
+    const placement = failedPlacementRecord();
+    placement.terminalRecovery = {
+      action: "force-destroy-environment",
+      dataLoss: "unreconciled-workspace-result",
+    };
+
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: {
+          getMany: () => new Map([[sessionId, placement]]),
+        },
+      }),
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          "cloud worker retains unreconciled workspace changes; use Stop cloud worker and confirm permanent abandonment before redispatch",
+      }),
+    );
+  });
+
   it("rejects failed-placement redispatch while its environment remains live", async () => {
     mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
     const dispatch = vi.fn();

@@ -181,6 +181,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    if (existingPlacement?.state === "failed" && existingPlacement.terminalRecovery) {
+      respondInvalidWorkerSession(
+        respond,
+        "cloud worker retains unreconciled workspace changes; use Stop cloud worker and confirm permanent abandonment before redispatch",
+      );
+      return;
+    }
     if (
       existingPlacement?.state === "failed" &&
       !isFailedWorkerPlacementEnvironmentGone({
