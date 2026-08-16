@@ -8045,7 +8045,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const requireEvidenceStep = publishJob.steps.find(
       (step: WorkflowStep) => step.name === "Require one QA evidence file",
     );
-    expect(requireEvidenceStep.run).toContain("Expected exactly one qa-evidence.json file");
+    expect(requireEvidenceStep.run).toContain(
+      "Expected exactly one aggregate QA evidence manifest",
+    );
+    expect(requireEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(requireEvidenceStep.run).toContain(
+      'evidence_path="$(dirname "${manifest_paths[0]}")/qa-evidence.json"',
+    );
+    expect(requireEvidenceStep.run).toContain('[[ ! -f "$evidence_path" || -L "$evidence_path" ]]');
 
     const validateManifestStep = publishJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA evidence manifest",
