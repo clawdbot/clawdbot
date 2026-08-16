@@ -64,11 +64,11 @@ export const CODEX_NODE_CONTINUE_COMMANDS = [
 export const originalPath = process.env.PATH;
 export const tempDirs: string[] = [];
 
-export const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
-export const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLocal;
-export const listCodexSessionCatalogRuntime = codexSessionCatalogRuntime.list;
-export const readCodexSessionTranscriptRuntime = codexSessionCatalogRuntime.readTranscript;
-export const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
+const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
+const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLocal;
+const listCodexSessionCatalogRuntime = codexSessionCatalogRuntime.list;
+const readCodexSessionTranscriptRuntime = codexSessionCatalogRuntime.readTranscript;
+const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
 
 export function createCodexSessionCatalogControl(
   params: Parameters<typeof createCodexSessionCatalogControlFactory>[0],
@@ -79,12 +79,9 @@ export function createCodexSessionCatalogControl(
   );
 }
 
-export type CodexSessionCatalogControlFactoryStub = Pick<
-  CodexSessionCatalogControlFactory,
-  "forRequest"
->;
+type CodexSessionCatalogControlFactoryStub = Pick<CodexSessionCatalogControlFactory, "forRequest">;
 
-export function asControlFactory(
+function asControlFactory(
   control:
     | CodexSessionCatalogControl
     | CodexSessionCatalogControlFactory
@@ -179,23 +176,23 @@ export function createCodexSessionCatalogNodeHostCommands(
   return createCodexSessionCatalogNodeHostCommandsRuntime(asControlFactory(control), configSources);
 }
 
-export type CreateSessionEntryParams = Parameters<
+type CreateSessionEntryParams = Parameters<
   PluginRuntime["agent"]["session"]["createSessionEntry"]
 >[0];
-export type CreateSessionEntryResult = Awaited<
+type CreateSessionEntryResult = Awaited<
   ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>
 >;
-export type PatchSessionEntryParams = Parameters<
+type PatchSessionEntryParams = Parameters<
   PluginRuntime["agent"]["session"]["patchSessionEntry"]
 >[0];
-export type SessionEntrySummary = ReturnType<
+type SessionEntrySummary = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
 >[number];
 
-export type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
+type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
   agentId?: string;
 };
-export type SessionCatalogProvider = Omit<
+type SessionCatalogProvider = Omit<
   RegisteredSessionCatalogProvider,
   "list" | "read" | "continueSession" | "archive" | "openTerminal"
 > & {
@@ -222,9 +219,7 @@ export type SessionCatalogProvider = Omit<
   ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>;
 };
 
-export function bindTestCatalogOwner(
-  provider: RegisteredSessionCatalogProvider,
-): SessionCatalogProvider {
+function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
   return {
     ...provider,
     list: (params) => provider.list({ agentId: "main", ...params }),
@@ -572,7 +567,6 @@ export type {
   CodexAppServerBindingStore,
   CodexAppServerThreadBinding,
   CodexCatalogHome,
-  CodexSessionCatalogControl,
   CodexThread,
   OpenClawConfig,
   PluginRuntime,
