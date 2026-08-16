@@ -535,7 +535,7 @@ export {
 /**
  * Derive the same compact user-facing tool detail that embedded OpenClaw uses for progress logs.
  */
-export type ToolProgressDetailMode = "explain" | "raw";
+export type ToolProgressDetailMode = "explain" | "raw" | "plain";
 
 /** Infer compact display metadata for one tool invocation from its name and arguments. */
 export function inferToolMetaFromArgs(

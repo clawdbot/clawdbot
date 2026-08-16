@@ -594,7 +594,7 @@ function compactRawCommand(raw: string, maxLength = 120): string {
 export type ToolDetailMode = "explain" | "raw" | "plain";
 
 /** Maps known shell activity into non-technical present-tense sentences. */
-export function resolvePlainExecDetail(args: unknown): string {
+function resolvePlainExecDetail(args: unknown): string {
   const record = asRecord(args);
   const raw = typeof record?.command === "string" ? record.command.trim() : undefined;
   if (!raw) {

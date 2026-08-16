@@ -1554,7 +1554,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             name?: string;
             phase?: string;
             args?: Record<string, unknown>;
-            detailMode?: "explain" | "raw";
+            detailMode?: "explain" | "raw" | "plain";
           }) => {
             if (!isChannelProgressDraftWorkToolName(payload.name)) {
               return false;
