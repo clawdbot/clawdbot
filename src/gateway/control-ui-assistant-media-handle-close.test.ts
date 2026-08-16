@@ -26,7 +26,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 
 vi.mock("../media/local-media-access.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/local-media-access.js")>();
-  return { ...actual, getDefaultLocalRoots: () => [mediaRoot] };
+  return { ...actual, getDefaultLocalRootsCore: () => [mediaRoot] };
 });
 
 vi.mock("../infra/fs-safe.js", async (importOriginal) => {
