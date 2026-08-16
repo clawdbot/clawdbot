@@ -874,7 +874,16 @@ async function runDeferredWorkerFailureProof(options: ProducerOptions): Promise<
       repoRoot: options.repoRoot,
       command: {
         executablePath: process.execPath,
-        argsPrefix: ["--import", "tsx", path.join(options.repoRoot, "src/entry.ts")],
+        argsPrefix: [
+          "--import",
+          "tsx",
+          "--import",
+          path.join(
+            options.repoRoot,
+            "test/e2e/qa-lab/runtime/gateway-deferred-sidecar-failure-hook.ts",
+          ),
+          path.join(options.repoRoot, "src/entry.ts"),
+        ],
         cwd: options.repoRoot,
         usePackagedPlugins: false,
       },
@@ -937,7 +946,6 @@ async function runDeferredWorkerFailureProof(options: ProducerOptions): Promise<
       runtimeEnvPatch: {
         OPENCLAW_SKIP_CHANNELS: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_QA_FAIL_WORKER_START: "1",
       },
     });
   } catch (error) {

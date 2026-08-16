@@ -9,6 +9,7 @@ import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
+import { getGatewayStartupTestHooks } from "./server-test-hooks.js";
 
 const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
   () => import("./server-startup-post-attach.js"),
@@ -17,13 +18,6 @@ const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
 const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks, logWsControl } =
   gatewayKernelLogs;
 const POST_READY_WORK_START_DELAY_MS = 500;
-
-const qaWorkerEnvironmentRuntimeStartFailure =
-  process.env.OPENCLAW_QA_FAIL_WORKER_START === "1"
-    ? () => {
-        throw new Error("QA worker environment sidecar failure sentinel");
-      }
-    : undefined;
 
 export { resetPreparedModelCatalogForTestCore };
 
@@ -63,7 +57,8 @@ export async function startGatewayServerCore(
       logReload,
       logTailscale,
       loadGatewayStartupPostAttachModule,
-      beforeWorkerEnvironmentRuntimeStart: qaWorkerEnvironmentRuntimeStartFailure,
+      beforeWorkerEnvironmentRuntimeStart:
+        getGatewayStartupTestHooks().beforeWorkerEnvironmentRuntimeStart,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
   } catch (err) {
