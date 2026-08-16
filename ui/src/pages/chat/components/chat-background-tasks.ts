@@ -511,7 +511,8 @@ async function cancelBackgroundTask(
     // Refusals (already terminal, stale id, no cancellation handle) are
     // successful responses with cancelled=false; surface them like errors.
     if (!result?.cancelled) {
-      state.error = result?.reason?.trim() || t("tasksPage.cancelFailed");
+      const reason = result?.reason?.trim();
+      state.error = reason ? formatUiError(reason) : t("tasksPage.cancelFailed");
     }
   } catch (error) {
     if (getBackgroundTasksState(host) === state) {

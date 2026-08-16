@@ -147,7 +147,11 @@ describe("background tasks rail state", () => {
     createBackgroundTasksProps(host);
     await flushAsync();
 
-    expect(createBackgroundTasksProps(host).error).toBe("OPENAI_API_KEY=sk-123...cdef");
+    const props = createBackgroundTasksProps(host);
+    expect(props.error).toBe("OPENAI_API_KEY=sk-123...cdef");
+    const rail = renderTaskRail({ ...props, collapsed: false });
+    expect(rail.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
+    expect(rail.textContent).not.toContain("sk-1234567890abcdef");
   });
 
   it("loads session-scoped tasks eagerly while the rail is collapsed", async () => {
@@ -241,7 +245,11 @@ describe("background tasks rail state", () => {
       request: (method) =>
         method === "tasks.list"
           ? Promise.resolve({ tasks: [running] })
-          : Promise.resolve({ found: true, cancelled: false, reason: "already finished" }),
+          : Promise.resolve({
+              found: true,
+              cancelled: false,
+              reason: "already finished: OPENAI_API_KEY=sk-1234567890abcdef",
+            }),
     });
     const auth = { role: "operator" as const, scopes: ["operator.write"] };
     host.hello = { type: "hello-ok", protocol: 4, auth };
@@ -252,7 +260,7 @@ describe("background tasks rail state", () => {
     await flushAsync();
 
     const props = createBackgroundTasksProps(host);
-    expect(props.error).toBe("already finished");
+    expect(props.error).toBe("already finished: OPENAI_API_KEY=sk-123...cdef");
     expect(props.cancellingTaskIds.has("task-1")).toBe(false);
   });
 
