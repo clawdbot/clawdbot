@@ -9,7 +9,7 @@ import {
 import { fixture, leasePath } from "./workspace-quiescence-scripts.test-support.js";
 
 describe("remote workspace quiescence resume deadline", () => {
-  it("keeps a maximum-size stalled recovery within the fixed pass budget", async () => {
+  it("bounds a stalled pass while allowing healthy high-cardinality progress", async () => {
     const input = await fixture();
     const nonce = "a".repeat(32);
     const leaseFile = leasePath(input.home, input.workspace, nonce);
@@ -47,5 +47,56 @@ describe("remote workspace quiescence resume deadline", () => {
     };
     expect(retained.processes).toHaveLength(4_096);
     expect(retained.recovery?.state).toBe("probe-timeout");
-  }, 14_000);
+
+    await fs.rm(input.stalledAllProcessProbePath, { force: true });
+    const healthyNonce = "b".repeat(32);
+    const healthyLeaseFile = leasePath(input.home, input.workspace, healthyNonce);
+    const preloadPath = path.join(input.home, "healthy-process-probe.cjs");
+    await fs.writeFile(
+      healthyLeaseFile,
+      JSON.stringify({
+        version: 1,
+        nonce: healthyNonce,
+        processes: Array.from({ length: 64 }, () => ({
+          pid: process.pid,
+          start: "healthy process",
+        })),
+        watchdog: null,
+        expiresAtMs: Date.now() + 60_000,
+      }),
+    );
+    await fs.writeFile(
+      preloadPath,
+      `const childProcess = require("node:child_process");
+const originalExecFile = childProcess.execFile;
+childProcess.execFile = function (file, args, options, callback) {
+  if (file === "ps" && args[0] === "-o" && args[1] === "stat=,lstart=") {
+    const timer = setTimeout(() => callback(null, "T healthy process\\n", ""), 700);
+    return { stdout: null, stderr: null, kill: () => { clearTimeout(timer); return true; }, unref: () => {} };
+  }
+  return originalExecFile.call(this, file, args, options, callback);
+};
+`,
+    );
+
+    const healthyStartedAt = Date.now();
+    const healthyResult = await runCommandWithTimeout(
+      [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, healthyNonce],
+      {
+        timeoutMs: 10_000,
+        baseEnv: {
+          ...input.env,
+          NODE_OPTIONS: `${input.env.NODE_OPTIONS ?? ""} --require=${preloadPath}`.trim(),
+        },
+        killProcessTree: true,
+      },
+    );
+    const healthyElapsedMs = Date.now() - healthyStartedAt;
+
+    expect(healthyResult.termination).toBe("exit");
+    expect(healthyResult.code, healthyResult.stderr).toBe(0);
+    expect(healthyElapsedMs).toBeGreaterThan(5_000);
+    expect(healthyElapsedMs).toBeLessThan(8_000);
+    await expect(fs.access(healthyLeaseFile)).rejects.toThrow();
+  }, 22_000);
 });
