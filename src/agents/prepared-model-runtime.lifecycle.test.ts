@@ -8,6 +8,7 @@ import {
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
@@ -821,6 +822,66 @@ describe("prepared model runtime snapshots", () => {
     finishAuthRefresh?.();
     await publication;
     expect(settled).toBe(true);
+  });
+
+  it("defers an in-flight auth refresh to a superseding config publication", async () => {
+    mocks.configuredAgentIds = ["default"];
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const events: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event.phase);
+    });
+    let finishAuthRefresh: (() => void) | undefined;
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(
+      async () =>
+        await new Promise<{ agentDir: string; wrote: false }>((resolve) => {
+          finishAuthRefresh = () => resolve({ agentDir: "/tmp/unused-agent", wrote: false });
+        }),
+    );
+
+    mocks.mutationListener?.({ affectsInheritedStores: true });
+    await vi.waitFor(() => expect(finishAuthRefresh).toBeDefined());
+    const reload = refreshPreparedModelRuntimeSnapshots(
+      { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      { gatewayLifecycle: true },
+    );
+    finishAuthRefresh?.();
+    await reload;
+    unregister();
+
+    expect(events).not.toContain("failed");
+    expect(mocks.warn).not.toHaveBeenCalled();
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+    ).resolves.toMatchObject({ agentId: "default" });
+  });
+
+  it("does not announce an auth republication while a config replacement gate is pending", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const replacementConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const publishedSnapshots: Array<ReturnType<typeof getPreparedModelRuntimeSnapshot>> = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "published") {
+        publishedSnapshots.push(
+          getPreparedModelRuntimeSnapshot({
+            agentId: "default",
+            agentDir: "/tmp/unused-agent",
+            inheritedAuthDir: "/tmp/unused-agent",
+            config: replacementConfig,
+          }),
+        );
+      }
+    });
+
+    // The mutation queues an auth task; the synchronous stale edge of the config
+    // refresh opens the replacement gate before that task runs.
+    mocks.mutationListener?.({ affectsInheritedStores: true });
+    await refreshPreparedModelRuntimeSnapshots(replacementConfig, { gatewayLifecycle: true });
+    unregister();
+
+    expect(publishedSnapshots).toHaveLength(1);
+    expect(publishedSnapshots[0]).toMatchObject({ config: replacementConfig });
   });
 
   it("invalidates and refreshes the affected owner at auth publication", async () => {
