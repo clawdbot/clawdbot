@@ -71,7 +71,7 @@ import { mergeSessionEntry } from "./types.js";
 
 // Transcript write owner. Queue coordination surrounds synchronous SQLite commit sections.
 
-class SqliteTranscriptMutationConflictError extends Error {
+export class SqliteTranscriptMutationConflictError extends Error {
   constructor(sessionId: string) {
     super(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
     this.name = "SqliteTranscriptMutationConflictError";
@@ -157,13 +157,24 @@ export async function rewriteTranscriptEventRowsExact(
 export function replaceTranscriptEventsSync(
   scope: SessionTranscriptWriteScope,
   events: TranscriptEvent[],
+  expectedSnapshot?: readonly SqliteTranscriptSnapshotRow[],
 ): boolean {
   // Every sync replacement inherits and enforces the admitted writer claim.
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  // Session-entry guards below protect identity/lifecycle/writer claim, not transcript
+  // row content. A caller that tracks its own last-synced row snapshot (e.g.
+  // SessionManagerCore) must pass it here: the vulnerability window is between the
+  // caller's OWN last read/append and this rewrite, not between a fresh read taken at
+  // the top of this function and the transaction below. A fresh read here would already
+  // include a foreign row that committed before this call, so it would trivially pass
+  // revalidation while `events` (built from the caller's stale in-memory state) still
+  // omits that row. Only fall back to a fresh read for callers with no tracked snapshot.
+  const snapshotRows = expectedSnapshot ?? readTranscriptEventRows(database, resolved.sessionId);
   let replaced = false;
-  runOpenClawAgentWriteTransaction((database) => {
-    const fresh = readSessionEntryRow(database, resolved.sessionKey);
+  runOpenClawAgentWriteTransaction((writeDatabase) => {
+    const fresh = readSessionEntryRow(writeDatabase, resolved.sessionKey);
     if (
       !fresh ||
       fresh.entry.sessionId !== resolved.sessionId ||
@@ -174,7 +185,10 @@ export function replaceTranscriptEventsSync(
     ) {
       return;
     }
-    replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
+    // Revalidate after BEGIN IMMEDIATE so a committed cross-process append cannot
+    // be silently deleted by this rewrite.
+    assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshotRows);
+    replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events);
     replaced = true;
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !replaced) {

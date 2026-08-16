@@ -178,6 +178,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
         "Session transcript header was not persisted",
       );
       this.persistenceHeaderPending = false;
+      // No refreshPersistedRowSnapshot() here: this branch always falls through to
+      // exactly one of the append branches below, whose own refresh reads the full
+      // current row set (including the header row just appended above) in one pass.
     }
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
@@ -185,6 +188,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         appendTranscriptEventSync(scope, entry),
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
       );
+      this.refreshPersistedRowSnapshot();
       return undefined;
     }
     if (!isIndexedSessionEntry(entry)) {
@@ -201,6 +205,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         ),
         `Session transcript entry was not persisted: ${entry.id}`,
       );
+      this.refreshPersistedRowSnapshot();
       return undefined;
     }
     const appendOptions = {
@@ -217,6 +222,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
+    this.refreshPersistedRowSnapshot();
     if (result.messageId !== entry.id) {
       const idempotencyKey =
         entry.message.role === "user" &&

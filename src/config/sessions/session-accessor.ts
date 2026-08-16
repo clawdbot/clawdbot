@@ -236,7 +236,9 @@ export {
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptEventsWithRowSnapshotSync,
   loadTranscriptHeaderSync,
+  loadTranscriptRowSnapshotSync,
   loadTranscriptTailEventsSync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
@@ -249,10 +251,12 @@ export {
   rewriteTranscriptEventRowsExact,
   rewriteTranscriptMessageAtAnchor,
   resolveTranscriptSessionKeyBySessionId,
+  SqliteTranscriptMutationConflictError,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
+export type { SqliteTranscriptSnapshotRow } from "./session-accessor.transcript.js";
 export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,

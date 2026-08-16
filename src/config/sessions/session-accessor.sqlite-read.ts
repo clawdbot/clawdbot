@@ -62,6 +62,48 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
   );
 }
 
+/**
+ * Reads fenced transcript events and the raw row snapshot from one read transaction.
+ * The row snapshot is unfenced (mirrors replaceTranscriptEventsSync's own pre-write
+ * read) so a caller that tracks it can detect any foreign row committed later,
+ * not just ones visible within its own turn boundary.
+ */
+export function loadTranscriptEventsWithRowSnapshotSync(scope: SessionTranscriptReadScope): {
+  events: TranscriptEvent[];
+  rows: SqliteTranscriptSnapshotRow[];
+} {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
+      const rows = readTranscriptEventRows(database, resolved.sessionId);
+      const beforeRawSeq = fence?.beforeRawSeq;
+      const visibleRows =
+        beforeRawSeq === undefined ? rows : rows.filter((row) => row.seq < beforeRawSeq);
+      return {
+        // SAFETY: eventJson is JSON written by this module's own transcript writers.
+        events: visibleRows.map((row) => JSON.parse(row.eventJson) as TranscriptEvent),
+        rows,
+      };
+    },
+    {
+      databaseLabel: database.path,
+      operationLabel: "session transcript fenced read with row snapshot",
+    },
+  );
+}
+
+/** Reads the current row snapshot only, for refreshing a caller-tracked snapshot after a write. */
+export function loadTranscriptRowSnapshotSync(
+  scope: SessionTranscriptReadScope,
+): SqliteTranscriptSnapshotRow[] {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return readTranscriptEventRows(database, resolved.sessionId);
+}
+
 /** Reads a complete transcript and its lifecycle snapshot from one SQLite read transaction. */
 export function inspectTranscriptEventsSync(scope: SessionTranscriptReadScope): {
   events: TranscriptEvent[];

@@ -59,6 +59,12 @@ type ConcurrencyWorkerRequest =
       rewriteMode: "read-then-replace" | "replace-twice";
       sessionId: string;
       storePath: string;
+    }
+  | {
+      kind: "sync-transcript-rewrite";
+      sessionId: string;
+      storePath: string;
+      targetEntryId: string;
     };
 
 type ConcurrencyWorkerReady<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
@@ -91,13 +97,17 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let concurrencyWorker: ReturnType<typeof spawn> | undefined;
 let nextRequestId = 0;
 
-function createConcurrencyWorkerScript(sessionAccessorUrl: string): string {
+function createConcurrencyWorkerScript(
+  sessionAccessorUrl: string,
+  sessionManagerUrl: string,
+): string {
   return `
 const {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
   withTranscriptWriteLock,
 } = await import(${JSON.stringify(sessionAccessorUrl)});
+const { SessionManager } = await import(${JSON.stringify(sessionManagerUrl)});
 
 const SESSION_KEY = ${JSON.stringify(SESSION_KEY)};
 const AGENT_ID = ${JSON.stringify(AGENT_ID)};
@@ -222,6 +232,37 @@ async function runTranscriptRewrite(request) {
   return result;
 }
 
+async function runSyncTranscriptRewrite(request) {
+  let result;
+  try {
+    const manager = SessionManager.open({
+      agentId: AGENT_ID,
+      sessionId: request.sessionId,
+      sessionKey: SESSION_KEY,
+      storePath: request.storePath,
+    });
+    const proceed = waitForProceed(request.requestId);
+    send({
+      phase: "ready",
+      requestId: request.requestId,
+      value: { eventCount: manager.getEntries().length },
+    });
+    await proceed;
+    // Synchronous rewrite path (removeTrailingEntries -> replacePersistedTranscript):
+    // no lock, no await between the manager's load and this call, so a foreign
+    // append committed during the "ready" handshake is the only way to race it.
+    manager.removeTrailingEntries((entry) => entry.id === request.targetEntryId);
+    result = { ok: true };
+  } catch (error) {
+    result = {
+      ok: false,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return result;
+}
+
 process.on("message", (request) => {
   if (!request || typeof request !== "object") {
     return;
@@ -242,7 +283,9 @@ process.on("message", (request) => {
     const value =
       request.kind === "reply-init"
         ? await runReplyInit(request)
-        : await runTranscriptRewrite(request);
+        : request.kind === "sync-transcript-rewrite"
+          ? await runSyncTranscriptRewrite(request)
+          : await runTranscriptRewrite(request);
     send({ phase: "result", requestId: request.requestId, value });
   })().catch((error) => {
     send({
@@ -309,6 +352,9 @@ async function getConcurrencyWorker(): Promise<ReturnType<typeof spawn>> {
   const sessionAccessorUrl = pathToFileURL(
     path.resolve("src/config/sessions/session-accessor.ts"),
   ).href;
+  const sessionManagerUrl = pathToFileURL(
+    path.resolve("src/agents/sessions/session-manager.ts"),
+  ).href;
   const child = spawn(
     process.execPath,
     [
@@ -316,7 +362,7 @@ async function getConcurrencyWorker(): Promise<ReturnType<typeof spawn>> {
       "tsx",
       "--input-type=module",
       "--eval",
-      createConcurrencyWorkerScript(sessionAccessorUrl),
+      createConcurrencyWorkerScript(sessionAccessorUrl, sessionManagerUrl),
     ],
     { stdio: ["ignore", "pipe", "pipe", "ipc"] },
   );
@@ -742,4 +788,78 @@ describe("session accessor cross-process concurrency", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("rejects a sync transcript rewrite after another process commits an append", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-transcript-rewrite-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-cross-process-transcript";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+      const userMessageId = (
+        await appendTranscriptMessage(scope, {
+          cwd: tempDir,
+          eventId: "user-message",
+          message: { role: "user", content: "question" },
+        })
+      ).messageId;
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-transcript-rewrite",
+          sessionId,
+          storePath,
+          targetEntryId: userMessageId,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 1 });
+          // Foreign append lands after the worker's SessionManager.open() read
+          // but before its synchronous removeTrailingEntries() rewrite -- the
+          // exact window a fresh in-function read would already include,
+          // silently discarding this row. The worker's caller-tracked snapshot
+          // must still catch it.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "committed concurrent reply",
+              timestamp: Date.now(),
+            },
+            parentId: userMessageId,
+          });
+        },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        name: "SqliteTranscriptMutationConflictError",
+        message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
+      });
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "user-message",
+          message: expect.objectContaining({ role: "user", content: "question" }),
+        }),
+        expect.objectContaining({
+          type: "message",
+          parentId: "user-message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "committed concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

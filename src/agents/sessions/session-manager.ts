@@ -6,8 +6,9 @@
  */
 import {
   appendTranscriptMessageSync,
-  loadTranscriptEventsSync,
+  loadTranscriptEventsWithRowSnapshotSync,
   type SessionTranscriptRuntimeTarget,
+  type SqliteTranscriptSnapshotRow,
 } from "../../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
@@ -51,8 +52,9 @@ export class SessionManager extends SessionManagerBranching {
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    loadedRowSnapshot?: readonly SqliteTranscriptSnapshotRow[],
   ) {
-    super(cwd, persistenceTarget, loadedEntries);
+    super(cwd, persistenceTarget, loadedEntries, loadedRowSnapshot);
   }
 
   /** Makes pending append-oriented persistence durable without rewriting committed entries. */
@@ -76,11 +78,12 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   static open(target: SessionTranscriptRuntimeTarget, cwdOverride?: string): SessionManager {
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const { events, rows } = loadTranscriptEventsWithRowSnapshotSync(target);
+    const entries = events as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
+    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries, rows);
   }
 
   /** Appends to the current transcript leaf without hydrating its history. */

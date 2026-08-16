@@ -206,6 +206,10 @@ export class SessionManagerBranching extends SessionManagerEntries {
     }
     this.persistenceTarget = nextTarget;
     this.persistenceHeaderPending = false;
+    // The tracked snapshot still reflects the previous session's rows. Refresh
+    // it against nextTarget so the next replacePersistedTranscript() compares
+    // against this session's actual rows instead of a stale, unrelated set.
+    this.refreshPersistedRowSnapshot();
     return newSessionId;
   }
 }

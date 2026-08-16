@@ -9,10 +9,13 @@ import {
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptEventsWithRowSnapshotSync,
   loadTranscriptHeaderSync,
+  loadTranscriptRowSnapshotSync,
   loadTranscriptTailEventsSync,
   readTranscriptStatsSync,
   readTranscriptEventAtSeqSync,
+  type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import {
@@ -23,6 +26,7 @@ import {
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
   rewriteTranscriptEventRowsExact,
+  SqliteTranscriptMutationConflictError,
   trimTranscriptForManualCompact,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
@@ -48,7 +52,9 @@ export {
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptEventsWithRowSnapshotSync,
   loadTranscriptHeaderSync,
+  loadTranscriptRowSnapshotSync,
   loadTranscriptTailEventsSync,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
@@ -60,9 +66,11 @@ export {
   rewriteTranscriptEventRowsExact,
   rewriteTranscriptMessageAtAnchor,
   resolveTranscriptSessionKeyBySessionId,
+  SqliteTranscriptMutationConflictError,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 };
+export type { SqliteTranscriptSnapshotRow };
 export { emitSessionTranscriptUpdate as emitTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 /**

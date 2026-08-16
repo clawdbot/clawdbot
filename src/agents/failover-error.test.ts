@@ -3,6 +3,7 @@
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
 import { describe, expect, it } from "vitest";
+import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import {
   buildFailoverRemediationHint,
@@ -839,6 +840,14 @@ describe("failover-error", () => {
         coordination,
         new Error("worker turn failed", { cause: coordination }),
       ]) {
+        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
+        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      }
+    });
+
+    it("returns true for a sync transcript rewrite conflict, direct and nested (#124393)", () => {
+      const conflict = new SqliteTranscriptMutationConflictError("session-1");
+      for (const error of [conflict, new Error("branch rewrite failed", { cause: conflict })]) {
         expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
         expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
       }
