@@ -256,6 +256,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     pullRequestsExpanded?: boolean;
     onExpandPullRequests?: () => void;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
+    onOpenDiff?: () => void;
   };
 
 export function renderChat(props: ChatProps) {
@@ -525,6 +526,7 @@ export function renderChat(props: ChatProps) {
                     expanded: props.pullRequestsExpanded === true,
                     onExpand: () => props.onExpandPullRequests?.(),
                     onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+                    onOpenDiff: props.onOpenDiff,
                   })}
                   ${renderChatSessionSuggestions({
                     suggestions: props.sessionSuggestions ?? [],

@@ -188,16 +188,28 @@ function visibleChatPullRequests(
   };
 }
 
-function renderDiffStats(item: { additions?: number; deletions?: number }) {
+function renderDiffStats(
+  item: { additions?: number; deletions?: number },
+  onOpenDiff?: () => void,
+) {
   if (typeof item.additions !== "number" && typeof item.deletions !== "number") {
     return nothing;
   }
-  return html`
-    <span class="chat-pr__diff">
-      <span class="chat-pr__additions">+${formatDiffCount(item.additions ?? 0)}</span>
-      <span class="chat-pr__deletions">−${formatDiffCount(item.deletions ?? 0)}</span>
-    </span>
+  const content = html`
+    <span class="chat-pr__additions">+${formatDiffCount(item.additions ?? 0)}</span>
+    <span class="chat-pr__deletions">−${formatDiffCount(item.deletions ?? 0)}</span>
   `;
+  if (onOpenDiff) {
+    return html`<button
+      class="chat-pr__diff chat-pr__diff--button"
+      type="button"
+      aria-label=${t("chat.sessionDiff.show")}
+      @click=${onOpenDiff}
+    >
+      ${content}
+    </button>`;
+  }
+  return html` <span class="chat-pr__diff">${content}</span> `;
 }
 
 function renderRateLimitWarning() {
@@ -215,7 +227,11 @@ function renderRateLimitWarning() {
 // branch is unpushed the gateway omits createUrl — the row then just reports
 // the session's local changed files. While rate limited, "no PR found" is
 // unreliable, so the warning stays visible here.
-function renderBranchRow(branch: ControlUiSessionBranch, rateLimited: boolean) {
+function renderBranchRow(
+  branch: ControlUiSessionBranch,
+  rateLimited: boolean,
+  onOpenDiff?: () => void,
+) {
   return html`
     <article class="chat-pr" data-state="branch">
       <span class="chat-pr__link chat-pr__link--static">
@@ -224,7 +240,7 @@ function renderBranchRow(branch: ControlUiSessionBranch, rateLimited: boolean) {
         <span class="chat-pr__branch">${branch.branch}</span>
       </span>
       <span class="chat-pr__meta">
-        ${renderDiffStats(branch)} ${rateLimited ? renderRateLimitWarning() : nothing}
+        ${renderDiffStats(branch, onOpenDiff)} ${rateLimited ? renderRateLimitWarning() : nothing}
         ${branch.createUrl
           ? html`
               <a
@@ -250,6 +266,7 @@ export function renderChatPullRequests(props: {
   expanded: boolean;
   onExpand: () => void;
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
+  onOpenDiff?: () => void;
 }) {
   if (props.pullRequests.length === 0 && !props.branch) {
     return nothing;
@@ -257,7 +274,7 @@ export function renderChatPullRequests(props: {
   const { visible, hiddenCount } = visibleChatPullRequests(props.pullRequests, props.expanded);
   return html`
     <div class="chat-prs" aria-live="polite">
-      ${props.branch ? renderBranchRow(props.branch, props.rateLimited) : nothing}
+      ${props.branch ? renderBranchRow(props.branch, props.rateLimited, props.onOpenDiff) : nothing}
       ${visible.map((pullRequest) => {
         const merged = pullRequest.state === "merged";
         return html`

@@ -204,9 +204,31 @@ describeControlUiE2e("session pull request chips", () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.diff",
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+        "sessions.diff": {
+          sessionKey: "main",
+          root: "/tmp/checkout",
+          branch: "claude/cloud-workers-live-events",
+          baseRef: "main",
+          files: [
+            {
+              path: "src/app.ts",
+              status: "modified",
+              additions: 2819,
+              deletions: 205,
+              patch: "@@ -1 +1 @@\n-old\n+new\n",
+            },
+          ],
+          additions: 2819,
+          deletions: 205,
+        },
       },
     });
     await page.goto(`${server.baseUrl}chat`);
@@ -239,6 +261,11 @@ describeControlUiE2e("session pull request chips", () => {
     // Locale-formatted diff stats, sized like the PR the branch would open.
     await expect.poll(() => row.locator(".chat-pr__additions").textContent()).toBe("+2,819");
     await expect.poll(() => row.locator(".chat-pr__deletions").textContent()).toBe("−205");
+    const diffMarker = row.getByRole("button", { name: "Show session changes" });
+    await expect.poll(() => diffMarker.count()).toBe(1);
+    await diffMarker.click();
+    await expect.poll(() => page.locator(".session-diff").count()).toBe(1);
+    await expect.poll(() => page.locator(".session-diff__filename").textContent()).toBe("app.ts");
     // While rate limited "no PR found" is unreliable, so the warning shows.
     await expect.poll(() => row.locator(".chat-pr__warning").count()).toBe(1);
     const create = row.locator(".chat-pr__create");

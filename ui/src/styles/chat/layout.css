@@ -2168,6 +2168,13 @@ button.chat-reply-preview--message:disabled {
   font: 12px/1.4 var(--mono);
 }
 
+.chat-pr__diff--button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: var(--cursor-action);
+}
+
 .chat-pr__additions {
   color: var(--ok);
 }

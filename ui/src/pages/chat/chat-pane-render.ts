@@ -452,6 +452,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         this.requestUpdate();
       },
       onDismissPullRequest: this.dismissSessionPullRequest,
+      onOpenDiff: catalogKey ? undefined : sessionWorkspace.onOpenDiff,
       taskSuggestionBusyIds: this.taskSuggestionBusyIds,
       sessionSuggestions: multiIdentity ? this.sessionSuggestions : [],
       sessionSuggestionRole: this.sessionSuggestionRole,
