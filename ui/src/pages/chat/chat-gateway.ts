@@ -349,7 +349,7 @@ function handleChatEvent(
     outcome: "done" | "interrupted",
     sessionStatus: "done" | "failed" | "killed" | "timeout",
   ) =>
-    reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    reconcileChatRunLifecycle(state, {
       outcome,
       sessionStatus,
       runId: terminalRunId,
@@ -411,17 +411,14 @@ function handleChatEvent(
       state.chatMessages = materializeVisibleStream();
     }
     if (payload.yielded === true && payload.stopReason === "end_turn") {
-      reconcileChatRunLifecycle(
-        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
-        {
-          yielded: true,
-          runId: terminalRunId,
-          sessionKey: state.sessionKey,
-          sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
-          clearLocalRun: true,
-          clearChatStream: true,
-        },
-      );
+      reconcileChatRunLifecycle(state, {
+        yielded: true,
+        runId: terminalRunId,
+        sessionKey: state.sessionKey,
+        sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
+        clearLocalRun: true,
+        clearChatStream: true,
+      });
     } else {
       reconcileTerminalRun("done", "done");
     }

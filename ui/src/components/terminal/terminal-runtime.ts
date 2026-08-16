@@ -1,4 +1,9 @@
 import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+
+function isEventListener(value: unknown): value is EventListener {
+  return typeof value === "function";
+}
 
 /** Creates a terminal whose WASM memory is never reused by another tab. */
 export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTerminalOptions) {
@@ -11,11 +16,9 @@ export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTermin
   const runtime = await loadGhosttyRuntime({ module: ghosttyModule });
   const controller = await createGhosttyTerminal({ ...options, runtime });
   const dispose = controller.dispose.bind(controller);
-  const terminal = controller.terminal as unknown as { handleMouseUp?: unknown };
-  let handleMouseUp =
-    typeof terminal.handleMouseUp === "function"
-      ? (terminal.handleMouseUp as EventListener)
-      : undefined;
+  const terminal = controller.terminal;
+  const mouseUpCandidate = asOptionalRecord(terminal)?.handleMouseUp;
+  let handleMouseUp = isEventListener(mouseUpCandidate) ? mouseUpCandidate : undefined;
   let disposed = false;
   controller.dispose = () => {
     if (disposed) {

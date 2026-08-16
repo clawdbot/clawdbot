@@ -30,7 +30,6 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     codexAppServerExtensionFactories: [],
     agentToolResultMiddlewareOwners: [],
     agentToolResultMiddlewares: [],
-    memoryEmbeddingProviders: [],
     agentHarnesses: [],
     pluginRuntimeArtifacts: new Map(),
     compactionProviders: [],

@@ -7,7 +7,7 @@ import {
   sendWebDirectInboundMessage,
 } from "./auto-reply.test-harness.js";
 import { monitorWebChannel } from "./auto-reply/monitor.js";
-import type { WebInboundMessageInput } from "./inbound.js";
+import type { WebInboundCallbackMessage } from "./inbound.js";
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
@@ -44,7 +44,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
 
 export async function monitorWebChannelWithCapture(resolver: unknown): Promise<{
   spies: ReturnType<typeof createWebInboundDeliverySpies>;
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
+  onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
 }> {
   const spies = createWebInboundDeliverySpies();
   const { listenerFactory, getOnMessage } = createWebListenerFactoryCapture();

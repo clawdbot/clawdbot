@@ -83,7 +83,7 @@ export function enqueuePendingSendMessage(
     recordChatSendTiming(host, pending, sendState, submittedAtMs);
   }
   schedulePendingSendPaintTiming(host, pending, submittedAtMs);
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true, false, {
+  scheduleChatScroll(host, true, false, {
     source: "manual",
   });
   return pending;

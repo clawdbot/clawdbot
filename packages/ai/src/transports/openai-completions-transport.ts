@@ -3,7 +3,6 @@ import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
-import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -32,9 +31,9 @@ import {
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 import {
+  createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
-  type WritableTransportStream,
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
 
@@ -173,8 +172,7 @@ function buildOpenAICompletionsClientConfig(
 
 export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   return (model, context, options) => {
-    const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as WritableTransportStream;
+    const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant" as const,

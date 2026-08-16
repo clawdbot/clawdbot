@@ -50,28 +50,6 @@ const DEPRECATED_TEST_ALIAS_ALLOWED_REFERENCE_FILES = new Set([
   "src/plugins/compat/registry.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
 ]);
-const LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES = new Set([
-  "extensions/amazon-bedrock/register.sync.runtime.ts",
-  "extensions/github-copilot/index.ts",
-  "extensions/google/index.ts",
-  "extensions/lmstudio/index.ts",
-  "extensions/memory-core/src/memory/provider-adapters.ts",
-  "extensions/mistral/index.ts",
-  "extensions/ollama/index.ts",
-  "extensions/openai/index.ts",
-  "extensions/voyage/index.ts",
-]);
-const LEGACY_MEMORY_EMBEDDING_PROVIDER_MANIFEST_FILES = new Set([
-  "extensions/amazon-bedrock/openclaw.plugin.json",
-  "extensions/github-copilot/openclaw.plugin.json",
-  "extensions/google/openclaw.plugin.json",
-  "extensions/lmstudio/openclaw.plugin.json",
-  "extensions/memory-core/openclaw.plugin.json",
-  "extensions/mistral/openclaw.plugin.json",
-  "extensions/ollama/openclaw.plugin.json",
-  "extensions/openai/openclaw.plugin.json",
-  "extensions/voyage/openclaw.plugin.json",
-]);
 const MATRIX_RUNTIME_DEPS = [
   "@matrix-org/matrix-sdk-crypto-wasm",
   "@matrix-org/matrix-sdk-crypto-nodejs",
@@ -438,45 +416,6 @@ function collectDeprecatedExtensionSdkImports(): Array<{ file: string; specifier
   return leaks;
 }
 
-function collectNewDeprecatedMemoryEmbeddingProviderApiFiles(): string[] {
-  const files: string[] = [];
-  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
-    const repoRelativePath = toRepoRelativePath(file);
-    if (isExtensionTestOrSupportPath(repoRelativePath)) {
-      continue;
-    }
-    const source = fs.readFileSync(file, "utf8");
-    if (
-      /\b(?:[A-Za-z_$][\w$]*\.)?registerMemoryEmbeddingProvider\s*\(/u.test(source) &&
-      !LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES.has(repoRelativePath)
-    ) {
-      files.push(repoRelativePath);
-    }
-  }
-  return files.toSorted();
-}
-
-function collectNewDeprecatedMemoryEmbeddingProviderManifestFiles(): string[] {
-  const files: string[] = [];
-  const manifestFiles = listGitTrackedFiles({
-    repoRoot: REPO_ROOT,
-    pathspecs: "extensions/**/openclaw.plugin.json",
-  });
-  if (!manifestFiles) {
-    throw new Error("unable to list plugin manifests for the deprecated manifest guard");
-  }
-  for (const repoRelativePath of manifestFiles) {
-    const source = fs.readFileSync(resolve(REPO_ROOT, repoRelativePath), "utf8");
-    if (
-      /"memoryEmbeddingProviders"\s*:/u.test(source) &&
-      !LEGACY_MEMORY_EMBEDDING_PROVIDER_MANIFEST_FILES.has(repoRelativePath)
-    ) {
-      files.push(repoRelativePath);
-    }
-  }
-  return files.toSorted();
-}
-
 function collectCodeFiles(dir: string): string[] {
   const trackedFiles = listTrackedCodeFiles(dir);
   if (trackedFiles) {
@@ -803,16 +742,6 @@ describe("plugin-sdk package contract guardrails", () => {
 
   it("keeps extension sources off deprecated plugin-sdk compatibility imports", () => {
     expect(collectDeprecatedExtensionSdkImports()).toStrictEqual([]);
-  });
-
-  it("keeps new bundled plugins off deprecated memory embedding provider registration", () => {
-    expect({
-      apiFiles: collectNewDeprecatedMemoryEmbeddingProviderApiFiles(),
-      manifestFiles: collectNewDeprecatedMemoryEmbeddingProviderManifestFiles(),
-    }).toStrictEqual({
-      apiFiles: [],
-      manifestFiles: [],
-    });
   });
 
   it("keeps real tests off the deprecated plugin-sdk test-utils alias", () => {

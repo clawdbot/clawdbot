@@ -1,7 +1,7 @@
 // Prove Slack probe deadlines against the real SDK and loopback HTTP transport.
 import { createServer, type RequestListener } from "node:http";
 import type { Socket } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { probeSlack } from "./probe.js";
 
 const TEST_ENV_KEYS = [
@@ -111,24 +111,49 @@ describe("probeSlack real network deadlines", () => {
   it("does not retry a dropped request after the probe has already returned", async () => {
     clearSlackTransportEnv();
     let requests = 0;
+    let notifyRequest: () => void = () => undefined;
+    let notifyRetry: () => void = () => undefined;
+    const requestArrived = new Promise<void>((resolve) => {
+      notifyRequest = resolve;
+    });
+    const retryArrived = new Promise<void>((resolve) => {
+      notifyRetry = resolve;
+    });
     const server = await startSlackTransportServer((request, response) => {
       requests += 1;
+      notifyRequest();
+      if (requests === 2) {
+        notifyRetry();
+      }
       request.resume();
       response.destroy();
     });
     try {
       process.env.SLACK_API_URL = server.apiUrl;
+      const nativeSetTimeout = globalThis.setTimeout;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const probe = probeSlack("probe-fixture", 100);
+        await requestArrived;
+        await vi.advanceTimersByTimeAsync(100);
+        await expect(probe).resolves.toMatchObject({ ok: false });
 
-      await expect(probeSlack("probe-fixture", 100)).resolves.toMatchObject({ ok: false });
-
-      // The default Slack read retry is randomized between 500 and 1,000 ms.
-      // Keep the endpoint alive long enough to catch work after the probe ends.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1_200);
-      });
-      expect(requests).toBe(1);
+        // The default Slack read retry is randomized between 500 and 1,000 ms.
+        await vi.advanceTimersByTimeAsync(1_200);
+        const retried = await Promise.race([
+          retryArrived.then(() => true),
+          new Promise<boolean>((resolve) => {
+            nativeSetTimeout(() => resolve(false), 100);
+          }),
+        ]);
+        expect(retried).toBe(false);
+        expect(requests).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
       await expect.poll(() => server.sockets.size, { timeout: 400 }).toBe(0);
     } finally {
+      vi.useRealTimers();
       await server.close();
     }
   });

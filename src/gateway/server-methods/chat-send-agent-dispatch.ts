@@ -395,19 +395,19 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.post_dispatch",
         async () => {
-          const returnedAgentErrorPayloads = agentRunStarted
-            ? replyDispatch.deliveredReplies
-                .map((entryInner) => entryInner.payload)
-                .filter((payload) => payload.isError)
-            : [];
+          const returnedAgentErrorPayloads = replyDispatch.deliveredReplies
+            .map((entryInner) => entryInner.payload)
+            .filter((payload) => payload.isError);
+          const hasReturnedAgentError =
+            returnedAgentErrorPayloads.length > 0 &&
+            (agentRunStarted || !isInternalTextSlashCommandTurn);
           const returnedAgentErrorMessage =
             returnedAgentErrorPayloads
               .map((payload) => payload.text?.trim())
               .filter((text): text is string => Boolean(text))
               .join(" | ") || undefined;
           if (
-            agentRunStarted &&
-            returnedAgentErrorPayloads.length > 0 &&
+            hasReturnedAgentError &&
             !userTurnRecorder.hasPersisted() &&
             !userTurnRecorder.isBlocked()
           ) {
@@ -426,7 +426,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           // Agent runs persist model-visible turns through SessionManager; this dispatcher owns
           // live delivery. Mirroring agent finals would duplicate normal assistant turns. The
           // non-agent branch has no runtime-owned turn, so it appends one before broadcasting.
-          if (!agentRunStarted && !queuedFollowup.isEnqueued()) {
+          if (!agentRunStarted && !queuedFollowup.isEnqueued() && !hasReturnedAgentError) {
             await finalizeChatSendNonAgentReplies({
               accountId,
               context,
@@ -443,12 +443,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               context,
               deliveredReplies: replyDispatch.deliveredReplies,
               emitFirstAssistantServerTiming,
-              hasReturnedAgentErrorPayloads: returnedAgentErrorPayloads.length > 0,
+              hasReturnedAgentErrorPayloads: hasReturnedAgentError,
               session,
             });
           }
-          const shouldBroadcastAgentError =
-            returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
+          const shouldBroadcastAgentError = hasReturnedAgentError && !broadcastedSourceReplyFinal;
           if (shouldBroadcastAgentError) {
             broadcastChatError({
               context,

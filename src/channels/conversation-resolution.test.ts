@@ -285,31 +285,6 @@ describe("conversation resolution", () => {
     },
   );
 
-  it("keeps parser-only fallback conversation targets during the migration window", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "legacychat", label: "Legacy chat" }),
-      messaging: {
-        parseExplicitTarget: ({ raw }) =>
-          raw === "room-a:topic:77"
-            ? { to: "room-a", threadId: 77, chatType: "group" as const }
-            : null,
-      },
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "legacychat",
-        accountId: "default",
-        originatingTo: "room-a:topic:77",
-      })?.canonical,
-    ).toEqual({
-      channel: "legacychat",
-      accountId: "default",
-      conversationId: "room-a",
-    });
-  });
-
   it("normalizes numeric command thread ids through the shared route contract", () => {
     registerChannelPlugin({
       ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),

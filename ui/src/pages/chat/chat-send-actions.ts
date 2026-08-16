@@ -111,7 +111,7 @@ const resetRetryState = (
 });
 
 export const steerSendDependencies: SteerSendDependencies = {
-  loadChatHistory: (host) => void loadChatHistory(host as unknown as ChatState),
+  loadChatHistory: (host) => void loadChatHistory(host),
   resumeRestoredOutbox: (host, itemId) => {
     const restoredOutbox = findStoredOutbox(host as ChatHost, itemId);
     if (!host.chatRunId && restoredOutbox) {
@@ -123,7 +123,7 @@ export const steerSendDependencies: SteerSendDependencies = {
     }
   },
   sendChatMessage: (host, message, attachments, options) =>
-    sendChatMessageWithGeneratedRunId(host as unknown as ChatState, message, attachments, options),
+    sendChatMessageWithGeneratedRunId(host, message, attachments, options),
 };
 
 export const steerQueuedChatMessage = (host: ChatHost, id: string) =>

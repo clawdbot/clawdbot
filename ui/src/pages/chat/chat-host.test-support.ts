@@ -43,7 +43,7 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   sessionsArchivedFilter?: "active" | "archived" | "all";
   password?: string;
   pendingSettingsPatches?: Record<string, Promise<boolean>>;
-  settings?: Partial<UiSettings>;
+  settings: Pick<UiSettings, "lastActiveSessionKey"> & Partial<UiSettings>;
 };
 
 function createPendingSettingsSessionCapability(
@@ -72,12 +72,15 @@ function createPendingSettingsSessionCapability(
 }
 
 type TestChatHostWithRequest = TestChatHost & { request: RequestMock };
-type MakeHostOverrides = Partial<TestChatHost> & { requestHandlers?: RequestHandlers };
+type MakeHostOverrides = Partial<Omit<TestChatHost, "settings">> & {
+  requestHandlers?: RequestHandlers;
+  settings?: Partial<UiSettings>;
+};
 
 export function makeChatHost(
   overrides: MakeHostOverrides & { requestHandlers: RequestHandlers },
 ): TestChatHostWithRequest;
-export function makeChatHost(overrides?: Partial<TestChatHost>): TestChatHost;
+export function makeChatHost(overrides?: MakeHostOverrides): TestChatHost;
 export function makeChatHost(
   overrides?: MakeHostOverrides,
 ): TestChatHost | TestChatHostWithRequest {
@@ -107,8 +110,11 @@ export function makeChatHost(
     chatStreamSegments: [],
     chatToolMessages: [],
     connected: true,
+    connectionEpoch: 0,
     chatLoading: false,
     chatMessage: "",
+    chatThinkingLevel: null,
+    chatVerboseLevel: null,
     chatLocalInputHistoryBySession: {},
     chatInputHistorySessionKey: null,
     chatInputHistoryItems: null,
@@ -119,6 +125,7 @@ export function makeChatHost(
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
+    chatStreamStartedAt: null,
     lastError: null,
     sessionKey: "agent:main",
     basePath: "",

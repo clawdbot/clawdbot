@@ -163,6 +163,22 @@ describe("SidebarSessionNarrationController", () => {
       "Reviewing the current implementation",
     );
 
+    const digestUpdateCount = digests.length;
+    controller.handleEvent(
+      gatewayEvent("session.observer", {
+        sessionKey: "agent:main:run",
+        runId: "run-2",
+        revision: 0,
+        updatedAt: 10_001,
+        headline: "Invalid replacement",
+        health: "on-track",
+      }),
+    );
+    expect(digests).toHaveLength(digestUpdateCount);
+    expect(digests.at(-1)?.get("agent:main:run")?.headline).toBe(
+      "Reviewing the current implementation",
+    );
+
     controller.handleEvent(
       gatewayEvent("agent", {
         sessionKey: "agent:main:run",

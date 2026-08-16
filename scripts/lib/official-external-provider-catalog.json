@@ -900,7 +900,7 @@
           }
         ],
         "contracts": {
-          "memoryEmbeddingProviders": ["mistral"],
+          "embeddingProviders": ["mistral"],
           "mediaUnderstandingProviders": ["mistral"],
           "realtimeTranscriptionProviders": ["mistral"]
         },
@@ -2273,7 +2273,7 @@
           }
         ],
         "contracts": {
-          "memoryEmbeddingProviders": [
+          "embeddingProviders": [
             "voyage"
           ]
         },

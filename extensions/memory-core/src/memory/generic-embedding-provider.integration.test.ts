@@ -4,12 +4,8 @@ import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearEmbeddingProviders,
-  clearMemoryEmbeddingProviders,
-  getActivePluginRegistry,
   listRegisteredEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
   restoreRegisteredEmbeddingProviders,
-  restoreRegisteredMemoryEmbeddingProviders,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEmbeddingProvider } from "./embeddings.js";
@@ -29,10 +25,6 @@ type TestServer = {
 
 const servers: TestServer[] = [];
 let registeredEmbeddingProvidersSnapshot: ReturnType<typeof listRegisteredEmbeddingProviders>;
-let registeredMemoryEmbeddingProvidersSnapshot: ReturnType<
-  typeof listRegisteredMemoryEmbeddingProviders
->;
-let restoreActiveMemoryEmbeddingProviders: (() => void) | undefined;
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -129,35 +121,19 @@ function createMemoryEmbeddingOptions(overrides?: {
 
 beforeEach(() => {
   registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
-  registeredMemoryEmbeddingProvidersSnapshot = listRegisteredMemoryEmbeddingProviders();
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
-
-  const activeRegistry = getActivePluginRegistry();
-  if (activeRegistry) {
-    const memoryEmbeddingProviders = activeRegistry.memoryEmbeddingProviders;
-    activeRegistry.memoryEmbeddingProviders = [];
-    restoreActiveMemoryEmbeddingProviders = () => {
-      activeRegistry.memoryEmbeddingProviders = memoryEmbeddingProviders;
-    };
-  } else {
-    restoreActiveMemoryEmbeddingProviders = undefined;
-  }
 });
 
 afterEach(async () => {
   const pendingServers = servers.splice(0);
   await Promise.all(pendingServers.map((server) => server.close()));
   restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
-  restoreRegisteredMemoryEmbeddingProviders(registeredMemoryEmbeddingProvidersSnapshot);
-  restoreActiveMemoryEmbeddingProviders?.();
 });
 
 describe("memory-core generic embedding provider bridge", () => {
   it("uses the core OpenAI-compatible provider through the generic registry and memory bridge", async () => {
     const server = await startEmbeddingServer();
 
-    expect(listRegisteredMemoryEmbeddingProviders()).toEqual([]);
     expect(listRegisteredEmbeddingProviders()).toMatchObject([
       {
         ownerPluginId: "core",

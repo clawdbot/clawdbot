@@ -15,7 +15,7 @@ import {
   type ChatCommandTarget,
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
-import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
+import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import {
   excludeComposerAttachments,
   readQueuedMessageById,
@@ -208,7 +208,7 @@ async function readCurrentStoredChatHistory(
     }
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
     if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId)) {
-      void loadChatHistory(host as unknown as ChatState);
+      void loadChatHistory(host);
     }
     return "continue";
   }
