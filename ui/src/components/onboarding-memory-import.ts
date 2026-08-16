@@ -10,6 +10,7 @@ import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/onboarding-memory-import.css";
@@ -23,11 +24,7 @@ type ProviderResult =
   | { kind: "error"; message: string };
 
 function toErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : t("onboarding.memoryImport.unknownError");
+  return formatUiError(error, t("onboarding.memoryImport.unknownError"));
 }
 
 function createIdempotencyKey(): string {

@@ -9,6 +9,7 @@ import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operato
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   findUiSessionRow,
   resolveSessionPreferredFaceForKey,
@@ -33,13 +34,6 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderTasks } from "./view.ts";
-
-function formatTaskError(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
-  return typeof error === "string" && error.trim() ? error.trim() : fallback;
-}
 
 function taskMatchesAgentScope(task: TaskSummary, agentId: string | null): boolean {
   if (!agentId) {
@@ -191,7 +185,7 @@ class TasksPage extends OpenClawLightDomElement {
     },
     onError: (error) => {
       this.taskRefreshEvents = null;
-      this.error = formatTaskError(error, t("tasksPage.loadFailed"));
+      this.error = formatUiError(error, t("tasksPage.loadFailed"));
     },
   });
   private readonly subscriptions = new SubscriptionsController(this)
@@ -292,7 +286,7 @@ class TasksPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = formatTaskError(error, t("tasksPage.cancelFailed"));
+        this.error = formatUiError(error, t("tasksPage.cancelFailed"));
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -339,7 +333,7 @@ class TasksPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = formatTaskError(error, t("tasksPage.recoveryFailed"));
+        this.error = formatUiError(error, t("tasksPage.recoveryFailed"));
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -369,7 +363,7 @@ class TasksPage extends OpenClawLightDomElement {
       await navigator.clipboard.writeText(result);
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = formatTaskError(error, t("tasksPage.recoveryFailed"));
+        this.error = formatUiError(error, t("tasksPage.recoveryFailed"));
       }
     }
   }
