@@ -4246,6 +4246,9 @@ describe("activateSetupInference", () => {
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
+        installRecords: {
+          codex: expect.objectContaining({ installPath: "/tmp/plugins/codex" }),
+        },
         reason: "source-changed",
         policyPluginIds: ["codex"],
         traceCommand: "openclaw-setup-probe",

@@ -286,6 +286,9 @@ async function activateSetupInferenceUnredacted(
       await refreshPluginRegistry({
         config: testPlan.config,
         reason: "source-changed",
+        ...(testPlan.config.plugins?.installs
+          ? { installRecords: testPlan.config.plugins.installs }
+          : {}),
         workspaceDir: workspace,
         policyPluginIds: ["codex"],
         traceCommand: "openclaw-setup-probe",
