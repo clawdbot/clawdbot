@@ -2,6 +2,7 @@
 import fsSync from "node:fs";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { probePortUsage } from "./ports-probe.js";
 import { findGatewayPidsOnPortSync as findUnixGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import {
@@ -71,4 +72,29 @@ export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[
 /** Format gateway PIDs for human-facing diagnostics. */
 export function formatGatewayPidList(pids: number[]): string {
   return pids.join(", ");
+}
+
+/**
+ * Fail when `port` still has an owner that PID discovery could not name.
+ *
+ * Finding no PID does not prove the gateway is down: `lsof` may be missing on
+ * minimal containers and the gateway lock may be absent or stale while the
+ * process keeps serving. Callers that would otherwise report "not running"
+ * use this to turn that ambiguity into an explicit error instead of a
+ * false success.
+ */
+export async function assertGatewayPortFreeWhenPidUnknown(port: number): Promise<void> {
+  const status = await probePortUsage(port).catch(() => "unknown" as const);
+  if (status === "free") {
+    return;
+  }
+  // Both remaining statuses stay fail-closed, but they describe different
+  // situations: "busy" observed a listener, while "unknown" means the probe
+  // itself could not answer. Reporting the port as in use for "unknown" would
+  // send operators looking for a listener that may not exist.
+  throw new Error(
+    status === "busy"
+      ? `port ${port} is in use but the gateway process could not be identified (lsof unavailable or the gateway lock is missing/stale); run "openclaw gateway status --deep" to investigate`
+      : `could not determine whether port ${port} is still in use, so the gateway cannot be confirmed stopped; run "openclaw gateway status --deep" to investigate`,
+  );
 }

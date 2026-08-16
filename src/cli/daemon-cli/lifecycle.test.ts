@@ -38,6 +38,9 @@ const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SI
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
 const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
+const assertGatewayPortFreeWhenPidUnknown = vi.fn<(port: number) => Promise<void>>(
+  async () => undefined,
+);
 const probeGateway = vi.fn<
   (opts: {
     url: string;
@@ -104,6 +107,7 @@ vi.mock("../../infra/gateway-processes.js", () => ({
   signalVerifiedGatewayPidSync: (pid: number, signal: "SIGTERM" | "SIGUSR1") =>
     signalVerifiedGatewayPidSync(pid, signal),
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
+  assertGatewayPortFreeWhenPidUnknown: (port: number) => assertGatewayPortFreeWhenPidUnknown(port),
 }));
 
 vi.mock("../../infra/gateway-lock.js", () => ({
@@ -261,6 +265,7 @@ describe("runDaemonRestart health checks", () => {
     writeGatewayRestartIntentSync.mockReset().mockReturnValue(true);
     clearGatewayRestartIntentSync.mockReset();
     formatGatewayPidList.mockReset().mockImplementation((pids) => pids.join(", "));
+    assertGatewayPortFreeWhenPidUnknown.mockReset().mockResolvedValue(undefined);
     probeGateway.mockReset();
     callGatewayCli.mockReset();
     isRestartEnabled.mockReset();
@@ -1114,6 +1119,22 @@ describe("runDaemonRestart health checks", () => {
 
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
     expect(appendGatewayLifecycleAudit).not.toHaveBeenCalled();
+    // Only report "not running" once the port is confirmed free (openclaw#119065).
+    expect(assertGatewayPortFreeWhenPidUnknown).toHaveBeenCalled();
     expect(outcome).toBeNull();
+  });
+
+  it("fails instead of reporting a stopped gateway when the port is busy but no pid is identifiable (openclaw#119065)", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    const busyPortError =
+      'port 18789 is in use but the gateway process could not be identified (lsof unavailable or the gateway lock is missing/stale); run "openclaw gateway status --deep" to investigate';
+    assertGatewayPortFreeWhenPidUnknown.mockRejectedValue(new Error(busyPortError));
+
+    await expect(runUnmanagedStop()).rejects.toThrow(
+      /port 18789 is in use but the gateway process could not be identified/,
+    );
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(appendGatewayLifecycleAudit).not.toHaveBeenCalled();
   });
 });

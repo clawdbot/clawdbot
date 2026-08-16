@@ -20,6 +20,7 @@ import {
   readActiveGatewayLockPort,
 } from "../../infra/gateway-lock.js";
 import {
+  assertGatewayPortFreeWhenPidUnknown,
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
@@ -218,16 +219,14 @@ async function stopGatewayWithoutServiceManager(port: number, lockOwnerPid: numb
   // reporting the gateway as not running while it keeps serving.
   const pids = listenerPids.length > 0 ? listenerPids : lockOwnerPid ? [lockOwnerPid] : [];
   if (pids.length === 0) {
+    // Reporting "not loaded" without checking the port hands back a false
+    // success while the gateway keeps serving.
+    await assertGatewayPortFreeWhenPidUnknown(port);
     return null;
   }
   for (const pid of pids) {
     signalVerifiedGatewayPidSync(pid, "SIGTERM");
-    appendGatewayLifecycleAudit({
-      action: "stop",
-      source: "cli",
-      mode: "sigterm",
-      pid,
-    });
+    appendGatewayLifecycleAudit({ action: "stop", source: "cli", mode: "sigterm", pid });
   }
   return {
     result: "stopped" as const,

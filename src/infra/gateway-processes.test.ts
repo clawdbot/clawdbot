@@ -1,4 +1,5 @@
 // Covers gateway process discovery across platform process listings.
+import net from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { getWindowsPowerShellExePath, getWindowsSystem32ExePath } from "./windows-install-roots.js";
@@ -9,6 +10,7 @@ const parseCmdScriptCommandLineMock = vi.hoisted(() => vi.fn());
 const parseProcCmdlineMock = vi.hoisted(() => vi.fn());
 const isGatewayArgvMock = vi.hoisted(() => vi.fn());
 const findGatewayPidsOnPortSyncMock = vi.hoisted(() => vi.fn());
+const probePortUsageMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -57,7 +59,16 @@ vi.mock("../channels/chat-meta.js", () => ({
   getChatChannelMeta: vi.fn(() => null),
 }));
 
+// Defaults to the real probe so the free/busy cases exercise actual sockets;
+// the indeterminate case overrides it, which no real socket can produce.
+vi.mock("./ports-probe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./ports-probe.js")>();
+  probePortUsageMock.mockImplementation(actual.probePortUsage);
+  return { ...actual, probePortUsage: (...args: unknown[]) => probePortUsageMock(...args) };
+});
+
 const {
+  assertGatewayPortFreeWhenPidUnknown,
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
@@ -65,6 +76,19 @@ const {
 
 function setPlatform(platform: NodeJS.Platform): void {
   mockProcessPlatform(platform);
+}
+
+async function findFreePort(): Promise<number> {
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const port = (server.address() as net.AddressInfo).port;
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+  return port;
 }
 
 describe("gateway-processes", () => {
@@ -188,5 +212,53 @@ describe("gateway-processes", () => {
 
   it("formats pid lists as comma-separated output", () => {
     expect(formatGatewayPidList([1, 2, 3])).toBe("1, 2, 3");
+  });
+
+  it("accepts a port with no listener when the gateway pid is unknown", async () => {
+    const port = await findFreePort();
+
+    await expect(assertGatewayPortFreeWhenPidUnknown(port)).resolves.toBeUndefined();
+  });
+
+  it("rejects a port that still has a listener when the gateway pid is unknown", async () => {
+    const server = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const port = (server.address() as net.AddressInfo).port;
+
+    try {
+      await expect(assertGatewayPortFreeWhenPidUnknown(port)).rejects.toThrow(
+        new RegExp(`port ${port} is in use but the gateway process could not be identified`),
+      );
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("distinguishes an indeterminate probe from an occupied port", async () => {
+    const port = await findFreePort();
+    probePortUsageMock.mockResolvedValueOnce("unknown");
+
+    const error = await assertGatewayPortFreeWhenPidUnknown(port).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(
+      new RegExp(`could not determine whether port ${port} is still in use`),
+    );
+    // The port has no listener, so the "in use" wording would be wrong here.
+    expect((error as Error).message).not.toMatch(/is in use but/);
+  });
+
+  it("stays fail-closed when the probe itself throws", async () => {
+    const port = await findFreePort();
+    probePortUsageMock.mockRejectedValueOnce(new Error("probe exploded"));
+
+    await expect(assertGatewayPortFreeWhenPidUnknown(port)).rejects.toThrow(
+      new RegExp(`could not determine whether port ${port} is still in use`),
+    );
   });
 });
