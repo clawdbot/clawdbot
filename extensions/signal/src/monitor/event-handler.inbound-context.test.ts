@@ -35,6 +35,24 @@ type DispatchInboundMessageMockParams = {
 };
 
 type SendReactionSignalMockCall = [string, number, string, unknown];
+type TestDispatchResult = {
+  queuedFinal: boolean;
+  counts: Record<"tool" | "block" | "final", number>;
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+  settledReceipt?: {
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+    anyVisibleDelivered: boolean;
+  };
+};
 
 const {
   sendTypingMock,
@@ -55,11 +73,13 @@ const {
     sendReactionSignalMock: vi.fn(async () => ({ ok: true })),
     enqueueSystemEventMock: vi.fn(),
     recordInboundSessionMock: vi.fn(),
-    dispatchInboundMessageMock: vi.fn(async (params: DispatchInboundMessageMockParams) => {
-      captureState.ctx = params.ctx;
-      await Promise.resolve(params.replyOptions?.onReplyStart?.());
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-    }),
+    dispatchInboundMessageMock: vi.fn(
+      async (params: DispatchInboundMessageMockParams): Promise<TestDispatchResult> => {
+        captureState.ctx = params.ctx;
+        await Promise.resolve(params.replyOptions?.onReplyStart?.());
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    ),
     logVerboseMock: vi.fn(),
     shouldLogVerboseMock: vi.fn(() => false),
     readAgentRunTerminalOutcomeMock: vi.fn(),

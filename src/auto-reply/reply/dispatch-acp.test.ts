@@ -36,7 +36,11 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
-import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
+import {
+  createAcpSessionMeta,
+  createAcpTestConfig,
+  createAcpTestReplyDispatcherFixture as createDispatcher,
+} from "./test-fixtures/acp-runtime.js";
 
 const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
@@ -310,43 +314,6 @@ function dispatcherCall(
     mockArg(fn as unknown as MockCallSource, index, 0, `dispatcher call ${index}`),
     "dispatcher call",
   );
-}
-
-function createDispatcher(): {
-  dispatcher: ReplyDispatcher;
-  counts: Record<"tool" | "block" | "final", number>;
-} {
-  const counts = { tool: 0, block: 0, final: 0 };
-  const sendToolResult = vi.fn(() => true);
-  const sendBlockReply = vi.fn(() => true);
-  const sendFinalReply = vi.fn(() => true);
-  const settledCounts = (delivered: number) => ({
-    delivered,
-    deliveredNotVisible: 0,
-    cancelled: 0,
-    failedBeforeSend: 0,
-    failedAfterSend: 0,
-  });
-  const dispatcher: ReplyDispatcher = {
-    sendToolResult,
-    sendBlockReply,
-    sendFinalReply,
-    waitForIdle: vi.fn(async () => ({
-      counts: {
-        tool: settledCounts(sendToolResult.mock.calls.length),
-        block: settledCounts(sendBlockReply.mock.calls.length),
-        final: settledCounts(sendFinalReply.mock.calls.length),
-      },
-      anyVisibleDelivered:
-        sendToolResult.mock.calls.length +
-          sendBlockReply.mock.calls.length +
-          sendFinalReply.mock.calls.length >
-        0,
-    })),
-    getQueuedCounts: vi.fn(() => counts),
-    markComplete: vi.fn(),
-  };
-  return { dispatcher, counts };
 }
 
 function setReadyAcpResolution() {

@@ -232,6 +232,19 @@ const dispatchInboundMessage = vi.hoisted(() =>
       queuedFinal: boolean;
       counts: { final: number; tool: number; block: number };
       failedCounts?: { final?: number; tool?: number; block?: number };
+      settledReceipt?: {
+        counts: Record<
+          "tool" | "block" | "final",
+          {
+            delivered: number;
+            deliveredNotVisible: number;
+            cancelled: number;
+            failedBeforeSend: number;
+            failedAfterSend: number;
+          }
+        >;
+        anyVisibleDelivered: boolean;
+      };
     }>
   >(async (_params?: DispatchInboundParams) => ({
     queuedFinal: false,

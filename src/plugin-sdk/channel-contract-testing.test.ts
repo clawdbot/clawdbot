@@ -14,23 +14,14 @@ describe("channel contract testing helpers", () => {
           counts: {
             tool: {
               delivered: 0,
-              deliveredNotVisible: 0,
-              cancelled: 0,
-              failedBeforeSend: 0,
               failedAfterSend: 0,
             },
             block: {
               delivered: 1,
-              deliveredNotVisible: 0,
-              cancelled: 0,
-              failedBeforeSend: 0,
               failedAfterSend: 0,
             },
             final: {
               delivered: 0,
-              deliveredNotVisible: 0,
-              cancelled: 0,
-              failedBeforeSend: 0,
               failedAfterSend: 0,
             },
           },
