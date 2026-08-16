@@ -68,10 +68,17 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
     ...(typeof providerStarted === "boolean" ? { providerStarted } : {}),
   };
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState, ...timeoutAttribution });
+  // Deduplicate: only add the timeout payload if it's not already present in the payloads.
+  const existingPayloads = input.hasPartialAssistantTextAfterPromptTimeout
+    ? []
+    : input.payloadsWithToolMedia || [];
+  const hasTimeoutPayload = existingPayloads.some(
+    (payload) => payload.text === timeoutText && payload.isError === true,
+  );
   return {
     payloads: [
-      ...(input.hasPartialAssistantTextAfterPromptTimeout ? [] : input.payloadsWithToolMedia || []),
-      { text: timeoutText, isError: true },
+      ...existingPayloads,
+      ...(hasTimeoutPayload ? [] : [{ text: timeoutText, isError: true }]),
     ],
     meta: {
       durationMs: Date.now() - input.startedAtMs,
