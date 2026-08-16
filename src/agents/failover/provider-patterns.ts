@@ -65,7 +65,7 @@ function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
     }
     cachedProviderRuntimeHooks = {
       classifyProviderFailoverSignalWithPlugin: (params) => {
-        const result: unknown = Reflect.apply(classify, runtime, [params]);
+        const result: unknown = classify(params);
         return result === null || result === undefined || isFailoverReason(result)
           ? result
           : undefined;
