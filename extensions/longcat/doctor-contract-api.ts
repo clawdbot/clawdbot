@@ -85,7 +85,9 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     if (!isLegacyStockLongCatModel(model)) {
       return model;
     }
-    return { ...model, cost: { ...model.cost, cacheWrite: 0 } };
+    return Object.assign({}, model, {
+      cost: Object.assign({}, model.cost, { cacheWrite: 0 }),
+    });
   });
 
   return {
