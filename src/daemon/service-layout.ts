@@ -19,7 +19,8 @@ export type GatewayServiceLayoutSummary = {
   entrypointSourceCheckout?: boolean;
 };
 
-function shellQuoteArg(value: string): string {
+/** POSIX-quotes one argument so operator-facing commands survive spaces and metacharacters. */
+export function shellQuoteArg(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(value)) {
     return value;
   }

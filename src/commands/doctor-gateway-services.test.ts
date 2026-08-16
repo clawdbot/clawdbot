@@ -56,7 +56,7 @@ const mocks = vi.hoisted(() => ({
   uninstallUserSystemdGatewayUnit: vi.fn().mockResolvedValue({
     unitName: "openclaw-gateway.service",
     unitPath: "",
-    removed: true,
+    archivedPath: "",
     disabled: true,
   }),
   note: vi.fn(),
@@ -2101,6 +2101,8 @@ describe("maybeScanExtraGatewayServices", () => {
 });
 
 describe("maybeResolveDuelingSystemdGatewayScopes", () => {
+  const ARCHIVED_USER_UNIT_PATH =
+    "/home/test/.openclaw/backups/systemd-units/2026-01-01/openclaw-gateway.service";
   const duelingInstallation = {
     kind: "dueling" as const,
     user: {
@@ -2127,14 +2129,14 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     delete process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
   });
 
-  it("removes the user-scope unit and keeps the system unit when confirmed", async () => {
+  it("archives the user-scope unit and keeps the system unit when confirmed", async () => {
     mockProcessPlatform("linux");
     mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
     mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
     mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
       unitName: "openclaw-gateway.service",
       unitPath: duelingInstallation.user.unitPath,
-      removed: true,
+      archivedPath: ARCHIVED_USER_UNIT_PATH,
       disabled: true,
     });
     const runtime = makeDoctorIo();
@@ -2144,7 +2146,37 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
 
     expect(mocks.uninstallUserSystemdGatewayUnit).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager.",
+      "Archived the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager.",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Restore it with: cp ${ARCHIVED_USER_UNIT_PATH} ${duelingInstallation.user.unitPath}`,
+      ),
+      "Redundant user gateway archived",
+    );
+  });
+
+  it("quotes both paths in the restore command so spaced paths stay copyable", async () => {
+    mockProcessPlatform("linux");
+    const spacedUnitPath = "/home/test user/.config/systemd/user/openclaw-gateway.service";
+    const spacedArchivePath =
+      "/home/test user/.openclaw/backups/systemd-units/2026-01-01/openclaw-gateway.service";
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
+    mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
+      unitName: "openclaw-gateway.service",
+      unitPath: spacedUnitPath,
+      archivedPath: spacedArchivePath,
+      disabled: true,
+    });
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), makeDoctorPrompts());
+
+    // An unquoted spaced path makes `cp` read four operands and copy to the
+    // wrong destination, so the printed recovery command must quote both.
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining(`Restore it with: cp '${spacedArchivePath}' '${spacedUnitPath}'`),
+      "Redundant user gateway archived",
     );
   });
 
@@ -2205,7 +2237,7 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
       unitName: "openclaw-gateway.service",
       unitPath: duelingInstallation.user.unitPath,
-      removed: true,
+      archivedPath: ARCHIVED_USER_UNIT_PATH,
       disabled: false,
     });
     const runtime = makeDoctorIo();

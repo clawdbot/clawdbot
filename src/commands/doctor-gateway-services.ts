@@ -26,7 +26,7 @@ import {
   readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
-import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
+import { shellQuoteArg, summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import { readManagedServiceEnvKeysFromEnvironment } from "../daemon/service-managed-env.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
@@ -1097,7 +1097,7 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
   const shouldRemove = await confirmDoctorServiceRepair(
     prompter,
     {
-      message: "Remove the redundant user-scope gateway unit and keep the system-scope unit?",
+      message: "Archive the redundant user-scope gateway unit and keep the system-scope unit?",
       initialValue: true,
     },
     policy,
@@ -1115,21 +1115,29 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
       env: process.env,
       stdout: process.stdout,
     });
+    const { archivedPath } = result;
     note(
-      result.removed
-        ? `Removed user-scope unit ${result.unitPath}.`
+      archivedPath
+        ? [
+            `Moved user-scope unit ${result.unitPath} to:`,
+            `- ${archivedPath}`,
+            // Both paths are operator-controlled through $HOME and the state
+            // dir, so quote them: an unquoted spaced path makes the printed
+            // restore command silently copy to the wrong place.
+            `Restore it with: cp ${shellQuoteArg(archivedPath)} ${shellQuoteArg(result.unitPath)}`,
+          ].join("\n")
         : `User-scope unit already absent at ${result.unitPath}.`,
-      "Redundant user gateway removed",
+      "Redundant user gateway archived",
     );
     // Only claim the conflict is resolved when systemd actually released the
     // unit; a file-only removal can leave the loaded unit running.
     runtime.log(
       result.disabled
-        ? "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager."
-        : `Removed the user-scope unit file, but systemctl was unavailable to stop it. Run: systemctl --user disable --now ${result.unitName} && systemctl --user daemon-reload`,
+        ? "Archived the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager."
+        : `Archived the user-scope unit file, but systemctl was unavailable to stop it. Run: systemctl --user disable --now ${result.unitName} && systemctl --user daemon-reload`,
     );
   } catch (err) {
-    runtime.error(`Failed to remove redundant user-scope gateway unit: ${String(err)}`);
+    runtime.error(`Failed to archive redundant user-scope gateway unit: ${String(err)}`);
     const hints = renderGatewayServiceCleanupHints();
     if (hints.length > 0) {
       note(hints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
