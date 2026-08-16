@@ -168,6 +168,7 @@ type ConnectFrame = {
     caps?: string[];
     scopes?: string[];
     device?: {
+      id?: string;
       signedAt?: number;
     };
   };
