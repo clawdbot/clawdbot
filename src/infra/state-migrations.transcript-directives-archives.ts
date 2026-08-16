@@ -10,6 +10,7 @@ import {
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "../state/openclaw-agent-session-transcript-archive-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
@@ -101,6 +102,13 @@ function readArchiveEncoding(value: string, owner: string): "identity" | "zstd" 
 }
 
 function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): ArchiveRowPlan[] {
+  // The archive table was added lazily at agent schema v17, so valid v17 databases may omit it.
+  const hasArchiveTable = database
+    .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+    .get(SESSION_TRANSCRIPT_ARCHIVES_TABLE);
+  if (!hasArchiveTable) {
+    return [];
+  }
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
   let query = db
     .selectFrom("session_transcript_archives")

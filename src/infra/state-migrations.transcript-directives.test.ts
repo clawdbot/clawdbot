@@ -114,6 +114,35 @@ function readGeneration(databasePath: string, sessionId: string): string {
   }
 }
 
+function readMigrationCursor(databasePath: string): unknown {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const row = database
+      .prepare(
+        "SELECT app_version FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
+      )
+      .get() as { app_version: string };
+    return JSON.parse(row.app_version);
+  } finally {
+    database.close();
+  }
+}
+
+function hasTranscriptArchivesTable(databasePath: string): boolean {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return Boolean(
+      database
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("session_transcript_archives"),
+    );
+  } finally {
+    database.close();
+  }
+}
+
 function parseArchive(content: string): FixtureEvent[] {
   return content
     .trimEnd()
@@ -384,5 +413,73 @@ describe("historical transcript directive migration", () => {
         openclawDelivery: { audioAsVoice: true },
       },
     });
+  });
+
+  it("completes an old-schema database without the optional archives table", () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-old-schema-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    insertSession(opened.db, {
+      events: [
+        messageEvent({
+          id: "old-schema-tagged",
+          role: "assistant",
+          timestamp: 1,
+          content: [{ type: "text", text: "[[audio_as_voice]] Pending" }],
+        }),
+      ],
+      generation: "before",
+      sessionId: "old-schema-session",
+    });
+    opened.db.exec("DROP TABLE session_transcript_archives");
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(migrateHistoricalTranscriptDirectives({ env })).toEqual({
+      changes: [expect.stringContaining("1 active session(s), 0 archived transcript(s)")],
+      warnings: [],
+    });
+    expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete" });
+    expect(hasTranscriptArchivesTable(databasePath)).toBe(false);
+    expect(JSON.parse(readEventJson(databasePath, "old-schema-session", 0))).toMatchObject({
+      message: {
+        content: [{ type: "text", text: "Pending" }],
+        openclawDelivery: { audioAsVoice: true },
+      },
+    });
+    expect(migrateHistoricalTranscriptDirectives({ env })).toEqual({
+      changes: [],
+      warnings: [],
+    });
+  });
+
+  it("completes a pre-stuck archives cursor when the optional table is absent", () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-stuck-archives-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    opened.db.exec("DROP TABLE session_transcript_archives");
+    opened.db
+      .prepare(
+        `INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at)
+         VALUES(?,?,?,?,?,?,?)`,
+      )
+      .run(
+        "historical-transcript-directives-v1",
+        "agent",
+        1,
+        "main",
+        JSON.stringify({ generation: "", phase: "archives", sessionId: "" }),
+        1,
+        1,
+      );
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(migrateHistoricalTranscriptDirectives({ env })).toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete" });
+    expect(hasTranscriptArchivesTable(databasePath)).toBe(false);
   });
 });
