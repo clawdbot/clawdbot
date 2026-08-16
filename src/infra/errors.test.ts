@@ -150,8 +150,14 @@ describe("error helpers", () => {
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
+    const codeFormatted = formatErrorMessage(
+      Object.assign(new Error("request failed"), { code: `token=${token}` }),
+      { includeCode: true },
+    );
     expect(formatted).toContain("Authorization: Bearer");
     expect(formatted).not.toContain(token);
+    expect(codeFormatted).toContain("request failed");
+    expect(codeFormatted).not.toContain(token);
   });
 
   it("redacts HTTP client config secrets from formatted error chains", () => {
