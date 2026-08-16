@@ -308,7 +308,7 @@ async function settleCodeModeResult(params: {
       const newPendingRequests = result.pendingRequests.filter(
         (request) => !pendingIds.has(request.id),
       );
-      if (newPendingRequests.length > 0) {
+      if (newPendingRequests.some((request) => request.method !== "sleep")) {
         // createPendingBridgeStates starts host calls synchronously. Flip the
         // evidence first so every later failure is permanently non-retryable.
         params.bridgeDispatch.started = true;
@@ -439,7 +439,7 @@ async function settleCodeModeResult(params: {
         const newPendingRequests = result.pendingRequests.filter(
           (request) => !pendingIds.has(request.id),
         );
-        if (newPendingRequests.length > 0) {
+        if (newPendingRequests.some((request) => request.method !== "sleep")) {
           params.bridgeDispatch.started = true;
         }
         pending.push(
@@ -478,7 +478,7 @@ async function settleCodeModeResult(params: {
         releaseReservation?.();
       }
     }
-    if (result.pendingRequests.length > 0) {
+    if (result.pendingRequests.some((request) => request.method !== "sleep")) {
       params.bridgeDispatch.started = true;
     }
     return snapshotState({

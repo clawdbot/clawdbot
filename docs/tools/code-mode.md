@@ -532,10 +532,18 @@ declare const tools: ToolCatalog;
 declare const MCP: Record<string, unknown>;
 declare const namespaces: Record<string, unknown>;
 
+declare function setTimeout(
+  callback: (...args: unknown[]) => void,
+  delay?: number,
+  ...args: unknown[]
+): number;
+declare function clearTimeout(id: number): void;
 declare function text(value: unknown): void;
 declare function json(value: unknown): void;
 declare function yield_control(reason?: string): Promise<void>;
 ```
+
+Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
 
 `ALL_TOOLS` is compact metadata for the run-scoped catalog; it does not contain
 full schemas by default. The model-visible `exec` description also includes a

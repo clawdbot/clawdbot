@@ -13,6 +13,7 @@ type CodeModeBridgeMethod =
   | "agentWait"
   | "skillsList"
   | "skillsRead"
+  | "sleep"
   | "swarmNote";
 
 export type CodeModeConfig = {

@@ -88,6 +88,7 @@ function createHostRequestHandler(params: {
       method !== "agentWait" &&
       method !== "skillsList" &&
       method !== "skillsRead" &&
+      method !== "sleep" &&
       method !== "swarmNote"
     ) {
       throw new Error("unsupported code mode bridge method");
@@ -115,6 +116,22 @@ function createHostRequestHandler(params: {
       args: Array.isArray(args) ? args : [],
     });
     return params.vm.newString(id);
+  };
+}
+
+function createHostCancelRequestHandler(params: {
+  vm: QuickJS;
+  pendingRequests: PendingBridgeRequest[];
+}): (this: JSValueHandle, id: JSValueHandle) => JSValueHandle {
+  return (idHandle) => {
+    const id = idHandle.toString();
+    const index = params.pendingRequests.findIndex((request) => request.id === id);
+    if (index >= 0) {
+      // Remove canceled timers before snapshotting so they neither consume a
+      // bridge slot nor force the parent to drain a sleep with no callback.
+      params.pendingRequests.splice(index, 1);
+    }
+    return params.vm.undefined;
   };
 }
 
@@ -159,6 +176,12 @@ async function createVm(params: {
       config: params.config,
     }),
   ).consume((hostRequest) => vm.global.setProp("__openclawHostRequest", hostRequest));
+  vm.newFunction(
+    "__openclawHostCancelRequest",
+    createHostCancelRequestHandler({ vm, pendingRequests: params.pendingRequests }),
+  ).consume((hostCancelRequest) =>
+    vm.global.setProp("__openclawHostCancelRequest", hostCancelRequest),
+  );
   vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
   return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
@@ -189,6 +212,10 @@ async function restoreVm(params: {
       pendingRequests: params.pendingRequests,
       config: params.config,
     }),
+  );
+  vm.registerHostCallback(
+    "__openclawHostCancelRequest",
+    createHostCancelRequestHandler({ vm, pendingRequests: params.pendingRequests }),
   );
   return { vm, didTimeout: () => timedOut || deadlineReached() };
 }

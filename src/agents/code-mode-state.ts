@@ -256,7 +256,8 @@ export function pendingBridgeRequestsReplaySafe(
       request.method === "agentSpawn" ||
       request.method === "agentWait" ||
       request.method === "skillsList" ||
-      request.method === "skillsRead"
+      request.method === "skillsRead" ||
+      request.method === "sleep"
     ) {
       return true;
     }
