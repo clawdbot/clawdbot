@@ -34,6 +34,7 @@ type CrabboxProfile = {
   binary?: string;
   class: string;
   desktop?: boolean;
+  heartbeatIntervalMs: number;
   idleTimeout: string;
   provider: string;
   ttl: string;
@@ -44,7 +45,7 @@ type IsExecutable = (candidate: string) => boolean;
 
 function requirePositiveDuration(value: unknown, key: string): string {
   const duration = nonEmptyString(value);
-  if (!duration || !isPositiveGoDuration(duration)) {
+  if (!duration || parsePositiveGoDurationNanoseconds(duration) === undefined) {
     throw new WorkerProviderError(
       `Crabbox profile ${key} must be a positive Go duration such as 60m`,
     );
@@ -52,21 +53,21 @@ function requirePositiveDuration(value: unknown, key: string): string {
   return duration;
 }
 
-function isPositiveGoDuration(duration: string): boolean {
+function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefined {
   if (!GO_DURATION_PATTERN.test(duration)) {
-    return false;
+    return undefined;
   }
   let total = 0n;
   for (const match of duration.matchAll(GO_DURATION_TOKEN_PATTERN)) {
     const numberText = match[1];
     const unit = match[2] ? DURATION_UNIT_NANOSECONDS[match[2]] : undefined;
     if (!numberText || unit === undefined) {
-      return false;
+      return undefined;
     }
     const [wholeText = "", fractionText = ""] = numberText.split(".", 2);
     const whole = wholeText.replace(/^0+/u, "") || "0";
     if (whole.length > 19) {
-      return false;
+      return undefined;
     }
     total += BigInt(whole) * unit;
     const fraction = fractionText.slice(0, 18);
@@ -74,10 +75,19 @@ function isPositiveGoDuration(duration: string): boolean {
       total += (BigInt(fraction) * unit) / 10n ** BigInt(fraction.length);
     }
     if (total > MAX_GO_DURATION_NANOSECONDS) {
-      return false;
+      return undefined;
     }
   }
-  return total > 0n;
+  return total > 0n ? total : undefined;
+}
+
+function heartbeatIntervalMs(idleTimeout: string): number {
+  const idleNanoseconds = parsePositiveGoDurationNanoseconds(idleTimeout);
+  if (idleNanoseconds === undefined) {
+    throw new Error("Crabbox heartbeat requires a positive idle timeout");
+  }
+  const intervalNanoseconds = idleNanoseconds / 3n;
+  return Math.max(5_000, Math.min(60_000, Number(intervalNanoseconds) / 1_000_000));
 }
 
 export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
@@ -114,7 +124,16 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (desktop !== undefined && typeof desktop !== "boolean") {
     throw new WorkerProviderError("Crabbox profile desktop must be a boolean");
   }
-  return { binary, class: machineClass, desktop, idleTimeout, provider, setup, ttl };
+  return {
+    binary,
+    class: machineClass,
+    desktop,
+    heartbeatIntervalMs: heartbeatIntervalMs(idleTimeout),
+    idleTimeout,
+    provider,
+    setup,
+    ttl,
+  };
 }
 
 export function buildCrabboxWarmupArgs(
