@@ -1,4 +1,5 @@
 // Copilot BYOK proxy tests verify SDK-local transport is guarded outbound fetch.
+import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -307,7 +308,7 @@ describe("createCopilotByokProxy", () => {
       }
     },
   );
-  it("rejects oversized request bodies before forwarding upstream", async () => {
+  it("rejects a slow declared oversized body before waiting for the body stream", async () => {
     const resolvedProvider = resolveCopilotProvider({
       model: {
         provider: "custom-proxy",
@@ -319,13 +320,48 @@ describe("createCopilotByokProxy", () => {
     const proxy = await createCopilotByokProxy(resolvedProvider);
 
     try {
-      const response = await fetch(`${proxy?.provider.provider?.baseUrl}/responses`, {
-        method: "POST",
-        body: "x".repeat(16 * 1024 * 1024 + 1),
+      const endpoint = new URL(`${proxy?.provider.provider?.baseUrl}/responses`);
+      const response = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        let settled = false;
+        const request = http.request(
+          {
+            hostname: endpoint.hostname,
+            port: Number(endpoint.port),
+            path: endpoint.pathname,
+            method: "POST",
+            headers: {
+              "content-length": String(16 * 1024 * 1024 + 1),
+            },
+          },
+          (incoming) => {
+            let body = "";
+            incoming.setEncoding("utf8");
+            incoming.on("data", (chunk: string) => {
+              body += chunk;
+            });
+            incoming.on("end", () => {
+              settled = true;
+              clearTimeout(timer);
+              resolve({ status: incoming.statusCode ?? 0, body });
+            });
+          },
+        );
+        const timer = setTimeout(() => {
+          request.destroy();
+          reject(new Error("timed out waiting for declared-length rejection"));
+        }, 2_000);
+        timer.unref();
+        request.once("error", (error) => {
+          clearTimeout(timer);
+          if (!settled) {
+            reject(error);
+          }
+        });
+        request.write("x");
+        // Keep the request open: the guard must reject from Content-Length alone.
       });
 
-      expect(response.status).toBe(413);
-      expect(await response.text()).toBe("Payload too large");
+      expect(response).toEqual({ status: 413, body: "Payload too large" });
       expect(ssrfRuntimeMock.fetchWithSsrFGuard).not.toHaveBeenCalled();
     } finally {
       await proxy?.close();

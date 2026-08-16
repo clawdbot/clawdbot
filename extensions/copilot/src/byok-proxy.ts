@@ -5,7 +5,6 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { requestBodyErrorToText } from "openclaw/plugin-sdk/webhook-ingress";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 
@@ -119,12 +118,6 @@ async function handleProxyRequest(
       res.end("Not found");
       return;
     }
-    if (isProxyRequestBodyTooLarge(req)) {
-      res.writeHead(413);
-      res.end(requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
-      req.resume();
-      return;
-    }
     const body =
       req.method === "GET" || req.method === "HEAD" ? undefined : await readGuardedBody(req, res);
     if (res.writableEnded) {
@@ -222,16 +215,6 @@ function isNonceProtectedProxyRequest(req: IncomingMessage, proxyPathPrefix: str
     incomingUrl.pathname === proxyPathPrefix ||
     incomingUrl.pathname.startsWith(`${proxyPathPrefix}/`)
   );
-}
-
-function isProxyRequestBodyTooLarge(req: IncomingMessage): boolean {
-  const header = req.headers["content-length"];
-  const raw = Array.isArray(header) ? header[0] : header;
-  if (typeof raw !== "string") {
-    return false;
-  }
-  const declaredLength = Number.parseInt(raw, 10);
-  return Number.isFinite(declaredLength) && declaredLength > PROXY_MAX_REQUEST_BODY_BYTES;
 }
 
 async function readGuardedBody(
