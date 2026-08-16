@@ -185,7 +185,12 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
 
   // Maintenance rewrites should preserve the exact requested history without
   // re-running persistence hooks or size truncation on replayed messages.
-  const appendMessage = getRawSessionAppendMessage(params.sessionManager);
+  // The replayed suffix is already-admitted history, so ingress idempotency must
+  // not resolve a replayed key back to its row on the abandoned branch; that
+  // returns a foreign entry id and aborts the replay with the suffix half written.
+  const rawAppendMessage = getRawSessionAppendMessage(params.sessionManager);
+  const appendMessage: typeof rawAppendMessage = (message, options) =>
+    rawAppendMessage(message, { ...options, idempotencyLookup: "caller-checked" });
   const rewrittenEntryIds = new Map<string, string>();
   // Every re-appended message follows the rewritten prefix, so its prefix-bound checkpoint is stale.
   for (const entry of branch.slice(firstMatchedIndex)) {

@@ -357,4 +357,61 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       { type: "text", text: "[runtime rewrite]" },
     ]);
   });
+
+  it("replays a keyed user turn in the rewritten suffix", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-keyed-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "runtime-sqlite-keyed-suffix-rewrite";
+    const sessionKey = "agent:main:test";
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const target = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      sessionFile,
+      sessionId,
+      updatedAt: 10,
+    } as SessionEntry);
+    const sessionManager = SessionManager.open(target, dir);
+    const [, toolResultEntryId] = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "run tool", timestamp: 1 }),
+      asAppendMessage(createToolResultReplacement("exec", "before rewrite", 2)),
+      asAppendMessage({
+        role: "user",
+        content: "second question",
+        timestamp: 3,
+        idempotencyKey: "chat-send-key-2",
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("second answer"),
+        timestamp: 4,
+      }),
+    ]);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: expectDefined(toolResultEntryId, "persisted tool result entry id"),
+          message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const activeMessages = getBranchMessages(SessionManager.open(target, dir));
+    expect(
+      activeMessages.map((message) =>
+        message.role === "user" ? String(message.content) : message.role,
+      ),
+    ).toEqual(["run tool", "toolResult", "second question", "assistant"]);
+  });
 });
