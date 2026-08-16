@@ -154,7 +154,41 @@ jobs:
       protocol_base_revision: ${{ steps.validate.outputs.protocol_base_revision }}
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
+      workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
+      workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
     steps:
+      # github.workflow_sha identifies the caller during workflow_call. Resolve the called
+      # workflow SHA from job context so trusted harness checkouts cannot drift to candidate code.
+      - name: Resolve job workflow identity
+        id: workflow
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          if (
+            typeof job.workflow_repository !== "string" ||
+            !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(job.workflow_repository)
+          ) {
+            throw new Error("job.workflow_repository must be an owner/repository slug");
+          }
+          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          fs.appendFileSync(
+            outputPath,
+            `workflow_repository=${job.workflow_repository}\nworkflow_sha=${job.workflow_sha}\n`,
+          );
+          NODE
+
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -252,30 +286,74 @@ jobs:
       profile: ${{ steps.plan.outputs.profile }}
       shard_count: ${{ steps.plan.outputs.shard_count }}
     steps:
-      - name: Checkout selected ref
+      - name: Checkout trusted QA harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          persist-credentials: false
-          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
-          # Selected-ref code runs later; never let it write shared default-branch caches.
+          install-deps: "false"
           use-actions-cache: "false"
+
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          fetch-depth: 1
+          path: selected
+          persist-credentials: false
+
+      - name: Verify selected checkout SHA
+        env:
+          EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git -C selected rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+
+      - name: Install selected dependencies
+        shell: bash
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          selected_home="${RUNNER_TEMP}/openclaw-qa-selected-home"
+          mkdir -p "$selected_home"
+          env -i \
+            CI=true \
+            COREPACK_HOME="${selected_home}/.cache/corepack" \
+            HOME="$selected_home" \
+            LANG=C.UTF-8 \
+            NPM_CONFIG_USERCONFIG=/dev/null \
+            PATH="$PATH" \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            pnpm install \
+              --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
+              --prefer-offline \
+              --frozen-lockfile \
+              --ignore-scripts=false \
+              --config.engine-strict=false \
+              --config.enable-pre-post-scripts=true \
+              --config.package-import-method=copy \
+              --config.side-effects-cache=true
 
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build qaRuntime
+        working-directory: selected
 
       - name: Resolve taxonomy profile shards
         id: plan
         env:
           QA_PROFILE: ${{ inputs.qa_profile }}
+        working-directory: selected
         run: |
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'
@@ -316,16 +394,67 @@ jobs:
       max-parallel: 8
       matrix: ${{ fromJSON(needs.plan_qa_profile.outputs.matrix) }}
     steps:
+      - name: Checkout trusted QA harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+          install-deps: "false"
+          use-actions-cache: "false"
+
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
+          path: selected
+          persist-credentials: false
+
+      - name: Verify selected checkout SHA
+        env:
+          EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git -C selected rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+
+      - name: Install selected dependencies
+        shell: bash
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          selected_home="${RUNNER_TEMP}/openclaw-qa-selected-home"
+          mkdir -p "$selected_home"
+          env -i \
+            CI=true \
+            COREPACK_HOME="${selected_home}/.cache/corepack" \
+            HOME="$selected_home" \
+            LANG=C.UTF-8 \
+            NPM_CONFIG_USERCONFIG=/dev/null \
+            PATH="$PATH" \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            pnpm install \
+              --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
+              --prefer-offline \
+              --frozen-lockfile \
+              --ignore-scripts=false \
+              --config.engine-strict=false \
+              --config.enable-pre-post-scripts=true \
+              --config.package-import-method=copy \
+              --config.side-effects-cache=true
 
       - name: Fetch protocol comparison base
         env:
           PROTOCOL_SINCE_BASE_SHA: ${{ needs.validate_selected_ref.outputs.protocol_base_revision }}
+        working-directory: selected
         run: |
           set -euo pipefail
           if [[ ! "$PROTOCOL_SINCE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -335,14 +464,6 @@ jobs:
           timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --no-recurse-submodules --depth=1 origin \
             "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/qa-protocol-base"
           test "$(git rev-parse refs/remotes/origin/qa-protocol-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-          # Selected-ref code runs later; never let it write shared default-branch caches.
-          use-actions-cache: "false"
 
       - name: Require live profile credentials
         if: needs.plan_qa_profile.outputs.channel_driver == 'live'
@@ -358,8 +479,10 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build qaRuntime
+        working-directory: selected
 
       - name: Ensure Playwright Chromium
+        working-directory: selected
         run: |
           playwright_script="scripts/ensure-playwright-chromium.mts"
           [[ -f "$playwright_script" ]] || playwright_script="scripts/ensure-playwright-chromium.mjs"
@@ -382,9 +505,10 @@ jobs:
           OPENCLAW_QA_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CREDENTIAL_SOURCE: convex
           OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "1"
+        working-directory: selected
         run: |
           set -euo pipefail
-          output_dir=".artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/${QA_SHARD_ID}"
+          output_dir="${GITHUB_WORKSPACE}/selected/.artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/${QA_SHARD_ID}"
           mkdir -p "$output_dir"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
           mapfile -t scenario_ids < <(jq -er '.[]' <<<"$SCENARIO_IDS_JSON")
@@ -474,6 +598,7 @@ jobs:
           OUTPUT_DIR: ${{ steps.run_profile.outputs.output_dir }}
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
           QA_PROFILE: ${{ needs.plan_qa_profile.outputs.profile }}
+        working-directory: selected
         run: |
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'
@@ -517,39 +642,83 @@ jobs:
       trusted_reason: ${{ steps.evidence.outputs.trusted_reason }}
       qa_evidence_path: ${{ steps.evidence.outputs.qa_evidence_path }}
     steps:
-      - name: Checkout selected ref
+      - name: Checkout trusted QA harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          persist-credentials: false
-          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
-          # Selected-ref code runs later; never let it write shared default-branch caches.
+          install-deps: "false"
           use-actions-cache: "false"
+
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          fetch-depth: 1
+          path: selected
+          persist-credentials: false
+
+      - name: Verify selected checkout SHA
+        env:
+          EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git -C selected rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+
+      - name: Install selected dependencies
+        shell: bash
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          selected_home="${RUNNER_TEMP}/openclaw-qa-selected-home"
+          mkdir -p "$selected_home"
+          env -i \
+            CI=true \
+            COREPACK_HOME="${selected_home}/.cache/corepack" \
+            HOME="$selected_home" \
+            LANG=C.UTF-8 \
+            NPM_CONFIG_USERCONFIG=/dev/null \
+            PATH="$PATH" \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            pnpm install \
+              --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
+              --prefer-offline \
+              --frozen-lockfile \
+              --ignore-scripts=false \
+              --config.engine-strict=false \
+              --config.enable-pre-post-scripts=true \
+              --config.package-import-method=copy \
+              --config.side-effects-cache=true
 
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build qaRuntime
+        working-directory: selected
 
       - name: Download QA profile shard evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: qa-profile-evidence-shard-*-${{ needs.validate_selected_ref.outputs.selected_revision }}
-          path: .artifacts/qa-profile-shards
+          path: selected/.artifacts/qa-profile-shards
           merge-multiple: false
 
       - name: Aggregate validated shard evidence
         id: aggregate
         env:
-          OUTPUT_DIR: .artifacts/qa-e2e/profile-${{ needs.plan_qa_profile.outputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          OUTPUT_DIR: ${{ github.workspace }}/selected/.artifacts/qa-e2e/profile-${{ needs.plan_qa_profile.outputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           QA_PROFILE: ${{ needs.plan_qa_profile.outputs.profile }}
           SHARD_COUNT: ${{ needs.plan_qa_profile.outputs.shard_count }}
+        working-directory: selected
         run: |
           set -euo pipefail
           mapfile -t status_paths < <(find .artifacts/qa-profile-shards -mindepth 2 -maxdepth 2 -type f -name qa-profile-run-status.json | sort)
@@ -611,6 +780,7 @@ jobs:
           REQUESTED_REF: ${{ inputs.trusted_ref || inputs.ref }}
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           TRUSTED_REASON: ${{ needs.validate_selected_ref.outputs.trusted_reason }}
+        working-directory: selected
         run: |
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'

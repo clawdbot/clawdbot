@@ -74,6 +74,7 @@ type WorkflowStep = {
   run?: string;
   uses?: string;
   with?: Record<string, unknown>;
+  "working-directory"?: string;
 };
 
 function readCiWorkflow() {
@@ -580,6 +581,8 @@ type QaProfileTimeoutFixtureMode = "natural-124" | "self-kill" | "term" | "kill"
 function runQaProfileTimeoutFixture(mode: QaProfileTimeoutFixtureMode) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-qa-profile-timeout-"));
   try {
+    const selectedRoot = path.join(root, "selected");
+    mkdirSync(selectedRoot);
     const binDir = path.join(root, "bin");
     mkdirSync(binDir);
     const fakePnpm = path.join(binDir, "pnpm");
@@ -651,13 +654,14 @@ timeout_outcome="none"`,
     script = capturedScript;
     const githubOutput = path.join(root, "github-output");
     const run = runWorkflowShellScript(script, {
-      cwd: root,
+      cwd: selectedRoot,
       env: {
         ...process.env,
         FAKE_PNPM_MODE: mode,
         GITHUB_OUTPUT: githubOutput,
         GITHUB_RUN_ATTEMPT: "1",
         GITHUB_RUN_ID: "42",
+        GITHUB_WORKSPACE: root,
         LC_ALL: "POSIX",
         PATH: fixturePath,
         CATEGORY_IDS_JSON: '["fixture.category"]',
@@ -670,7 +674,13 @@ timeout_outcome="none"`,
         TIMEOUT_SUPERVISOR_CAPTURE: timeoutSupervisorCapture,
       },
     });
-    const outputDir = path.join(root, ".artifacts", "qa-e2e", "profile-all-42-1", "shard-01");
+    const outputDir = path.join(
+      selectedRoot,
+      ".artifacts",
+      "qa-e2e",
+      "profile-all-42-1",
+      "shard-01",
+    );
     const status = JSON.parse(
       readFileSync(path.join(outputDir, "qa-profile-run-status.json"), "utf8"),
     ) as {
@@ -7259,11 +7269,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(validateJob.outputs.protocol_base_revision).toBe(
         "${{ steps.validate.outputs.protocol_base_revision }}",
       );
-      expect(validateJob.steps[1].env.INPUT_REF).toBe(trustedInput);
+      const validateStep = expectDefined(
+        validateJob.steps.find((step: WorkflowStep) => step.name === "Validate selected ref"),
+        "QA selected-ref validation",
+      );
+      expect(validateStep.env.INPUT_REF).toBe(trustedInput);
       const ordered = [
-        "Checkout selected ref",
-        "Fetch protocol comparison base",
+        "Checkout trusted QA harness",
         "Setup Node environment",
+        "Checkout selected ref",
+        "Verify selected checkout SHA",
+        "Install selected dependencies",
+        "Fetch protocol comparison base",
         "Build private QA runtime",
         "Run QA profile shard",
       ].map((name) => stepNames.indexOf(name));
@@ -7428,6 +7445,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const qaPlanJob = qaEvidenceWorkflow.jobs.plan_qa_profile;
     const qaShardJob = qaEvidenceWorkflow.jobs.run_qa_profile_shard;
     const qaAggregateJob = qaEvidenceWorkflow.jobs.aggregate_qa_profile;
+    const qaValidateJob = qaEvidenceWorkflow.jobs.validate_selected_ref;
 
     expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
       qa_evidence_run_id: {
@@ -7521,11 +7539,120 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       profile: "${{ steps.plan.outputs.profile }}",
       shard_count: "${{ steps.plan.outputs.shard_count }}",
     });
-    for (const job of [qaPlanJob, qaShardJob, qaAggregateJob]) {
-      const setupStep = job.steps.find(
-        (step: WorkflowStep) => step.name === "Setup Node environment",
+    expect(qaValidateJob.outputs).toMatchObject({
+      workflow_repository: "${{ steps.workflow.outputs.workflow_repository }}",
+      workflow_sha: "${{ steps.workflow.outputs.workflow_sha }}",
+    });
+    const workflowIdentityStep = qaValidateJob.steps[0];
+    expect(workflowIdentityStep).toMatchObject({
+      name: "Resolve job workflow identity",
+      id: "workflow",
+      env: { JOB_CONTEXT: "${{ toJSON(job) }}" },
+    });
+    expect(workflowIdentityStep.run).toContain("job.workflow_repository");
+    expect(workflowIdentityStep.run).toContain("job.workflow_sha");
+    expect(workflowIdentityStep.run).toContain("^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$");
+    expect(workflowIdentityStep.run).toContain("^[0-9a-f]{40}$");
+
+    const selectedCodeSteps = new Map([
+      [qaPlanJob, ["Build private QA runtime", "Resolve taxonomy profile shards"]],
+      [
+        qaShardJob,
+        [
+          "Fetch protocol comparison base",
+          "Build private QA runtime",
+          "Ensure Playwright Chromium",
+          "Run QA profile shard",
+          "Validate QA profile shard evidence",
+        ],
+      ],
+      [
+        qaAggregateJob,
+        [
+          "Build private QA runtime",
+          "Aggregate validated shard evidence",
+          "Finalize QA profile evidence",
+        ],
+      ],
+    ]);
+    for (const [job, codeStepNames] of selectedCodeSteps) {
+      const stepIndex = (name: string) =>
+        job.steps.findIndex((step: WorkflowStep) => step.name === name);
+      const trustedCheckout = job.steps[0];
+      const setupStep = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+        "trusted QA harness Node setup",
       );
+      const selectedCheckout = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Checkout selected ref"),
+        "selected QA checkout",
+      );
+      const verifySelected = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Verify selected checkout SHA"),
+        "selected QA checkout verification",
+      );
+      const installSelected = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Install selected dependencies"),
+        "selected QA dependency install",
+      );
+
+      expect(trustedCheckout).toMatchObject({
+        name: "Checkout trusted QA harness",
+        uses: CHECKOUT_V6,
+        with: {
+          repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
+          ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+          "fetch-depth": 1,
+          "persist-credentials": false,
+        },
+      });
+      expect(job.steps.filter((step: WorkflowStep) => step.uses === CHECKOUT_V6)).toHaveLength(2);
+      expect(job.steps.some((step: WorkflowStep) => step.uses?.startsWith("actions/cache/"))).toBe(
+        false,
+      );
+      expect(setupStep.with?.["install-deps"]).toBe("false");
       expect(setupStep.with?.["use-actions-cache"]).toBe("false");
+      expect(selectedCheckout).toMatchObject({
+        uses: CHECKOUT_V6,
+        with: {
+          ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+          path: "selected",
+          "fetch-depth": 1,
+          "persist-credentials": false,
+        },
+      });
+      expect(verifySelected.run).toContain("git -C selected rev-parse HEAD");
+      expect(verifySelected.env?.EXPECTED_SHA).toBe(
+        "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      );
+      expect(installSelected["working-directory"]).toBe("selected");
+      expect(installSelected.run).toContain(
+        '--store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store"',
+      );
+      for (const installFlag of [
+        "--frozen-lockfile",
+        "--ignore-scripts=false",
+        "--config.engine-strict=false",
+        "--config.enable-pre-post-scripts=true",
+        "--config.side-effects-cache=true",
+      ]) {
+        expect(installSelected.run).toContain(installFlag);
+      }
+      const ordered = [
+        0,
+        stepIndex("Setup Node environment"),
+        stepIndex("Checkout selected ref"),
+        stepIndex("Verify selected checkout SHA"),
+        stepIndex("Install selected dependencies"),
+      ];
+      expect(ordered.every((index, position) => index > (ordered[position - 1] ?? -1))).toBe(true);
+      for (const codeStepName of codeStepNames) {
+        const codeStep = expectDefined(
+          job.steps.find((step: WorkflowStep) => step.name === codeStepName),
+          `selected QA step ${codeStepName}`,
+        );
+        expect(codeStep["working-directory"], codeStepName).toBe("selected");
+      }
     }
     const validateProfileStep = qaPlanJob.steps.find(
       (step: WorkflowStep) => step.name === "Resolve taxonomy profile shards",
@@ -7560,6 +7687,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
+    expect(runProfileStep.run).toContain(
+      'output_dir="${GITHUB_WORKSPACE}/selected/.artifacts/qa-e2e/',
+    );
     expect(runProfileStep.run).toContain('mkdir -p "$output_dir"');
     expect(runProfileStep.run.indexOf('mkdir -p "$output_dir"')).toBeLessThan(
       runProfileStep.run.indexOf('echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"'),
@@ -7635,7 +7765,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(aggregateDownloadStep.with).toMatchObject({
       pattern:
         "qa-profile-evidence-shard-*-${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      path: ".artifacts/qa-profile-shards",
+      path: "selected/.artifacts/qa-profile-shards",
       "merge-multiple": false,
     });
     const aggregateStep = qaAggregateJob.steps.find(
@@ -7648,6 +7778,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(aggregateStep.run).toContain("-mindepth 2 -maxdepth 2");
     expect(aggregateStep.run).toContain("aggregateQaProfileEvidenceShards");
     expect(aggregateStep.run).toContain("if jq -e '.timedOut == true'");
+    expect(aggregateStep.env?.OUTPUT_DIR).toContain(
+      "${{ github.workspace }}/selected/.artifacts/qa-e2e/",
+    );
+    const aggregateUploadStep = qaAggregateJob.steps.find(
+      (step: WorkflowStep) => step.name === "Upload QA profile evidence",
+    );
+    expect(aggregateUploadStep.with?.path).toBe("${{ steps.aggregate.outputs.output_dir }}");
 
     const failProfileStep = qaAggregateJob.steps.find(
       (step: WorkflowStep) => step.name === "Fail if QA profile failed",
