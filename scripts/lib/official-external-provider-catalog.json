@@ -2465,6 +2465,49 @@
           "minHostVersion": ">=2026.6.9"
         }
       }
+    },
+    {
+      "name": "@openclaw/llmtr-provider",
+      "description": "OpenClaw LLMTR provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "llmtr",
+          "label": "LLMTR"
+        },
+        "providers": [
+          {
+            "id": "llmtr",
+            "name": "LLMTR",
+            "docs": "/providers/llmtr",
+            "categories": ["cloud", "llm"],
+            "envVars": ["LLMTR_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "llmtr-api-key",
+                "choiceLabel": "LLMTR API key",
+                "choiceHint": "OpenAI-compatible AI gateway with Turkey-hosted routes",
+                "groupId": "llmtr",
+                "groupLabel": "LLMTR",
+                "groupHint": "OpenAI-compatible AI gateway with Turkey-hosted routes",
+                "optionKey": "llmtrApiKey",
+                "cliFlag": "--llmtr-api-key",
+                "cliOption": "--llmtr-api-key <key>",
+                "cliDescription": "LLMTR API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/llmtr-provider",
+          "npmSpec": "@openclaw/llmtr-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.8.1"
+        }
+      }
     }
   ]
 }

@@ -1512,6 +1512,14 @@
     "target": "NovitaAI"
   },
   {
+    "source": "LLMTR",
+    "target": "LLMTR"
+  },
+  {
+    "source": "LLMTR (multi-vendor gateway)",
+    "target": "LLMTR（多厂商网关）"
+  },
+  {
     "source": "Onboard",
     "target": "引导设置"
   },

@@ -1542,6 +1542,7 @@
                   "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
+                  "providers/llmtr",
                   "providers/lmstudio",
                   "providers/longcat",
                   "providers/meta",
