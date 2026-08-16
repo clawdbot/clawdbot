@@ -125,9 +125,9 @@ export async function writeTuiLastSessionKey(params: {
 export function createRememberSessionKeyWriter(params: {
   buildScopeKey: (sessionKey: string) => string;
   reportFailure: (message: string) => void;
-  write?: typeof writeTuiLastSessionKey;
+  write: typeof writeTuiLastSessionKey;
 }): (sessionKey: string) => void {
-  const write = params.write ?? writeTuiLastSessionKey;
+  const write = params.write;
   let failureReported = false;
   return (sessionKey: string) => {
     const trimmed = sessionKey.trim();

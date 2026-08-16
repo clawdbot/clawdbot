@@ -63,6 +63,7 @@ import {
   createRememberSessionKeyWriter,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
+  writeTuiLastSessionKey,
 } from "./tui-last-session.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
@@ -1024,6 +1025,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       chatLog.addSystem(`session memory write failed: ${message}`);
       tui.requestRender();
     },
+    write: writeTuiLastSessionKey,
   });
 
   const restoreRememberedSession = async (expectedConnectionGeneration: number) => {
