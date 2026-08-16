@@ -25,11 +25,8 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
 import {
   resetGatewayRestartStateForInProcessRestart,

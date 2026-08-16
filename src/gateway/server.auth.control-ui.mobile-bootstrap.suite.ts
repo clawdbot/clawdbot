@@ -179,8 +179,8 @@ export function registerControlUiMobileBootstrapSuite(): void {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
-    const { getPairedDevice, listDevicePairing, verifyDeviceToken } =
-      await import("../infra/device-pairing.js");
+    const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
@@ -433,7 +433,8 @@ export function registerControlUiMobileBootstrapSuite(): void {
     ]);
     expect(operatorHandoff?.scopes).not.toContain("operator.admin");
 
-    const { getPairedDevice, verifyDeviceToken } = await import("../infra/device-pairing.js");
+    const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
     const paired = await getPairedDevice(identity.deviceId);
     expect(paired?.approvedScopes).not.toContain("operator.admin");
     expect(paired?.tokens?.operator?.scopes).not.toContain("operator.admin");

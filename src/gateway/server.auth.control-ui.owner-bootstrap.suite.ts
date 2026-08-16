@@ -17,8 +17,8 @@ import {
 export function registerControlUiOwnerBootstrapSuite(): void {
   test("silently approves host-authorized control ui owner bootstrap tokens", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { getPairedDevice, listDevicePairing, verifyDeviceToken } =
-      await import("../infra/device-pairing.js");
+    const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
     const { resolveSharedGatewaySessionGeneration } =

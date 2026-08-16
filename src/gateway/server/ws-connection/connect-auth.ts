@@ -8,7 +8,7 @@ import {
   getDeviceBootstrapTokenProfile,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
-import { verifyDeviceToken } from "../../../infra/device-pairing.js";
+import { verifyDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { formatForLog } from "../../ws-log.js";

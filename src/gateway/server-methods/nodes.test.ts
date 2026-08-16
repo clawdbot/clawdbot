@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import {
   captureNodePairingGeneration,
   captureNodePairingState,
@@ -11,12 +12,10 @@ import {
   resolveCurrentPairedDeviceNodeBinding,
 } from "../../infra/device-pairing-node-state.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
+import { revokeDeviceToken, rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
 import {
-  approveDevicePairing,
   listDevicePairing,
   requestDevicePairing,
-  revokeDeviceToken,
-  rotateDeviceToken,
   withPairedDeviceRecords,
 } from "../../infra/device-pairing.js";
 import {
