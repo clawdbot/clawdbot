@@ -1,5 +1,6 @@
 // Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, handleQaBusRequest, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
@@ -111,10 +112,15 @@ describe("qa-bus server", () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
   });
 
-  it("wakes stale-cursor long polls as soon as matching account traffic arrives", async () => {
+  it("wakes matching long polls and settles late polls during shutdown", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
+    let stopped = false;
+    stops.push(async () => {
+      if (!stopped) {
+        await bus.stop();
+      }
+    });
 
     const pending = pollQaBus({
       baseUrl: bus.baseUrl,
@@ -137,6 +143,40 @@ describe("qa-bus server", () => {
       cursor: 1,
       kind: "inbound-message",
     });
+
+    const waitForCursorAdvance = state.waitForCursorAdvance.bind(state);
+    let lateWaiterStarted = false;
+    let lateWaiterSettled = false;
+    state.waitForCursorAdvance = async (...args) => {
+      lateWaiterStarted = true;
+      try {
+        return await waitForCursorAdvance(...args);
+      } finally {
+        lateWaiterSettled = true;
+      }
+    };
+    const body = JSON.stringify({ accountId: "late-body", cursor: 0, timeoutMs: 30_000 });
+    const slowPoll = request({
+      host: "127.0.0.1",
+      port: bus.port,
+      path: "/v1/poll",
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+    });
+    slowPoll.on("response", (response) => response.resume());
+    slowPoll.on("error", () => undefined);
+    slowPoll.write(body.slice(0, 1));
+    await sleep(10);
+
+    stopped = true;
+    const startedAt = Date.now();
+    const stopping = bus.stop();
+    setTimeout(() => slowPoll.end(body.slice(1)), 50);
+    await stopping;
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(lateWaiterStarted).toBe(true);
+    expect(lateWaiterSettled).toBe(true);
   });
 
   it("resumes an account after its last acknowledged cursor when the client restarts", async () => {

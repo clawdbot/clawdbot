@@ -192,14 +192,14 @@ export function createQaBusState() {
   };
 
   return {
-    reset() {
+    reset(terminal = false) {
       conversations.clear();
       threads.clear();
       messages.clear();
       events.length = 0;
       // Keep the cursor monotonic across resets so long-poll clients do not
-      // miss fresh events and retained restart acknowledgements remain valid.
-      waiters.reset();
+      // miss events; terminal reset also fences late waiter timers.
+      waiters.reset(undefined, terminal);
     },
     getSnapshot() {
       return buildQaBusSnapshot({

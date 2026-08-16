@@ -957,9 +957,7 @@ export async function startQaLabServer(
       cleanupError = toQaError(error);
     }
     const results = await Promise.allSettled([
-      Promise.resolve().then(() =>
-        serverListening ? closeQaHttpServer(server, () => state.reset()) : undefined,
-      ),
+      serverListening ? closeQaHttpServer(server, state) : undefined,
       Promise.resolve().then(releaseCaptureStore),
     ]);
     const failed = results.find((result) => result.status === "rejected");

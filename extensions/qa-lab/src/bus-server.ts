@@ -287,16 +287,12 @@ function normalizeQaBusSearchInput(input: Record<string, unknown>): QaBusSearchM
   } as QaBusSearchMessagesInput;
 }
 
-export async function closeQaHttpServer(
-  server: Server,
-  onCloseStarted?: () => void,
-): Promise<void> {
+export async function closeQaHttpServer(server: Server, state?: QaBusState): Promise<void> {
   let forceCloseTimer: NodeJS.Timeout | undefined;
   try {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
-      // Fence new requests before canceling owner state so no waiter can register after cleanup.
-      onCloseStarted?.();
+      state?.reset(true); // Fence first so late request bodies cannot add waiter timers.
       server.closeIdleConnections?.();
       forceCloseTimer = setTimeout(() => {
         server.closeAllConnections?.();
@@ -476,7 +472,7 @@ export async function startQaBusServer(params: { state: QaBusState; port?: numbe
     port: address.port,
     baseUrl: `http://127.0.0.1:${address.port}`,
     async stop() {
-      await closeQaHttpServer(server, () => params.state.reset());
+      await closeQaHttpServer(server, params.state);
     },
   };
 }
