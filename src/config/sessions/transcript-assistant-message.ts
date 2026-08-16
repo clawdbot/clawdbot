@@ -2,8 +2,6 @@ import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
 
-export { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
-
 export type AssistantBeforeMessageWrite = (params: {
   message: AgentMessage;
   agentId?: string;
