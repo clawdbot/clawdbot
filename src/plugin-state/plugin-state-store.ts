@@ -283,6 +283,11 @@ function createSyncKeyedStoreForPluginId<T>(
     rekey(key, nextKey, value) {
       const normalizedKey = validateKey(key, "rekey");
       const normalizedNextKey = validateKey(nextKey, "rekey");
+      if (normalizedKey === normalizedNextKey) {
+        // A self-rekey has no defined outcome: the source would be its own
+        // live target, which is neither a move nor a two-key conflict.
+        throw invalidInput("plugin state rekey requires distinct keys", "rekey");
+      }
       const prepared = prepareRegisterParams(
         normalizedNextKey,
         value,

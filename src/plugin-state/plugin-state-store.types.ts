@@ -26,6 +26,8 @@ export type PluginStateKeyedStore<T> = {
    * vanished but a live row at `nextKey` makes the rekey's end state
    * idempotently true. Returns "conflict" (and changes nothing) when both
    * keys hold live entries, and "missing" when neither key holds one.
+   * Throws PLUGIN_STATE_INVALID_INPUT when `key` and `nextKey` are equal —
+   * a self-rekey has no defined outcome.
    */
   rekey?: (key: string, nextKey: string, value: T) => Promise<"rekeyed" | "missing" | "conflict">;
   lookup(key: string): Promise<T | undefined>;
@@ -54,6 +56,8 @@ export type PluginStateSyncKeyedStore<T> = {
    * vanished but a live row at `nextKey` makes the rekey's end state
    * idempotently true. Returns "conflict" (and changes nothing) when both
    * keys hold live entries, and "missing" when neither key holds one.
+   * Throws PLUGIN_STATE_INVALID_INPUT when `key` and `nextKey` are equal —
+   * a self-rekey has no defined outcome.
    */
   rekey?: (key: string, nextKey: string, value: T) => "rekeyed" | "missing" | "conflict";
   lookup(key: string): T | undefined;

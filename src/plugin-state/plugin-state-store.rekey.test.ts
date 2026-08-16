@@ -92,6 +92,48 @@ describe("plugin state keyed store rekey", () => {
     expect(store.lookup("scoped")).toEqual({ version: 2 });
   });
 
+  it("rejects a self-rekey without touching state", async () => {
+    const store = createPluginStateKeyedStore<{ version: number }>("memory-wiki", {
+      namespace: "ownership-rekey-self",
+      maxEntries: 10,
+    });
+    if (!store.rekey) {
+      throw new Error("plugin state rekey unavailable");
+    }
+    await store.register("legacy", { version: 1 });
+    // Equal keys are rejected outright: the source would be its own live
+    // target, which is neither a move nor a two-key conflict.
+    const failure = await store.rekey("legacy", "legacy", { version: 2 }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toMatchObject({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "rekey",
+    });
+    await expect(store.lookup("legacy")).resolves.toEqual({ version: 1 });
+
+    const syncStore = createPluginStateSyncKeyedStore<{ version: number }>("memory-wiki", {
+      namespace: "ownership-rekey-self-sync",
+      maxEntries: 10,
+    });
+    if (!syncStore.rekey) {
+      throw new Error("plugin state rekey unavailable");
+    }
+    syncStore.register("legacy", { version: 1 });
+    let syncFailure: unknown;
+    try {
+      syncStore.rekey("legacy", "legacy", { version: 2 });
+    } catch (error) {
+      syncFailure = error;
+    }
+    expect(syncFailure).toMatchObject({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "rekey",
+    });
+    expect(syncStore.lookup("legacy")).toEqual({ version: 1 });
+  });
+
   it("reports invalid rekey values as rekey operations", async () => {
     const store = createPluginStateKeyedStore<{ version: number }>("memory-wiki", {
       namespace: "ownership-rekey-invalid",
