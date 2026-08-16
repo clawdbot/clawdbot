@@ -182,7 +182,7 @@ async function finishPreparedManualRun(
     }
     const endedAt = state.deps.nowMs();
     const triggerSkipped = coreResult.status === "ok" && coreResult.triggerEval?.fired === false;
-    const emitMissingQueuedTerminal = (required = false) => {
+    const emitMissingTerminal = (required = false) => {
       const tracker = prepared.terminalTracker;
       if ((!tracker && !required) || tracker?.emitted) {
         return;
@@ -191,8 +191,8 @@ async function finishPreparedManualRun(
         prepared.activeJobMarker?.jobRemoved === true
           ? executionJob
           : state.store?.jobs.find((entry) => entry.id === jobId);
-      // enqueueRun acknowledges a concrete run id, so every accepted request
-      // needs one terminal event even if the job or service owner changes mid-run.
+      // Queued calls carry a tracker for dedupe. A removed direct run has no
+      // tracker, but still needs one durable terminal event/history/task outcome.
       emitCronRunFinished(
         state,
         {
@@ -236,11 +236,11 @@ async function finishPreparedManualRun(
         error: coreResult.error,
       });
       finalized = true;
-      emitMissingQueuedTerminal(true);
+      emitMissingTerminal(true);
       return;
     }
     if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
-      emitMissingQueuedTerminal();
+      emitMissingTerminal();
       return;
     }
 
@@ -424,7 +424,7 @@ async function finishPreparedManualRun(
     if (finalized) {
       armTimer(state);
     }
-    emitMissingQueuedTerminal();
+    emitMissingTerminal();
   } finally {
     // Terminal receipt persistence is fallible; local liveness and admission
     // ownership must still retire or this process permanently self-fences the job.
