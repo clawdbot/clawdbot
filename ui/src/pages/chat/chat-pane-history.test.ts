@@ -345,7 +345,7 @@ describe("chat pane native history pagination", () => {
     await pane.showEarlierMessages();
 
     expect(thread.scrollTop).toBe(0);
-    expect(state.chatHistoryPagination.hasMore).toBe(true);
+    expect(state.chatHistoryPagination).toMatchObject({ hasMore: true });
     expect(state.lastError).toBe("history unavailable");
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
