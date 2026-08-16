@@ -75,10 +75,9 @@ function fixtureDocument(themeMode: "dark" | "light"): string {
 // not shorten to a basename, which is the case that has to stay inside the column.
 const LONG_CHIP_PATH = "packages/gateway-protocol/src/session-transport-envelope.ts";
 
-// Separation cases for the glyph-attachment probe below. `unbroken` has no `/`,
-// `-`, or `_` for the line breaker to use as a natural break point, so it can
-// only wrap via the inherited `overflow-wrap: anywhere` — the exact condition
-// that starves the glyph's own line of a break opportunity (#123310 P2).
+// Cases for the glyph-attachment probe below. `unbroken` has no `/`, `-`, or `_`
+// to break on, so only the inherited `overflow-wrap: anywhere` can wrap it —
+// the condition that starves the glyph's own line of a break opportunity.
 const SEPARATION_CASES = [
   { filePath: "src/app.ts", id: "sep-short", label: "app.ts", line: undefined },
   {
@@ -115,10 +114,8 @@ function wrapFixtureDocument(themeMode: "dark" | "light"): string {
 type SeparationSample = {
   readonly caseId: (typeof SEPARATION_CASES)[number]["id"];
   readonly columnWidth: number;
-  // Positive when the glyph's line (the chip's own top) and the label's first
-  // character land on different lines — i.e. the glyph is stranded above a
-  // label that wrapped away from it, invisible to an inline-block chip's own
-  // getClientRects() (see chipLineCount below, always 1 for an atomic box).
+  // A full line-height means the glyph is stranded above a label that wrapped
+  // away from it; on the same line it is only font-ascent noise.
   readonly glyphToLabelGapPx: number;
   readonly lineHeightPx: number;
   readonly wrapped: boolean;
@@ -144,10 +141,9 @@ async function probeWrap(themeMode: "dark" | "light"): Promise<{
   const page = await browser.newPage();
   try {
     await page.goto(`file://${fixtureFile}`);
-    return await page.evaluate<{
-      samples: readonly WrapSample[];
-      separation: readonly SeparationSample[];
-    }>(
+    // No explicit type argument: a lone one binds `evaluate`'s `Arg` to `void`
+    // and the case ids arrive untyped. Inference reads both from the call.
+    return await page.evaluate(
       (caseIds) => {
         const resolve = (selector: string) => {
           const element = document.querySelector(selector);
@@ -177,11 +173,9 @@ async function probeWrap(themeMode: "dark" | "light"): Promise<{
             longChipWidth: longChip.getBoundingClientRect().width,
           });
         }
-        // Narrower, dedicated sweep for the glyph-attachment probe: a short
-        // basename like "app.ts" never wraps inside a realistic 220-900px chat
-        // column, so reusing that range here would make the case's vacuity guard
-        // unsatisfiable. The failure this guards is about the *tight* space
-        // directly beside the glyph, not the column at large.
+        // Its own narrower sweep: a short basename never wraps in a realistic
+        // 220-900px column, so that range would leave the vacuity guard below
+        // unsatisfiable. This failure is about the space beside the glyph.
         for (let columnWidth = 40; columnWidth <= 320; columnWidth += 4) {
           column.style.width = `${columnWidth}px`;
           for (const { caseId, element } of separationChips) {
@@ -348,17 +342,11 @@ describeFileLinkPresentation("chat file link presentation", () => {
     },
   );
 
-  // A file-link chip is `display: inline-block`, so it always reports exactly
-  // one client rect from the *outside* — the two tests above stay green even
-  // when the glyph splits from its label internally, because that split lives
-  // inside the chip's own atomic box. This closes that gap by comparing the
-  // chip's own top (where the glyph paints, since it is the first thing in the
-  // box) against the label's first character: on the same line the gap is only
-  // font-ascent noise; stranded on the next internal line it is a full
-  // line-height. Table-driven across a short basename (never has to wrap), an
-  // unbroken long basename (no `/`/`-`/`_` break points — only
-  // `overflow-wrap: anywhere` can wrap it, which is exactly what starves the
-  // glyph of a break opportunity), and a path carrying a `:line` suffix.
+  // An inline-block chip reports one client rect from the outside even when the
+  // glyph splits from its label inside its own box, so the two tests above
+  // cannot see that split. This compares the chip's top — where the glyph
+  // paints, being first in the box — against the label's first character: same
+  // line is font-ascent noise, a stranded glyph is a full line-height.
   it.each(["light", "dark"] as const)(
     "keeps the glyph attached to the label's first character in %s",
     async (themeMode) => {
