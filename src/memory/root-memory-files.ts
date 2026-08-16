@@ -27,13 +27,25 @@ function normalizeWorkspaceRelativePath(value: string): string {
   return value.trim().replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
+function isErrnoCode(error: unknown, code: string): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code: unknown }).code === code
+  );
+}
+
 /** Checks for an exact directory entry without case-folded path lookup. */
 export async function exactWorkspaceEntryExists(dir: string, name: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(dir);
     return entries.includes(name);
-  } catch {
-    return false;
+  } catch (error: unknown) {
+    if (isErrnoCode(error, "ENOENT") || isErrnoCode(error, "ENOTDIR")) {
+      return false;
+    }
+    throw error;
   }
 }
 
@@ -50,7 +62,12 @@ export async function resolveCanonicalRootMemoryFile(workspaceDir: string): Prom
         return path.join(workspaceDir, entry.name);
       }
     }
-  } catch {}
+  } catch (error: unknown) {
+    if (isErrnoCode(error, "ENOENT") || isErrnoCode(error, "ENOTDIR")) {
+      return null;
+    }
+    throw error;
+  }
   return null;
 }
 
