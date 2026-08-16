@@ -235,6 +235,21 @@ describe("sessionsCommand", () => {
     );
   });
 
+  it("reports an existing empty SQLite store as an empty successful list", async () => {
+    const store = await writeStore({}, "sessions-empty");
+    const { runtime, logs, errors } = makeRuntime();
+
+    await sessionsCommand({ store }, runtime);
+    cleanupStore(store);
+
+    expect(errors).toEqual([]);
+    expect(logs).toEqual([
+      expect.stringContaining(`Session store: ${store}`),
+      expect.stringContaining("Sessions listed: 0"),
+      "No sessions found.",
+    ]);
+  });
+
   it("exports subagent lineage metadata in JSON output", async () => {
     const store = await writeStore({
       "agent:main:child": {

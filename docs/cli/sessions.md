@@ -23,21 +23,21 @@ openclaw sessions --agent work
 openclaw sessions --all-agents
 openclaw sessions --active 120
 openclaw sessions --limit 25
-openclaw sessions --store ./tmp/sessions.json
+openclaw sessions --store ./tmp/sessions.sqlite
 openclaw sessions --json
 ```
 
 Flags:
 
-| Flag                 | Description                                                            |
-| -------------------- | ---------------------------------------------------------------------- |
-| `--agent <id>`       | One configured agent store (required for multiple explicit agents).    |
-| `--all-agents`       | Aggregate all configured agent stores.                                 |
-| `--store <path>`     | Explicit store path (cannot combine with `--agent` or `--all-agents`). |
-| `--active <minutes>` | Only show sessions updated within the past N minutes.                  |
-| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).        |
-| `--json`             | Machine-readable output.                                               |
-| `--verbose`          | Verbose logging.                                                       |
+| Flag                 | Description                                                                  |
+| -------------------- | ---------------------------------------------------------------------------- |
+| `--agent <id>`       | One configured agent store (required for multiple explicit agents).          |
+| `--all-agents`       | Aggregate all configured agent stores.                                       |
+| `--store <path>`     | Existing physical `.sqlite` store path (cannot combine with `--all-agents`). |
+| `--active <minutes>` | Only show sessions updated within the past N minutes.                        |
+| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).              |
+| `--json`             | Machine-readable output.                                                     |
+| `--verbose`          | Verbose logging.                                                             |
 
 `openclaw sessions` and the Gateway `sessions.list` RPC are bounded by default
 so large long-lived stores cannot monopolize the CLI process or Gateway event
@@ -63,8 +63,8 @@ skipped.
 {
   "path": null,
   "stores": [
-    { "agentId": "main", "path": "/home/user/.openclaw/agents/main/sessions/sessions.json" },
-    { "agentId": "work", "path": "/home/user/.openclaw/agents/work/sessions/sessions.json" }
+    { "agentId": "main", "path": "/home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite" },
+    { "agentId": "work", "path": "/home/user/.openclaw/agents/work/agent/openclaw-agent.sqlite" }
   ],
   "allAgents": true,
   "count": 2,

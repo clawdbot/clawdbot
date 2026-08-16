@@ -1,5 +1,8 @@
 // Session store target tests cover session-store path resolution for command surfaces.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 
@@ -18,6 +21,8 @@ function createRuntime(): RuntimeEnv {
 }
 
 describe("resolveSessionStoreTargetsOrExit", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -54,5 +59,59 @@ describe("resolveSessionStoreTargetsOrExit", () => {
     expect(targets).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith("Unknown agent id: ghost");
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    ["missing", "human"],
+    ["missing", "json"],
+    ["directory", "human"],
+    ["directory", "json"],
+    ["non-database", "human"],
+    ["non-database", "json"],
+    ["logical-locator", "human"],
+    ["logical-locator", "json"],
+  ] as const)("rejects a %s explicit store in %s mode", (storeKind, mode) => {
+    const dir = tempDirs.make("openclaw-explicit-session-store-");
+    const storePath =
+      storeKind === "missing"
+        ? path.join(dir, "missing.sqlite")
+        : storeKind === "directory"
+          ? dir
+          : storeKind === "logical-locator"
+            ? path.join(dir, "sessions.json")
+            : path.join(dir, "not-a-database.sqlite");
+    if (storeKind === "non-database" || storeKind === "logical-locator") {
+      fs.writeFileSync(storePath, "not a db");
+    }
+    resolveSessionStoreTargetsMock.mockReturnValue([{ agentId: "main", storePath }]);
+    const runtime = createRuntime();
+
+    const targets = resolveSessionStoreTargetsOrExit({
+      cfg: {},
+      opts: { store: storePath },
+      runtime,
+      json: mode === "json",
+    });
+
+    expect(targets).toBeNull();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    const output = [...vi.mocked(runtime.log).mock.calls, ...vi.mocked(runtime.error).mock.calls]
+      .flat()
+      .join("\n");
+    expect(output).toContain(storePath);
+    expect(output).toMatch(/session store/iu);
+    expect(output).toMatch(/pass an existing|pass a database|normalized only/iu);
+    if (storeKind === "directory") {
+      expect(output).not.toContain(`${storePath}.sqlite`);
+    }
+    if (mode === "json") {
+      expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]))).toEqual({
+        error: expect.stringContaining(storePath),
+      });
+      expect(runtime.error).not.toHaveBeenCalled();
+    } else {
+      expect(runtime.error).toHaveBeenCalledOnce();
+      expect(runtime.log).not.toHaveBeenCalled();
+    }
   });
 });

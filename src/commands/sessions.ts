@@ -331,6 +331,7 @@ export async function sessionsCommand(
       allAgents: opts.allAgents,
     },
     runtime,
+    json: opts.json,
   });
   if (!targets) {
     return;
