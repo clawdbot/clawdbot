@@ -222,6 +222,8 @@ const threadBindingSchema = z
       .pipe(z.string().min(1))
       .optional()
       .catch(undefined),
+    // Legacy rows may contain the retired two-field permission overlay. Keep
+    // parsing it so the rest of the binding survives; SessionEntry owns live policy.
     approvalPolicy: z
       .preprocess(
         (value) => (value === "on-failure" ? "on-request" : value),

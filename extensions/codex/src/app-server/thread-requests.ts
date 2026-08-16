@@ -184,6 +184,9 @@ export function buildThreadStartParams(
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     cwd: options.cwd,
+    ...(options.appServer.sessionRoot
+      ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
+      : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer),
@@ -222,6 +225,7 @@ export function buildThreadResumeParams(
   params: EmbeddedRunAttemptParams,
   options: {
     threadId: string;
+    cwd?: string;
     authProfileId?: string;
     modelProvider?: string | null;
     appServer: CodexAppServerRuntimeOptions;
@@ -258,6 +262,10 @@ export function buildThreadResumeParams(
       });
   return {
     threadId: options.threadId,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    ...(options.appServer.sessionRoot
+      ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
+      : {}),
     // Only the latest turn id/status is needed to preserve active-turn conflict
     // handling; avoid rebuilding and validating the full persisted history.
     excludeTurns: true,

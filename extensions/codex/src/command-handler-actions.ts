@@ -405,8 +405,8 @@ export async function setConversationPermissions(
     return "Usage: /codex permissions [default|yolo|status]";
   }
   const target = await resolveControlTarget(ctx);
-  if (!target) {
-    return "Cannot set Codex permissions because this command did not include a stable binding identity.";
+  if (!target || !ctx.sessionId || !ctx.sessionKey) {
+    return "Cannot set Codex permissions because this command did not include a complete session identity.";
   }
   const value = args[0];
   const parsed = parseCodexPermissionsModeArg(value);
@@ -414,9 +414,13 @@ export async function setConversationPermissions(
     return "Usage: /codex permissions [default|yolo|status]";
   }
   return await deps.setCodexConversationPermissions({
-    identity: target.identity,
-    bindingStore: deps.bindingStore,
     mode: parsed,
+    config: ctx.config,
+    session: {
+      agentId: target.agentId,
+      sessionId: ctx.sessionId,
+      sessionKey: ctx.sessionKey,
+    },
   });
 }
 
