@@ -104,8 +104,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
       void this.browserPanelController.refreshAll();
     }
-    const refreshedForClientChange =
-      this.browserPanelController.synchronizeHostProperties(changed);
+    const refreshedForClientChange = this.browserPanelController.synchronizeHostProperties(changed);
     if (
       this.embedded &&
       this.available &&
