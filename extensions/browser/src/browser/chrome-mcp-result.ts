@@ -21,7 +21,6 @@ import {
   redactChromeMcpProfileLabelForDiagnostic,
 } from "./chrome-mcp-diagnostics.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
   if (!Array.isArray(value)) {
@@ -79,18 +78,8 @@ export function extractStructuredPages(result: ChromeMcpToolResult): ChromeMcpSt
   return structured.length > 0 ? structured : extractTextPages(result);
 }
 
-function normalizeSnapshotNode(value: unknown, depth = 0): ChromeMcpSnapshotNode | null {
-  const record = asNullableRecord(value);
-  if (!record || depth > ROLE_SNAPSHOT_MAX_DEPTH) {
-    return null;
-  }
+function normalizeSnapshotFields(record: Record<string, unknown>): ChromeMcpSnapshotNode {
   const snapshotValue = record.value;
-  const children = Array.isArray(record.children)
-    ? record.children.flatMap((child) => {
-        const normalized = normalizeSnapshotNode(child, depth + 1);
-        return normalized ? [normalized] : [];
-      })
-    : undefined;
   return {
     id: readStringValue(record.id),
     role: readStringValue(record.role),
@@ -101,8 +90,34 @@ function normalizeSnapshotNode(value: unknown, depth = 0): ChromeMcpSnapshotNode
       ? { value: snapshotValue }
       : {}),
     description: readStringValue(record.description),
-    ...(children ? { children } : {}),
   };
+}
+
+function normalizeSnapshotNode(value: unknown): ChromeMcpSnapshotNode | null {
+  const rootRecord = asNullableRecord(value);
+  if (!rootRecord) {
+    return null;
+  }
+  const root = normalizeSnapshotFields(rootRecord);
+  const pending = [{ record: rootRecord, node: root }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || !Array.isArray(current.record.children)) {
+      continue;
+    }
+    const children: ChromeMcpSnapshotNode[] = [];
+    for (const child of current.record.children) {
+      const record = asNullableRecord(child);
+      if (!record) {
+        continue;
+      }
+      const node = normalizeSnapshotFields(record);
+      children.push(node);
+      pending.push({ record, node });
+    }
+    current.node.children = children;
+  }
+  return root;
 }
 
 export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
