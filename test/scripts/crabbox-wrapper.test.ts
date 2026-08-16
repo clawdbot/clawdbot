@@ -17,14 +17,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildSync } from "esbuild";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mts";
-import { makeTempDir } from "../helpers/temp-dir.js";
+import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
+const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const fakeCrabboxBinDirs = new Map<string, string>();
@@ -393,7 +394,7 @@ function runWrapper(helpText: string, args: string[], options: WrapperOptions = 
     encoding: "utf8",
     input: options.input,
     env: wrapperEnv(helpText, options),
-    timeout: 10_000,
+    timeout: options.timeoutMs ?? 10_000,
   });
 }
 
@@ -403,7 +404,7 @@ function runSourceWrapper(helpText: string, args: string[], options: WrapperOpti
     encoding: "utf8",
     input: options.input,
     env: wrapperEnv(helpText, options),
-    timeout: 10_000,
+    timeout: options.timeoutMs ?? 10_000,
   });
 }
 
@@ -419,6 +420,7 @@ type WrapperOptions = {
   gitResponses?: Record<string, { status?: number; stdout?: string; stderr?: string }>;
   input?: string;
   nodePreload?: string;
+  timeoutMs?: number;
 };
 
 function spawnWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
@@ -488,7 +490,7 @@ function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): FakeCrab
 }
 
 function makeInvocationLog(): string {
-  const dir = makeTempDir(tempDirs, "openclaw-crabbox-invocations-");
+  const dir = invocationLogTempDirs.make("openclaw-crabbox-invocations-");
   return path.join(dir, "invocations.jsonl");
 }
 
@@ -1194,10 +1196,11 @@ describe("scripts/crabbox-wrapper", () => {
   it("allows a provider-scoped doctor to use its full dependency timeout", () => {
     const { output } = runSuccessfulBrokerWrapper(["run", "--provider", "aws", "--", "echo ok"], {
       env: { OPENCLAW_FAKE_CRABBOX_DOCTOR_DELAY_MS: "5500" },
+      timeoutMs: 20_000,
     });
 
     expect(output.args).toContain("aws");
-  }, 10_000);
+  }, 20_000);
 
   it("probes native Windows readiness with the requested target context", () => {
     const { output, result } = runSuccessfulBrokerWrapper(
