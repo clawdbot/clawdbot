@@ -25,6 +25,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
+import { assertExpectedExistingSession } from "./agent-expected-session.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
@@ -683,6 +684,15 @@ describe("gateway agent handler", () => {
       ),
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing requester entry for an initial-lifecycle admission", () => {
+    expect(() =>
+      assertExpectedExistingSession({
+        constraint: { lifecycleRevision: null },
+        message: "requester lifecycle changed",
+      }),
+    ).toThrow("requester lifecycle changed");
   });
 
   it("rejects plugin SDK subagent registration and adoption when persistence fails", async () => {

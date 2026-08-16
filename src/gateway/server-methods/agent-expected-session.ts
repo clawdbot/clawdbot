@@ -91,11 +91,13 @@ export function assertExpectedExistingSession(params: {
       throw new ExpectedExistingSessionChangedError(params.message);
     }
     if (params.constraint.lifecycleRevision !== undefined) {
-      const actualLifecycleRevision = params.entry?.lifecycleRevision ?? null;
-      if (actualLifecycleRevision === params.constraint.lifecycleRevision) {
-        return;
+      if (!params.entry) {
+        throw new ExpectedExistingSessionChangedError(params.message);
       }
-      throw new ExpectedExistingSessionChangedError(params.message);
+      const actualLifecycleRevision = params.entry?.lifecycleRevision ?? null;
+      if (actualLifecycleRevision !== params.constraint.lifecycleRevision) {
+        throw new ExpectedExistingSessionChangedError(params.message);
+      }
     }
   }
 }
