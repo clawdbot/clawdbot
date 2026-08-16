@@ -141,7 +141,11 @@ finish_pr_operation_completion() {
   local operation_status="$1"
   trap - EXIT
   trap '' PIPE
-  if [ "$BASHPID" = "$PR_OPERATION_COMPLETION_LEADER_PID" ]; then
+  # macOS system Bash 3.2 has no BASHPID. $$ identifies the top-level shell,
+  # while BASH_SUBSHELL fences forked subshells that retain the same $$.
+  if [ "${BASH_SUBSHELL:-0}" -eq 0 ] &&
+    [ "$$" = "$PR_OPERATION_COMPLETION_LEADER_PID" ]
+  then
     notify_pr_operation_phase operation-complete 2>/dev/null || :
   fi
   exit "$operation_status"
@@ -149,7 +153,7 @@ finish_pr_operation_completion() {
 
 install_pr_operation_completion_trap() {
   [ -z "$PR_OPERATION_COMPLETION_LEADER_PID" ] || return 0
-  PR_OPERATION_COMPLETION_LEADER_PID="$BASHPID"
+  PR_OPERATION_COMPLETION_LEADER_PID="$$"
   trap 'finish_pr_operation_completion "$?"' EXIT
 }
 
@@ -158,11 +162,11 @@ install_pr_operation_completion_trap() {
 if [ "${OPENCLAW_PR_DEDICATED_PROCESS_GROUP:-}" = "1" ]; then
   if [ "${OPENCLAW_PR_LOCK_NOTIFY_FD:-}" = "3" ] &&
     [ "${OPENCLAW_PR_LOCK_SUPERVISOR_PID:-}" = "$PPID" ] &&
-    [ "$BASHPID" = "$$" ]
+    [ "${BASH_SUBSHELL:-0}" -eq 0 ]
   then
-    pr_operation_entry_pgid=$(ps -o pgid= -p "$BASHPID" 2>/dev/null || true)
+    pr_operation_entry_pgid=$(ps -o pgid= -p "$$" 2>/dev/null || true)
     pr_operation_entry_pgid="${pr_operation_entry_pgid//[[:space:]]/}"
-    if [ "$pr_operation_entry_pgid" = "$BASHPID" ]; then
+    if [ "$pr_operation_entry_pgid" = "$$" ]; then
       install_pr_operation_completion_trap
     fi
     unset pr_operation_entry_pgid
