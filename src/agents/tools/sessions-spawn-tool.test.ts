@@ -187,7 +187,9 @@ describe("sessions_spawn tool", () => {
       };
     };
 
-    expect(tool.displaySummary).toBe("Spawn subagent or ACP session.");
+    expect(tool.displaySummary).toBe(
+      "Spawn hidden subagent (ephemeral) or visible work session (durable).",
+    );
     expect(tool.description).toContain('runtime="acp"');
     expect(tool.description).toContain('unless ACP `streamTo="parent"`');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
@@ -470,13 +472,13 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Persistent sidebar UI session; use for work the user will watch or return to, or when they ask for a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+      "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     );
     expect(schema.properties?.cwd?.description).toContain(
       "outside configured agent workspaces require operator.admin",
     );
-    expect(tool.description).toContain("`visible=true`: persistent sidebar dashboard session");
-    expect(tool.description).toContain("when the user asks to create/open a thread");
+    expect(tool.description).toContain("`visible=true`: durable visible session");
+    expect(tool.description).toContain("Default for coding, multi-step work");
     expect(tool.description).toContain('no `mode="run"`');
     expect(tool.description).toContain("inherits the caller tool-policy ceiling");
     expect(tool.description).toContain("session URL on the first line");
