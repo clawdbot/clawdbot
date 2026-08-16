@@ -1549,11 +1549,8 @@ describe("Crabbox worker provider", () => {
 
       expect(calls.filter((argv) => argv[1] === "heartbeat")).toHaveLength(1);
       expect(warnings).toEqual([
-        expect.stringContaining(
-          "cloud worker machines may be reaped after 60m of coordinator-idle time",
-        ),
+        `Crabbox heartbeat is unavailable for worker lease ${LEASE_ID}; upgrade Crabbox to a release that includes \`crabbox heartbeat\` (added after v0.43.0); cloud worker machines may be reaped after 60m of coordinator-idle time`,
       ]);
-      expect(warnings[0]).toContain("upgrade Crabbox to 0.43.1 or newer");
     } finally {
       await provider.destroy(lease);
       vi.useRealTimers();

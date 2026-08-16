@@ -1,7 +1,8 @@
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 
-const CRABBOX_HEARTBEAT_MIN_VERSION = "0.43.1";
+const CRABBOX_HEARTBEAT_UPGRADE =
+  "upgrade Crabbox to a release that includes `crabbox heartbeat` (added after v0.43.0)";
 
 type HeartbeatContext = {
   binary: string;
@@ -85,7 +86,7 @@ export function createCrabboxHeartbeatManager(dependencies: {
     if (permanentFailure) {
       const message =
         permanentFailure === "command"
-          ? `Crabbox heartbeat is unavailable for worker lease ${entry.id}; upgrade Crabbox to ${CRABBOX_HEARTBEAT_MIN_VERSION} or newer`
+          ? `Crabbox heartbeat is unavailable for worker lease ${entry.id}; ${CRABBOX_HEARTBEAT_UPGRADE}`
           : `Crabbox provider ${entry.provider} does not support heartbeat for worker lease ${entry.id}`;
       warn(entry, message);
       return;
