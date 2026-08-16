@@ -18,7 +18,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   allowModelOverride?: boolean;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   cronRunContinuation?: boolean;
-  expectedRequesterLifecycleRevision?: string;
+  expectedRequesterLifecycleRevision?: string | null;
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;

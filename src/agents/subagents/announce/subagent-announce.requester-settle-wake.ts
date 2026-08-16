@@ -54,6 +54,15 @@ function isRequesterLifecycleChangedError(error: unknown): boolean {
   return REQUESTER_LIFECYCLE_CHANGED_ANNOUNCE_RE.test(message);
 }
 
+function matchesRequesterLifecycle(
+  expected: string | null | undefined,
+  current: string | undefined,
+): boolean {
+  // Legacy rows omitted the field; keep their undefined-to-undefined behavior,
+  // while null explicitly records the initial lifecycle for final admission.
+  return expected === undefined ? current === undefined : expected === (current ?? null);
+}
+
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
   requireVisibleReply: boolean;
@@ -392,11 +401,18 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   }
 
   const currentRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
-  const matchingEntries = settledBatch.filter(
-    (entry) => entry.expectedRequesterLifecycleRevision === currentRequesterLifecycleRevision,
+  const matchingEntries = settledBatch.filter((entry) =>
+    matchesRequesterLifecycle(
+      entry.expectedRequesterLifecycleRevision,
+      currentRequesterLifecycleRevision,
+    ),
   );
   const mismatchedEntries = settledBatch.filter(
-    (entry) => entry.expectedRequesterLifecycleRevision !== currentRequesterLifecycleRevision,
+    (entry) =>
+      !matchesRequesterLifecycle(
+        entry.expectedRequesterLifecycleRevision,
+        currentRequesterLifecycleRevision,
+      ),
   );
   if (mismatchedEntries.length > 0) {
     fenceRequesterSettleWakeBatch({
@@ -527,7 +543,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         ),
         // Bind delivery to the lifecycle revision validated above; Gateway
         // rechecks it at final admission across any intervening reset.
-        expectedRequesterLifecycleRevision: currentRequesterLifecycleRevision,
+        expectedRequesterLifecycleRevision: currentRequesterLifecycleRevision ?? null,
         signal: params.signal,
       });
     } catch (error) {

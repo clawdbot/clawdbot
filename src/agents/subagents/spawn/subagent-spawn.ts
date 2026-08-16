@@ -526,7 +526,9 @@ export async function spawnSubagentDirect(
           workspaceDir: spawnedMetadata.workspaceDir,
           runTimeoutSeconds,
           expectsCompletionMessage: shouldAnnounceCompletion,
-          ...(shouldAnnounceCompletion ? { expectedRequesterLifecycleRevision } : {}),
+          ...(shouldAnnounceCompletion
+            ? { expectedRequesterLifecycleRevision: expectedRequesterLifecycleRevision ?? null }
+            : {}),
           spawnMode,
           collect: params.collect === true,
           swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,

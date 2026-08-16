@@ -71,7 +71,7 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
-  expectedRequesterLifecycleRevision?: string;
+  expectedRequesterLifecycleRevision?: string | null;
   expectFinal?: boolean;
   timeoutMs?: number;
 }): Promise<unknown> {
@@ -98,7 +98,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
-  expectedRequesterLifecycleRevision?: string;
+  expectedRequesterLifecycleRevision?: string | null;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;

@@ -205,11 +205,11 @@ export function prepareAgentRequestPreflight(params: {
   const expectedSession = expectedSessionResult.constraint
     ? {
         ...expectedSessionResult.constraint,
-        ...(internalLifecycleResult.lifecycleRevision
+        ...(internalLifecycleResult.lifecycleRevision !== undefined
           ? { lifecycleRevision: internalLifecycleResult.lifecycleRevision }
           : {}),
       }
-    : internalLifecycleResult.lifecycleRevision
+    : internalLifecycleResult.lifecycleRevision !== undefined
       ? { lifecycleRevision: internalLifecycleResult.lifecycleRevision }
       : undefined;
   const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;

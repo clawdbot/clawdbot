@@ -229,8 +229,8 @@ export type SubagentRunRecord = {
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
-  /** Requester lifecycle revision captured when this handoff was admitted. */
-  expectedRequesterLifecycleRevision?: string;
+  /** Requester lifecycle captured when this handoff was admitted; null is the initial lifecycle. */
+  expectedRequesterLifecycleRevision?: string | null;
   requesterOrigin?: DeliveryContext;
   /** Durable source locator for transport-neutral progress presentation. */
   progressOrigin?: SubagentProgressOrigin;

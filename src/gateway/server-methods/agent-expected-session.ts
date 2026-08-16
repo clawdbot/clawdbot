@@ -7,7 +7,8 @@ import {
 
 export type ExpectedExistingSessionConstraint = {
   handoffId?: string;
-  lifecycleRevision?: string;
+  /** String revision, or null for the explicitly captured initial lifecycle. */
+  lifecycleRevision?: string | null;
   sessionId?: string;
 };
 
@@ -43,9 +44,8 @@ export function resolveExpectedExistingSessionConstraint(params: {
 export function resolveInternalExpectedLifecycleConstraint(params: {
   canUseInternalRuntimeHandoff: boolean;
   expectedRequesterLifecycleRevision?: unknown;
-}): { ok: true; lifecycleRevision?: string } | { ok: false; error: string } {
-  const lifecycleRevision = normalizeOptionalString(params.expectedRequesterLifecycleRevision);
-  if (!lifecycleRevision) {
+}): { ok: true; lifecycleRevision?: string | null } | { ok: false; error: string } {
+  if (params.expectedRequesterLifecycleRevision === undefined) {
     return { ok: true };
   }
   if (!params.canUseInternalRuntimeHandoff) {
@@ -54,7 +54,11 @@ export function resolveInternalExpectedLifecycleConstraint(params: {
       error: "expectedRequesterLifecycleRevision is reserved for backend callers.",
     };
   }
-  return { ok: true, lifecycleRevision };
+  if (params.expectedRequesterLifecycleRevision === null) {
+    return { ok: true, lifecycleRevision: null };
+  }
+  const lifecycleRevision = normalizeOptionalString(params.expectedRequesterLifecycleRevision);
+  return lifecycleRevision ? { ok: true, lifecycleRevision } : { ok: true };
 }
 
 export function validateExpectedExistingSessionTarget(params: {
@@ -86,10 +90,11 @@ export function assertExpectedExistingSession(params: {
     ) {
       throw new ExpectedExistingSessionChangedError(params.message);
     }
-    if (
-      params.constraint.lifecycleRevision !== undefined &&
-      params.entry?.lifecycleRevision !== params.constraint.lifecycleRevision
-    ) {
+    if (params.constraint.lifecycleRevision !== undefined) {
+      const actualLifecycleRevision = params.entry?.lifecycleRevision ?? null;
+      if (actualLifecycleRevision === params.constraint.lifecycleRevision) {
+        return;
+      }
       throw new ExpectedExistingSessionChangedError(params.message);
     }
   }

@@ -677,7 +677,7 @@ export async function spawnAcpDirect(
         label: params.label,
         runTimeoutSeconds,
         expectsCompletionMessage,
-        expectedRequesterLifecycleRevision: rev,
+        ...(expectsCompletionMessage ? { expectedRequesterLifecycleRevision: rev ?? null } : {}),
         spawnMode,
       };
     },

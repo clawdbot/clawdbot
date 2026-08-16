@@ -263,14 +263,15 @@ describe("requester lifecycle fencing", () => {
   it("delivers for an initial lifecycle without a persisted revision", async () => {
     sessionStore = { [REQUESTER]: { sessionId: "sess-main" } };
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      makeSettledChild({ runId: "run-a", expectedRequesterLifecycleRevision: undefined }),
-      makeSettledChild({ runId: "run-b", expectedRequesterLifecycleRevision: undefined }),
+      makeSettledChild({ runId: "run-a", expectedRequesterLifecycleRevision: null }),
+      makeSettledChild({ runId: "run-b", expectedRequesterLifecycleRevision: null }),
     ]);
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledTimes(1);
+    expect(deliveredCallArg().expectedRequesterLifecycleRevision).toBeNull();
     expect(completeBatchSpy.mock.calls.at(-1)?.[0]).toEqual(["run-a", "run-b"]);
   });
 

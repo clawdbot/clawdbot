@@ -222,8 +222,8 @@ export async function registerPluginSubagentRunFromGateway(params: {
     cleanup: "keep",
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
     expectsCompletionMessage: params.requester !== undefined,
-    ...(requesterLifecycleRevision !== undefined
-      ? { expectedRequesterLifecycleRevision: requesterLifecycleRevision }
+    ...(params.requester !== undefined
+      ? { expectedRequesterLifecycleRevision: requesterLifecycleRevision ?? null }
       : {}),
     spawnMode: "run",
   });

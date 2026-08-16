@@ -35,7 +35,7 @@ type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticCronRunContinuation?: boolean;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   disableSyntheticClient?: boolean;
-  expectedRequesterLifecycleRevision?: string;
+  expectedRequesterLifecycleRevision?: string | null;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
   internalDeliveryMediaUrls?: string[];
