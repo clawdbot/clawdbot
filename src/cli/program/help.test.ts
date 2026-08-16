@@ -118,6 +118,31 @@ describe("configureProgramHelp", () => {
     }
   }
 
+  async function parseHelp(argv: string[]) {
+    process.argv = ["node", "openclaw", ...argv];
+    let stdout = "";
+    let stderr = "";
+    const program = new OpenClawCommand().enablePositionalOptions().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.configureOutput({
+      writeOut: (value) => {
+        stdout += value;
+      },
+      writeErr: (value) => {
+        stderr += value;
+      },
+    });
+    const plugins = program.command("plugins").description("Manage plugins");
+    plugins
+      .command("list")
+      .description("List plugins")
+      .action(() => {});
+
+    const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(CommanderError);
+    return { error: error as CommanderError, stderr, stdout };
+  }
+
   it("adds root help hint and marks commands with subcommands", () => {
     process.argv = ["node", "openclaw", "--help"];
     const program = makeProgramWithCommands();
@@ -144,6 +169,24 @@ describe("configureProgramHelp", () => {
     expect(options?.mode).toBe("default");
     expect(help).toContain("Examples:");
     expect(help).toContain("https://docs.openclaw.ai/cli");
+  });
+
+  it("keeps valid root, group, subcommand, short, and help-command output successful", async () => {
+    const rootHelp = await parseHelp(["--help"]);
+    const shortHelp = await parseHelp(["-h"]);
+    const groupHelp = await parseHelp(["plugins", "--help"]);
+    const subcommandHelp = await parseHelp(["plugins", "list", "--help"]);
+    const helpCommand = await parseHelp(["help", "plugins"]);
+
+    for (const result of [rootHelp, shortHelp, groupHelp, subcommandHelp, helpCommand]) {
+      expect(result.error.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+    }
+    expect(rootHelp.error.code).toBe("commander.helpDisplayed");
+    expect(shortHelp.stdout).toBe(rootHelp.stdout);
+    expect(groupHelp.stdout).toContain("Usage: openclaw plugins [options] [command]");
+    expect(subcommandHelp.stdout).toContain("Usage: openclaw plugins list [options]");
+    expect(helpCommand.stdout).toBe(groupHelp.stdout);
   });
 
   it("formats parse errors from the exact Commander command path", async () => {

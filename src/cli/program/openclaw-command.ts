@@ -1,6 +1,14 @@
 // Commander subclass that preserves the exact failing command for parse-error guidance.
 import { Command, type ErrorOptions } from "commander";
-import { setCommanderErrorCommand } from "./commander-parse-facts.js";
+import { getCommanderSubcommandFact, setCommanderErrorCommand } from "./commander-parse-facts.js";
+
+type CommanderHelpInternals = Command & {
+  _outputHelpIfRequested(args: string[]): void;
+};
+
+// SAFETY: Commander 15 owns this prototype method; the adapter preserves its receiver and args.
+const commanderOutputHelpIfRequested = (Command.prototype as CommanderHelpInternals)
+  ._outputHelpIfRequested;
 
 export class OpenClawCommand extends Command {
   override createCommand(name?: string): Command {
@@ -8,25 +16,26 @@ export class OpenClawCommand extends Command {
   }
 
   override error(message: string, errorOptions?: ErrorOptions): never {
-    const firstArgument = this.args[0];
-    // Commander checks a parent action before its unknown-command branch.
-    // Reclassify only zero-argument parents so genuine leaf excess stays intact.
-    const isUnknownSubcommand =
-      errorOptions?.code === "commander.excessArguments" &&
-      this.registeredArguments.length === 0 &&
-      this.commands.length > 0 &&
-      firstArgument !== undefined &&
-      !this.commands.some(
-        (command) => command.name() === firstArgument || command.aliases().includes(firstArgument),
-      );
     const restoreErrorCommand = setCommanderErrorCommand(this);
     try {
-      return super.error(
-        isUnknownSubcommand ? `error: unknown command '${firstArgument}'` : message,
-        isUnknownSubcommand ? { ...errorOptions, code: "commander.unknownCommand" } : errorOptions,
-      );
+      return super.error(message, errorOptions);
     } finally {
       restoreErrorCommand();
     }
+  }
+
+  // Commander 15 checks this internal hook before dispatching actions.
+  // Defer only marked lazy placeholders so their real command tree can decide.
+  _outputHelpIfRequested(args: string[]): void {
+    const subcommandFact = getCommanderSubcommandFact(this, args);
+    if (subcommandFact?.kind === "defer") {
+      return;
+    }
+    if (subcommandFact?.kind === "unknown") {
+      this.error(`error: unknown command '${subcommandFact.name}'`, {
+        code: "commander.unknownCommand",
+      });
+    }
+    commanderOutputHelpIfRequested.call(this, args);
   }
 }
