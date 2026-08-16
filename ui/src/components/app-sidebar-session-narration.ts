@@ -540,11 +540,11 @@ export class SidebarSessionNarrationController {
     ) {
       return;
     }
-    this.observeRun(key, runId);
     const digest = { ...record, runId };
     if (!Value.Check(SessionObserverDigestSchema, digest)) {
       return;
     }
+    this.observeRun(key, runId);
     const previous = this.observerDigests.get(key);
     if (previous && pickFreshestObserverDigest(previous, digest) === previous) {
       return;
