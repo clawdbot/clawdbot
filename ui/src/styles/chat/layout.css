@@ -1872,11 +1872,12 @@ button.chat-reply-preview--message:disabled {
   justify-self: end;
 }
 
-/* Compact split control pinned to the card's top-right; both halves share one
-   fixed height so the chevron cap can never overhang the primary segment. */
+/* Paired actions stay pinned to the card's top-right and share one fixed height
+   while remaining visibly separate, independently rounded controls. */
 .task-suggestion__split {
   display: inline-flex;
   align-items: stretch;
+  gap: 4px;
   height: 26px;
 }
 
@@ -1886,14 +1887,10 @@ button.chat-reply-preview--message:disabled {
   gap: 5px;
   height: 26px;
   padding: 0 10px;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  border-radius: var(--radius-md);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
-}
-
-.task-suggestion__start:only-child {
-  border-radius: var(--radius-md);
 }
 
 .task-suggestion__start svg {
@@ -1906,10 +1903,9 @@ button.chat-reply-preview--message:disabled {
   width: 26px;
   min-width: 26px;
   height: 26px;
-  margin-left: -1px;
   padding: 0;
   place-items: center;
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  border-radius: var(--radius-md);
 }
 
 .task-suggestion__menu-trigger svg {
