@@ -25,7 +25,7 @@ advances a milestone.
 | F   | Real-wire session boundary harness                         | landed      | #121212                                                                                                                                                                   |
 | 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                                                                                                          |
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901 |
-| 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037, #124356                                                                                                                                                 |
+| 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037, #124356, #124590                                                                                                                                        |
 | 8   | Stop-and-continue moves                                    | not started | —                                                                                                                                                                         |
 | 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                                                                                                                                                                         |
 | 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                                                                                                                                                                         |
@@ -325,8 +325,9 @@ requires its durable receipt across attach, admission, placement, tunnel, and
 launch, retires stale environments for idempotent reprovisioning, and removes
 local-package execution. The cleanup that follows separates inventory consent and
 capacity from installed bundle state and deletes the obsolete local build scan.
-The remaining functional slice exposes the installed version on the devices page
-and bounds superseded node bundle GC.
+The retention slice (#124590) reuses the authoritative maintenance snapshot to
+prune superseded node bundles in bounded generation-acknowledged passes. The
+remaining functional slice exposes the validated installed version on Devices.
 
 ### Projects read model (milestone 4 foundation)
 
