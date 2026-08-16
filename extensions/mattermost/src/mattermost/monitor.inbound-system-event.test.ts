@@ -1662,6 +1662,66 @@ describe("mattermost inbound user posts", () => {
     expect(runtimeCore.channel.session.recordInboundSession).not.toHaveBeenCalled();
   });
 
+  it("does not debounce denied and allowed senders into the same turn", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    const config: OpenClawConfig = {
+      channels: {
+        defaults: { contextVisibility: "allowlist" },
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["allowed-user"],
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(config, undefined, {
+      inboundDebounceMs: 10,
+      createInboundDebouncer,
+    });
+
+    const monitor = monitorMattermostProvider({
+      config,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-denied",
+      message: "denied text",
+      senderId: "denied-user",
+      senderName: "mallory",
+    });
+    await emitMattermostChannelPost(socket, {
+      id: "post-allowed",
+      message: "allowed text",
+      senderId: "allowed-user",
+      senderName: "alice",
+    });
+
+    await vi.waitFor(() => {
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.SenderId).toBe("allowed-user");
+    expect(ctx?.BodyForAgent).toBe("allowed text");
+    expect(ctx?.Body).not.toContain("denied text");
+  });
+
   it("flushes pending group text before authorizing a bare abort without a mention", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();

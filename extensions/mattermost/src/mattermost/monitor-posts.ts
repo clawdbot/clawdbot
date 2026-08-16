@@ -74,7 +74,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       return;
     }
     const allMessageIds = messageIds?.length ? messageIds : [post.id];
-    const senderId = post.user_id ?? payload.broadcast?.user_id;
+    const senderId = post.user_id;
     if (!senderId) {
       monitor.logVerboseMessage("mattermost: drop post (missing sender id)");
       return;

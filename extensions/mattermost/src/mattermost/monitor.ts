@@ -253,11 +253,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         entry.post.channel_id ??
         entry.payload.data?.channel_id ??
         entry.payload.broadcast?.channel_id;
-      if (!channelId) {
+      if (!channelId || !entry.post.user_id) {
         return null;
       }
       const threadId = normalizeOptionalString(entry.post.root_id);
-      return `mattermost:${account.accountId}:${channelId}:${threadId ? `thread:${threadId}` : "channel"}`;
+      // Cross-sender merging would apply only the final post's identity during access checks.
+      return `mattermost:${account.accountId}:${channelId}:${threadId ? `thread:${threadId}` : "channel"}:${entry.post.user_id}`;
     },
     shouldDebounce: (entry) => {
       if (entry.post.file_ids?.length) {
