@@ -344,11 +344,8 @@ verify_elevation_app() {
   peekaboo_commit="$(plist_value "$app" PeekabooSourceCommit)"
   [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'elevation app has invalid OpenClawGitCommit'
   [[ "$peekaboo_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'elevation app has invalid PeekabooSourceCommit'
-  codesign --verify --deep --strict "$app"
-  [[ "$(codesign_value "$app" TeamIdentifier)" == "$EXPECTED_TEAM_ID" ]] ||
-    fail "elevation app must use TeamIdentifier=$EXPECTED_TEAM_ID"
-  [[ "$(codesign_value "$app" Authority)" == "$EXPECTED_AUTHORITY" ]] ||
-    fail "elevation app must use $EXPECTED_AUTHORITY"
+  verify_signed_app_identity "$app" ||
+    fail "elevation app must be signed for every architecture by $EXPECTED_AUTHORITY"
   codesign --verify --strict --test-requirement='=notarized' "$app"
   xcrun stapler validate "$app" >/dev/null
   spctl --assess --type execute "$app"
@@ -356,14 +353,21 @@ verify_elevation_app() {
   verify_universal_machos "$app"
 }
 
+verify_signed_app_identity() {
+  local app="$1" arch
+  codesign --verify --deep --strict --all-architectures "$app" >/dev/null 2>&1 || return 1
+  for arch in arm64 x86_64; do
+    [[ "$(codesign_value_for_arch "$app" TeamIdentifier "$arch")" == "$EXPECTED_TEAM_ID" ]] || return 1
+    [[ "$(codesign_value_for_arch "$app" Authority "$arch")" == "$EXPECTED_AUTHORITY" ]] || return 1
+  done
+}
+
 verify_rollback_app() {
   local app="$1" expected_arm64_cdhash="$2" expected_x86_64_cdhash="$3"
   [[ -d "$app" && ! -L "$app" ]] || return 1
   [[ "$(plist_value "$app" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] || return 1
   [[ "$(plist_value "$app" OpenClawGitCommit)" =~ ^[0-9a-f]{40}$ ]] || return 1
-  codesign --verify --deep --strict "$app" >/dev/null 2>&1 || return 1
-  [[ "$(codesign_value "$app" TeamIdentifier)" == "$EXPECTED_TEAM_ID" ]] || return 1
-  [[ "$(codesign_value "$app" Authority)" == "$EXPECTED_AUTHORITY" ]] || return 1
+  verify_signed_app_identity "$app" || return 1
   [[ -n "$expected_arm64_cdhash" && -n "$expected_x86_64_cdhash" ]] || return 1
   [[ "$(codesign_value_for_arch "$app" CDHash arm64)" == "$expected_arm64_cdhash" ]] || return 1
   [[ "$(codesign_value_for_arch "$app" CDHash x86_64)" == "$expected_x86_64_cdhash" ]]
@@ -881,6 +885,13 @@ background_app_records() {
 
 app_binary_pids() {
   local app_binary="$APP_PATH/Contents/MacOS/OpenClaw" pid executable lsof_output listed_status
+  local pids="" pgrep_status=0
+  pids="$(pgrep -x OpenClaw 2>/dev/null)" || pgrep_status=$?
+  case "$pgrep_status" in
+    0) ;;
+    1) return 0 ;;
+    *) return 1 ;;
+  esac
   while IFS= read -r pid; do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     if ! lsof_output="$(lsof -a -p "$pid" -d txt -Fn 2>/dev/null)"; then
@@ -901,7 +912,7 @@ app_binary_pids() {
       esac
     fi
     [[ "$executable" == "$app_binary" ]] && printf '%s\n' "$pid"
-  done < <(pgrep -x OpenClaw 2>/dev/null || true)
+  done <<<"$pids"
 }
 
 openclaw_pid_is_listed() {
@@ -1471,9 +1482,12 @@ install_host() {
     local installed_commit
     installed_commit="$(plist_value "$APP_PATH" OpenClawGitCommit)"
     [[ "$installed_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'installed OpenClaw app has no exact source receipt'
-    ROLLBACK_APP_PATH="${APP_PATH}.rollback-elevation-host-${installed_commit}"
+    ROLLBACK_APP_PATH="$(mktemp -d "${APP_PATH}.rollback-elevation-host-${installed_commit}.XXXXXX")"
+    # The native rename helper uses renamex_np(RENAME_EXCL), so releasing this empty name
+    # cannot turn a later collision into nesting or overwrite; any recreated entry refuses.
+    rmdir "$ROLLBACK_APP_PATH"
     [[ ! -e "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] ||
-      fail "elevation backup already exists: $ROLLBACK_APP_PATH"
+      fail "could not reserve a unique elevation backup path: $ROLLBACK_APP_PATH"
     ROLLBACK_APP_CDHASH_ARM64="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)"
     ROLLBACK_APP_CDHASH_X86_64="$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)"
     [[ -n "$ROLLBACK_APP_CDHASH_ARM64" && -n "$ROLLBACK_APP_CDHASH_X86_64" ]] ||
@@ -1972,9 +1986,16 @@ recover_host() {
   if [[ -n "$ROLLBACK_APP_PATH" ]]; then
     [[ -d "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] ||
       fail 'receipt app backup is missing, symlinked, or not a bundle directory'
-    local backup_source="${ROLLBACK_APP_PATH#"$APP_PATH.rollback-elevation-host-"}"
-    [[ "$backup_source" =~ ^[0-9a-f]{40}$ ]] ||
-      fail 'receipt app backup path is outside the canonical rollback namespace'
+    local backup_generation="${ROLLBACK_APP_PATH#"$APP_PATH.rollback-elevation-host-"}"
+    if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' ]]; then
+      [[ "$backup_generation" =~ ^[0-9a-f]{40}$ ]] ||
+        fail 'legacy receipt app backup path is outside the canonical rollback namespace'
+    else
+      # Schema 3 first ships with generation-unique custody; earlier numeric schemas were
+      # confined to this unmerged branch and are intentionally not compatibility formats.
+      [[ "$backup_generation" =~ ^[0-9a-f]{40}[.][A-Za-z0-9]{6}$ ]] ||
+        fail 'receipt app backup path is outside the canonical rollback namespace'
+    fi
     if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' ]]; then
       ROLLBACK_APP_CDHASH_ARM64="$(codesign_value_for_arch "$ROLLBACK_APP_PATH" CDHash arm64)"
       ROLLBACK_APP_CDHASH_X86_64="$(codesign_value_for_arch "$ROLLBACK_APP_PATH" CDHash x86_64)"
