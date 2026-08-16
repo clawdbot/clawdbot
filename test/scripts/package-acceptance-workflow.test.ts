@@ -324,6 +324,48 @@ function runReleaseChecksInputValidation(
   return { outputPath, result };
 }
 
+function runReleaseChecksShellStep(
+  stepName: string,
+  env: Record<string, string>,
+  workdir = tempDirs.make("release-checks-shell-step-"),
+) {
+  const step = workflowStep(workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"), stepName);
+  const outputPath = resolve(workdir, "github-output");
+  writeFileSync(outputPath, "", "utf8");
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      ...env,
+      GITHUB_OUTPUT: outputPath,
+      PATH: process.env.PATH,
+    },
+  });
+  return { output: readFileSync(outputPath, "utf8"), result };
+}
+
+function createReleaseChecksContextFixture() {
+  const root = tempDirs.make("release-checks-context-repo-");
+  const repo = resolve(root, ".release-qa-context");
+  mkdirSync(repo);
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+  git("init", "-q", "--initial-branch=release/2026.8.1");
+  git("config", "user.name", "OpenClaw Test");
+  git("config", "user.email", "openclaw-test@example.com");
+  writeFileSync(resolve(repo, "package.json"), '{"version":1}\n', "utf8");
+  git("add", "package.json");
+  git("commit", "-qm", "candidate");
+  const candidateSha = git("rev-parse", "HEAD");
+  writeFileSync(resolve(repo, "package.json"), '{"version":2}\n', "utf8");
+  git("commit", "-qam", "branch advance");
+  const branchHeadSha = git("rev-parse", "HEAD");
+  git("tag", "-a", "v2026.8.1", "-m", "release", branchHeadSha);
+  const tree = git("rev-parse", "HEAD^{tree}");
+  const unrelatedSha = git("commit-tree", tree, "-m", "unrelated root");
+  return { branchHeadSha, candidateSha, git, root, unrelatedSha };
+}
+
 function runFullReleaseTargetSummary(rerunGroup: string, skipTelegram: string) {
   const step = workflowStep(
     workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
@@ -4160,13 +4202,123 @@ describe("package artifact reuse", () => {
   });
 
   it("overlays only trusted Anthropic mock tooling for frozen-target QA parity", () => {
+    const resolveTarget = workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target");
+    const contextValidation = workflowStep(resolveTarget, "Validate trusted QA tooling context");
+    const contextCheckout = workflowStep(resolveTarget, "Checkout trusted QA tooling context");
+    const eligibility = workflowStep(resolveTarget, "Validate trusted QA tooling eligibility");
+    const resolveStepNames = resolveTarget.steps?.map((step) => step.name) ?? [];
     const job = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_lab_parity_lane_release_checks");
     const trustedCheckout = workflowStep(job, "Checkout trusted QA Anthropic mock tooling");
     const installTooling = workflowStep(job, "Install trusted QA Anthropic mock tooling");
     const stepNames = job.steps?.map((step) => step.name) ?? [];
+    const targetSha = "a".repeat(40);
+    const eligibilityCondition =
+      "needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'";
+
+    expect(resolveTarget.outputs?.trusted_qa_tooling_eligible).toBe(
+      "${{ steps.trusted_qa_tooling.outputs.eligible }}",
+    );
+    expect(contextValidation.if).toBe("inputs.target_context_ref != ''");
+    expect(contextCheckout).toMatchObject({
+      if: "steps.trusted_qa_context.outputs.checkout_ref != ''",
+      uses: "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+      with: {
+        "fetch-depth": 0,
+        path: ".release-qa-context",
+        "persist-credentials": false,
+        ref: "${{ steps.trusted_qa_context.outputs.checkout_ref }}",
+        "sparse-checkout": "package.json",
+        "sparse-checkout-cone-mode": false,
+        submodules: false,
+      },
+    });
+    expect(eligibility.if).toBe("steps.trusted_qa_context.outputs.checkout_ref != ''");
+    expect(resolveStepNames.indexOf("Validate trusted QA tooling context")).toBeLessThan(
+      resolveStepNames.indexOf("Checkout trusted QA tooling context"),
+    );
+    expect(resolveStepNames.indexOf("Checkout trusted QA tooling context")).toBeLessThan(
+      resolveStepNames.indexOf("Validate trusted QA tooling eligibility"),
+    );
+
+    for (const contextRef of [
+      "release/2026.8.1",
+      "refs/heads/extended-stable/2026.8.33",
+      "v2026.8.1",
+      "refs/tags/v2026.8.1-alpha.2",
+      "v2026.8.1-beta.3",
+    ]) {
+      const { output, result } = runReleaseChecksShellStep("Validate trusted QA tooling context", {
+        TARGET_CONTEXT_REF: contextRef,
+        TARGET_REF: targetSha,
+      });
+      expect(result.status, `${contextRef}: ${result.stderr}`).toBe(0);
+      expect(output, contextRef).toContain(
+        `normalized_ref=${contextRef.replace(/^refs\/(heads|tags)\//u, "")}\n`,
+      );
+    }
+
+    for (const contextRef of [
+      "main",
+      "release-ci/2026.8.1-frozen",
+      "release/2026.8",
+      "v2026.8.1-rc.1",
+      "refs/heads/refs/tags/v2026.8.1",
+    ]) {
+      const { result } = runReleaseChecksShellStep("Validate trusted QA tooling context", {
+        TARGET_CONTEXT_REF: contextRef,
+        TARGET_REF: targetSha,
+      });
+      expect(result.status, contextRef).toBe(1);
+      expect(result.stderr).toContain(
+        "target_context_ref must be a canonical OpenClaw release branch or tag.",
+      );
+    }
+
+    for (const targetRef of ["release/2026.8.1", "a".repeat(39)]) {
+      const { result } = runReleaseChecksShellStep("Validate trusted QA tooling context", {
+        TARGET_CONTEXT_REF: "release/2026.8.1",
+        TARGET_REF: targetRef,
+      });
+      expect(result.status, targetRef).toBe(1);
+      expect(result.stderr).toContain(
+        "target_context_ref requires ref to be a full 40-character commit SHA.",
+      );
+    }
+
+    const fixture = createReleaseChecksContextFixture();
+    const relationshipCases = [
+      ["tag", "refs/tags/v2026.8.1", fixture.branchHeadSha, 0, ""],
+      ["tag", "refs/tags/v2026.8.1", fixture.candidateSha, 1, "does not match target"],
+      ["branch", "refs/heads/release/2026.8.1", fixture.branchHeadSha, 0, ""],
+      ["branch", "refs/heads/release/2026.8.1", fixture.candidateSha, 0, ""],
+      [
+        "branch",
+        "refs/heads/release/2026.8.1",
+        fixture.unrelatedSha,
+        1,
+        "is not reachable from branch",
+      ],
+    ] as const;
+    for (const [contextKind, checkoutRef, targetRef, expectedStatus, error] of relationshipCases) {
+      fixture.git("checkout", "-q", "--detach", checkoutRef);
+      const { output, result } = runReleaseChecksShellStep(
+        "Validate trusted QA tooling eligibility",
+        {
+          CONTEXT_KIND: contextKind,
+          CONTEXT_REF: checkoutRef.replace(/^refs\/(heads|tags)\//u, ""),
+          TARGET_REF: targetRef,
+        },
+        fixture.root,
+      );
+      expect(result.status, `${contextKind} ${targetRef}: ${result.stderr}`).toBe(expectedStatus);
+      expect(output).toBe(expectedStatus === 0 ? "eligible=true\n" : "");
+      if (error) {
+        expect(result.stderr).toContain(error);
+      }
+    }
 
     expect(trustedCheckout).toMatchObject({
-      if: "inputs.target_context_ref != ''",
+      if: eligibilityCondition,
       uses: "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
       with: {
         "persist-credentials": false,
@@ -4176,7 +4328,7 @@ describe("package artifact reuse", () => {
         "sparse-checkout-cone-mode": false,
       },
     });
-    expect(installTooling.if).toBe("inputs.target_context_ref != ''");
+    expect(installTooling.if).toBe(eligibilityCondition);
     expect(installTooling.run).toContain("trap 'rm -rf -- \"$trusted_checkout\"' EXIT");
     const installLines = (installTooling.run ?? "").split("\n").map((line) => line.trim());
     const sourceArgument =
