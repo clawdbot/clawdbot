@@ -2211,7 +2211,6 @@ src/auto-reply/chunk.ts	4
 src/auto-reply/command-auth.ts	5
 src/auto-reply/command-turn-context.ts	1
 src/auto-reply/commands-registry.ts	1
-src/auto-reply/dispatch.ts	4
 src/auto-reply/heartbeat-filter.ts	4
 src/auto-reply/heartbeat-tool-response.ts	3
 src/auto-reply/reply-payload.ts	2

@@ -1,7 +1,6 @@
 /** Auto-reply dispatch orchestration, hook composition, and foreground delivery fencing. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
-import { isChannelPartialDeliveryError } from "../channels/turn/delivery-result.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import {
@@ -14,9 +13,7 @@ import {
   buildProjectedInboundMessageSendingBeforeDeliver,
   type ReplyPayloadSuppressedObserver,
 } from "../infra/outbound/deliver-hooks.js";
-import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { logMessageReceived } from "../logging/diagnostic.js";
-import { hasOutboundReplyContent } from "../plugin-sdk/reply-payload.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
 import {
   resolveCommandTurnContext,
@@ -28,7 +25,6 @@ import {
   type ForegroundReplyFenceState,
   notifyForegroundReplyFenceWaiters,
 } from "./foreground-reply-fence-state.js";
-import { setReplyPayloadMetadata } from "./reply-payload.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -48,14 +44,12 @@ import {
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
-import type { ReplyPayload } from "./types.js";
 
 type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
 
 type ForegroundReplyFenceSnapshot = {
   key: string;
   generation: number;
-  state: ForegroundReplyFenceState;
 };
 
 type ReplyPayloadRunState = {
@@ -113,169 +107,60 @@ function beginForegroundReplyFence(
   }
   const state = foregroundReplyFenceByKey.get(key) ?? {
     generation: 0,
-    visibleDeliveryGeneration: 0,
-    activeDispatches: 0,
-    activeGenerations: new Map<number, number>(),
-    suspendedGenerations: new Set<number>(),
+    activeGenerations: new Set<number>(),
     waiters: new Set<() => void>(),
   };
-  // Generation ordering lets newer foreground replies suppress stale visible deliveries.
+  // Keep every admitted generation until it settles so successors cannot overtake it.
   state.generation += 1;
-  state.activeDispatches += 1;
-  state.activeGenerations.set(
-    state.generation,
-    (state.activeGenerations.get(state.generation) ?? 0) + 1,
-  );
+  state.activeGenerations.add(state.generation);
   foregroundReplyFenceByKey.set(key, state);
   return {
     key,
     generation: state.generation,
-    state,
   };
 }
 
-function setForegroundReplyFenceAdmissionWaiting(
-  snapshot: ForegroundReplyFenceSnapshot | undefined,
-  waiting: boolean,
-): void {
-  if (!snapshot) {
-    return;
-  }
-  const state = foregroundReplyFenceByKey.get(snapshot.key);
-  if (state !== snapshot.state) {
-    return;
-  }
-  if (waiting) {
-    if (state.activeGenerations.delete(snapshot.generation)) {
-      state.suspendedGenerations.add(snapshot.generation);
-    }
-  } else if (state.suspendedGenerations.delete(snapshot.generation)) {
-    state.activeGenerations.set(snapshot.generation, 1);
-  }
-  notifyForegroundReplyFenceWaiters(state);
-}
-
-function hasNewerActiveForegroundReplyFenceGeneration(
+function hasEarlierActiveForegroundReplyFenceGeneration(
   state: ForegroundReplyFenceState,
   generation: number,
 ): boolean {
-  for (const [activeGeneration, count] of state.activeGenerations) {
-    if (activeGeneration > generation && count > 0) {
+  for (const activeGeneration of state.activeGenerations) {
+    if (activeGeneration < generation) {
       return true;
     }
   }
   return false;
 }
 
-async function shouldCancelForegroundReplyDelivery(
+async function waitForEarlierForegroundReplyFenceGenerations(
   snapshot: ForegroundReplyFenceSnapshot | undefined,
-): Promise<boolean> {
+): Promise<void> {
   if (!snapshot) {
-    return false;
+    return;
   }
   while (true) {
     const state = foregroundReplyFenceByKey.get(snapshot.key);
-    if (!state) {
-      return false;
+    if (!state || !hasEarlierActiveForegroundReplyFenceGeneration(state, snapshot.generation)) {
+      return;
     }
-    if (state.visibleDeliveryGeneration > snapshot.generation) {
-      return true;
-    }
-    if (!hasNewerActiveForegroundReplyFenceGeneration(state, snapshot.generation)) {
-      return false;
-    }
-    // Wait for newer generations to settle before deciding whether this delivery is stale.
+    // Delivery is FIFO; model work remains concurrent and only the visible boundary waits.
     await new Promise<void>((resolve) => {
       state.waiters.add(resolve);
     });
   }
 }
 
-function markForegroundReplyFenceVisibleDelivery(
+async function runForegroundReplyFenceSettledDeliveries(
   snapshot: ForegroundReplyFenceSnapshot | undefined,
-  payload: ReplyPayload,
-  deliveryResult: unknown,
-): void {
-  if (!snapshot || !hasOutboundReplyContent(payload, { trimText: true })) {
-    return;
-  }
-  if (isExplicitlyNonVisibleDelivery(deliveryResult)) {
-    return;
-  }
-  // A visible payload with no explicit negative delivery result becomes the generation winner.
-  markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
-}
-
-function markForegroundReplyFenceVisibleDeliveryGeneration(
-  snapshot: ForegroundReplyFenceSnapshot | undefined,
-): void {
-  if (!snapshot) {
-    return;
-  }
-  const state = foregroundReplyFenceByKey.get(snapshot.key);
-  if (!state) {
-    return;
-  }
-  state.visibleDeliveryGeneration = Math.max(state.visibleDeliveryGeneration, snapshot.generation);
-  notifyForegroundReplyFenceWaiters(state);
-}
-
-function isExplicitlyNonVisibleDelivery(deliveryResult: unknown): boolean {
-  return (
-    typeof deliveryResult === "object" &&
-    deliveryResult !== null &&
-    !Array.isArray(deliveryResult) &&
-    "visibleReplySent" in deliveryResult &&
-    (deliveryResult as { visibleReplySent?: unknown }).visibleReplySent === false
-  );
-}
-
-function isExplicitlyVisibleDelivery(deliveryResult: unknown): boolean {
-  return (
-    typeof deliveryResult === "object" &&
-    deliveryResult !== null &&
-    !Array.isArray(deliveryResult) &&
-    (deliveryResult as { visibleReplySent?: unknown }).visibleReplySent === true
-  );
-}
-
-function isVisiblePartialDeliveryError(error: unknown): boolean {
-  if (isOutboundDeliveryError(error)) {
-    return error.sentBeforeError;
-  }
-  if (isChannelPartialDeliveryError(error)) {
-    return true;
-  }
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    !Array.isArray(error) &&
-    ((error as { visibleReplySent?: unknown }).visibleReplySent === true ||
-      (error as { sentBeforeError?: unknown }).sentBeforeError === true)
-  );
-}
-
-async function runForegroundReplyFenceFreshSettledDelivery(
-  snapshot: ForegroundReplyFenceSnapshot | undefined,
+  onSettled: (() => unknown) | undefined,
   onFreshSettledDelivery: (() => unknown) | undefined,
 ): Promise<void> {
-  if (!onFreshSettledDelivery) {
+  if (!onSettled && !onFreshSettledDelivery) {
     return;
   }
-  if (await shouldCancelForegroundReplyDelivery(snapshot)) {
-    return;
-  }
-  try {
-    const deliveryResult = await onFreshSettledDelivery();
-    if (isExplicitlyVisibleDelivery(deliveryResult)) {
-      markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
-    }
-  } catch (err: unknown) {
-    if (isVisiblePartialDeliveryError(err)) {
-      markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
-    }
-    throw err;
-  }
+  await waitForEarlierForegroundReplyFenceGenerations(snapshot);
+  await onSettled?.();
+  await onFreshSettledDelivery?.();
 }
 
 function endForegroundReplyFence(snapshot: ForegroundReplyFenceSnapshot): void {
@@ -283,16 +168,9 @@ function endForegroundReplyFence(snapshot: ForegroundReplyFenceSnapshot): void {
   if (!state) {
     return;
   }
-  const activeGenerationCount = state.activeGenerations.get(snapshot.generation) ?? 0;
-  if (activeGenerationCount <= 1) {
-    state.activeGenerations.delete(snapshot.generation);
-  } else {
-    state.activeGenerations.set(snapshot.generation, activeGenerationCount - 1);
-  }
-  state.suspendedGenerations.delete(snapshot.generation);
-  state.activeDispatches -= 1;
+  state.activeGenerations.delete(snapshot.generation);
   notifyForegroundReplyFenceWaiters(state);
-  if (state.activeDispatches <= 0) {
+  if (state.activeGenerations.size === 0) {
     foregroundReplyFenceByKey.delete(snapshot.key);
   }
 }
@@ -535,48 +413,13 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
       ? markReplyDispatchBeforeDeliverDeadlineOwned(async (payload, info) => {
-          // Check both before and after hooks because hooks can await while newer replies finish.
-          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
-            // Only the foreground fence proves "not shown because stale"; hook
-            // cancellations may be intentional policy and must stay untagged.
-            setReplyPayloadMetadata(payload, {
-              foregroundDeliverySuppression: { reason: "stale-foreground" },
-            });
-            return null;
-          }
-          const deliverPayload = configuredBeforeDeliver
-            ? await configuredBeforeDeliver(payload, info)
-            : payload;
-          if (!deliverPayload) {
-            return null;
-          }
-          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
-            setReplyPayloadMetadata(payload, {
-              foregroundDeliverySuppression: { reason: "stale-foreground" },
-            });
-            return null;
-          }
-          return deliverPayload;
+          await waitForEarlierForegroundReplyFenceGenerations(foregroundReplyFence);
+          return configuredBeforeDeliver ? await configuredBeforeDeliver(payload, info) : payload;
         })
       : undefined;
-  const deliver: ReplyDispatcherWithTypingOptions["deliver"] = async (payload, info) => {
-    try {
-      const result = await params.dispatcherOptions.deliver(payload, info);
-      markForegroundReplyFenceVisibleDelivery(foregroundReplyFence, payload, result);
-      return result;
-    } catch (err: unknown) {
-      if (isVisiblePartialDeliveryError(err)) {
-        markForegroundReplyFenceVisibleDelivery(foregroundReplyFence, payload, {
-          visibleReplySent: true,
-        });
-      }
-      throw err;
-    }
-  };
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
-      deliver,
       beforeDeliver,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
@@ -598,11 +441,6 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
         ...params.replyOptions,
         ...replyOptions,
         onTypingController,
-        onReplyAdmissionWaitChange: (waiting) => {
-          // A turn waiting to own the lane cannot make the current owner's reply stale.
-          // Suspend only that generation so independent newer turns still fence old replies.
-          setForegroundReplyFenceAdmissionWaiting(foregroundReplyFence, waiting);
-        },
       },
       replyPayloadRunState,
       outboundHooks: ownership.outboundHooks,
@@ -610,12 +448,9 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     });
   } finally {
     try {
-      const settledResult = await params.dispatcherOptions.onSettled?.();
-      if (isExplicitlyVisibleDelivery(settledResult)) {
-        markForegroundReplyFenceVisibleDeliveryGeneration(foregroundReplyFence);
-      }
-      await runForegroundReplyFenceFreshSettledDelivery(
+      await runForegroundReplyFenceSettledDeliveries(
         foregroundReplyFence,
+        params.dispatcherOptions.onSettled,
         params.dispatcherOptions.onFreshSettledDelivery,
       );
     } finally {
