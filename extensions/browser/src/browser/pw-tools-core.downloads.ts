@@ -423,12 +423,15 @@ export async function downloadViaPlaywright(opts: {
     rootDir: opts.rootDir,
     signal: opts.signal,
   });
-  const locator = refLocator(page, ref);
+  void capture.promise.catch(() => {});
   try {
-    await locator.click({ timeout });
+    const locator = refLocator(page, ref);
+    await locator.click({ timeout, signal: opts.signal });
   } catch (err) {
     capture.cancel();
-    throw toAIFriendlyError(err, ref);
+    throw opts.signal?.aborted && opts.signal.reason instanceof Error
+      ? opts.signal.reason
+      : toAIFriendlyError(err, ref);
   }
   return await capture.promise;
 }
