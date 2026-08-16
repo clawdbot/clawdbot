@@ -1,6 +1,10 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { loadChatMetadata, rememberChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
+import {
+  loadChatMetadata,
+  rememberChatMetadata,
+  type ChatMetadataResult,
+} from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
@@ -8,7 +12,7 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory, type ChatMetadataResult } from "./chat-history.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";

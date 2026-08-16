@@ -3,16 +3,15 @@ import {
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
   GatewaySessionsDefaults,
-  ModelCatalogEntry,
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
+import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -572,10 +571,6 @@ function reconcileLoadedHistoryTail(options: {
         : { hasMore: false, totalMessages: nextTotal },
   };
 }
-
-export type ChatMetadataResult = CommandsListResult & {
-  models?: ModelCatalogEntry[];
-};
 
 export type ChatEventPayload = {
   runId?: string;

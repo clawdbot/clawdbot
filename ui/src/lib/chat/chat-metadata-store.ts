@@ -2,8 +2,13 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   resolveGatewayStartupRetryAfterMs,
 } from "@openclaw/gateway-client/browser";
+import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ChatMetadataResult } from "../../pages/chat/chat-history.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
+
+export type ChatMetadataResult = CommandsListResult & {
+  models?: ModelCatalogEntry[];
+};
 
 type ChatMetadataEntry = {
   result?: ChatMetadataResult;
