@@ -139,15 +139,6 @@ const inspectWindowsGatewayFirewall = vi.hoisted(() =>
 );
 
 vi.mock("../commands/onboard-helpers.js", () => ({
-  buildOnboardingControlUiUrl: (params: {
-    httpUrl: string;
-    authMode?: "token" | "password";
-    token?: string;
-    suppressTokenOutput?: boolean;
-  }) =>
-    params.authMode === "token" && params.token && !params.suppressTokenOutput
-      ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
-      : params.httpUrl,
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
   resolveControlUiLinks: vi.fn(() => ({
@@ -1548,8 +1539,9 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
   });
 
-  it("suppresses token-bearing onboarding output when requested", async () => {
+  it("never prints the reusable Gateway token during classic onboarding", async () => {
     const prompter = createLaterPrompter();
+    probeGatewayReachable.mockResolvedValue({ ok: true });
 
     await finalizeSetupWizard({
       flow: "advanced",
@@ -1558,8 +1550,7 @@ describe("finalizeSetupWizard", () => {
         authChoice: "skip",
         installDaemon: false,
         skipHealth: true,
-        skipUi: true,
-        suppressGatewayTokenOutput: true,
+        skipUi: false,
       },
       baseConfig: {},
       nextConfig: {},
@@ -1580,6 +1571,7 @@ describe("finalizeSetupWizard", () => {
       .mock.calls.map((call) => call.join("\n"))
       .join("\n");
     expect(output).toContain("http://127.0.0.1:18789");
+    expect(output).toContain("openclaw dashboard --no-open");
     expect(output).not.toContain("session-token");
     expect(output).not.toContain("#token=");
   });

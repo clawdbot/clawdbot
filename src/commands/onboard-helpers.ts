@@ -20,7 +20,6 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
-import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveAdvertisedControlUiLinks,
@@ -50,18 +49,6 @@ export { randomToken } from "./random-token.js";
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
-
-/** Builds the token-authenticated Control UI URL shown by onboarding surfaces. */
-export function buildOnboardingControlUiUrl(params: {
-  httpUrl: string;
-  authMode?: GatewayAuthMode;
-  token?: string;
-  suppressTokenOutput?: boolean;
-}): string {
-  return params.authMode === "token" && params.token && !params.suppressTokenOutput
-    ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
-    : params.httpUrl;
-}
 
 /** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
