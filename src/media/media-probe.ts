@@ -8,6 +8,7 @@ import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/rec
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
+import { MEDIA_FFPROBE_TIMEOUT_MS } from "./ffmpeg-limits.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
 
@@ -271,11 +272,18 @@ type VideoDimensions = {
 
 /** Probes a video buffer while preserving the existing public media-runtime API. */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
+  const deadlineMs = Date.now() + MEDIA_FFPROBE_TIMEOUT_MS;
   const { width, height } = (await probeMediaSource({ kind: "buffer", buffer }, "video")) ?? {};
   if (width && height) {
     return { width, height };
   }
-  return await probeVideoDimensionsFromTempFile(buffer);
+  // The retry shares one deadline with the pipe probe so a failing video can
+  // never delay delivery beyond the single-probe budget.
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    return undefined;
+  }
+  return await probeVideoDimensionsFromTempFile(buffer, remainingMs);
 }
 
 /**
@@ -288,6 +296,7 @@ export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensi
  */
 async function probeVideoDimensionsFromTempFile(
   buffer: Buffer,
+  timeoutMs: number,
 ): Promise<VideoDimensions | undefined> {
   try {
     return await withTempWorkspace(
@@ -295,7 +304,7 @@ async function probeVideoDimensionsFromTempFile(
       async (workspace) => {
         const filePath = await workspace.write("probe-input.bin", buffer);
         const { width, height } =
-          (await probeMediaSource({ kind: "filePath", filePath }, "video")) ?? {};
+          (await probeMediaSource({ kind: "filePath", filePath }, "video", { timeoutMs })) ?? {};
         return width && height ? { width, height } : undefined;
       },
     );

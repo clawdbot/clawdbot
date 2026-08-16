@@ -315,9 +315,51 @@ describe("probeVideoDimensions", () => {
     });
 
     await expect(probeVideoDimensions(buffer)).resolves.toBeUndefined();
-    expect(filePaths).toHaveLength(1);
-    await expect(fs.access(filePaths[0])).rejects.toThrow();
-    await expect(fs.access(path.dirname(filePaths[0]))).rejects.toThrow();
+    const failedPath = filePaths[0];
+    expect(failedPath).toBeDefined();
+    if (!failedPath) {
+      return;
+    }
+    await expect(fs.access(failedPath)).rejects.toThrow();
+    await expect(fs.access(path.dirname(failedPath))).rejects.toThrow();
+  });
+
+  it("carries the remaining probe budget into the temp-file retry", async () => {
+    const buffer = Buffer.from("slow pipe video");
+    let now = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      runFfprobe.mockImplementationOnce(async () => {
+        now += 4000;
+        throw new Error("pipe:0: Invalid data found when processing input");
+      });
+      runFfprobe.mockResolvedValueOnce(
+        JSON.stringify({ streams: [{ codec_type: "video", width: 640, height: 480 }] }),
+      );
+
+      await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 640, height: 480 });
+      expect(runFfprobe).toHaveBeenCalledTimes(2);
+      expect(runFfprobe).toHaveBeenLastCalledWith(expect.any(Array), { timeoutMs: 6000 });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("skips the temp-file retry when the pipe probe exhausted the budget", async () => {
+    const buffer = Buffer.from("timed out video");
+    let now = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      runFfprobe.mockImplementationOnce(async () => {
+        now += 10_000;
+        throw new Error("ffprobe timed out");
+      });
+
+      await expect(probeVideoDimensions(buffer)).resolves.toBeUndefined();
+      expect(runFfprobe).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("keeps concurrent fallback probes isolated in separate workspaces", async () => {
