@@ -857,20 +857,23 @@ export class ControlModelConversation {
 
   async loadMoreHistory(options?: ControlModelRequestOptions): Promise<void> {
     this.#assertCommandReady("chat.history");
+    if (this.#historyLoop) {
+      const activeLoop = this.#historyLoop;
+      const activeOffset = this.#historyOffsetRequested;
+      await activeLoop;
+      if (activeOffset > 0) {
+        return;
+      }
+      if (!this.#historyHasMore || this.#historyNextOffset === null) {
+        return;
+      }
+    }
     if (!this.#historyHasMore || this.#historyNextOffset === null) {
       throw localError(
         "conflict",
         "chat.history",
         "No older history is available",
         "NO_MORE_HISTORY",
-      );
-    }
-    if (this.#historyLoop) {
-      throw localError(
-        "conflict",
-        "chat.history",
-        "A history operation is already in progress",
-        "HISTORY_BUSY",
       );
     }
     this.#historyRequested = true;

@@ -169,8 +169,10 @@ export function createHarness(
     request: async <T>(method: string, params: Record<string, unknown>) =>
       (await request(method, params)) as T,
   };
+  const sessionMessageKeysEquivalent = (left: string, right: string) => left === right;
   const gateway: ControlModelGatewayBinding = {
     getSessionMessageSubscriptionClient: () => subscriptionClient,
+    sessionMessageKeysEquivalent,
     getConnectionSnapshot: () => connection,
     subscribeConnection(listener) {
       connectionListeners.add(listener);
@@ -194,6 +196,7 @@ export function createHarness(
   return {
     gateway,
     subscriptionClient,
+    sessionMessageKeysEquivalent,
     calls,
     request,
     materializeArtifactView,

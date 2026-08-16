@@ -261,7 +261,10 @@ describe("Control Model conversations", () => {
 
   it("shares observer refcounts with other owners of the same Gateway client", async () => {
     const harness = createHarness({ status: "connected", epoch: 1 });
-    const coordinator = getGatewaySessionMessageSubscriptionCoordinator(harness.subscriptionClient);
+    const coordinator = getGatewaySessionMessageSubscriptionCoordinator(
+      harness.subscriptionClient,
+      { keysEquivalent: harness.sessionMessageKeysEquivalent },
+    );
     const external = await coordinator.acquire("agent:main:one");
     const model = createControlModel({ gateway: harness.gateway });
     model.start();
@@ -274,6 +277,24 @@ describe("Control Model conversations", () => {
 
     await coordinator.release(external);
     expect(harness.callsFor("sessions.messages.unsubscribe")).toHaveLength(1);
+  });
+
+  it("allows later owners to configure the model's shared key matcher", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    model.conversation("agent:main:one");
+    await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(2));
+
+    const coordinator = getGatewaySessionMessageSubscriptionCoordinator(
+      harness.subscriptionClient,
+      { keysEquivalent: harness.sessionMessageKeysEquivalent },
+    );
+    const external = await coordinator.acquire("agent:main:one");
+    expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(2);
+
+    await coordinator.release(external);
+    model.dispose();
   });
 
   it("retries a failed observer activation within the same connection epoch", async () => {
@@ -390,6 +411,47 @@ describe("Control Model conversations", () => {
       truncatedBefore: true,
       truncatedAfter: false,
     });
+    model.dispose();
+  });
+
+  it("queues older history behind an active newest-history refresh", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    let resolveTail: (value: unknown) => void = () => undefined;
+    harness.setHistory(
+      0,
+      new Promise((resolve) => {
+        resolveTail = resolve;
+      }),
+    );
+    harness.setHistory(2, {
+      messages: [message(1), message(2)],
+      hasMore: false,
+      totalMessages: 4,
+    });
+    const model = createControlModel({
+      gateway: harness.gateway,
+      autoLoadConversationHistory: false,
+    });
+    model.start();
+    const conversation = model.conversation("agent:main:one");
+
+    const refresh = conversation.refreshHistory();
+    const older = conversation.loadMoreHistory();
+    resolveTail({
+      messages: [message(3), message(4)],
+      hasMore: true,
+      nextOffset: 2,
+      totalMessages: 4,
+    });
+    await Promise.all([refresh, older]);
+
+    expect(harness.callsFor("chat.history").map((call) => call.params.offset ?? 0)).toEqual([0, 2]);
+    expect(messageIds(conversation.getSnapshot())).toEqual([
+      "message-1",
+      "message-2",
+      "message-3",
+      "message-4",
+    ]);
     model.dispose();
   });
 

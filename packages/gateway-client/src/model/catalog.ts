@@ -62,6 +62,7 @@ export type ControlModelGatewayEventFrame = Readonly<{
 
 export type ControlModelGatewayBinding = Readonly<{
   getSessionMessageSubscriptionClient?(): GatewaySessionMessageRequestClient | null;
+  sessionMessageKeysEquivalent?(left: string, right: string): boolean;
   getConnectionSnapshot(): ControlModelConnectionSnapshot;
   subscribeConnection(listener: () => void): () => void;
   subscribeSessionCatalogInvalidations(listener: () => void): () => void;

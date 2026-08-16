@@ -371,6 +371,7 @@ class ControlModelImpl implements ControlModel {
         this.#gateway.getSessionMessageSubscriptionClient?.() ?? this.#gateway;
       this.#messageSubscriptionCoordinator = getGatewaySessionMessageSubscriptionCoordinator(
         this.#messageSubscriptionClient,
+        { keysEquivalent: this.#gateway.sessionMessageKeysEquivalent },
       );
     }
     return this.#messageSubscriptionCoordinator;
