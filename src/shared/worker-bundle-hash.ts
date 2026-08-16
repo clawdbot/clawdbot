@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
 export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
+export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";
+
+export function compareWorkerBundlePaths(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 export type WorkerBundleHashEntry = {
   path: string;

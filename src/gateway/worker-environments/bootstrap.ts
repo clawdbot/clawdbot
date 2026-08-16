@@ -170,7 +170,7 @@ function addFile(relative) {
     fail("unsafe worker file: " + relative);
   }
   const contents = fs.readFileSync(absolute);
-  const mode = relative === "openclaw.mjs" || (stats.mode & 0o111) !== 0 ? 0o700 : 0o600;
+  const mode = relative === "worker.mjs" || (stats.mode & 0o111) !== 0 ? 0o700 : 0o600;
   fs.chmodSync(absolute, mode);
   entries.push({
     path: relative,
@@ -179,72 +179,17 @@ function addFile(relative) {
     sha256: crypto.createHash("sha256").update(contents).digest("hex"),
   });
 }
-function walk(relativeDirectory) {
-  assertDirectory(relativeDirectory);
-  const absoluteDirectory = path.join(root, ...relativeDirectory.split("/"));
-  for (const name of fs.readdirSync(absoluteDirectory).sort()) {
-    const relative = relativeDirectory + "/" + name;
-    const stats = fs.lstatSync(path.join(root, ...relative.split("/")));
-    if (stats.isSymbolicLink()) {
-      fail("unsafe worker path: " + relative);
-    }
-    if (stats.isDirectory()) {
-      walk(relative);
-    } else {
-      addFile(relative);
-    }
-  }
-}
-function readNpmInventory() {
-  assertDirectory("dist");
-  const inventoryPath = path.join(root, "dist", "postinstall-inventory.json");
-  const inventoryStats = fs.lstatSync(inventoryPath);
-  if (inventoryStats.isSymbolicLink() || !inventoryStats.isFile()) {
-    fail("unsafe worker dist inventory");
-  }
-  const value = JSON.parse(fs.readFileSync(inventoryPath, "utf8"));
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
-    fail("invalid worker dist inventory");
-  }
-  const unique = new Set(value);
-  if (unique.size !== value.length) {
-    fail("duplicate worker dist inventory entry");
-  }
-  for (const relative of value) {
-    if (
-      !relative.startsWith("dist/") ||
-      relative.includes("\\") ||
-      path.posix.normalize(relative) !== relative ||
-      relative === "dist/postinstall-inventory.json"
-    ) {
-      fail("unsafe worker dist inventory entry: " + relative);
-    }
-    addFile(relative);
-  }
-}
 try {
   assertRoot();
-  addFile("openclaw.mjs");
-  addFile("package.json");
-  if (install === "npm") {
-    readNpmInventory();
-  } else if (install === "bundle") {
-    walk("dist");
-    // Vendored workspace packages ship inside the bundle and are part of its hash;
-    // node_modules is installed after verification and never walked here.
-    const vendorPath = path.join(root, "vendor");
-    const vendorStats = fs.existsSync(vendorPath) ? fs.lstatSync(vendorPath) : undefined;
-    if (vendorStats) {
-      if (vendorStats.isSymbolicLink() || !vendorStats.isDirectory()) {
-        fail("unsafe worker vendor directory");
+  if (install === "npm" || install === "bundle") {
+    for (const name of fs.readdirSync(root)) {
+      if (name !== "worker.mjs" && name !== "bootstrap-receipt.json") {
+        fail("unexpected worker bundle path: " + name);
       }
-      walk("vendor");
     }
+    addFile("worker.mjs");
   } else {
     fail("invalid worker install channel");
-  }
-  if (entries.length < 3) {
-    fail("worker dist is empty");
   }
   entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   const separator = String.fromCharCode(0);
@@ -495,7 +440,6 @@ case "$install" in
       printf '%s\n' '${NPM_MISSING_MARKER}' >&2
       exit ${NPM_MISSING_EXIT_CODE}
     fi
-    npm_prefix=$staging/.npm-prefix
     npm_pack_json=$staging/npm-pack.json
     npm pack "$package_spec" --pack-destination "$staging" --ignore-scripts --json --registry=https://registry.npmjs.org/ > "$npm_pack_json"
     package_archive=$(node -e '${READ_NPM_PACK_FILENAME_JS}' "$npm_pack_json")
@@ -504,15 +448,7 @@ case "$install" in
       printf '%s\n' 'worker npm package integrity mismatch' >&2
       exit 2
     fi
-    npm install --global --prefix "$npm_prefix" --ignore-scripts --omit=dev --no-audit --no-fund "$package_archive"
-    package_dir=$npm_prefix/lib/node_modules/openclaw
-    if [ ! -f "$package_dir/openclaw.mjs" ]; then
-      printf '%s\n' 'npm did not install the OpenClaw package root' >&2
-      exit 2
-    fi
-    # Match bundle layout so the worker entry always lives under the versioned root.
-    cp -R "$package_dir/." "$staging/"
-    rm -rf "$npm_prefix"
+    tar -xzf "$package_archive" -C "$staging" --strip-components=3 package/dist/worker/worker.mjs
     rm -f "$npm_pack_json" "$package_archive"
     ;;
   *)
@@ -524,15 +460,6 @@ esac
 if ! node -e '${VERIFY_INSTALL_JS}' "$staging" "$hash" "$install"; then
   printf '%s\n' 'worker install content does not match the expected bundle hash' >&2
   exit 2
-fi
-# Materialize production dependencies only after the pristine bundle passed its
-# integrity check; npm install writes node_modules the hash intentionally excludes.
-if [ "$install" = bundle ]; then
-  if ! command -v npm >/dev/null 2>&1; then
-    printf '%s\n' '${NPM_MISSING_MARKER}' >&2
-    exit ${NPM_MISSING_EXIT_CODE}
-  fi
-  npm install --prefix "$staging" --ignore-scripts --omit=dev --no-audit --no-fund >&2
 fi
 printf '%s\n' "$receipt_json" > "$staging/${BOOTSTRAP_RECEIPT}"
 chmod 600 "$staging/${BOOTSTRAP_RECEIPT}"

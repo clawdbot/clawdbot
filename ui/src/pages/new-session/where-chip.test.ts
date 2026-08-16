@@ -205,6 +205,13 @@ describe("Where chip state", () => {
             canExec: false,
             canBrowse: false,
           },
+          {
+            nodeId: "outdated",
+            displayName: "Outdated",
+            connected: true,
+            canExec: true,
+            canBrowse: true,
+          },
         ],
         environments: readDraftEnvironments([
           { id: "node:online", type: "node", platform: "darwin" },
@@ -230,6 +237,18 @@ describe("Where chip state", () => {
             lastSeenAtMs: 5_000,
           },
           { id: "node:camera", type: "node" },
+          {
+            id: "node:outdated",
+            type: "node",
+            issues: [
+              {
+                code: "update-required",
+                action: "update-and-reconnect",
+                updateCommand: "openclaw update",
+                headlessReconnectCommand: "openclaw node restart",
+              },
+            ],
+          },
         ]),
         cloudProfiles: [],
         execNode: "",
@@ -273,6 +292,10 @@ describe("Where chip state", () => {
       expect(facts("lost")[0]).toMatch(/^Offline for /);
       expect(row("legacy")?.disabled).toBe(true);
       expect(facts("legacy")[0]).toMatch(/^Last seen /);
+      expect(row("outdated")?.disabled).toBe(true);
+      expect(facts("outdated")).toEqual([
+        "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
+      ]);
       expect(row("camera")).toBeNull();
     } finally {
       now.mockRestore();

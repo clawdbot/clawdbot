@@ -1,22 +1,27 @@
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   validateWorkerAdmissionHandshake,
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   extractWorkerBundleArchive,
   readWorkerBundleDirectoryManifest,
 } from "../shared/worker-bundle-archive.js";
-import { hashWorkerBundleManifest } from "../shared/worker-bundle-hash.js";
+import {
+  hashWorkerBundleManifest,
+  WORKER_BUNDLE_ENTRY_PATH,
+} from "../shared/worker-bundle-hash.js";
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../shared/worker-bundle-limits.js";
 import {
   nodeWorkerBundleTransferPath,
@@ -30,28 +35,7 @@ import {
 } from "./node-worker-transfer-http.js";
 
 const INSTALL_RECEIPT = "bootstrap-receipt.json";
-const INSTALL_TIMEOUT_MS = 35 * 60_000;
-const INSTALL_IGNORED_TOP_LEVEL = new Set(["node_modules", INSTALL_RECEIPT]);
-
-type BundleInstallCommandRunner = typeof runCommandWithTimeout;
-
-function commandEnv(homeDir: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    HOME: homeDir,
-    ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
-    CI: "1",
-    GIT_ASKPASS: "",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    NPM_CONFIG_AUDIT: "false",
-    NPM_CONFIG_FUND: "false",
-    NPM_CONFIG_IGNORE_SCRIPTS: "true",
-    NPM_CONFIG_UPDATE_NOTIFIER: "false",
-    SSH_ASKPASS: "",
-  };
-}
+const INSTALL_IGNORED_TOP_LEVEL = new Set([INSTALL_RECEIPT]);
 
 async function responseBody(response: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
   const chunks: Buffer[] = [];
@@ -104,10 +88,7 @@ async function downloadBundle(params: {
       }
       hash.update(chunk);
       if (!output.write(chunk)) {
-        await new Promise<void>((resolve, reject) => {
-          output.once("drain", resolve);
-          output.once("error", reject);
-        });
+        await once(output, "drain");
       }
     }
     await new Promise<void>((resolve, reject) => {
@@ -158,7 +139,7 @@ async function validateInstalledBundle(
       return false;
     }
     const root = await fsp.realpath(bundleDir);
-    const entry = await fsp.realpath(path.join(root, "openclaw.mjs"));
+    const entry = await fsp.realpath(path.join(root, WORKER_BUNDLE_ENTRY_PATH));
     return isPathInside(root, entry) && (await fsp.stat(entry)).isFile();
   } catch {
     return false;
@@ -202,21 +183,11 @@ async function publishBundle(destination: string, staging: string): Promise<void
 
 export class NodeWorkerBundleInstaller {
   readonly #root: string;
-  readonly #env: NodeJS.ProcessEnv;
-  readonly #runCommand: BundleInstallCommandRunner;
   readonly #operations = new KeyedAsyncQueue();
 
-  constructor(
-    options: {
-      root?: string;
-      env?: NodeJS.ProcessEnv;
-      runCommand?: BundleInstallCommandRunner;
-    } = {},
-  ) {
+  constructor(options: { root?: string; env?: NodeJS.ProcessEnv } = {}) {
     const env = options.env ?? process.env;
     this.#root = path.resolve(options.root ?? path.join(resolveStateDir(env), "node-host"));
-    this.#env = { ...env };
-    this.#runCommand = options.runCommand ?? runCommandWithTimeout;
   }
 
   async ensure(params: {
@@ -244,8 +215,6 @@ export class NodeWorkerBundleInstaller {
         try {
           const archivePath = path.join(operationRoot, "bundle.tgz");
           const staging = path.join(operationRoot, "root");
-          const homeDir = path.join(operationRoot, "home");
-          await fsp.mkdir(homeDir, { mode: 0o700 });
           await downloadBundle({
             gatewayUrl: params.gatewayUrl,
             gatewayTlsFingerprint: params.gatewayTlsFingerprint,
@@ -259,38 +228,6 @@ export class NodeWorkerBundleInstaller {
             expectedBundleHash: input.build.bundleHash,
             limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
           });
-          const install = await this.#runCommand(
-            [
-              "npm",
-              "install",
-              "--prefix",
-              staging,
-              "--ignore-scripts",
-              "--omit=dev",
-              "--no-audit",
-              "--no-fund",
-              "--package-lock=false",
-            ],
-            {
-              cwd: staging,
-              baseEnv: commandEnv(homeDir, this.#env),
-              timeoutMs: INSTALL_TIMEOUT_MS,
-              signal: params.signal,
-              maxOutputBytes: 256 * 1024,
-              maxCombinedOutputBytes: 512 * 1024,
-            },
-          );
-          if (install.termination !== "exit" || install.code !== 0) {
-            throw new Error("worker bundle dependency installation failed");
-          }
-          const installedManifest = await readWorkerBundleDirectoryManifest({
-            root: staging,
-            limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-            ignoreTopLevel: new Set(["node_modules"]),
-          });
-          if (hashWorkerBundleManifest(installedManifest) !== input.build.bundleHash) {
-            throw new Error("worker bundle changed during dependency installation");
-          }
           const receipt = await fsp.open(path.join(staging, INSTALL_RECEIPT), "wx", 0o600);
           try {
             await receipt.writeFile(`${JSON.stringify(input.build)}\n`);
@@ -318,8 +255,12 @@ export class NodeWorkerBundleInstaller {
             { cause: error },
           );
         }
+        const detail = truncateUtf16Safe(
+          redactSensitiveText(error instanceof Error ? error.message : String(error)),
+          512,
+        );
         throw new NodeWorkerBundleInstallError(
-          "worker-bundle-install-failed: bundle installation did not complete",
+          `worker-bundle-install-failed: ${detail || "bundle installation did not complete"}`,
           { cause: error },
         );
       }

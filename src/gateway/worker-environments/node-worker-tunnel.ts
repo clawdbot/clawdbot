@@ -64,7 +64,6 @@ type NodeWorkerLaunch = (request: {
   input: {
     launchId: string;
     gatewayNamespace: string;
-    installKind: "local";
     expectedBundleHash: string;
     placementGeneration: number;
     descriptor: Parameters<WorkerTunnelHandle["launchTurn"]>[0]["plan"];
@@ -192,7 +191,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     return Boolean(
       current &&
       current.ownerEpoch === entry.ownerEpoch &&
-      current.bootstrapReceipt?.installKind === "local" &&
+      current.bootstrapReceipt?.installKind === "bundle" &&
       sameWorkerBuild(current.bootstrapReceipt, entry.expectedBuild) &&
       current.attachedSessionIds.length <= 1 &&
       (current.attachedSessionIds.length === 0 ||
@@ -218,13 +217,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       throw new Error("device worker node transport is unavailable");
     }
     const node = (await raceWithSignal(transport.listCurrentNodes(), signal)).find(
-      (candidate) =>
-        candidate.nodeId === entry.deviceId &&
-        candidate.workerBuild &&
-        sameWorkerBuild(candidate.workerBuild, entry.expectedBuild),
+      (candidate) => candidate.nodeId === entry.deviceId,
     );
     if (!node) {
-      throw new Error("device worker node is not connected with the expected build");
+      throw new Error("device worker node is not connected with the supervisor dialect");
     }
     return { transport, node };
   };
@@ -531,7 +527,6 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           input: {
             launchId: plan.assignment.turnId,
             gatewayNamespace,
-            installKind: "local",
             expectedBundleHash: entry.expectedBuild.bundleHash,
             placementGeneration: request.placementGeneration,
             descriptor: plan,
