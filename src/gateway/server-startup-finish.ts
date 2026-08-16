@@ -129,7 +129,6 @@ export async function finishGatewayStartup(params: {
     gatewayInstanceRuntime,
     residentRegistry,
   } = runtime;
-  let postAttachRuntimeReturned = false;
   const [{ attachGatewayWsHandlers }, { listPluginNodeCapabilities }] = await startupTrace.measure(
     "gateway.ws-imports",
     () =>
@@ -158,8 +157,7 @@ export async function finishGatewayStartup(params: {
       browserRateLimiter: browserAuthRateLimiter,
       nodeReapprovalCoordinator,
       preauthHandshakeTimeoutMs,
-      isStartupPending: (scope) =>
-        scope === "core" ? !postAttachRuntimeReturned : isGatewayStartupPending(),
+      isStartupPending: isGatewayStartupPending,
       isControlUiDeviceAuthMigrationPending: () => controlUiDeviceAuthMigration.pending,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
@@ -191,6 +189,7 @@ export async function finishGatewayStartup(params: {
     stop: async () => await databaseVerifierHandle?.stop(),
   });
   const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
+  let postAttachRuntimeReturned = false;
   let scheduledServicesActivated = false;
   const loadScheduledServicesModule = createLazyPromise(
     () => import("./server-runtime-services.js"),
@@ -355,16 +354,16 @@ export async function finishGatewayStartup(params: {
     ),
   );
   kernel.setPostAttachHandles(postAttachHandles);
-  postAttachRuntimeReturned = true;
   startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
   startupTrace.mark("ready");
   if (sidecarStartup === "defer") {
-    log.info("gateway core ready; sidecars still starting");
+    log.info("gateway ready");
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (!minimalTestGateway) {
     await databaseIntegrityResident.start();
   }
+  postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");

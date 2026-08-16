@@ -1878,7 +1878,7 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
-  it("retries startup-unavailable connect responses without terminal callbacks", async () => {
+  it("reports startup-unavailable while retaining automatic reconnect", async () => {
     useNodeFakeTimers();
     const onClose = vi.fn();
     const client = new GatewayBrowserClient({
@@ -1906,7 +1906,18 @@ describe("GatewayBrowserClient", () => {
       await expectSocketClosed(ws);
       expect(ws.lastClose).toEqual({ code: 4013, reason: "gateway starting" });
       ws.emitClose(4013, "gateway starting");
-      expect(onClose).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledWith({
+        code: 4013,
+        reason: "gateway starting",
+        error: {
+          code: "UNAVAILABLE",
+          message: "gateway starting; retry shortly",
+          details: { reason: "startup-sidecars" },
+          retryable: true,
+          retryAfterMs: 250,
+        },
+        willRetry: true,
+      });
       expect(wsInstances).toHaveLength(1);
 
       await vi.advanceTimersByTimeAsync(249);

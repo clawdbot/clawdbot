@@ -315,6 +315,12 @@ export function resolveGatewayDisconnectState(
   activityStatus: string;
   remediation?: string;
 } {
+  if (input.reason === "gateway starting") {
+    return {
+      connectionStatus: "gateway starting",
+      activityStatus: "starting up",
+    };
+  }
   const failure = classifyGatewayConnectFailure(input);
   const reasonLabel =
     failure.userMessage === "gateway unreachable" ? "closed" : failure.userMessage;
@@ -1846,13 +1852,16 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     dynamicSlashCommandsRequestId += 1;
     updateAutocompleteProvider();
     pauseStreamingWatchdog();
-    const disconnectState = isLocalMode
-      ? {
-          connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,
-          activityStatus: "idle",
-          remediation: undefined,
-        }
-      : resolveGatewayDisconnectState({ reason, details });
+    const disconnectState =
+      reason === "gateway starting"
+        ? resolveGatewayDisconnectState({ reason, details })
+        : isLocalMode
+          ? {
+              connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,
+              activityStatus: "idle",
+              remediation: undefined,
+            }
+          : resolveGatewayDisconnectState({ reason, details });
     setConnectionStatus(disconnectState.connectionStatus, 5000);
     setActivityStatus(disconnectState.activityStatus);
     if (disconnectState.remediation && !remediationShown) {

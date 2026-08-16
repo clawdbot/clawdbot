@@ -54,7 +54,7 @@ export type GatewayWsMessageHandlerParams = {
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
-  isStartupPending?: (scope?: "core" | "full") => boolean;
+  isStartupPending?: () => boolean;
   isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];

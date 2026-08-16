@@ -724,7 +724,7 @@ export class GatewayBrowserClient {
     const error = context.connectFailure?.error;
     const startupDelay = context.connectFailure?.reconnectDelayMs;
     if (startupDelay !== undefined) {
-      return { retry: true, notify: false, reconnectDelayMs: startupDelay, pendingError: error };
+      return { retry: true, notify: true, reconnectDelayMs: startupDelay, pendingError: error };
     }
     const connectError =
       error instanceof GatewayRequestError ? toGatewayErrorInfo(error) : undefined;

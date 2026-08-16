@@ -3,8 +3,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { tryListenOnPort } from "../infra/ports-probe.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import {
   getGatewayTestPort,
   installGatewayTestHooks,
@@ -14,28 +12,6 @@ import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-
 
 type StartGatewayServer = typeof import("./test-helpers.js").startTestGatewayServer;
 type GatewayServerForTest = Awaited<ReturnType<StartGatewayServer>>;
-
-const startupPluginLoadGate = vi.hoisted(() => ({
-  entered: 0,
-  pending: null as Promise<void> | null,
-  release: undefined as (() => void) | undefined,
-}));
-
-vi.mock("./server-startup-plugins.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./server-startup-plugins.js")>();
-  return {
-    ...actual,
-    loadGatewayStartupPluginRuntime: async (
-      params: Parameters<typeof actual.loadGatewayStartupPluginRuntime>[0],
-    ) => {
-      if (startupPluginLoadGate.pending) {
-        startupPluginLoadGate.entered += 1;
-        await startupPluginLoadGate.pending;
-      }
-      return await actual.loadGatewayStartupPluginRuntime(params);
-    },
-  };
-});
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -88,10 +64,6 @@ async function disconnectWebSocket(ws: WebSocket): Promise<void> {
 }
 
 afterEach(() => {
-  startupPluginLoadGate.release?.();
-  startupPluginLoadGate.entered = 0;
-  startupPluginLoadGate.pending = null;
-  startupPluginLoadGate.release = undefined;
   vi.restoreAllMocks();
 });
 
@@ -125,61 +97,6 @@ describe("gateway startup websocket readiness", () => {
       if (server) {
         await server.close();
       }
-      if (previousMinimal === undefined) {
-        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-      } else {
-        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimal;
-      }
-    }
-  });
-
-  it("admits operator core access while full plugin startup is pending", async () => {
-    const previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-    startupPluginLoadGate.pending = new Promise<void>((resolve) => {
-      startupPluginLoadGate.release = resolve;
-    });
-    let server: GatewayServerForTest | undefined;
-    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    const port = await getGatewayTestPort();
-    const startup = startTestGatewayServer(port, {
-      auth: { mode: "none" },
-      sidecarStartup: "defer",
-    }).then((started) => {
-      server = started;
-      return started;
-    });
-
-    try {
-      await vi.waitFor(() => expect(startupPluginLoadGate.entered).toBe(1));
-      await vi.waitFor(() => expect(server).toBeDefined());
-      client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-        scopes: ["operator.read"],
-      });
-      await expect(client.request("status", {})).resolves.toBeDefined();
-      await expect(fetch(`http://127.0.0.1:${port}/startupz`)).resolves.toMatchObject({
-        status: 503,
-      });
-      await expect(fetch(`http://127.0.0.1:${port}/readyz`)).resolves.toMatchObject({
-        status: 503,
-      });
-      startupPluginLoadGate.release?.();
-      await expect
-        .poll(async () => (await fetch(`http://127.0.0.1:${port}/startupz`)).status, {
-          timeout: 10_000,
-          interval: 50,
-        })
-        .toBe(200);
-    } finally {
-      startupPluginLoadGate.release?.();
-      server ??= await startup.catch(() => undefined);
-      if (client) {
-        await disconnectGatewayClient(client);
-      }
-      await server?.close();
       if (previousMinimal === undefined) {
         delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
       } else {

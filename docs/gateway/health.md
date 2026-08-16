@@ -64,8 +64,6 @@ The Gateway exposes three unauthenticated `GET`/`HEAD` probe pairs:
 
 `/startupz` returns `503` with `status: "starting"` while startup sidecars are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. Use it for Kubernetes, Fly, Render, and similar traffic admission. A broken Telegram or other channel account can make `/readyz` return `503` without taking a healthy Control UI out of service through `/startupz`.
 
-Authenticated operator clients can connect while startup sidecars are pending. Core methods remain available, while methods that depend on startup state return a retryable `UNAVAILABLE` response until startup completes.
-
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
 ## Uptime monitoring

@@ -462,6 +462,13 @@ describe("resolveTuiSessionSelection", () => {
 });
 
 describe("resolveGatewayDisconnectState", () => {
+  it("shows startup progress while the gateway keeps retrying", () => {
+    expect(resolveGatewayDisconnectState({ reason: "gateway starting" })).toEqual({
+      connectionStatus: "gateway starting",
+      activityStatus: "starting up",
+    });
+  });
+
   it("returns scope-upgrade recovery guidance when disconnect reason requires pairing", () => {
     const state = resolveGatewayDisconnectState({
       reason: "gateway closed (1008): pairing required",

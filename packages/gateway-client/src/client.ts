@@ -1058,7 +1058,7 @@ export class GatewayClient {
     if (context.code === 1013 && context.connectFailure?.reconnectDelayMs !== undefined) {
       return {
         retry: true,
-        notify: false,
+        notify: true,
         reconnectDelayMs: context.connectFailure.reconnectDelayMs,
       };
     }
