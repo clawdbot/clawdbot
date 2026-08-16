@@ -447,6 +447,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       // A dismissed open PR still exists, so the row must not offer a duplicate.
       pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
       pullRequestsExpanded: this.sessionPullRequestsExpanded,
+      onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       onExpandPullRequests: () => {
         this.sessionPullRequestsExpanded = true;
         this.requestUpdate();
