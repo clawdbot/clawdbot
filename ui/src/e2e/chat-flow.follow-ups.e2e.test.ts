@@ -37,7 +37,6 @@ suite.define(() => {
   });
 
   it("starts a model-suggested follow-up in a fresh worktree session", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -84,16 +83,15 @@ suite.define(() => {
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
       const moreActions = page.getByRole("button", { name: "More ways to start this task" });
       expect(await moreActions.count()).toBe(1);
-      if (artifactDir) {
-        await page.locator('.task-suggestion[data-task-id="task_123"]').screenshot({
-          path: `${artifactDir}/task-card-button-spacing.png`,
-        });
-      }
-      const startBox = await startButton.boundingBox();
-      const moreActionsBox = await moreActions.boundingBox();
+      const [startBox, moreActionsBox] = await Promise.all([
+        startButton.boundingBox(),
+        moreActions.boundingBox(),
+      ]);
       expect(startBox).not.toBeNull();
       expect(moreActionsBox).not.toBeNull();
-      expect(moreActionsBox!.x - (startBox!.x + startBox!.width)).toBeGreaterThanOrEqual(4);
+      expect(
+        (moreActionsBox?.x ?? 0) - ((startBox?.x ?? 0) + (startBox?.width ?? 0)),
+      ).toBeGreaterThanOrEqual(4);
       await moreActions.click();
       await page
         .getByText("Copy prompt", { exact: true })
