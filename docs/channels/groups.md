@@ -60,7 +60,7 @@ Plugin-owned conversation bindings are the exception. Once a plugin binds a thre
 
 Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
 
-Sessions suppress verbose tool/progress summaries by default. Use `/verbose on` (or `/verbose full`) to show them for the current session while debugging, and `/verbose off` to return to final-reply-only behavior. Verbose state is per session and works the same in direct chats, groups, channels, and forum topics.
+Sessions suppress verbose tool/progress summaries by default. Use `/verbose on`, `/verbose full`, or `/verbose plain` to show them for the current session while debugging, and `/verbose off` to return to final-reply-only behavior. Verbose state is per session and works the same in direct chats, groups, channels, and forum topics.
 
 To submit unmentioned always-on group chatter as quiet room context instead of user requests, use [Ambient room events](/channels/ambient-room-events):
 
