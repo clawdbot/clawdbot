@@ -111,6 +111,22 @@ describe("shared/tailscale-status", () => {
     });
   });
 
+  it("rejects out-of-range numeric proxy ports", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "0" } },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(0, run)).resolves.toEqual([]);
+  });
+
   it("ignores non-root, non-HTTPS, and non-loopback Serve handlers", async () => {
     const run = vi.fn().mockResolvedValue({
       code: 0,

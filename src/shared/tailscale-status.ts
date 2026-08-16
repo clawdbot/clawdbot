@@ -70,7 +70,8 @@ function extractTailnetHostFromStatusJson(raw: string): string | null {
 function parseLoopbackProxyPort(proxy: string): number | null {
   const trimmed = proxy.trim();
   if (/^\d+$/.test(trimmed)) {
-    return Number.parseInt(trimmed, 10);
+    const parsed = Number.parseInt(trimmed, 10);
+    return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : null;
   }
   const normalized = trimmed.includes("://") ? trimmed : `http://${trimmed}`;
   try {
