@@ -38,6 +38,17 @@ export type ChatComposerMemoryFallback = {
   sequence: number;
 };
 
+export type ChatGuardianNotice = {
+  key: string;
+  runId: string;
+  timestamp: number;
+  kind: "approved" | "denied" | "warning";
+  command?: string;
+  riskLevel?: string;
+  rationale?: string;
+  message?: string;
+};
+
 export type ChatQueueSkillWorkshopRevision = {
   proposalId: string;
   agentId?: string;
@@ -93,6 +104,7 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       label?: string;
       startsTurn?: true;
+      tone?: "danger";
     }
   | {
       kind: "divider";

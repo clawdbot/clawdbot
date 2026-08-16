@@ -8,7 +8,7 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
+import type { ChatComposerMemoryFallback, ChatGuardianNotice } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatState } from "./chat-history.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
@@ -53,6 +53,7 @@ export type ChatPageHost = ChatHost &
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
     chatToolMessages: Record<string, unknown>[];
+    guardianNotices: ChatGuardianNotice[];
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
     chatMessagesBySession: ChatMessageCache;

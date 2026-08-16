@@ -10,7 +10,11 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatGuardianNotice,
+  ChatQueueItem,
+  ChatStreamSegment,
+} from "../../../lib/chat/chat-types.ts";
 import {
   buildCompanionQuestionPrefill,
   buildMoreDetailsCompanionQuestion,
@@ -63,6 +67,7 @@ export type ChatThreadProps = {
   historyLoading?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
+  guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;

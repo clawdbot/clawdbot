@@ -6,7 +6,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatGuardianNotice,
+  ChatQueueItem,
+  ChatStreamSegment,
+} from "../../lib/chat/chat-types.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
@@ -74,6 +78,7 @@ export type ToolStreamHost = {
   toolStreamOrder: string[];
   activityEventSeqById?: Map<string, number>;
   chatToolMessages: Record<string, unknown>[];
+  guardianNotices?: ChatGuardianNotice[];
   toolStreamSyncTimer: number | null;
   planStatus?: PlanStatus | null;
   knownAgentRunIds?: Set<string>;
@@ -960,6 +965,46 @@ function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload): bool
   return false;
 }
 
+function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream !== "codex_app_server.guardian") {
+    return false;
+  }
+  const data = payload.data ?? {};
+  const phase = toTrimmedString(data.phase);
+  const status = toTrimmedString(data.status);
+  const kind =
+    phase === "warning"
+      ? "warning"
+      : phase === "completed" && (status === "approved" || status === "denied")
+        ? status
+        : null;
+  if (!kind) {
+    return true;
+  }
+  const reviewId = toTrimmedString(data.reviewId) ?? String(payload.seq);
+  const command = toTrimmedString(data.command);
+  const riskLevel = toTrimmedString(data.riskLevel);
+  const rationale = toTrimmedString(data.rationale);
+  const message = toTrimmedString(data.message);
+  const notice: ChatGuardianNotice = {
+    key: `guardian:${payload.runId}:${reviewId}:${kind}`,
+    runId: payload.runId,
+    timestamp: typeof payload.ts === "number" ? payload.ts : Date.now(),
+    kind,
+    ...(command ? { command } : {}),
+    ...(riskLevel ? { riskLevel } : {}),
+    ...(rationale ? { rationale } : {}),
+    ...(message ? { message } : {}),
+  };
+  const current = host.guardianNotices ?? [];
+  const existingIndex = current.findIndex((candidate) => candidate.key === notice.key);
+  host.guardianNotices =
+    existingIndex === -1
+      ? [...current.slice(-49), notice]
+      : current.map((candidate, index) => (index === existingIndex ? notice : candidate));
+  return true;
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
   if (!payload) {
     return false;
@@ -986,6 +1031,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handleUsageEvent(host, payload)) {
+    return true;
+  }
+
+  if (handleGuardianEvent(host, payload)) {
     return true;
   }
 

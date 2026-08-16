@@ -460,6 +460,16 @@
   margin: 0 auto;
 }
 
+.chat-notice--danger {
+  width: min(560px, calc(100% - 32px));
+  margin: 14px auto;
+  text-align: left;
+}
+
+.chat-notice--danger .chat-notice__body {
+  width: 100%;
+}
+
 .chat-notice :where(ul, ol, pre, blockquote) {
   display: inline-block;
   text-align: left;
