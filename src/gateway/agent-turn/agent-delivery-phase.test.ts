@@ -31,7 +31,11 @@ describe("resolveAgentDeliveryPhase", () => {
     const respond = vi.fn();
 
     await resolveAgentDeliveryPhase({
-      request: { message: "strict delivery", deliver: true },
+      request: {
+        message: "strict delivery",
+        deliver: true,
+        idempotencyKey: "strict-target-resolution",
+      },
       cfg: {},
       agentId: "main",
       replyTo: "",
