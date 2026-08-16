@@ -1,5 +1,6 @@
 import path from "node:path";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -310,6 +311,24 @@ export function createAgentHarnessHostCapabilities(params: {
           .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
           .map((tool) => gateBoundTool(tool, assertActive))
       );
+    },
+    prepareMutableFileApproval: async (request) => {
+      assertActive();
+      const prepared = await prepareSystemRunMutableFileApproval(request);
+      assertActive();
+      if (!prepared.ok) {
+        return prepared;
+      }
+      return Object.freeze({
+        ok: true,
+        requiresOneShot: prepared.requiresOneShot,
+        revalidate: async () => {
+          assertActive();
+          const current = await prepared.revalidate();
+          assertActive();
+          return current;
+        },
+      });
     },
     runBeforeToolCall,
     requestApproval: async (request) => {

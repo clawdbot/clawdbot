@@ -1,8 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   PLUGIN_APPROVAL_DETAIL_MAX_LENGTH,
 } from "../../infra/plugin-approvals.js";
+import { APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE } from "../../infra/system-run-approval-binding.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   requestClaudeNativeToolApproval,
@@ -111,7 +115,7 @@ describe("requestClaudeNativeToolApproval", () => {
     await expect(
       requestClaudeNativeToolApproval({
         toolName: "Bash",
-        toolInput: {},
+        toolInput: { command: "ls" },
         pluginId: "claude-cli",
         ask: "on-miss",
       }),
@@ -124,7 +128,7 @@ describe("requestClaudeNativeToolApproval", () => {
     await expect(
       requestClaudeNativeToolApproval({
         toolName: "Bash",
-        toolInput: {},
+        toolInput: { command: "ls" },
         pluginId: "claude-cli",
         ask: "on-miss",
       }),
@@ -138,7 +142,7 @@ describe("requestClaudeNativeToolApproval", () => {
       .mockImplementationOnce(() => new Promise(() => {}));
     const approval = requestClaudeNativeToolApproval({
       toolName: "Bash",
-      toolInput: {},
+      toolInput: { command: "ls" },
       pluginId: "claude-cli",
       abortSignal: abortController.signal,
       ask: "on-miss",
@@ -154,7 +158,7 @@ describe("requestClaudeNativeToolApproval", () => {
     mockCallGatewayTool.mockImplementationOnce(() => new Promise(() => {}));
     const approval = requestClaudeNativeToolApproval({
       toolName: "Bash",
-      toolInput: {},
+      toolInput: { command: "ls" },
       pluginId: "claude-cli",
       abortSignal: abortController.signal,
       ask: "on-miss",
@@ -209,6 +213,34 @@ describe("requestClaudeNativeToolApproval", () => {
       detail: '{"command":"ls"}',
       allowedDecisions: ["allow-once", "deny"],
     });
+  });
+
+  it("checks Bash script drift before rejecting an unexpected allow-always", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-always-drift-"));
+    const script = path.join(cwd, "script.sh");
+    try {
+      fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
+      mockCallGatewayTool.mockImplementationOnce(async () => {
+        fs.writeFileSync(script, "#!/bin/sh\necho changed\n");
+        return { id: "approval-unexpected-always", decision: "allow-always" };
+      });
+
+      await expect(
+        requestClaudeNativeToolApproval({
+          toolName: "Bash",
+          toolInput: { command: "sh script.sh" },
+          pluginId: "claude-cli",
+          cwd,
+          ask: "on-miss",
+        }),
+      ).resolves.toEqual({
+        kind: "deny",
+        reason: "operand-binding",
+        message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+      });
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("denies Bash whose channel description truncates even when detail would fit", async () => {
@@ -302,7 +334,7 @@ describe("requestClaudeNativeToolApproval", () => {
     mockCallGatewayTool.mockResolvedValueOnce({ id: "approval-7", decision: "deny" });
 
     await requestClaudeNativeToolApproval({
-      toolName: "Bash",
+      toolName: "WebFetch",
       toolInput: { toJSON: () => undefined },
       pluginId: "claude-cli",
       ask: "on-miss",
