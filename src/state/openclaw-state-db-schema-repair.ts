@@ -465,13 +465,20 @@ function isDefaultAgentDatabasePath(pathname: string, agentId: string): boolean 
   );
 }
 
+export type AgentDatabasePathMigrationSummary = {
+  relativized: number;
+  reanchored: string[];
+  deleted: string[];
+  preserved: number;
+};
+
 export function migrateAgentDatabaseRelativePaths(
   db: DatabaseSync,
   previousVersion: number,
   databasePath: string,
-): boolean {
+): AgentDatabasePathMigrationSummary {
   if (previousVersion >= 9 || !tableExists(db, "agent_databases")) {
-    return false;
+    return { relativized: 0, reanchored: [], deleted: [], preserved: 0 };
   }
   const rows = db.prepare("SELECT agent_id, path FROM agent_databases").all();
   const updatePath = db.prepare(
@@ -481,7 +488,9 @@ export function migrateAgentDatabaseRelativePaths(
   const hasPath = db.prepare(
     "SELECT 1 FROM agent_databases WHERE agent_id = ? AND path = ? LIMIT 1",
   );
-  let changed = false;
+  let relativized = 0;
+  const reanchored: string[] = [];
+  const deleted: string[] = [];
   for (const row of rows) {
     const agentId = row.agent_id;
     const registeredPath = row.path;
@@ -494,7 +503,7 @@ export function migrateAgentDatabaseRelativePaths(
     const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath);
     if (!path.isAbsolute(storedPath)) {
       updatePath.run(storedPath, agentId, registeredPath);
-      changed = true;
+      relativized += 1;
     }
   }
   const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
@@ -526,16 +535,21 @@ export function migrateAgentDatabaseRelativePaths(
         // The same agent already owns its in-root canonical registration. Keeping a second
         // default-layout registration guarantees duplicate canonical session keys on every list.
         deletePath.run(agentId, registeredPath);
-        changed = true;
+        deleted.push(registeredPath);
       } else if (existsSync(counterpartAbsolute)) {
         // Re-anchor a copied or moved state directory onto its copied database instead of
         // deleting the registration or leaving it dangling at the source root.
         updatePath.run(counterpartStored, agentId, registeredPath);
-        changed = true;
+        reanchored.push(registeredPath);
       }
     }
   }
-  return changed;
+  return {
+    relativized,
+    reanchored,
+    deleted,
+    preserved: rows.length - relativized - reanchored.length - deleted.length,
+  };
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {

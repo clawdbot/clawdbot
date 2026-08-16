@@ -72,3 +72,54 @@ export function resolveOpenClawRegisteredAgentDatabasePath(
     ? storedPath
     : `${resolveOpenClawStateDirForDatabasePath(registryDatabasePath)}${path.sep}${storedPath}`;
 }
+
+type AgentPathMigrationObservation = {
+  relativized: number;
+  reanchored: string[];
+  deleted: string[];
+};
+
+type AgentPathMigrationLogger = {
+  warn: (
+    message: string,
+    fields: { reanchored: string[]; deleted: string[]; path: string },
+  ) => void;
+};
+
+export function describeAgentPathMigration(summary: AgentPathMigrationObservation): string[] {
+  const { relativized, reanchored, deleted } = summary;
+  if (relativized === 0 && reanchored.length === 0 && deleted.length === 0) {
+    return [];
+  }
+  const decisions = reanchored.length + deleted.length;
+  const counts = [
+    `${relativized} relativized`,
+    reanchored.length > 0 && `${reanchored.length} re-anchored`,
+    deleted.length > 0 && `${deleted.length} removed`,
+  ].filter(Boolean);
+  return [
+    `Migrated agent database registry paths to state-relative storage${decisions > 0 ? ` (${counts.join(", ")})` : ""}`,
+    ...reanchored.map(
+      (registeredPath) =>
+        `Re-anchored agent database registry path ${registeredPath} to the current state directory`,
+    ),
+    ...deleted.map(
+      (registeredPath) => `Removed duplicate agent database registry path ${registeredPath}`,
+    ),
+  ];
+}
+
+export function warnAgentPathMigration(
+  log: AgentPathMigrationLogger,
+  summary: AgentPathMigrationObservation,
+  databasePath: string,
+): void {
+  if (summary.reanchored.length === 0 && summary.deleted.length === 0) {
+    return;
+  }
+  log.warn("agent database registry rows re-anchored or removed during v9 migration", {
+    reanchored: summary.reanchored,
+    deleted: summary.deleted,
+    path: databasePath,
+  });
+}

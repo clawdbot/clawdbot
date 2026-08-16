@@ -1640,6 +1640,14 @@ describe("openclaw state database", () => {
       kind: "agent-databases-relative-paths-v9",
       path: databasePath,
     });
+    expect(repairOpenClawStateDatabaseSchema({ env })).toEqual({
+      changes: [
+        "Migrated agent database registry paths to state-relative storage (2 relativized, 1 re-anchored, 1 removed)",
+        `Re-anchored agent database registry path ${copiedForeignPath} to the current state directory`,
+        `Removed duplicate agent database registry path ${dualForeignPath}`,
+      ],
+      warnings: [],
+    });
     const migrated = openOpenClawStateDatabase({ env });
     expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(9);
     expect(

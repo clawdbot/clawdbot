@@ -71,7 +71,7 @@ import {
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
-  migrateAgentDatabaseRelativePaths,
+  migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateRetiredCommitmentsSchema,
   migrateWorkerPlacementExecutionModeSchema,
   repairAgentDatabasesCompositePrimaryKey,
@@ -79,6 +79,7 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
 import {
   assertOpenClawStateWriteAllowed,
   OpenClawStateOwnershipError,
@@ -204,9 +205,9 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
         if (migrateWorkerPlacementExecutionModeSchema(db, previousVersion)) {
           applied.push("Migrated cloud worker placements to execution modes");
         }
-        if (migrateAgentDatabaseRelativePaths(db, previousVersion, pathname)) {
-          applied.push("Migrated agent database registry paths to state-relative storage");
-        }
+        applied.push(
+          ...describeAgentPathMigration(migrateAgentPaths(db, previousVersion, pathname)),
+        );
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
         }
@@ -397,7 +398,7 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
         dropLegacyStateTables(db);
         migrateRetiredCommitmentsSchema(db, previousVersion);
         migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
-        migrateAgentDatabaseRelativePaths(db, previousVersion, pathname);
+        const agentPathMigration = migrateAgentPaths(db, previousVersion, pathname);
         ensureAdditiveStateColumns(db);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
@@ -456,6 +457,7 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
             ),
         );
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+        warnAgentPathMigration(stateDbLog, agentPathMigration, pathname);
       },
       {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
