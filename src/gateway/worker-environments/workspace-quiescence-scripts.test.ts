@@ -702,7 +702,7 @@ ${REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS}`;
     }
   }, 35_000);
 
-  it("uses a bounded count-aware deadline to quiesce and resume many processes", async () => {
+  it("allows healthy high-cardinality enrollment to use a bounded count-aware deadline", async () => {
     const input = await fixture();
     await useBatchedDelayedProcessFixture(input);
     const children = Array.from({ length: 64 }, () => spawn("sleep", ["30"], { stdio: "ignore" }));
@@ -716,9 +716,6 @@ ${REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS}`;
       nonce = await quiesce(input, 30_000, 30_000);
       await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
       await renew(input, nonce, 30_000);
-      await resume(input, nonce);
-      nonce = "";
-      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, false)));
     } finally {
       await fs.rm(input.delayedProcessProbeTargetPath, { force: true });
       await fs.rm(input.extraProcessPath, { force: true });

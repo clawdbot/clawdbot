@@ -36,7 +36,6 @@ async function resume() {
   const recovery = await recoverProcessReferences(
     references,
     ${options.processProbeConcurrency},
-    processReferenceDeadlineMs(references.length),
   );
   if (recovery.remaining.length > 0) {
     const watchdog = recovery.remaining.find((entry) => entry.signal === "SIGTERM") ?? null;
