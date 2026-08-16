@@ -265,6 +265,13 @@ describe.concurrent("gateway startup-migration refusal", () => {
       const legacyArtifactPath = path.join(legacyAgentDir, "auth-profiles.json");
       fs.mkdirSync(legacyAgentDir, { recursive: true });
       fs.writeFileSync(legacyArtifactPath, JSON.stringify({ profiles: {} }));
+      // A pending state write admission side effect: a nonempty WAL beside a
+      // missing main database gets copied to an .orphaned-* quarantine file by
+      // sidecar quarantine unless the live-owner refusal runs first.
+      const sharedStateDbDir = path.join(stateDir, "state");
+      fs.mkdirSync(sharedStateDbDir, { recursive: true });
+      const orphanWalPath = path.join(sharedStateDbDir, "openclaw.sqlite-wal");
+      fs.writeFileSync(orphanWalPath, Buffer.alloc(64, 1));
       // A live gateway owner: this test process is alive and its start time
       // matches, which is exactly how a real concurrent gateway verifies.
       const lockDir = resolveGatewayLockDir(stateDir);
@@ -300,6 +307,8 @@ describe.concurrent("gateway startup-migration refusal", () => {
       // relocation stayed untouched for the live owner.
       expect(fs.existsSync(legacyArtifactPath), output).toBe(true);
       expect(fs.existsSync(path.join(stateDir, "agents", "main", "agent")), output).toBe(false);
+      // No orphan-sidecar quarantine copy either: write admission never ran.
+      expect(fs.readdirSync(sharedStateDbDir), output).toEqual(["openclaw.sqlite-wal"]);
       expect(result.status, output).toBe(1);
       expect(result.stderr, output).toContain("already owns this state directory");
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);

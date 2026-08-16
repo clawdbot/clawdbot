@@ -35,23 +35,32 @@ export function throwStartupMigrationIdentityChanged(): never {
 }
 
 /**
- * A gateway startup that will refuse readiness must stay side-effect-free: when a live
- * gateway owns this state directory, the pending automatic migrations behind the startup
- * lease would relocate its files before the runtime lock acquisition refuses. Refuse first.
+ * A gateway startup that will refuse readiness must stay side-effect-free: a live owner of
+ * this state directory means every pending startup write (config-health recovery, sidecar
+ * quarantine, automatic migrations) would mutate its files before the runtime lock refuses.
  * Probe-only: the runtime lock stays owned by the gateway run loop's restart lifecycle.
  * Test runs skip the probe like acquireGatewayLock does (locks are disabled under Vitest).
+ * Returns the refusal message so each mutation boundary can report through its own runtime.
  */
-export async function refuseStartupMigrationsForLiveGatewayOwner(
+export async function describeLiveGatewayOwnerStartupBlocker(
   env: NodeJS.ProcessEnv,
-): Promise<void> {
+): Promise<string | undefined> {
   if (env.VITEST || env.NODE_ENV === "test") {
-    return;
+    return undefined;
   }
   const { readActiveGatewayLockIdentity } = await import("../infra/gateway-lock.js");
   const activeGateway = await readActiveGatewayLockIdentity({ env });
-  if (activeGateway) {
-    throwStartupMigrationRefusal(
-      `Another gateway (pid ${activeGateway.pid}) already owns this state directory; refusing to run automatic startup migrations or report the gateway ready. Stop it with "openclaw gateway stop" (or select a different OPENCLAW_STATE_DIR), then retry startup.`,
-    );
+  if (!activeGateway) {
+    return undefined;
+  }
+  return `Another gateway (pid ${activeGateway.pid}) already owns this state directory; refusing to run automatic startup migrations or report the gateway ready. Stop it with "openclaw gateway stop" (or select a different OPENCLAW_STATE_DIR), then retry startup.`;
+}
+
+export async function refuseStartupMigrationsForLiveGatewayOwner(
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const blocker = await describeLiveGatewayOwnerStartupBlocker(env);
+  if (blocker) {
+    throwStartupMigrationRefusal(blocker);
   }
 }

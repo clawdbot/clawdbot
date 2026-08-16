@@ -167,6 +167,12 @@ export async function runDoctorConfigPreflight(
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
+  const gatewayStartupCheckpointRequired = options.requireStartupMigrationCheckpoint === true;
+  if (gatewayStartupCheckpointRequired) {
+    // First preflight operation: state write admission below already quarantines orphaned
+    // SQLite sidecars, so the live-owner refusal must precede every mutation-capable step.
+    await refuseStartupMigrationsForLiveGatewayOwner(process.env);
+  }
   if (stateMigrationsRequested) {
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
@@ -175,7 +181,6 @@ export async function runDoctorConfigPreflight(
   }
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
-  const gatewayStartupCheckpointRequired = options.requireStartupMigrationCheckpoint === true;
   const migrationCheckpointRequired =
     gatewayStartupCheckpointRequired || options.requireStateMigrationCheckpoint === true;
   let migrationCheckpoint = migrationCheckpointRequired
@@ -210,6 +215,8 @@ export async function runDoctorConfigPreflight(
       return;
     }
     if (gatewayStartupCheckpointRequired) {
+      // Re-probe past the entry gate: the lease wait below can block behind a sibling
+      // startup that becomes the live owner before our migrations would mutate its state.
       await refuseStartupMigrationsForLiveGatewayOwner(startupMigrationEnv);
     }
     startupMigrationLease = await migrationCheckpoint.acquireStartupMigrationLeaseWithWait({
