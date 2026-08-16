@@ -89,6 +89,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let lastListOptions: SessionListOptions = {};
   let hasForegroundListOptions = false;
   let hasSeededListOptions = false;
+  let pageActive = typeof document === "undefined" || document.visibilityState !== "hidden";
   const managedLists = new Map<string, ManagedSessionList>();
 
   const publishManagedList = (entry: ManagedSessionList, snapshot: SessionListSnapshot): void => {
@@ -114,6 +115,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         canRefresh: () =>
           managedLists.get(key) === entry &&
           entry.listeners.size > 0 &&
+          pageActive &&
           host.connection.capture() !== null,
         refresh: () => refreshManagedList(entry, { append: false }),
       }),
@@ -348,6 +350,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!eventRefreshQueued) {
       return null;
     }
+    if (!pageActive) {
+      return null;
+    }
     eventRefreshQueued = false;
     return { ...lastListOptions, force: true };
   };
@@ -405,25 +410,41 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       eventRefreshQueued = true;
       return inFlight;
     }
+    eventRefreshQueued = false;
     return startRefresh({ ...lastListOptions, force: true });
   };
 
   const eventRefreshCoordinator = createSessionEventRefreshCoordinator({
-    canRefresh: () => host.connection.capture() !== null,
+    canRefresh: () => pageActive && host.connection.capture() !== null,
     refresh: refreshFromEvent,
   });
-  const flushEventRefresh = () => eventRefreshCoordinator.flush();
 
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === "hidden") {
-      flushEventRefresh();
+  const setEventRefreshActive = (active: boolean, markDirty = false) => {
+    pageActive = active;
+    const coordinators = [
+      eventRefreshCoordinator,
+      ...Array.from(managedLists.values(), (entry) => entry.coordinator),
+    ];
+    for (const coordinator of coordinators) {
+      if (active) {
+        coordinator.resume();
+      } else {
+        coordinator.pause(markDirty);
+      }
     }
   };
+  const handleVisibilityChange = () => {
+    setEventRefreshActive(document.visibilityState !== "hidden");
+  };
+  const handlePageHide = () => setEventRefreshActive(false, true);
+  const handlePageShow = () => handleVisibilityChange();
+
   const observesPageLifecycle =
     typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
   if (observesPageLifecycle) {
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    globalThis.addEventListener("pagehide", flushEventRefresh);
+    globalThis.addEventListener("pagehide", handlePageHide);
+    globalThis.addEventListener("pageshow", handlePageShow);
   }
 
   const refreshReplacement = (agentId?: string | null): Promise<void> => {
@@ -556,12 +577,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
     },
     dispose() {
-      // Flush before disposal so page-exit events start the trailing canonical list.
-      flushEventRefresh();
       eventRefreshCoordinator.dispose();
       if (observesPageLifecycle) {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
-        globalThis.removeEventListener("pagehide", flushEventRefresh);
+        globalThis.removeEventListener("pagehide", handlePageHide);
+        globalThis.removeEventListener("pageshow", handlePageShow);
       }
       inFlight = null;
       queuedExplicitRefresh = null;

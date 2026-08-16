@@ -32,7 +32,6 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
-import { checkUpdateStatus } from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
 import { devUpdateTargetFromGitCampaign } from "../../infra/update-dev-target.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
@@ -86,30 +85,22 @@ function tryResolveProcessCwd(): string | undefined {
   }
 }
 
-async function resolveGatewayEffectiveUpdateChannel(
-  configChannel: ReturnType<typeof normalizeUpdateChannel>,
-) {
-  const invocationCwd = tryResolveProcessCwd();
-  const root = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    ...(invocationCwd ? { cwd: invocationCwd } : {}),
-  });
-  const status = await checkUpdateStatus({
-    root,
-    timeoutMs: 2500,
-    fetchGit: false,
-    includeRegistry: false,
-  });
-  if (status.installKind === "unknown") {
-    return null;
+// Explicit callers share only active checkout work for the exact config snapshot.
+// Reloaded config must never join work started under an older snapshot.
+const updateStatusCheckoutRefreshes = new WeakMap<OpenClawConfig, Promise<void>>();
+
+function refreshUpdateStatusCheckout(config: OpenClawConfig): Promise<void> {
+  const current = updateStatusCheckoutRefreshes.get(config);
+  if (current) {
+    return current;
   }
-  return resolveEffectiveUpdateChannel({
-    configChannel,
-    currentVersion: VERSION,
-    installKind: status.installKind,
-    git: status.git,
-  }).channel;
+  const refresh = refreshGatewayUpdateStatus(config).finally(() => {
+    if (updateStatusCheckoutRefreshes.get(config) === refresh) {
+      updateStatusCheckoutRefreshes.delete(config);
+    }
+  });
+  updateStatusCheckoutRefreshes.set(config, refresh);
+  return refresh;
 }
 
 async function readPreUpdateConfigForPostCoreFinalize(): Promise<
@@ -182,22 +173,19 @@ export const updateHandlers: GatewayRequestHandlers = {
       );
       sentinel = getLatestUpdateRestartSentinel();
     }
-    const configChannel = context?.getRuntimeConfig
-      ? normalizeUpdateChannel(context.getRuntimeConfig().update?.channel)
-      : null;
-    if (context?.getRuntimeConfig) {
+    const config = context?.getRuntimeConfig?.();
+    const configChannel = normalizeUpdateChannel(config?.update?.channel);
+    if (params.refreshCheckout === true && config) {
       try {
-        await refreshGatewayUpdateStatus(context.getRuntimeConfig());
+        await refreshUpdateStatusCheckout(config);
       } catch (err) {
-        context.logGateway?.warn(
+        context?.logGateway?.warn(
           `update.status checkout refresh failed: ${formatUpdateRunErrorMessage(err)}`,
         );
       }
     }
     const schedule = getUpdateSchedule();
-    const effectiveChannel = await resolveGatewayEffectiveUpdateChannel(configChannel).catch(
-      () => null,
-    );
+    const effectiveChannel = configChannel ?? schedule?.channel;
     const result = {
       sentinel,
       updateAvailable: getUpdateAvailable(),

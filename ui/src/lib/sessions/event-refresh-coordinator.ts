@@ -14,6 +14,9 @@ export function createSessionEventRefreshCoordinator(
   let deadline: number | null = null;
   let inFlight: Promise<void> | null = null;
   let trailing = false;
+  // Hidden/page-exit lifecycle holds one authoritative refresh bit. Resume
+  // redeems it once without starting network work during teardown.
+  let held = false;
   let generation = 0;
   let disposed = false;
 
@@ -26,7 +29,11 @@ export function createSessionEventRefreshCoordinator(
   };
 
   const start = () => {
-    if (disposed || !options.canRefresh()) {
+    if (disposed) {
+      return;
+    }
+    if (!options.canRefresh()) {
+      held = true;
       return;
     }
     if (inFlight) {
@@ -50,7 +57,12 @@ export function createSessionEventRefreshCoordinator(
 
   return {
     schedule() {
-      if (disposed || !options.canRefresh()) {
+      if (disposed) {
+        return;
+      }
+      if (!options.canRefresh()) {
+        clearTimer();
+        held = true;
         return;
       }
       const now = Date.now();
@@ -65,26 +77,34 @@ export function createSessionEventRefreshCoordinator(
         start();
       }, delay);
     },
-    flush() {
-      if (timer === null) {
+    pause(markDirty = false) {
+      held = markDirty || held || timer !== null || trailing || inFlight !== null;
+      clearTimer();
+      trailing = false;
+    },
+    resume() {
+      if (disposed || !held || !options.canRefresh()) {
         return;
       }
-      clearTimer();
+      held = false;
       start();
     },
     absorb() {
       clearTimer();
       trailing = false;
+      held = false;
     },
     reset() {
       clearTimer();
       trailing = false;
+      held = false;
       inFlight = null;
       generation += 1;
     },
     dispose() {
       clearTimer();
       trailing = false;
+      held = false;
       inFlight = null;
       generation += 1;
       disposed = true;

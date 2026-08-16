@@ -15,7 +15,6 @@ type TestUpdateSchedule =
   | import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState
   | null;
 
-const checkUpdateStatusMock = vi.hoisted(() => vi.fn());
 const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
 const getUpdateAvailableMock = vi.hoisted(() => vi.fn<() => TestUpdateAvailable>(() => null));
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => TestUpdateSchedule>(() => null));
@@ -26,17 +25,6 @@ const getLatestUpdateRestartSentinelMock = vi.hoisted(() =>
 const refreshLatestUpdateRestartSentinelMock = vi.hoisted(() =>
   vi.fn<() => Promise<TestUpdateSentinel>>(async () => null),
 );
-
-vi.mock("../../infra/openclaw-root.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/openclaw-root.js")>(
-    "../../infra/openclaw-root.js",
-  );
-  return { ...actual, resolveOpenClawPackageRoot: async () => "/tmp/openclaw" };
-});
-
-vi.mock("../../infra/update-check.js", () => ({
-  checkUpdateStatus: checkUpdateStatusMock,
-}));
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
@@ -61,7 +49,6 @@ vi.mock("./validation.js", () => ({
 
 beforeEach(() => {
   versionMock.value = "1.0.0";
-  checkUpdateStatusMock.mockReset();
   getUpdateAvailableMock.mockReset();
   getUpdateAvailableMock.mockReturnValue(null);
   getUpdateScheduleMock.mockReset();
@@ -77,10 +64,9 @@ beforeEach(() => {
 describe("update.status effective channel", () => {
   it("reports a verified configless extended-stable package channel", async () => {
     versionMock.value = "2026.6.33";
-    checkUpdateStatusMock.mockResolvedValueOnce({
-      root: "/tmp/openclaw",
-      installKind: "package",
-      packageManager: "npm",
+    getUpdateScheduleMock.mockReturnValueOnce({
+      channel: "extended-stable",
+      autoEnabled: false,
     });
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
@@ -99,6 +85,73 @@ describe("update.status effective channel", () => {
       true,
       expect.objectContaining({ effectiveChannel: "extended-stable" }),
     );
+    expect(refreshGatewayUpdateStatusMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers the current config channel over the startup schedule", async () => {
+    getUpdateScheduleMock.mockReturnValueOnce({ channel: "beta", autoEnabled: true });
+    const { updateHandlers } = await import("./update.js");
+    const respond = vi.fn();
+    const handler = updateHandlers["update.status"];
+    if (!handler) {
+      throw new Error("update.status handler is unavailable");
+    }
+
+    await handler({
+      params: {},
+      respond,
+      context: { getRuntimeConfig: () => ({ update: { channel: "dev" } }) },
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ effectiveChannel: "dev" }),
+    );
+  });
+
+  it("scopes explicit checkout refreshes to the current config identity", async () => {
+    const { updateHandlers } = await import("./update.js");
+    const handler = updateHandlers["update.status"];
+    if (!handler) {
+      throw new Error("update.status handler is unavailable");
+    }
+    const config = { update: { channel: "dev" as const } };
+    const context = { getRuntimeConfig: () => config };
+
+    await handler({ params: {}, respond: vi.fn(), context } as never);
+    expect(refreshGatewayUpdateStatusMock).not.toHaveBeenCalled();
+
+    let settleRefresh: (() => void) | undefined;
+    refreshGatewayUpdateStatusMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          settleRefresh = resolve;
+        }),
+    );
+    const first = handler({
+      params: { refreshCheckout: true },
+      respond: vi.fn(),
+      context,
+    } as never);
+    const second = handler({
+      params: { refreshCheckout: true },
+      respond: vi.fn(),
+      context,
+    } as never);
+    await vi.waitFor(() => expect(refreshGatewayUpdateStatusMock).toHaveBeenCalledTimes(1));
+
+    await handler({
+      params: { refreshCheckout: true },
+      respond: vi.fn(),
+      context: { getRuntimeConfig: () => ({ update: { channel: "beta" } }) },
+    } as never);
+    expect(refreshGatewayUpdateStatusMock).toHaveBeenCalledTimes(2);
+
+    settleRefresh?.();
+    await Promise.all([first, second]);
+
+    await handler({ params: { refreshCheckout: true }, respond: vi.fn(), context } as never);
+    expect(refreshGatewayUpdateStatusMock).toHaveBeenCalledTimes(3);
   });
 
   it("refreshes the latest update sentinel before responding", async () => {

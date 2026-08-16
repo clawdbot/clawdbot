@@ -58,6 +58,31 @@ function createHarness(request: GatewayBrowserClient["request"]) {
   return { sessions, emitEvent: (event: GatewayEventFrame) => eventListener?.(event) };
 }
 
+function installPageLifecycle() {
+  const documentEvents = new EventTarget();
+  const pageEvents = new EventTarget();
+  let visibilityState: DocumentVisibilityState = "visible";
+  Object.defineProperty(documentEvents, "visibilityState", {
+    configurable: true,
+    get: () => visibilityState,
+  });
+  vi.stubGlobal("document", documentEvents);
+  vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
+  vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
+  return {
+    setVisibility(next: DocumentVisibilityState) {
+      visibilityState = next;
+      documentEvents.dispatchEvent(new Event("visibilitychange"));
+    },
+    pageHide() {
+      pageEvents.dispatchEvent(new Event("pagehide"));
+    },
+    pageShow() {
+      pageEvents.dispatchEvent(new Event("pageshow"));
+    },
+  };
+}
+
 describe("event-driven session list refresh", () => {
   it("refreshes exact managed queries by agent and retains appended dashboard windows", async () => {
     vi.useFakeTimers();
@@ -527,29 +552,65 @@ describe("event-driven session list refresh", () => {
     }
   });
 
-  it("flushes a pending event refresh synchronously on dispose", async () => {
+  it("holds canonical and filtered event refreshes while hidden and catches up once", async () => {
     vi.useFakeTimers();
+    const page = installPageLifecycle();
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(1);
+      return sessionsResult(1, [{ key: "agent:main:pending", kind: "direct", updatedAt: 0 }]);
     });
     const { sessions, emitEvent } = createHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
+    const unsubscribe = sessions.subscribeList({ agentId: "main", archivedFilter: "all" }, vi.fn());
 
     try {
-      await sessions.refresh({ force: true });
+      await sessions.refresh({ agentId: "main", force: true });
+      await sessions.refreshList({ agentId: "main", archivedFilter: "all", force: true });
       emitEvent(sessionChangedEvent("agent:main:pending"));
-      sessions.dispose();
 
+      page.setVisibility("hidden");
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          sessionKey: "agent:main:pending",
+          reason: "update",
+          key: "agent:main:pending",
+          kind: "direct",
+          updatedAt: 2,
+          archived: true,
+          archivedAt: 2,
+        },
+      });
+      expect(sessions.state.result?.sessions).toEqual([]);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_MAX_WAIT_MS * 2);
       expect(request).toHaveBeenCalledTimes(2);
+
+      page.setVisibility("visible");
+      page.pageShow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(4);
+
+      page.setVisibility("hidden");
+      page.pageHide();
+      page.pageShow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(4);
+      page.setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(6);
+
+      sessions.dispose();
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS * 2);
-      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenCalledTimes(6);
     } finally {
+      unsubscribe();
       sessions.dispose();
       vi.useRealTimers();
+      vi.unstubAllGlobals();
     }
   });
 });
