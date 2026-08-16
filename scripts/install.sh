@@ -1722,24 +1722,135 @@ persist_shell_path_prepend() {
     fi
 
     local path_expr="${2:-$dir}"
-    local path_line="export PATH=\"${path_expr}:\$PATH\""
-    local wrote_rc=0
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [[ -f "$rc" ]]; then
-            if [[ "$(sed -n '1p' "$rc")" != "$path_line" ]]; then
-                local tmp_rc="${rc}.openclaw-tmp"
-                {
-                    printf '%s\n' "$path_line"
-                    grep -Fvx "$path_line" "$rc" || true
-                } > "$tmp_rc"
-                mv "$tmp_rc" "$rc"
-            fi
-            wrote_rc=1
+    local shell_name="${SHELL:-}"
+    shell_name="${shell_name##*/}"
+    local bash_login_rc="$HOME/.profile"
+    if [[ -e "$HOME/.bash_profile" || -L "$HOME/.bash_profile" ]]; then
+        bash_login_rc="$HOME/.bash_profile"
+    elif [[ -e "$HOME/.bash_login" || -L "$HOME/.bash_login" ]]; then
+        bash_login_rc="$HOME/.bash_login"
+    fi
+
+    local targets=()
+    local fish_rc="$HOME/.config/fish/conf.d/openclaw.fish"
+    case "$shell_name" in
+        bash)
+            targets+=("bash:$HOME/.bashrc" "bash:$bash_login_rc")
+            [[ -e "$HOME/.zshrc" || -L "$HOME/.zshrc" ]] && targets+=("zsh:$HOME/.zshrc")
+            [[ -e "$HOME/.zprofile" || -L "$HOME/.zprofile" ]] && targets+=("zsh:$HOME/.zprofile")
+            [[ -e "$fish_rc" || -L "$fish_rc" ]] && targets+=("fish:$fish_rc")
+            ;;
+        zsh)
+            targets+=("zsh:$HOME/.zshrc" "zsh:$HOME/.zprofile")
+            [[ -e "$HOME/.bashrc" || -L "$HOME/.bashrc" ]] && targets+=("bash:$HOME/.bashrc")
+            [[ -e "$bash_login_rc" || -L "$bash_login_rc" ]] && targets+=("bash:$bash_login_rc")
+            [[ -e "$fish_rc" || -L "$fish_rc" ]] && targets+=("fish:$fish_rc")
+            ;;
+        fish)
+            targets+=("fish:$fish_rc")
+            [[ -e "$HOME/.bashrc" || -L "$HOME/.bashrc" ]] && targets+=("bash:$HOME/.bashrc")
+            [[ -e "$bash_login_rc" || -L "$bash_login_rc" ]] && targets+=("bash:$bash_login_rc")
+            [[ -e "$HOME/.zshrc" || -L "$HOME/.zshrc" ]] && targets+=("zsh:$HOME/.zshrc")
+            [[ -e "$HOME/.zprofile" || -L "$HOME/.zprofile" ]] && targets+=("zsh:$HOME/.zprofile")
+            ;;
+        *)
+            echo ""
+            ui_warn "Could not identify your shell from SHELL=${SHELL:-unset}; PATH was not persisted"
+            echo "  Add this directory to PATH in your shell startup file: ${dir}"
+            echo "  Bash/zsh: export PATH=\"${path_expr}:\$PATH\""
+            echo "  Fish: fish_add_path -- \"${path_expr}\""
+            return 0
+            ;;
+    esac
+
+    local target contract rc path_line failed=0
+    for target in "${targets[@]}"; do
+        contract="${target%%:*}"
+        rc="${target#*:}"
+        if [[ "$contract" == "fish" ]]; then
+            path_line="fish_add_path -- \"${path_expr}\""
+        else
+            path_line="export PATH=\"${path_expr}:\$PATH\""
+        fi
+        if ! persist_path_line_to_profile "$rc" "$path_line"; then
+            failed=1
         fi
     done
-    if [[ "$wrote_rc" -eq 0 ]]; then
-        printf '%s\n' "$path_line" >> "$HOME/.bashrc"
+    return "$failed"
+}
+
+resolve_safe_profile_target() {
+    local profile="$1" current="$1" link parent resolved hops=0
+    local home_real
+    home_real="$(cd "$HOME" 2>/dev/null && pwd -P)" || return 1
+    while [[ -L "$current" ]]; do
+        ((hops += 1))
+        if (( hops > 40 )); then
+            ui_warn "Refusing to update profile symlink loop: ${profile}" >&2
+            return 1
+        fi
+        link="$(readlink "$current")" || return 1
+        parent="$(dirname "$current")"
+        if [[ "$link" == /* ]]; then
+            current="$link"
+        else
+            current="$parent/$link"
+        fi
+        parent="$(cd "$(dirname "$current")" 2>/dev/null && pwd -P)" || {
+            ui_warn "Refusing profile symlink with missing parent: ${profile}" >&2
+            return 1
+        }
+        current="$parent/$(basename "$current")"
+    done
+    parent="$(cd "$(dirname "$current")" 2>/dev/null && pwd -P)" || return 1
+    resolved="$parent/$(basename "$current")"
+    case "$resolved" in
+        "$home_real"/*) ;;
+        *)
+            ui_warn "Refusing profile symlink outside your home: ${profile}" >&2
+            return 1
+            ;;
+    esac
+    if [[ ! -f "$resolved" || -L "$resolved" ]]; then
+        ui_warn "Refusing non-regular profile target: ${profile}" >&2
+        return 1
     fi
+    local owner current_uid
+    current_uid="$(id -u)"
+    owner="$(stat -c '%u' "$resolved" 2>/dev/null || stat -f '%u' "$resolved" 2>/dev/null || true)"
+    if [[ "$owner" != "$current_uid" ]]; then
+        ui_warn "Refusing profile target not owned by the current user: ${profile}" >&2
+        return 1
+    fi
+    printf '%s\n' "$resolved"
+}
+
+persist_path_line_to_profile() {
+    local profile="$1" path_line="$2" rc tmp_rc
+    rc="$profile"
+    if [[ -L "$profile" ]]; then
+        rc="$(resolve_safe_profile_target "$profile")" || return 1
+    elif [[ -e "$profile" && ! -f "$profile" ]]; then
+        ui_warn "Refusing non-regular shell profile: ${profile}"
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$rc")"
+    if [[ "$(sed -n '1p' "$rc" 2>/dev/null || true)" == "$path_line" ]]; then
+        return 0
+    fi
+    tmp_rc="$(mktemp "${rc}.openclaw-tmp.XXXXXX")"
+    TMPFILES+=("$tmp_rc")
+    if [[ -f "$rc" ]]; then
+        cp -p "$rc" "$tmp_rc"
+    fi
+    {
+        printf '%s\n' "$path_line"
+        if [[ -f "$rc" ]]; then
+            grep -Fvx "$path_line" "$rc" || true
+        fi
+    } > "$tmp_rc"
+    mv "$tmp_rc" "$rc"
 }
 
 promote_supported_node_binary() {
@@ -2470,14 +2581,8 @@ ensure_user_local_bin_on_path() {
     local target="$HOME/.local/bin"
     mkdir -p "$target"
 
-    export PATH="$target:$PATH"
-
-    local path_line="export PATH=\"\$HOME/.local/bin:\$PATH\""
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [[ -f "$rc" ]] && ! grep -q ".local/bin" "$rc"; then
-            echo "$path_line" >> "$rc"
-        fi
-    done
+    prepend_path_dir "$target"
+    persist_shell_path_prepend "$target" "\$HOME/.local/bin" || true
 }
 
 npm_global_bin_dir() {
@@ -2674,12 +2779,16 @@ warn_shell_path_missing_dir() {
     # that case new shells are fine and the user only needs to reload this one.
     # RC lines may spell the home dir as $HOME instead of the expanded path.
     local dir_home_form="\$HOME${dir#"$HOME"}"
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.config/fish/conf.d/openclaw.fish"; do
         if [[ -f "$rc" ]] && { grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc"; }; then
             echo ""
             ui_info "PATH updated in ${rc}: added ${label} (${dir})"
             echo "  New terminals pick this up automatically."
-            echo "  For this shell, run: source ${rc}; hash -r"
+            if [[ "$rc" == *.fish ]]; then
+                echo "  For this shell, run: source ${rc}"
+            else
+                echo "  For this shell, run: source ${rc}; hash -r"
+            fi
             return 0
         fi
     done
@@ -2687,8 +2796,13 @@ warn_shell_path_missing_dir() {
     echo ""
     ui_warn "PATH missing ${label}: ${dir}"
     echo "  This can make openclaw show as \"command not found\" in new terminals."
-    echo "  Fix (zsh: ~/.zshrc, bash: ~/.bashrc):"
-    echo "    export PATH=\"${dir}:\$PATH\""
+    if [[ "${SHELL:-}" == */fish ]]; then
+        echo "  Fix (Fish: ~/.config/fish/conf.d/openclaw.fish):"
+        echo "    fish_add_path -- \"${dir}\""
+    else
+        echo "  Fix (zsh: ~/.zshrc, bash: ~/.bashrc):"
+        echo "    export PATH=\"${dir}:\$PATH\""
+    fi
 }
 
 openclaw_command_for_user() {
