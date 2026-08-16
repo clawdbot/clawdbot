@@ -231,7 +231,10 @@ describe("SystemAgentChatEngine approval", () => {
 
     const reply = await engine.handle("yes");
 
-    expect(createAgent).toHaveBeenCalledWith({ name: "researcher" });
+    expect(createAgent).toHaveBeenCalledWith({
+      name: "researcher",
+      provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
+    });
     expect(reply.action).toBe("open-tui");
     expect(reply.handoff).toMatchObject({
       kind: "open-tui",

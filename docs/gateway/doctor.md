@@ -366,8 +366,10 @@ That stages grounded durable candidates into the short-term dreaming store while
     When a stable Chrome extension copy and owned native-host registration already
     exist, doctor reports registration drift. `openclaw doctor --fix` may repair
     that owned registration, but it never installs the host for every OpenClaw
-    user and never overwrites a foreign same-name manifest or launcher. Use
-    `openclaw browser extension install` for the initial setup.
+    user and never overwrites a foreign same-name manifest or launcher. For
+    initial setup, run `openclaw browser extension install` first, then add the
+    official Chrome Web Store extension. The unpacked stable path is a
+    development fallback.
 
     Doctor also audits the host-local Chrome MCP path when you use `defaultProfile: "user"` or a configured `existing-session` profile:
 

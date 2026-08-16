@@ -393,6 +393,23 @@ describe("current plugin metadata snapshot", () => {
     );
   });
 
+  it("trusts the config identity explicitly paired with an owner-prepared scope", () => {
+    const sourceConfig = { plugins: { allow: ["source"] } };
+    const runtimeConfig = { plugins: { allow: ["runtime"] } };
+    const workspaceDir = "/workspace";
+    const snapshot = createSnapshot({ config: sourceConfig, workspaceDir });
+
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir })).toBe(
+          snapshot,
+        );
+      },
+      { config: runtimeConfig },
+    );
+  });
+
   it("rejects a workspace-scoped snapshot when the caller does not provide workspace scope", () => {
     const config = { plugins: { allow: ["demo"] } };
     const snapshot = createSnapshot({ config, workspaceDir: "/workspace/a" });

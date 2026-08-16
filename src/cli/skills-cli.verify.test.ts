@@ -266,7 +266,11 @@ describe("skills verify CLI", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: 'Skill "html" is not tracked from skills-sh:owner-b/repo-b/html.',
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: 'Skill "html" is not tracked from skills-sh:owner-b/repo-b/html.',
+      },
     });
     expect(mocks.runtimeErrors).toStrictEqual([]);
     expect(mocks.fetchClawHubSkillVerificationMock).not.toHaveBeenCalled();
@@ -285,7 +289,11 @@ describe("skills verify CLI", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: "ClawHub verification unavailable",
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: "ClawHub verification unavailable",
+      },
     });
     expect(mocks.runtimeErrors).toStrictEqual([]);
   });

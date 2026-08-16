@@ -367,13 +367,29 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
-  it("parses native session discovery options", () => {
+  it("parses named native session discovery homes and rejects empty labels", () => {
     expect(
       readCodexPluginConfig({
-        sessionCatalog: { enabled: false, homes: [" /srv/codex-extra "] },
+        sessionCatalog: {
+          enabled: false,
+          homes: [
+            " /srv/codex-string ",
+            { path: " /srv/codex-named ", label: " Named store " },
+            { path: " /srv/codex-default " },
+          ],
+        },
       }).sessionCatalog,
-    ).toEqual({ enabled: false, homes: ["/srv/codex-extra"] });
-    expect(readCodexPluginConfig({ sessionCatalog: { homes: [" "] } })).toStrictEqual({});
+    ).toEqual({
+      enabled: false,
+      homes: [
+        "/srv/codex-string",
+        { path: "/srv/codex-named", label: "Named store" },
+        { path: "/srv/codex-default" },
+      ],
+    });
+    expect(
+      readCodexPluginConfig({ sessionCatalog: { homes: [{ path: "/srv/codex", label: " " }] } }),
+    ).toStrictEqual({});
   });
 
   it.each([

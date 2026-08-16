@@ -54,6 +54,7 @@ import {
   type ConfigSetOptions,
 } from "./config-set-input.js";
 import { resolveConfigSetMode } from "./config-set-parser.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 
 export { parseConfigSetPath } from "./config-cli-path.js";
@@ -155,7 +156,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const res = getAtPath(redactConfigObject(snapshot.config), parsedPath);
     if (!res.found) {
       if (opts.json) {
-        writeRuntimeJson(runtime, { error: `Config path not found: ${opts.path}` });
+        writeRuntimeJson(runtime, formatCliJsonFailure(`Config path not found: ${opts.path}`));
         runtime.exit(1);
         return;
       }
@@ -183,7 +184,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       throw err;
     }
     if (opts.json) {
-      writeRuntimeJson(runtime, { error: formatErrorMessage(err) });
+      writeRuntimeJson(runtime, formatCliJsonFailure(err));
       runtime.exit(1);
       return;
     }
@@ -317,7 +318,11 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     const shortPath = shortenHomePath(outputPath);
     if (!snapshot.exists) {
       if (opts.json) {
-        writeRuntimeJson(runtime, { valid: false, path: outputPath, error: "file not found" }, 0);
+        writeRuntimeJson(
+          runtime,
+          { ...formatCliJsonFailure("file not found"), valid: false, path: outputPath },
+          0,
+        );
       } else {
         runtime.error(danger(`Config file not found: ${shortPath}`));
         runtime.error(
@@ -330,7 +335,12 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     if (!snapshot.valid) {
       const issues = normalizeConfigIssues(snapshot.issues);
       if (opts.json) {
-        writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
+        writeRuntimeJson(runtime, {
+          ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
+          valid: false,
+          path: outputPath,
+          issues,
+        });
       } else {
         runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
         for (const line of renderConfigValidationIssueLines(snapshot, danger("×"))) {
@@ -361,7 +371,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     if (opts.json) {
       writeRuntimeJson(
         runtime,
-        { valid: false, path: outputPath, error: formatErrorMessage(err) },
+        { ...formatCliJsonFailure(err), valid: false, path: outputPath },
         0,
       );
     } else {

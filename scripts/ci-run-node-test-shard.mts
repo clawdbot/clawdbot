@@ -19,7 +19,10 @@ import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mts";
+import {
+  acquireLocalHeavyCheckLockSync,
+  withLocalHeavyCheckLockHeld,
+} from "./lib/local-heavy-check-runtime.mts";
 
 // Two concurrent plans halve the serial tail of packed jobs. Children run with
 // inner test-projects parallelism 1 so a job never exceeds two Vitest runs;
@@ -122,32 +125,30 @@ export function buildChildEnv(
     // races. The scratch fallback preserves per-plan isolation.
     [FS_MODULE_CACHE_PATH_ENV_KEY]: join(persistentCacheRoot || scratchDir, cacheDirectory),
     OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
-    // This wrapper holds the repo heavy-check lock; children skipping it is
-    // what lets two plans run concurrently instead of serializing on the lock.
-    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
   };
-  if (entry.kind === "target") {
-    return childEnv;
-  }
-  const plan = entry.plan;
-  if (plan.shard_name) {
-    childEnv.OPENCLAW_VITEST_SHARD_NAME = plan.shard_name;
-  }
-  if (plan.env && typeof plan.env === "object" && !Array.isArray(plan.env)) {
-    for (const [key, value] of Object.entries(plan.env)) {
-      if (typeof value === "string") {
-        childEnv[key] = value;
+  if (entry.kind === "group") {
+    const plan = entry.plan;
+    if (plan.shard_name) {
+      childEnv.OPENCLAW_VITEST_SHARD_NAME = plan.shard_name;
+    }
+    if (plan.env && typeof plan.env === "object" && !Array.isArray(plan.env)) {
+      for (const [key, value] of Object.entries(plan.env)) {
+        if (typeof value === "string") {
+          childEnv[key] = value;
+        }
       }
     }
+    if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
+      const includeFile = join(scratchDir, `node-test-include-${index}.json`);
+      writeFileSync(includeFile, JSON.stringify(plan.includePatterns), "utf8");
+      childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+    } else {
+      delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+    }
   }
-  if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
-    const includeFile = join(scratchDir, `node-test-include-${index}.json`);
-    writeFileSync(includeFile, JSON.stringify(plan.includePatterns), "utf8");
-    childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
-  } else {
-    delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
-  }
-  return childEnv;
+  // This wrapper owns the shared lock, so every nested heavy-check wrapper must
+  // inherit that ownership rather than queueing behind its own parent.
+  return withLocalHeavyCheckLockHeld(childEnv);
 }
 
 export function pruneFsModuleCache(root: string, maxBytes = FS_MODULE_CACHE_MAX_BYTES) {

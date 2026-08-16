@@ -85,7 +85,10 @@ outside OpenClaw:
         enabled: true,
         config: {
           sessionCatalog: {
-            homes: ["/path/to/additional-codex-home"],
+            homes: [
+              "/path/to/additional-codex-home",
+              { path: "/path/to/review-codex-home", label: "Review sessions" },
+            ],
           },
         },
       },
@@ -95,10 +98,12 @@ outside OpenClaw:
 ```
 
 Configured stores appear in the sidebar alongside automatically discovered
-ones, labeled `Local Codex · configured <n>` and grouped by each session's
-working directory. Sessions in these stores support the same view, continue,
-and archive actions, and the selected OpenClaw agent still owns the resulting
-connection; `homes` only adds catalog sources.
+ones, labeled `Local Codex · <label>` and grouped by each session's working
+directory. String entries and objects without `label` use the basename of the
+canonicalized home directory; an explicit `label` overrides that default.
+Sessions in these stores support the same view, continue, and archive actions,
+and the selected OpenClaw agent still owns the resulting connection; `homes`
+only adds catalog sources.
 
 Only existing directories are included. Equivalent paths are canonicalized and
 deduplicated against the automatic homes, and automatic homes keep priority

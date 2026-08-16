@@ -5,6 +5,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   chatQueueMovableSegments,
+  compareChatQueueOrder,
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
@@ -30,6 +31,17 @@ type ChatQueueReorder = {
 
 const DRAG_MIME = "application/x-openclaw-queued-message";
 const DRAG_OVER_CLASS = "chat-queue__item--drop-target";
+
+export function steerableQueuedMessage(queue: readonly ChatQueueItem[]): ChatQueueItem | undefined {
+  return queue
+    .toSorted(compareChatQueueOrder)
+    .find(
+      (item) =>
+        !isSteeredQueueItem(item) &&
+        (item.sendState === undefined || item.sendState === "waiting-idle") &&
+        !item.localCommandName,
+    );
+}
 
 function sendStateLabel(item: ChatQueueItem): string | null {
   switch (item.sendState) {
@@ -102,9 +114,8 @@ function renderChatQueueItem(
   const busy = item.sendState === "executing-command" || isInflightSteer(item);
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) &&
-    !steered &&
-    (item.sendState === undefined || item.sendState === "waiting-idle") &&
-    !item.localCommandName;
+    !failed &&
+    steerableQueuedMessage([item]) === item;
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);
   const move = props.onQueueMove;
@@ -198,7 +209,7 @@ function renderChatQueueItem(
       ${reconnecting
         ? html`<span class="chat-queue__dot" aria-hidden="true"></span>`
         : html`<span class="chat-queue__icon" aria-hidden="true">
-            ${failed ? icons.alertTriangle : steered ? icons.cornerDownRight : icons.clock}
+            ${failed ? icons.alertTriangle : steered ? icons.cornerDownRight : icons.outbox}
           </span>`}
       ${renderChatAuthorAvatar(item.sender)}
       ${steered

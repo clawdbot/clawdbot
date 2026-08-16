@@ -243,21 +243,41 @@ suite.define(() => {
         .locator(".tabstrip-tab__close")
         .evaluate((close) => {
           const header = close.closest<HTMLElement>(".tp-header");
+          const tab = close.previousElementSibling;
+          const tabBase = tab?.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
           if (!header) {
             throw new Error("Terminal close control must stay inside the tab header");
           }
+          if (!tabBase) {
+            throw new Error("Terminal close control must follow a rendered tab surface");
+          }
           const headerBounds = header.getBoundingClientRect();
           const closeBounds = close.getBoundingClientRect();
+          const tabBounds = tabBase.getBoundingClientRect();
+          const closeStyle = getComputedStyle(close);
+          const tabStyle = getComputedStyle(tabBase);
           return {
+            backgroundColor: tabStyle.backgroundColor,
+            borderBottomWidth: tabStyle.borderBottomWidth,
+            borderRadius: tabStyle.borderRadius,
+            closeBorderBottomWidth: closeStyle.borderBottomWidth,
             centerOffset: Math.abs(
               closeBounds.top +
                 closeBounds.height / 2 -
                 (headerBounds.top + headerBounds.height / 2),
             ),
+            closeInset: tabBounds.right - closeBounds.right,
             height: closeBounds.height,
+            tabHeight: tabBounds.height,
             width: closeBounds.width,
           };
         });
+      expect(closeControlMetrics.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(closeControlMetrics.borderBottomWidth).toBe("0px");
+      expect(closeControlMetrics.borderRadius).not.toBe("0px");
+      expect(closeControlMetrics.closeBorderBottomWidth).toBe("0px");
+      expect(closeControlMetrics.closeInset).toBeGreaterThanOrEqual(-0.5);
+      expect(closeControlMetrics.tabHeight).toBe(30);
       expect(closeControlMetrics.width).toBe(28);
       expect(closeControlMetrics.height).toBe(28);
       expect(closeControlMetrics.centerOffset).toBeLessThanOrEqual(0.5);

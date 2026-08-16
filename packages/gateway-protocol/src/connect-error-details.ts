@@ -232,7 +232,11 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
 
 /** Read the exact target artifact from an untrusted reload-required rejection. */
 export function readControlUiBuildMismatchId(details: unknown): string | null {
-  if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
+  const code = readConnectErrorDetailCode(details);
+  if (
+    code !== ConnectErrorDetailCodes.PROTOCOL_MISMATCH &&
+    code !== ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH
+  ) {
     return null;
   }
   const raw = details as { gatewayBuildId?: unknown; reloadRequired?: unknown };

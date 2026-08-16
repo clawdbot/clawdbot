@@ -307,6 +307,17 @@ describe("workboard gateway methods", () => {
         events: expect.arrayContaining([expect.objectContaining({ kind: "comment_added" })]),
       },
     });
+
+    const oversizedRespond = vi.fn();
+    await methods.get("workboard.cards.comment")?.handler({
+      params: { id: cardId, body: "x".repeat(2001) },
+      respond: oversizedRespond,
+    } as never);
+
+    expect(oversizedRespond.mock.calls[0]?.[0]).toBe(false);
+    expect(oversizedRespond.mock.calls[0]?.[2]).toMatchObject({
+      message: "comment body must be 2000 characters or fewer (got 2001).",
+    });
   });
 
   it("validates labels from comma-separated gateway input", async () => {

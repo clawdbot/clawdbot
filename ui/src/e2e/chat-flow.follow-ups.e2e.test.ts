@@ -3,6 +3,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
+  expectRequestCountStable,
   installMockGateway,
   requireRecord,
   requireString,
@@ -691,6 +692,124 @@ suite.define(() => {
         sessionKey: "main",
       });
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("steers a queued follow-up with modified Enter in Enter shortcut mode", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await page.locator("[data-settings-send-shortcut]").selectOption("enter");
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("keep the first shortcut run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const firstSend = requireRecord((await gateway.waitForRequest("chat.send")).params);
+      const firstRunId = requireString(firstSend.idempotencyKey, "first active run id");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const steerText = "steer this keyboard follow-up now";
+      await composer.fill(steerText);
+      const enterQueueButton = page.getByRole("button", { name: "Queue message" });
+      const enterTooltip = await enterQueueButton
+        .locator("..")
+        .evaluate((element) => (element as HTMLElement & { content?: string }).content);
+      expect(enterTooltip).toBe("Queue ⏎ · Steer ⌘/Ctrl+Enter");
+      if (artifactDir) {
+        await enterQueueButton.hover();
+        await expect
+          .poll(() =>
+            enterQueueButton.evaluate((button) => {
+              const tooltip = button
+                .closest("openclaw-tooltip")
+                ?.shadowRoot?.querySelector("wa-tooltip");
+              return (tooltip as (HTMLElement & { open?: boolean }) | null)?.open === true;
+            }),
+          )
+          .toBe(true);
+        await page.screenshot({
+          path: `${artifactDir}/queue-steer-shortcut.png`,
+          fullPage: true,
+        });
+      }
+      await composer.press("Control+Enter");
+
+      const firstRunSends = await waitForRequests(gateway, "chat.send", 2);
+      const steerParams = requireRecord(firstRunSends[1]?.params);
+      expect(steerParams).toMatchObject({
+        deliver: false,
+        expectedRunId: firstRunId,
+        message: steerText,
+        queueMode: "steer",
+        sessionKey: "main",
+      });
+      const steeredRow = page.locator(".chat-queue__item--steered", { hasText: steerText });
+      await steeredRow.waitFor({ timeout: 10_000 });
+      await gateway.emitGatewayEvent("chat", {
+        runId: requireString(steerParams.idempotencyKey, "steer send id"),
+        sessionKey: "main",
+        state: "final",
+      });
+      await steeredRow.waitFor({ state: "detached", timeout: 10_000 });
+
+      await gateway.emitChatFinal({ runId: firstRunId, text: "First shortcut run finished." });
+      await page
+        .getByRole("button", { name: "Stop generating" })
+        .waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps modified Enter queued in modifier-enter shortcut mode", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await page.locator("[data-settings-send-shortcut]").selectOption("modifier-enter");
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("keep the modifier shortcut run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const queuedText = "leave this modifier follow-up queued";
+      await composer.fill(queuedText);
+      const queueButton = page.getByRole("button", { name: "Queue message" });
+      const tooltip = await queueButton
+        .locator("..")
+        .evaluate((element) => (element as HTMLElement & { content?: string }).content);
+      expect(tooltip).toBe("Queue");
+      await composer.press("Control+Enter");
+
+      const queuedRow = page.locator(".chat-queue__item", { hasText: queuedText });
+      await queuedRow.waitFor({ timeout: 10_000 });
+      await queuedRow.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
+      await expectRequestCountStable(gateway, "chat.send", 1);
     } finally {
       await suite.closeBrowserContext(context);
     }

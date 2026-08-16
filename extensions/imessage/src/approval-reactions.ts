@@ -137,19 +137,6 @@ function listIMessageApprovalReactionBindings(
   return listApprovalReactionBindings({ allowedDecisions });
 }
 
-export function buildIMessageApprovalReactionHint(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): string | null {
-  return buildApprovalReactionHint({ allowedDecisions });
-}
-
-export function addIMessageApprovalReactionHintToText(params: {
-  text: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  return addApprovalReactionHintToText(params);
-}
-
 type IMessageApprovalDeliveryBinding = ApprovalReactionDeliveryBinding & {
   approvalSlug: string;
 };
@@ -205,7 +192,7 @@ function visibleApprovalBindingMatches(
   if (!options.requireReactionHint) {
     return true;
   }
-  const hint = buildIMessageApprovalReactionHint(binding.allowedDecisions);
+  const hint = buildApprovalReactionHint({ allowedDecisions: binding.allowedDecisions });
   return Boolean(hint && text.includes(hint));
 }
 
@@ -229,7 +216,7 @@ export function addIMessageApprovalReactionHintToStructuredPayload(params: {
   }
   return {
     ...params.payload,
-    text: addIMessageApprovalReactionHintToText({
+    text: addApprovalReactionHintToText({
       text,
       allowedDecisions: metadata.allowedDecisions,
     }),

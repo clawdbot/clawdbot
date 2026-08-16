@@ -487,6 +487,7 @@ export async function prepareGatewayKernelState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
+    isConnectionActive,
   } = connectionState;
 
   return {
@@ -569,6 +570,7 @@ export async function prepareGatewayKernelState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
+    isConnectionActive,
     getWorkerIngressEndpoint: transportBridge.getWorkerIngressEndpoint,
     getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,

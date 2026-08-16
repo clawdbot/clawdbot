@@ -11,6 +11,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 type TestChatPane = HTMLElement & {
+  catalogCursor: string | undefined;
   catalogMessages: unknown[];
   context: ApplicationContext;
   state: ChatPageHost;
@@ -25,6 +26,7 @@ type TestChatPane = HTMLElement & {
   prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<boolean>;
+  showEarlierMessages: () => Promise<void>;
   requestReplyMessage: (messageId: string) => void;
   readReplyMessage: (messageId: string) => unknown;
   openReplyMessage: (messageId: string) => void;
@@ -39,6 +41,7 @@ type TestChatPane = HTMLElement & {
     activeSessionKey: string | null;
     pendingScrollOffsetFor: (sessionKey: string) => number | null;
     revealMessage: (messageId: string) => boolean;
+    scrollToOffset: (offset: number) => void;
   };
 };
 
@@ -126,6 +129,30 @@ function nativeHistorySeq(message: unknown): number | undefined {
     | Record<string, unknown>
     | undefined;
   return typeof metadata?.seq === "number" ? metadata.seq : undefined;
+}
+
+function appendChatThread(
+  pane: TestChatPane,
+  options: { clientHeight?: number; scrollHeight?: number; scrollTop?: number } = {},
+) {
+  const thread = document.createElement("div");
+  thread.className = "chat-thread";
+  thread.scrollTop = options.scrollTop ?? 0;
+  Object.defineProperty(thread, "clientHeight", { value: options.clientHeight ?? 500 });
+  Object.defineProperty(thread, "scrollHeight", { value: options.scrollHeight ?? 2_000 });
+  pane.append(thread);
+  return thread;
+}
+
+function createNativeShowEarlierPane(request: ReturnType<typeof vi.fn>, scrollTop = 0) {
+  const client = { request } as unknown as GatewayBrowserClient;
+  const result = createTestChatPane({ client, sessions: {} as SessionCapability });
+  result.state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
+  result.state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+  const thread = appendChatThread(result.pane, { scrollTop });
+  vi.spyOn(result.pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
+  const scrollToOffset = vi.spyOn(result.pane.transcript, "scrollToOffset");
+  return { ...result, scrollToOffset, thread };
 }
 
 describe("chat pane native history pagination", () => {
@@ -247,6 +274,124 @@ describe("chat pane native history pagination", () => {
     };
 
     expect(pane.hasOlderMessages()).toBe(false);
+  });
+
+  it("shows already-loaded earlier history one viewport up without requesting a page", async () => {
+    const request = vi.fn();
+    const { pane, thread } = createNativeShowEarlierPane(request, 1_200);
+
+    await pane.showEarlierMessages();
+
+    expect(thread.scrollTop).toBe(700);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("loads at the top through the canonical path and reveals the prepended window", async () => {
+    const request = vi.fn(async () => ({
+      messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+      hasMore: true,
+      nextOffset: 4,
+      totalMessages: 6,
+    }));
+    const { pane, scrollToOffset, state } = createNativeShowEarlierPane(request);
+
+    await pane.showEarlierMessages();
+
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 100,
+      offset: 2,
+    });
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
+    expect(scrollToOffset).toHaveBeenCalledWith(0);
+    expect(pane.transcriptScrollTop).toBe(0);
+    expect(pane.historyObserverArmed).toBe(false);
+    expect(pane.historyAutoLoadBlocked).toBe(true);
+  });
+
+  it("reveals a final catalog page even when its cursor is exhausted", async () => {
+    const request = vi.fn(async () => ({
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      items: [{ id: "u1", type: "userMessage", text: "oldest catalog message" }],
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    state.sessionKey = key;
+    pane.sessionKey = key;
+    pane.catalogCursor = "final-page";
+    appendChatThread(pane);
+    vi.spyOn(pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
+    const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");
+
+    await pane.showEarlierMessages();
+
+    expect(request).toHaveBeenCalledWith(
+      "sessions.catalog.read",
+      expect.objectContaining({ cursor: "final-page" }),
+    );
+    expect(pane.catalogMessages).toHaveLength(1);
+    expect(pane.catalogCursor).toBeUndefined();
+    expect(scrollToOffset).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps the viewport and pagination retryable when the older load fails", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("history unavailable");
+    });
+    const { pane, scrollToOffset, state, thread } = createNativeShowEarlierPane(request);
+
+    await pane.showEarlierMessages();
+
+    expect(thread.scrollTop).toBe(0);
+    expect(state.chatHistoryPagination).toMatchObject({ hasMore: true });
+    expect(state.lastError).toBe("history unavailable");
+    expect(scrollToOffset).not.toHaveBeenCalled();
+  });
+
+  it("joins an in-flight canonical load before revealing its earlier window", async () => {
+    const deferred = createDeferred<{
+      messages: unknown[];
+      hasMore: boolean;
+      totalMessages: number;
+    }>();
+    const request = vi.fn(() => deferred.promise);
+    const { pane, scrollToOffset } = createNativeShowEarlierPane(request);
+
+    const automaticLoad = pane.loadOlderMessages();
+    const manualNavigation = pane.showEarlierMessages();
+    deferred.resolve({
+      messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+      hasMore: false,
+      totalMessages: 4,
+    });
+    await Promise.all([automaticLoad, manualNavigation]);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(scrollToOffset).toHaveBeenCalledOnce();
+    expect(scrollToOffset).toHaveBeenCalledWith(0);
+  });
+
+  it("does not navigate a replacement session after an older load settles", async () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+    appendChatThread(pane);
+    const loaded = createDeferred<boolean>();
+    const committed = createDeferred<boolean>();
+    vi.spyOn(pane, "loadOlderMessages").mockReturnValue(loaded.promise);
+    vi.spyOn(pane, "updateComplete", "get").mockReturnValue(committed.promise);
+    const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");
+
+    const navigation = pane.showEarlierMessages();
+    loaded.resolve(true);
+    await Promise.resolve();
+    state.sessionKey = "agent:main:replacement";
+    committed.resolve(true);
+    await navigation;
+
+    expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
   it("auto-loads a visible sentinel when the initial tail is not scrollable", async () => {

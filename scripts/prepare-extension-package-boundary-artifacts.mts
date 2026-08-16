@@ -161,6 +161,8 @@ function listSourceDtsOutputs(sourceDir: string, outputPrefix: string) {
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  // agent-harness-runtime projects the host-prepared attempt contract.
+  "src/agents/embedded-agent-runner/run/types.ts",
   // provider-auth re-exports these signatures into generated SDK declarations.
   "src/agents/cli-credentials.ts",
   "src/plugins/provider-runtime-model.types.ts",

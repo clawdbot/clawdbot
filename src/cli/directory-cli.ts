@@ -206,12 +206,10 @@ export function registerDirectoryCli(program: Command) {
     try {
       await action();
     } catch (err) {
-      const message = formatErrorMessage(err);
       if (opts.json) {
-        defaultRuntime.writeJson({ error: message });
-      } else {
-        defaultRuntime.error(danger(message));
+        throw err;
       }
+      defaultRuntime.error(danger(formatErrorMessage(err)));
       defaultRuntime.exit(1);
     }
   };

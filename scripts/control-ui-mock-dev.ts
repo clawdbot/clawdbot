@@ -1352,6 +1352,7 @@ async function createChatPickerScenario(
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
       execCwd: "/Users/peter/Projects",
       execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      hasAutomation: true,
       pinned: true,
     }),
     sessionRow("agent:main:whatsapp:group:family", "Family", baseTime - 90_000, {

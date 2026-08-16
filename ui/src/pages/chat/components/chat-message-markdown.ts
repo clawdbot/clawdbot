@@ -234,12 +234,11 @@ export function renderUserMessageMarkdown(
 
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
+  const visibleMarkdown = expanded ? markdown : preview;
   return html`
     <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
       <div class="chat-message-disclosure__content">
-        ${expanded
-          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
-          : html`<div class="chat-message-disclosure__preview">${preview}</div>`}
+        ${renderMarkdownText(visibleMarkdown, opts.isStreaming, markdownRenderOptions)}
       </div>
       <button
         class="chat-message-disclosure__toggle"

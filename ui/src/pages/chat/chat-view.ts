@@ -33,6 +33,7 @@ import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
+import type { ChatSendOptions } from "./chat-send-contract.ts";
 import { type ChatCloudStartupNoticeProps, renderChatViewNotices } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
@@ -50,7 +51,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./components/chat
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.ts";
-import type { ReplyMessageAccess } from "./components/chat-thread-interactions.ts";
+import type { ChatThreadProps, ReplyMessageAccess } from "./components/chat-thread-interactions.ts";
 import {
   renderTranscriptSearch,
   toggleTranscriptSearch,
@@ -100,7 +101,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     ) => void | Promise<void>;
     onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
     messages: unknown[];
-    historyPagination?: { loading: boolean };
+    historyPagination?: ChatThreadProps["historyPagination"];
     toolMessages: unknown[];
     streamSegments: ChatStreamSegment[];
     stream: string | null;
@@ -192,7 +193,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onRequestUpdate?: () => void;
     onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     onSlashIntent?: () => void | Promise<void>;
-    onSend: () => void;
+    onSend: (options?: ChatSendOptions) => void;
     onCompact?: () => void | Promise<void>;
     onOpenSessionCheckpoints?: () => void | Promise<void>;
     onToggleRealtimeTalk?: () => void;
@@ -254,6 +255,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     pullRequestsBranch?: ControlUiSessionBranch;
     pullRequestsRateLimited?: boolean;
     pullRequestsExpanded?: boolean;
+    onOpenSessionDiff?: () => void;
     onExpandPullRequests?: () => void;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
   };
@@ -450,6 +452,27 @@ export function renderChat(props: ChatProps) {
           </div>
         `
       : nothing;
+  const earlierHistoryButton = props.historyPagination?.hasMore
+    ? html`
+        <button
+          class="btn btn--sm chat-history-available"
+          type="button"
+          aria-busy=${props.historyPagination.loading ? "true" : "false"}
+          aria-label=${t("chat.thread.showEarlier")}
+          @click=${props.historyPagination.onShowEarlier}
+        >
+          ${props.historyPagination.loading
+            ? html`<span class="session-run-spinner" aria-hidden="true"></span>`
+            : nothing}
+          <span role="status">
+            ${props.historyPagination.loading
+              ? t("chat.thread.loadingEarlier")
+              : t("chat.thread.earlierHistoryAvailable")}
+          </span>
+          <strong>${t("chat.thread.showEarlier")}</strong>
+        </button>
+      `
+    : nothing;
 
   return html`
     <section
@@ -504,7 +527,7 @@ export function renderChat(props: ChatProps) {
                 ${props.header ?? nothing} ${renderChatViewNotices(props)}
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation">
-                  ${thread} ${scrollToBottomButton}
+                  ${thread} ${earlierHistoryButton} ${scrollToBottomButton}
                   ${props.inlineApproval && props.onApprovalDecision
                     ? html`<div class="chat-inline-approval">
                         ${renderExecApprovalCard({
@@ -525,6 +548,7 @@ export function renderChat(props: ChatProps) {
                     expanded: props.pullRequestsExpanded === true,
                     onExpand: () => props.onExpandPullRequests?.(),
                     onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+                    onOpenSessionDiff: props.onOpenSessionDiff,
                   })}
                   ${renderChatSessionSuggestions({
                     suggestions: props.sessionSuggestions ?? [],

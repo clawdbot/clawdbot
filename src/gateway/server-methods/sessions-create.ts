@@ -27,7 +27,7 @@ import {
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
+import { prepareWorktreeSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
@@ -234,6 +234,22 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const explicitSessionLabel = normalizeOptionalString(p.label);
+    // Start before repository resolution, but cap the whole shared request: either
+    // naming gets a title within eight seconds or creation falls back to the raw source.
+    const worktreeTitle =
+      p.worktree === true && !requestedWorktreeName && !explicitSessionLabel
+        ? prepareWorktreeSessionTitle({
+            cfg,
+            agentId: normalizeAgentId(
+              catalogAgentId ?? explicitlyRequestedAgent.agentId ?? explicitlyRequestedAgentId,
+            ),
+            userMessage: initialMessage ?? "",
+            attachments: initialAttachments,
+            onError: (error) =>
+              sessionLog.warn(`worktree title failed: ${formatErrorMessage(error)}`),
+          })
+        : undefined;
     let projectRoot: string | undefined;
     if (requestedProjectId) {
       const project = resolveProjectRegistry(cfg, requestedProjectId);
@@ -423,17 +439,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             }
             sessionWorktree = existing;
           } else {
+            const generatedTitle = await worktreeTitle?.generated;
             sessionWorktree = await managedWorktrees.create({
               repoRoot: workspace,
               ownerKind: "session",
               ownerId: lifecycleTarget.key,
               name: requestedWorktreeName,
               suggestedName: slugifyWorktreeTitle(
-                normalizeOptionalString(p.label) ??
-                  buildDashboardSessionTitleSource({
-                    message: initialMessage ?? "",
-                    attachments: initialAttachments,
-                  }),
+                explicitSessionLabel ?? generatedTitle ?? worktreeTitle?.source ?? "",
               ),
               baseRef: requestedWorktreeBaseRef,
               // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
@@ -576,6 +589,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         // that point may suppress follow-on work, but cannot roll back the session.
         if (!authority.hasActive()) {
           return;
+        }
+        if (await worktreeTitle?.persist(agentId, entry, key, storePath)) {
+          emitSessionsChanged(context, { sessionKey: key, agentId, reason: "chat.title" });
         }
         await captureCreatedSessionDiffBaseline({ key, agentId, cfg, entry, storePath });
         if (hasInitialTurn) {

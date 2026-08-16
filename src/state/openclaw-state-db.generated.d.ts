@@ -84,6 +84,13 @@ export interface AgentModelCatalogs {
   updated_at: number;
 }
 
+export interface AgentProvenance {
+  agent_id: string;
+  created_at_ms: number;
+  created_via: string;
+  creator_agent_id: string | null;
+}
+
 export interface AndroidNotificationRecentPackages {
   package_name: string;
   sort_order: number;
@@ -1713,6 +1720,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
   agent_model_catalogs: AgentModelCatalogs;
+  agent_provenance: AgentProvenance;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;

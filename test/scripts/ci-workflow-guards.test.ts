@@ -2724,11 +2724,11 @@ NODE
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
-    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(3);
+    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
 
-  it("splits Windows tests only for the GitHub-hosted backend", () => {
+  it("splits Windows tests two ways on every runner backend", () => {
     const workflow = readCiWorkflow();
     const runStep = workflow.jobs["checks-windows"].steps.find(
       (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
@@ -2762,45 +2762,28 @@ NODE
     expect(github.status, github.output).toBe(0);
     expect(hybrid.status, hybrid.output).toBe(0);
     expect(hybridDispatch.status, hybridDispatch.output).toBe(0);
-    // Blacksmith's Windows class admits ~2 concurrent jobs, so any profile that
-    // can land there uses the single lane; only guaranteed-hosted profiles split.
-    const expectedBlacksmithWindowsMatrix = [
-      {
-        check_name: "checks-windows-node-test",
-        runtime: "node",
-        task: "test",
-        runner: "blacksmith-8vcpu-windows-2025",
-      },
-    ];
-    expect(
-      JSON.parse(
-        expectDefined(blacksmith.outputs.checks_windows_matrix, "Blacksmith Windows matrix"),
-      ).include,
-    ).toEqual(expectedBlacksmithWindowsMatrix);
-    const expectedHostedWindowsMatrix = [
+    // Blacksmith's Windows class admits exactly 2 concurrent jobs (run
+    // 31865243804), so every backend uses the same 2-part split: a 3rd part
+    // queues behind a finished one and a single lane serializes the whole body.
+    const expectedWindowsMatrix = [
       { check_name: "checks-windows-node-test-1", runtime: "node", task: "test-1" },
       { check_name: "checks-windows-node-test-2", runtime: "node", task: "test-2" },
-      { check_name: "checks-windows-node-test-3", runtime: "node", task: "test-3" },
     ];
-    expect(
-      JSON.parse(expectDefined(github.outputs.checks_windows_matrix, "GitHub Windows matrix"))
-        .include,
-    ).toEqual(expectedHostedWindowsMatrix);
-    expect(
-      JSON.parse(expectDefined(hybrid.outputs.checks_windows_matrix, "hybrid Windows matrix"))
-        .include,
-    ).toEqual(expectedBlacksmithWindowsMatrix);
-    expect(
-      JSON.parse(
-        expectDefined(
-          hybridDispatch.outputs.checks_windows_matrix,
-          "hybrid dispatch Windows matrix",
-        ),
-      ).include,
-    ).toEqual(expectedHostedWindowsMatrix);
+    for (const [label, manifest] of [
+      ["Blacksmith", blacksmith],
+      ["GitHub", github],
+      ["hybrid", hybrid],
+      ["hybrid dispatch", hybridDispatch],
+    ] as const) {
+      expect(
+        JSON.parse(expectDefined(manifest.outputs.checks_windows_matrix, `${label} Windows matrix`))
+          .include,
+        label,
+      ).toEqual(expectedWindowsMatrix);
+    }
     expect(runStep.run).toContain("test-1)\n    pnpm test:windows:ci:1");
     expect(runStep.run).toContain("test-2)\n    pnpm test:windows:ci:2");
-    expect(runStep.run).toContain("test-3)\n    pnpm test:windows:ci:3");
+    expect(runStep.run).not.toContain("pnpm test:windows:ci:3");
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
@@ -4336,7 +4319,8 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       group: "sqlite-session-schema-baseline",
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
-    expect(workflow.jobs["checks-windows"]["runs-on"]).toContain("matrix.runner");
+    // The Windows matrix carries no per-row runner: both parts share one class.
+    expect(workflow.jobs["checks-windows"]["runs-on"]).not.toContain("matrix.runner");
     expect(source).toContain("blacksmith-8vcpu-windows-2025");
   });
 
@@ -4389,6 +4373,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     );
     expect(hostedLintCache.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
     expect(hostedLintCache.with).toEqual(boundaryCache.with);
+    expect(boundaryCache.with.key).toContain("src/agents/embedded-agent-runner/run/types.ts");
     // Single semantic writer: protected pushes commit explicitly (not
     // on-change/if-missing, whose allocated-byte heuristic can strand a stale
     // marker); PR clones and the lint consumer stay read-only.
@@ -4415,6 +4400,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(lintRestoreStep.env.BOUNDARY_CONFIG_HASH).toBe(configHash);
     for (const gate of [restoreStep, lintRestoreStep, seedStep]) {
       expect(gate.run).toContain('echo "$BOUNDARY_CONFIG_HASH"');
+      expect(gate.run).toContain("HEAD:src/agents/embedded-agent-runner/run/types.ts");
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     }
     // Seeding is writer-only work: PR mounts never commit, so seeding there
@@ -8045,7 +8031,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const requireEvidenceStep = publishJob.steps.find(
       (step: WorkflowStep) => step.name === "Require one QA evidence file",
     );
-    expect(requireEvidenceStep.run).toContain("Expected exactly one qa-evidence.json file");
+    expect(requireEvidenceStep.run).toContain(
+      "Expected exactly one aggregate QA evidence manifest",
+    );
+    expect(requireEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(requireEvidenceStep.run).toContain(
+      'evidence_path="$(dirname "${manifest_paths[0]}")/qa-evidence.json"',
+    );
+    expect(requireEvidenceStep.run).toContain('[[ ! -f "$evidence_path" || -L "$evidence_path" ]]');
 
     const validateManifestStep = publishJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA evidence manifest",
@@ -8113,11 +8106,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(generatedPrUploadStep.with.path.trim().split("\n")).toEqual(MATURITY_GENERATED_PR_PATHS);
 
+    const prepareRenderEvidenceStep = publishJob.steps.find(
+      (step: WorkflowStep) => step.name === "Prepare aggregate QA evidence for rendering",
+    );
+    expect(prepareRenderEvidenceStep.env.QA_EVIDENCE_PATH).toBe(
+      "${{ steps.evidence.outputs.qa_evidence_path }}",
+    );
+    expect(prepareRenderEvidenceStep.run).toContain(
+      'render_evidence_dir=".artifacts/maturity-render-evidence"',
+    );
+    expect(prepareRenderEvidenceStep.run).toContain(
+      'install -m 0644 "$QA_EVIDENCE_PATH" "$render_evidence_dir/qa-evidence.json"',
+    );
     for (const stepName of ["Render artifact docs", "Render committed docs preview"]) {
       const renderStep = publishJob.steps.find((step: WorkflowStep) => step.name === stepName);
       expect(renderStep.env.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
       expect(renderStep.run).toContain('[[ "$ALLOW_FAILURES" == "true" ]]');
       expect(renderStep.run).toContain("allow_failures_args+=(--allow-failures)");
+      expect(renderStep.run).toContain("--evidence-dir .artifacts/maturity-render-evidence");
+      expect(renderStep.run).not.toContain("--evidence-dir .artifacts/maturity-evidence");
       expect(renderStep.run).toContain('"${allow_failures_args[@]}"');
     }
     const renderArtifactStep = publishJob.steps.find(

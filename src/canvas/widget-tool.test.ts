@@ -95,6 +95,12 @@ async function executeWidget(params: {
 }
 
 describe("show_widget", () => {
+  it("tells the agent to use widgets proactively", () => {
+    expect(createShowWidgetTool().description).toMatch(
+      /^Visual helps\? Make widget\. Do not wait for ask\./,
+    );
+  });
+
   it("uses flat provider-safe enums for dashboard options", () => {
     const tool = createShowWidgetTool();
     const properties = (

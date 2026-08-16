@@ -293,9 +293,11 @@ describe("Codex supervision catalog", () => {
     tempDirs.push(root);
     const alphaAgentDir = path.join(root, "agents", "alpha", "agent");
     const betaAgentDir = path.join(root, "agents", "beta", "agent");
+    const fileAgentDir = path.join(root, "agents", "file", "agent");
     const processCodexHome = path.join(root, "process-codex-home");
     const alphaCodexHome = resolveCodexAppServerHomeDir(alphaAgentDir);
     const betaCodexHome = resolveCodexAppServerHomeDir(betaAgentDir);
+    const fileAgentCodexHome = resolveCodexAppServerHomeDir(fileAgentDir);
     const configuredCodexHomes = Array.from({ length: MAX_HOST_COUNT }, (_, index) =>
       path.join(root, "configured-codex-home", String(index)),
     );
@@ -310,6 +312,9 @@ describe("Codex supervision catalog", () => {
     await Promise.all([
       fs.symlink(configuredCodexHome, configuredCodexHomeAlias, "dir"),
       fs.writeFile(configuredFile, "not a directory"),
+      fs
+        .mkdir(fileAgentDir, { recursive: true })
+        .then(() => fs.writeFile(fileAgentCodexHome, "not a directory")),
     ]);
     const runtimeConfig = {
       agents: {
@@ -317,6 +322,7 @@ describe("Codex supervision catalog", () => {
         list: [
           { id: "alpha", agentDir: alphaAgentDir },
           { id: "beta", agentDir: betaAgentDir },
+          { id: "file", agentDir: fileAgentDir },
         ],
       },
     } as OpenClawConfig;
@@ -331,11 +337,13 @@ describe("Codex supervision catalog", () => {
         sessionCatalog: {
           homes: [
             configuredCodexHome,
-            configuredCodexHomeAlias,
+            { path: configuredCodexHomeAlias, label: "Duplicate alias" },
+            { path: configuredCodexHomes[1]!, label: "Named store" },
+            { path: configuredCodexHomes[2]! },
             alphaCodexHome,
             path.join(root, "missing-codex-home"),
             configuredFile,
-            ...configuredCodexHomes.slice(1),
+            ...configuredCodexHomes.slice(3),
           ],
         },
       }),
@@ -350,6 +358,11 @@ describe("Codex supervision catalog", () => {
     expect(resolvedHomes.filter((home) => configuredCodexHomes.includes(home))).toHaveLength(
       MAX_HOST_COUNT - 3,
     );
+    expect(homes.slice(3, 6).map((home) => home.label)).toEqual([
+      "Local Codex · 0",
+      "Local Codex · Named store",
+      "Local Codex · 2",
+    ]);
     expect(homes.map((home) => home.agentDir)).toEqual(Array(MAX_HOST_COUNT).fill(betaAgentDir));
     expect(homes[0]?.hostId).toBe(CODEX_LOCAL_SESSION_HOST_ID);
     expect(homes.slice(1).every((home) => home.hostId.startsWith("gateway:local:"))).toBe(true);
@@ -423,7 +436,7 @@ describe("Codex supervision catalog", () => {
       },
     } as OpenClawConfig;
     let runtimeConfig = configA;
-    const existsSync = vi.spyOn(fsSync, "existsSync");
+    const statSync = vi.spyOn(fsSync, "statSync");
     try {
       const resolver = createCodexCatalogHomeResolver({
         config: configA,
@@ -431,11 +444,11 @@ describe("Codex supervision catalog", () => {
         getPluginConfig: () => ({ supervision: { enabled: true } }),
         env: { ...process.env, CODEX_HOME: processCodexHome },
       });
-      const seedDiscoveryCount = existsSync.mock.calls.length;
+      const seedDiscoveryCount = statSync.mock.calls.length;
 
       expect(resolver.forAgent("alpha")).not.toHaveLength(0);
       expect(resolver.forAgent("alpha")).not.toHaveLength(0);
-      expect(existsSync).toHaveBeenCalledTimes(seedDiscoveryCount);
+      expect(statSync).toHaveBeenCalledTimes(seedDiscoveryCount);
 
       runtimeConfig = configB;
       const betaHomes = resolver.forAgent("beta");
@@ -446,12 +459,12 @@ describe("Codex supervision catalog", () => {
             betaCodexHome,
         ),
       ).toBe(true);
-      const reloadedDiscoveryCount = existsSync.mock.calls.length;
+      const reloadedDiscoveryCount = statSync.mock.calls.length;
 
       expect(resolver.forAgent("beta")).toEqual(betaHomes);
-      expect(existsSync).toHaveBeenCalledTimes(reloadedDiscoveryCount);
+      expect(statSync).toHaveBeenCalledTimes(reloadedDiscoveryCount);
     } finally {
-      existsSync.mockRestore();
+      statSync.mockRestore();
     }
   });
 

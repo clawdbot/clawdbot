@@ -336,6 +336,11 @@ export interface UserMessage {
 export interface AssistantMessage {
   role: "assistant";
   content: (TextContent | ThinkingContent | ToolCall)[];
+  openclawDelivery?: {
+    audioAsVoice?: true;
+    replyToCurrent?: true;
+    replyToId?: string;
+  };
   api: Api;
   provider: Provider;
   model: string;

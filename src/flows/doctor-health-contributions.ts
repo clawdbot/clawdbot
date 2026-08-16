@@ -19,7 +19,8 @@ import { createDoctorHealthContribution } from "./doctor-health-contribution.js"
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
-import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
+import type { DetectableHealthCheckInput } from "./health-check-runner-types.js";
+import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 export type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
@@ -409,10 +410,12 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   ];
 }
 
-export async function resolveDoctorContributionHealthChecks(): Promise<readonly HealthCheck[]> {
+export async function resolveDoctorContributionHealthChecks(): Promise<
+  readonly DetectableHealthCheckInput[]
+> {
   const { createCoreHealthChecks } = await import("./doctor-core-checks.js");
   const checksById = new Map(createCoreHealthChecks().map((check) => [check.id, check]));
-  const checks: HealthCheck[] = [];
+  const checks: DetectableHealthCheckInput[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {
       checks.push(...contribution.healthChecks.map(normalizeHealthCheck));

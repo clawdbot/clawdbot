@@ -44,6 +44,7 @@ import {
 } from "./gateway-run-argv.js";
 import {
   hasJsonOutputFlag,
+  isJsonOutputModeActive,
   withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
@@ -1520,14 +1521,14 @@ async function runCliWithPreparedOutputMode(
       const [
         { buildProgram },
         { formatUncaughtError },
-        { formatCliFailureLines },
+        { formatCliFailureLines, formatCliJsonFailure },
         { runFatalErrorHooks },
         {
           installUnhandledRejectionHandler,
           isBenignUncaughtExceptionError,
           isUncaughtExceptionHandled,
         },
-        { restoreRuntimeTerminalState },
+        { defaultRuntime, restoreRuntimeTerminalState },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program.js"),
@@ -1554,6 +1555,9 @@ async function runCliWithPreparedOutputMode(
             formatUncaughtError(error),
           );
           return;
+        }
+        if (isJsonOutputModeActive(normalizedArgv)) {
+          defaultRuntime.writeJson(formatCliJsonFailure(error));
         }
         for (const line of formatCliFailureLines({
           title: "OpenClaw hit an unexpected runtime error.",
@@ -1654,6 +1658,9 @@ async function runCliWithPreparedOutputMode(
         completedHelpOrVersion = isHelpOrVersionInvocation;
       } catch (error) {
         if (!isCommanderParseExit(error)) {
+          throw error;
+        }
+        if (isJsonOutputModeActive(parseArgv) && error.exitCode !== 0) {
           throw error;
         }
         process.exitCode = error.exitCode;

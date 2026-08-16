@@ -20,6 +20,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   listOpenClawRegisteredAgentDatabases,
@@ -240,8 +241,12 @@ describe("agents delete command", () => {
       expect(runtime.error).not.toHaveBeenCalled();
       expect(readJsonLogs()).toEqual([
         {
-          error:
-            'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
+          ok: false,
+          error: {
+            type: "cli_error",
+            message:
+              'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
+          },
         },
       ]);
       expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
@@ -504,6 +509,8 @@ describe("agents delete command", () => {
       await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
       const databasePath = path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite");
       registerOpenClawAgentDatabase({ agentId: "ops", path: databasePath });
+      recordAgentProvenance("ops", { createdVia: "operator" });
+      recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "ops" });
       expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).toContain("ops");
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
@@ -512,6 +519,8 @@ describe("agents delete command", () => {
         "ops",
       );
       expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(true);
+      expect(readAgentProvenance("ops")).toBeUndefined();
+      expect(readAgentProvenance("child")).toMatchObject({ creatorAgentId: "ops" });
     });
   });
 
@@ -645,7 +654,13 @@ describe("agents delete command", () => {
 
       expect(runtime.error).not.toHaveBeenCalled();
       expect(readJsonLogs()).toEqual([
-        { error: 'Agent "ops" is the only configured agent and cannot be deleted.' },
+        {
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: 'Agent "ops" is the only configured agent and cannot be deleted.',
+          },
+        },
       ]);
       expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
       expectSessionStore(cfg, {

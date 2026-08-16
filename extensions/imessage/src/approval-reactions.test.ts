@@ -1,4 +1,5 @@
 // Imessage tests cover approval reactions plugin behavior.
+import { buildApprovalReactionHint } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +7,6 @@ import { listPendingIMessageApprovalReactionPollTargets } from "./approval-react
 import {
   addIMessageApprovalReactionHintToStructuredPayload,
   buildIMessageApprovalConversationKeyForTarget,
-  buildIMessageApprovalReactionHint,
   clearIMessageApprovalReactionTargetsForTest,
   handleIMessageApprovalReaction,
   maybeResolveIMessageApprovalReaction,
@@ -78,9 +78,9 @@ describe("iMessage approval reactions", () => {
   });
 
   it("renders shared reaction choices for allowed decisions", () => {
-    expect(buildIMessageApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
-    );
+    expect(
+      buildApprovalReactionHint({ allowedDecisions: ["allow-once", "allow-always", "deny"] }),
+    ).toBe("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
   });
 
   it("uses typed metadata to prepare shared forwarded prompts", () => {

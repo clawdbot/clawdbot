@@ -903,10 +903,16 @@ describe("grouped chat rendering", () => {
 
   it("collapses long user messages and toggles their disclosure state", () => {
     const container = document.createElement("div");
-    const markdownContent = Array.from({ length: 13 }, (_, index) => `Prompt line ${index}`).join(
-      "\n",
-    );
+    const collapsedLines = [
+      "Inspect AGENTS.md:188 first.",
+      ...Array.from({ length: 11 }, (_, index) => `Prompt line ${index}`),
+    ];
+    const expandedTail = "Full prompt tail after the disclosure boundary.";
+    const markdownContent = [...collapsedLines, expandedTail].join("\n");
     const onToggleUserMessageExpanded = vi.fn();
+    markdownRenderMock
+      .mockImplementationOnce(renderMarkdownHtml)
+      .mockImplementationOnce(renderMarkdownHtml);
 
     renderGroupedMessage(
       container,
@@ -920,10 +926,17 @@ describe("grouped chat rendering", () => {
 
     const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
     const toggle = expectElement(disclosure, ".chat-message-disclosure__toggle", HTMLButtonElement);
+    const collapsedText = expectElement(disclosure, ".chat-text", HTMLDivElement);
+    const collapsedFileLink = expectElement(
+      collapsedText,
+      "a.markdown-file-link",
+      HTMLAnchorElement,
+    );
     expect(disclosure.classList.contains("is-expanded")).toBe(false);
-    expect(
-      expectElement(disclosure, ".chat-message-disclosure__preview", HTMLDivElement).textContent,
-    ).toBe(Array.from({ length: 12 }, (_, index) => `Prompt line ${index}`).join("\n") + "…");
+    expect(collapsedText.textContent?.trim()).toBe(`${collapsedLines.join("\n")}…`);
+    expect(collapsedText.textContent).not.toContain(expandedTail);
+    expect(collapsedFileLink.dataset.filePath).toBe("AGENTS.md");
+    expect(collapsedFileLink.dataset.fileLine).toBe("188");
     expect(toggle.textContent?.trim()).toBe("Show more");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
@@ -946,8 +959,12 @@ describe("grouped chat rendering", () => {
       ".chat-message-disclosure__toggle",
       HTMLButtonElement,
     );
+    const expandedText = expectElement(expandedDisclosure, ".chat-text", HTMLDivElement);
+    const expandedFileLink = expectElement(expandedText, "a.markdown-file-link", HTMLAnchorElement);
     expect(expandedDisclosure.classList.contains("is-expanded")).toBe(true);
-    expect(expandedDisclosure.querySelector(".chat-message-disclosure__preview")).toBeNull();
+    expect(expandedText.textContent).toContain(expandedTail);
+    expect(expandedFileLink.dataset.filePath).toBe("AGENTS.md");
+    expect(expandedFileLink.dataset.fileLine).toBe("188");
     expect(collapseToggle.textContent?.trim()).toBe("Show less");
     expect(collapseToggle.getAttribute("aria-expanded")).toBe("true");
   });
@@ -963,9 +980,9 @@ describe("grouped chat rendering", () => {
       { onToggleUserMessageExpanded: vi.fn() },
     );
 
-    expect(
-      expectElement(container, ".chat-message-disclosure__preview", HTMLDivElement).textContent,
-    ).toBe(`${"a".repeat(699)}…`);
+    expect(expectElement(container, ".chat-text", HTMLDivElement).textContent?.trim()).toBe(
+      `${"a".repeat(699)}…`,
+    );
   });
 
   it("does not add prompt disclosure controls to short user or assistant messages", () => {
