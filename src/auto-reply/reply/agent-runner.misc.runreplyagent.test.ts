@@ -748,65 +748,69 @@ describe("runReplyAgent auto-compaction token update", () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-post-compaction-queued-followup-"),
     );
-    await fs.writeFile(
-      path.join(workspaceDir, "AGENTS.md"),
-      "## Session Startup\nRead the queued workspace startup file.\n\n## Red Lines\nNever skip startup context after compaction.\n",
-      "utf-8",
-    );
-    const sessionKey = "main";
-    const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 50_000 };
-    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
-      const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
-      if (typeof onAgentEvent === "function") {
-        await onAgentEvent({ stream: "compaction", data: { phase: "start" } });
-        await onAgentEvent({ stream: "compaction", data: { phase: "end", completed: true } });
-      }
-      return { payloads: [{ text: "ok" }], meta: { agentMeta: {} } };
-    });
+    try {
+      await fs.writeFile(
+        path.join(workspaceDir, "AGENTS.md"),
+        "## Session Startup\nRead the queued workspace startup file.\n\n## Red Lines\nNever skip startup context after compaction.\n",
+        "utf-8",
+      );
+      const sessionKey = "main";
+      const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 50_000 };
+      runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+        const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
+        if (typeof onAgentEvent === "function") {
+          await onAgentEvent({ stream: "compaction", data: { phase: "start" } });
+          await onAgentEvent({ stream: "compaction", data: { phase: "end", completed: true } });
+        }
+        return { payloads: [{ text: "ok" }], meta: { agentMeta: {} } };
+      });
 
-    vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
-      const events = peekSystemEvents(key);
-      expect(events).toHaveLength(1);
-      expect(events[0]).toContain("Read the queued workspace startup file.");
-      expect(events[0]).toContain("Never skip startup context after compaction.");
-    });
+      vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
+        const events = peekSystemEvents(key);
+        expect(events).toHaveLength(1);
+        expect(events[0]).toContain("Read the queued workspace startup file.");
+        expect(events[0]).toContain("Never skip startup context after compaction.");
+      });
 
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath: "",
-      sessionEntry,
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+        storePath: "",
+        sessionEntry,
+        workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
           },
         },
-      },
-    });
+      });
 
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: sessionKey,
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      defaultModel: "anthropic/claude-opus-4-6",
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
+      await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: sessionKey,
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        typing,
+        sessionCtx,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        defaultModel: "anthropic/claude-opus-4-6",
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
 
-    expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
+      expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps a provided reply operation active until final delivery completes", async () => {
