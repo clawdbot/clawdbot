@@ -74,7 +74,9 @@ scripts/mac-elevation-host.sh package \
   --peekaboo-source-commit <full-peekaboo-sha>
 cd dist/elevation-host
 export PREFIX="OpenClaw-<full-openclaw-sha>-Peekaboo-<full-peekaboo-sha>-stable"
+export INSTALLER_SHA256="<authenticated-installer-sha256>"
 export RECEIPT_SHA256="<authenticated-receipt-sha256>"
+[[ "$(shasum -a 256 "$PREFIX-installer.sh" | awk '{print $1}')" == "$INSTALLER_SHA256" ]] || exit 1
 shasum -a 256 -c "$PREFIX.zip.sha256"
 shasum -a 256 -c "$PREFIX-installer.sh.sha256"
 ./"$PREFIX-installer.sh" verify \

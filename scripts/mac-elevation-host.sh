@@ -340,6 +340,23 @@ backup_file_matches() {
     "$(shasum -a 256 "$path" | awk '{print $1}')" == "$expected_sha" ]]
 }
 
+restore_file_atomically() {
+  local source="$1" destination="$2" expected_sha="$3" mode="$4" staged=""
+  backup_file_matches "$source" "$expected_sha" || return 1
+  staged="$(mktemp "${destination}.restore.XXXXXX")" || return 1
+  if ! cp -p "$source" "$staged" ||
+    ! chmod "$mode" "$staged" ||
+    ! backup_file_matches "$staged" "$expected_sha"
+  then
+    rm -f "$staged"
+    return 1
+  fi
+  mv "$staged" "$destination" || true
+  rm -f "$staged"
+  backup_file_matches "$destination" "$expected_sha" &&
+    [[ "$(stat -f '%Lp' "$destination")" == "$mode" ]]
+}
+
 receipt_string() {
   local receipt="$1" filter="$2" label="$3"
   local value
@@ -1382,6 +1399,8 @@ recover_install() {
   if [[ "$elevation_state" == 'loaded' ]]; then
     launchctl bootout "$job_domain" >/dev/null 2>&1 || return 1
   fi
+  wait_for_app_binary_exit || return 1
+  [[ "$(job_loaded_state "$job_domain")" == "absent" ]] || return 1
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -d "$APP_PATH" ]]; then
     failed_container="$(mktemp -d "${APP_PATH}.failed-elevation-host-${ROLLBACK_FAILED_SOURCE}.XXXXXX")" ||
       return 1
@@ -1396,11 +1415,16 @@ recover_install() {
     mv "$ROLLBACK_APP_PATH" "$APP_PATH" || recovery_failed=1
   fi
   if [[ -n "$ROLLBACK_ELEVATION_PLIST" && -f "$ROLLBACK_ELEVATION_PLIST" ]]; then
-    cp "$ROLLBACK_ELEVATION_PLIST" "$PLIST_PATH" || recovery_failed=1
-    chmod 644 "$PLIST_PATH"
+    restore_file_atomically \
+      "$ROLLBACK_ELEVATION_PLIST" \
+      "$PLIST_PATH" \
+      "$ROLLBACK_ELEVATION_PLIST_SHA" \
+      644 || recovery_failed=1
     restored_state="$(job_loaded_state "$job_domain")"
     [[ "$restored_state" != 'unknown' ]] || recovery_failed=1
-    if [[ "$ROLLBACK_ELEVATION_WAS_LOADED" == "1" && "$restored_state" == 'absent' ]]; then
+    if [[ "$recovery_failed" == "0" &&
+      "$ROLLBACK_ELEVATION_WAS_LOADED" == "1" && "$restored_state" == 'absent' ]]
+    then
       launchctl bootstrap "$launch_domain" "$PLIST_PATH" >/dev/null 2>&1 || recovery_failed=1
     elif [[ "$ROLLBACK_ELEVATION_WAS_LOADED" == "0" && "$restored_state" != 'absent' ]]; then
       recovery_failed=1
@@ -1463,7 +1487,7 @@ recover_install() {
 }
 
 restore_current_generation_after_recovery_failure() {
-  local restore_failed=0 app_restore_failed=0 state receipt_tmp="" plist_tmp=""
+  local restore_failed=0 app_restore_failed=0 state
 
   if [[ "$RECOVERY_RELAUNCHED_ADOPTED_PID" =~ ^[0-9]+$ ]]; then
     ADOPTION_PID="$RECOVERY_RELAUNCHED_ADOPTED_PID"
@@ -1503,6 +1527,11 @@ restore_current_generation_after_recovery_failure() {
   elif [[ "$state" == "unknown" ]]; then
     restore_failed=1
   fi
+  wait_for_app_binary_exit || return 1
+  [[ "$(job_loaded_state "$job_domain")" == "absent" ]] || return 1
+  if [[ -n "$ROLLBACK_MIGRATION_LABEL" ]]; then
+    [[ "$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")" == "absent" ]] || return 1
+  fi
 
   if [[ -n "$RECOVERED_FAILED_APP_PATH" ]]; then
     if [[ -e "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]]; then
@@ -1528,52 +1557,20 @@ restore_current_generation_after_recovery_failure() {
   [[ "$app_restore_failed" == "0" ]] || return 1
 
   if [[ -n "$RECOVERY_CURRENT_PLIST" ]]; then
-    if backup_file_matches "$RECOVERY_CURRENT_PLIST" "$RECOVERY_CURRENT_PLIST_SHA"; then
-      plist_tmp="$(mktemp "${PLIST_PATH}.restore-current.XXXXXX")" || restore_failed=1
-      if [[ -n "$plist_tmp" ]]; then
-        if cp -p "$RECOVERY_CURRENT_PLIST" "$plist_tmp" &&
-          chmod 644 "$plist_tmp" &&
-          backup_file_matches "$plist_tmp" "$RECOVERY_CURRENT_PLIST_SHA"
-        then
-          if ! mv "$plist_tmp" "$PLIST_PATH" &&
-            ! backup_file_matches "$PLIST_PATH" "$RECOVERY_CURRENT_PLIST_SHA"
-          then
-            restore_failed=1
-          fi
-          rm -f "$plist_tmp"
-        else
-          rm -f "$plist_tmp"
-          restore_failed=1
-        fi
-      fi
-    else
-      restore_failed=1
-    fi
+    restore_file_atomically \
+      "$RECOVERY_CURRENT_PLIST" \
+      "$PLIST_PATH" \
+      "$RECOVERY_CURRENT_PLIST_SHA" \
+      644 || restore_failed=1
   elif [[ -e "$PLIST_PATH" || -L "$PLIST_PATH" ]]; then
     rm -f "$PLIST_PATH" || restore_failed=1
   fi
 
-  if backup_file_matches "$RECOVERY_CURRENT_RECEIPT" "$RECOVERY_CURRENT_RECEIPT_SHA"; then
-    receipt_tmp="$(mktemp "${RECEIPT_PATH}.restore-current.XXXXXX")" || restore_failed=1
-    if [[ -n "$receipt_tmp" ]]; then
-      if cp -p "$RECOVERY_CURRENT_RECEIPT" "$receipt_tmp" &&
-        chmod 600 "$receipt_tmp" &&
-        backup_file_matches "$receipt_tmp" "$RECOVERY_CURRENT_RECEIPT_SHA"
-      then
-        if ! mv "$receipt_tmp" "$RECEIPT_PATH" &&
-          ! backup_file_matches "$RECEIPT_PATH" "$RECOVERY_CURRENT_RECEIPT_SHA"
-          then
-            restore_failed=1
-          fi
-          rm -f "$receipt_tmp"
-        else
-        rm -f "$receipt_tmp"
-        restore_failed=1
-      fi
-    fi
-  else
-    restore_failed=1
-  fi
+  restore_file_atomically \
+    "$RECOVERY_CURRENT_RECEIPT" \
+    "$RECEIPT_PATH" \
+    "$RECOVERY_CURRENT_RECEIPT_SHA" \
+    600 || restore_failed=1
 
   if [[ "$restore_failed" == "0" && "$RECOVERY_CURRENT_PLIST_WAS_LOADED" == "1" ]]; then
     launchctl bootstrap "$launch_domain" "$PLIST_PATH" >/dev/null 2>&1 || restore_failed=1

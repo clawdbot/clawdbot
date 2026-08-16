@@ -591,7 +591,7 @@ function createInstallRollbackHarness(
       "#!/usr/bin/env bash",
       "set -euo pipefail",
       'destination="${!#}"',
-      'if [[ "$TEST_FAIL_CURRENT_RECEIPT_RESTORE_COPY" == "1" && "$destination" == *elevation-host-install.json.restore-current.* ]]; then',
+      'if [[ "$TEST_FAIL_CURRENT_RECEIPT_RESTORE_COPY" == "1" && "$destination" == *elevation-host-install.json.restore.* ]]; then',
       "  printf '%s\\n' partial >\"$destination\"",
       "  exit 7",
       "fi",
@@ -1169,11 +1169,19 @@ describe("mac elevation host command contract", () => {
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("an OpenClaw app process survived owner shutdown");
+      expect(result.stderr).toContain("automatic elevation-host rollback was incomplete");
       expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
         oldBinary,
       );
-      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
-      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+      expect(existsSync(harness.sourcePlist)).toBe(false);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-absent");
+      const backupName = readdirSync(harness.stateDir).find((name) =>
+        name.startsWith("elevation-host.previous-launch-agent."),
+      );
+      expect(backupName).toBeDefined();
+      expect(readFileSync(path.join(harness.stateDir, backupName!), "utf8")).toBe(
+        harness.sourceContents,
+      );
       expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
     },
   );
