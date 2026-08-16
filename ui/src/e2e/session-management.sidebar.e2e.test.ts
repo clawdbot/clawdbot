@@ -564,7 +564,7 @@ suite.define(() => {
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
       await gateway.deferNext("sessions.subscribe");
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", { includeLastMessage: true });
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect
@@ -583,8 +583,56 @@ suite.define(() => {
 
       await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
-        .toBeGreaterThan(initialListCount);
+        .poll(
+          async () =>
+            (await gateway.getRequests("sessions.list"))
+              .slice(initialListCount)
+              .filter((request) => requireRecord(request.params).includeLastMessage === true)
+              .length,
+        )
+        .toBe(1);
+      const reconnectListRequests = (await gateway.getRequests("sessions.list")).slice(
+        initialListCount,
+      );
+      const reconnectListParams = reconnectListRequests.map((request) =>
+        requireRecord(request.params),
+      );
+      const canonicalListIndex = reconnectListParams.findIndex(
+        (params) => params.includeLastMessage === true,
+      );
+      expect(canonicalListIndex).toBe(reconnectListParams.length - 1);
+      expect(reconnectListParams[canonicalListIndex]).toEqual({
+        agentId: "main",
+        configuredAgentsOnly: true,
+        includeDerivedTitles: true,
+        includeGlobal: true,
+        includeLastMessage: true,
+        includeUnknown: true,
+        limit: 50,
+      });
+      const routeListParams = reconnectListParams.slice(0, canonicalListIndex);
+      const routeSearches = routeListParams.map((params) => String(params.search));
+      const routeSearchOrder = [firstKey, selectedKey];
+      expect(routeSearches).toEqual(
+        routeSearches.toSorted((a, b) => routeSearchOrder.indexOf(a) - routeSearchOrder.indexOf(b)),
+      );
+      expect(new Set(routeSearches).size).toBe(routeSearches.length);
+      for (const [index, params] of routeListParams.entries()) {
+        expect(routeSearchOrder).toContain(routeSearches[index]);
+        expect(params).toEqual({
+          agentId: "main",
+          archived: "all",
+          configuredAgentsOnly: true,
+          includeDerivedTitles: true,
+          includeGlobal: true,
+          includeUnknown: true,
+          limit: 20,
+          search: routeSearches[index],
+        });
+      }
+      expect(new Set(reconnectListRequests.map((request) => request.id)).size).toBe(
+        reconnectListRequests.length,
+      );
       await gateway.resolveDeferred(
         "sessions.list",
         sessionsListResponse([
