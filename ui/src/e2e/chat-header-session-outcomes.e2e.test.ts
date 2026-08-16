@@ -51,6 +51,49 @@ function proofContextOptions() {
   };
 }
 
+async function installPlacementGateway(page: Page, sessionA: string, sessionB: string) {
+  return installMockGateway(page, {
+    featureMethods: ["chat.startup", "sessions.reclaim"],
+    historyMessages: [{ role: "assistant", content: "Placement outcome proof." }],
+    methodResponses: {
+      "sessions.list": chatSessionListResponse([
+        {
+          key: sessionA,
+          kind: "direct",
+          label: "Session A",
+          updatedAt: 2,
+          placement: {
+            state: "active",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            stateChangedAtMs: 1,
+            environmentId: "worker:one",
+            activeOwnerEpoch: 1,
+            workerBundleHash: "a".repeat(64),
+            workspaceBaseManifestRef: "base-manifest",
+            remoteWorkspaceDir: "/workspace/session-a",
+          },
+        },
+        { key: sessionB, kind: "direct", label: "Session B", updatedAt: 1 },
+      ]),
+    },
+    sessionKey: sessionA,
+  });
+}
+
+async function startPlacementReclaim(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+): Promise<void> {
+  await page.goto(`${suite.server.baseUrl}chat`);
+  await gateway.deferNext("sessions.reclaim");
+  await page.getByRole("button", { name: "Runs on Cloud" }).click();
+  await page.getByText("Stop cloud worker…", { exact: true }).click();
+  await page.getByRole("button", { name: "Stop worker" }).click();
+  await gateway.waitForRequest("sessions.reclaim");
+}
+
 suite.define(() => {
   beforeAll(async () => {
     if (captureProof) {
@@ -126,42 +169,10 @@ suite.define(() => {
     const page = await context.newPage();
     const sessionA = "agent:main:placement-a";
     const sessionB = "agent:main:placement-b";
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.startup", "sessions.reclaim"],
-      historyMessages: [{ role: "assistant", content: "Placement outcome proof." }],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([
-          {
-            key: sessionA,
-            kind: "direct",
-            label: "Session A",
-            updatedAt: 2,
-            placement: {
-              state: "active",
-              generation: 1,
-              createdAtMs: 1,
-              updatedAtMs: 1,
-              stateChangedAtMs: 1,
-              environmentId: "worker:one",
-              activeOwnerEpoch: 1,
-              workerBundleHash: "a".repeat(64),
-              workspaceBaseManifestRef: "base-manifest",
-              remoteWorkspaceDir: "/workspace/session-a",
-            },
-          },
-          { key: sessionB, kind: "direct", label: "Session B", updatedAt: 1 },
-        ]),
-      },
-      sessionKey: sessionA,
-    });
+    const gateway = await installPlacementGateway(page, sessionA, sessionB);
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.deferNext("sessions.reclaim");
-      await page.getByRole("button", { name: "Runs on Cloud" }).click();
-      await page.getByText("Stop cloud worker…", { exact: true }).click();
-      await page.getByRole("button", { name: "Stop worker" }).click();
-      await gateway.waitForRequest("sessions.reclaim");
+      await startPlacementReclaim(page, gateway);
       await capture(page, "01-placement-pending.png");
 
       await navigateAwayAndBack(page, sessionA, sessionB);
@@ -177,6 +188,36 @@ suite.define(() => {
         )
         .not.toBe(message);
       await capture(page, "02-placement-returned.png");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a current placement reclaim failure visible and retryable", async () => {
+    const context = await suite.newBrowserContext(proofContextOptions());
+    const page = await context.newPage();
+    const sessionA = "agent:main:placement-current";
+    const sessionB = "agent:main:placement-other";
+    const gateway = await installPlacementGateway(page, sessionA, sessionB);
+
+    try {
+      await startPlacementReclaim(page, gateway);
+      const message = "Current placement failure stays actionable.";
+      await gateway.rejectDeferred("sessions.reclaim", { code: "INVALID_REQUEST", message });
+
+      const visiblePane = page.locator(".chat-pane-cache__pane--visible");
+      await expect
+        .poll(() =>
+          visiblePane.evaluate(
+            (pane) => (pane as HTMLElement & { sessionKey?: string }).sessionKey,
+          ),
+        )
+        .toBe(sessionA);
+      await visiblePane.getByText(message, { exact: true }).waitFor();
+
+      await page.getByRole("button", { name: "Runs on Cloud" }).click();
+      await page.getByText("Stop cloud worker…", { exact: true }).waitFor();
+      await capture(page, "00-placement-current-failure.png");
     } finally {
       await suite.closeBrowserContext(context);
     }
