@@ -135,6 +135,21 @@ export function resolvePluginNpmGenerationProjectDirPrefix(packageName: string):
   return `${encodePluginNpmProjectDirName(packageName)}${PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR}`;
 }
 
+/** Checks that an existing managed path preserves its npm-root-relative real path. */
+export function isPluginNpmManagedPath(params: { managedPath: string; npmDir?: string }): boolean {
+  const npmDir = path.resolve(params.npmDir ?? resolveDefaultPluginNpmDir());
+  const managedPath = path.resolve(params.managedPath);
+  try {
+    return (
+      lstatSync(npmDir).isDirectory() &&
+      path.relative(npmDir, managedPath) ===
+        path.relative(realpathSync(npmDir), realpathSync(managedPath))
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Checks whether a project directory has the exact managed shape owned by a package. */
 export function isPluginNpmProjectDir(params: {
   packageName: string;
@@ -146,17 +161,7 @@ export function isPluginNpmProjectDir(params: {
   if (path.dirname(projectDir) !== path.resolve(resolvePluginNpmProjectsDir(npmDir))) {
     return false;
   }
-  try {
-    if (!lstatSync(npmDir).isDirectory()) {
-      return false;
-    }
-    if (
-      path.relative(npmDir, projectDir) !==
-      path.relative(realpathSync(npmDir), realpathSync(projectDir))
-    ) {
-      return false;
-    }
-  } catch {
+  if (!isPluginNpmManagedPath({ managedPath: projectDir, npmDir })) {
     return false;
   }
   if (projectDir === path.resolve(resolvePluginNpmProjectDir(params))) {
