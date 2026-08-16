@@ -242,3 +242,35 @@ The cron lifecycle interrupt at `src/cron/isolated-agent/run.ts` aborts the runn
 ## LOC and publication
 
 Follow-up commit classification: production `+14/-15` (net `-1`); tests `+17/-6`. Commit `0bd0599487b` (`fix(cron): preserve coded abort reasons`) was force-with-lease pushed over prior PR head `77ab08e4f5d`. PR #124511 remains open and unlanded.
+# PR #124670 follow-up: strict-agent-id CI gates
+
+## Outcome
+
+Rebased `steipete/agent-id-strict-input` onto current `origin/main` (`337933509d6`), cleared the coercion-helper and max-lines failures without weakening either guard, preserved the accepted agent-id repair, and left the PR unlanded for lead review.
+
+## Coercion export classification
+
+`normalizeAgentIdStrict` is classified as an enforced canonical coercion helper in the existing `packages/normalization-core/src/agent-id.ts` owner entry, beside `isValidAgentId` and `normalizeAgentId`. The guard audits every callable export in that canonical module and derives its exact declaration carve-out from the same owner list, so no deferred classification or exceptional bespoke exemption was appropriate.
+
+## `setup-apply.ts` split
+
+Extracted the complete model-selection projection into `src/system-agent/setup-model-selection.ts`: target-agent normalization, roster projection, canonical model metadata, credential pinning, runtime pinning, and runtime-policy verification now have one concept owner. Direct callers and the dedicated tests import that module; `setup-apply.ts` does not re-export the moved APIs and is now the config-transaction/workspace/Gateway orchestrator. This reduced `setup-apply.ts` from 788 physical lines (705 lint-counted) to 650 without a max-lines baseline entry or suppression.
+
+Current `main` had also landed two assertion-SAFETY removals without shrinking its baseline. The follow-up removed the now-zero `src/state/control-ui-device-auth-migration.ts` entry and lowered `ui/src/lib/nodes/index.ts` from 4 to 3, exactly as the shrink-only ratchet required.
+
+## Re-validation
+
+- Exact guards: coercion helper declaration guard passed with 104 allowlisted declarations; max-lines ratchet passed with 910 grandfathered suppressions; assertion-SAFETY ratchet passed with 4,335 files and 13,848 grandfathered assertions.
+- Focused behavior: 18 files passed across six Vitest shards, 565 tests total after the final rebase. This covered normalization core, create/add/bind/delete/identity, sessions, Gateway mutation/workspace/request routing, system-agent parse/model selection, setup transactions, and concurrency.
+- Requested broad proof on Blacksmith Testbox: `pnpm plugin-sdk:surface:check`, `pnpm tsgo:core`, `pnpm tsgo:core:test`, and `pnpm build` all exited 0. The SDK check reported 331 entrypoints / 7,252 exports; build completed all phases and verified all 144 public Plugin SDK subpaths.
+- Built-CLI before/after proof used isolated temporary state only, with no real OpenClaw home and no Gateway port. Baseline `origin/main` normalized `агент✨` to `main`; after `doctor --fix`, `agents delete "агент✨" --force --json` exited 0, reduced the roster to `second`, and removed both workspace and agent-dir markers. The branch rejected add with the strict diagnostic; delete exited 1 with exactly one JSON error object on stdout, zero stderr, retained `main` and `second`, and preserved both markers.
+- Final `node scripts/check-changed.mjs`: exit 0 in 18m19s on Testbox run `31960006515`. It covered formatting, coercion/max-lines/assertion ratchets, SDK surface/boundaries, core + core-test + extension + extension-test + script typechecks, core/extension/script lint, database-first guards, and `0 runtime value cycle(s)`.
+- Autoreview command: `.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main --stream-engine-output`. Two clean runs reported no accepted/actionable findings (confidence 0.99 before the final moving-base rebase and 0.98 after it); no findings were accepted or rejected.
+
+## Commits
+
+- `df9db1f4800 fix(agents): reject unrepresentable agent ids`
+- `c9ec2e30880 refactor(system-agent): split model selection setup`
+- `90389d8c46c chore: shrink assertion safety baseline`
+
+No `CHANGELOG.md`, max-lines baseline, suppression, coercion guard weakening, persistent OpenClaw state, port 18789, release, or landing action was used.
