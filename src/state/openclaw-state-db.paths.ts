@@ -54,8 +54,12 @@ export function resolveOpenClawAgentDatabaseStoredPath(
   const stateDir = resolveOpenClawStateDirForDatabasePath(registryDatabasePath);
   const absolutePath = path.resolve(agentDatabasePath);
   const relativePath = path.relative(stateDir, absolutePath);
-  return relativePath.startsWith("..") || path.isAbsolute(relativePath)
-    ? absolutePath
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return absolutePath;
+  }
+  const statePrefix = `${stateDir}${stateDir.endsWith(path.sep) ? "" : path.sep}`;
+  return path.isAbsolute(agentDatabasePath) && agentDatabasePath.startsWith(statePrefix)
+    ? agentDatabasePath.slice(statePrefix.length)
     : relativePath;
 }
 
@@ -66,5 +70,5 @@ export function resolveOpenClawRegisteredAgentDatabasePath(
 ): string {
   return path.isAbsolute(storedPath)
     ? storedPath
-    : path.resolve(resolveOpenClawStateDirForDatabasePath(registryDatabasePath), storedPath);
+    : `${resolveOpenClawStateDirForDatabasePath(registryDatabasePath)}${path.sep}${storedPath}`;
 }

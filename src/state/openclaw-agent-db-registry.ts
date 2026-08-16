@@ -689,7 +689,7 @@ export function unregisterOpenClawAgentDatabase(params: {
   runOpenClawStateWriteTransaction(
     (database) => {
       const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
-      const matchingPaths = [...new Set([storedPath, path.resolve(params.path)])];
+      const matchingPaths = [...new Set([storedPath, params.path, path.resolve(params.path)])];
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
         database.db,

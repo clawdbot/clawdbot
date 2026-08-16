@@ -486,7 +486,7 @@ export function migrateAgentDatabaseRelativePaths(
       continue;
     }
     const absolutePath = path.resolve(registeredPath);
-    const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, absolutePath);
+    const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath);
     if (!path.isAbsolute(storedPath)) {
       updatePath.run(storedPath, agentId, registeredPath);
       changed = true;
