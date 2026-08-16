@@ -27,8 +27,6 @@ import {
   buildNativeHookRelayCommandWithStateDatabase,
   resolveNativeHookRelayCommandTimeoutMs,
 } from "./native-hook-relay-command.js";
-export { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
-export { resolveNativeHookRelayDeferredToolApproval } from "./native-hook-relay-permissions.js";
 import {
   nativeHookRelayEventHasLocalWork,
   nativeHookRelayEventToolMatcher,
@@ -63,12 +61,6 @@ import type {
   RegisterNativeHookRelayParams,
 } from "./native-hook-relay-types.js";
 import { NATIVE_HOOK_RELAY_EVENTS } from "./native-hook-relay-types.js";
-export type {
-  NativeHookRelayEvent,
-  NativeHookRelayProcessResponse,
-  NativeHookRelayProvider,
-  NativeHookRelayRegistrationHandle,
-} from "./native-hook-relay-types.js";
 import {
   isJsonValue,
   normalizePositiveInteger,
@@ -77,6 +69,14 @@ import {
   readNonEmptyString,
   snapshotNativeHookRelayPayload,
 } from "./native-hook-relay-utils.js";
+export { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
+export { resolveNativeHookRelayDeferredToolApproval } from "./native-hook-relay-permissions.js";
+export type {
+  NativeHookRelayEvent,
+  NativeHookRelayProcessResponse,
+  NativeHookRelayProvider,
+  NativeHookRelayRegistrationHandle,
+} from "./native-hook-relay-types.js";
 
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
 const log = createSubsystemLogger("agents/harness/native-hook-relay");

@@ -10,8 +10,8 @@ import {
   McpError,
   type CallToolResult,
   type ClientCapabilities,
+  type ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

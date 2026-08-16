@@ -1,8 +1,11 @@
 // Telegram plugin module implements reasoning lane coordinator behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
-import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  findCodeRegions,
+  isInsideCode,
+  stripReasoningTagsFromText,
+} from "openclaw/plugin-sdk/text-chunking";
 import type {
   TelegramBufferedFinalAnswer,
   TelegramReasoningStepState,

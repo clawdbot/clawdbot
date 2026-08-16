@@ -24,8 +24,10 @@ import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { reclaimChatPanePlacement } from "./chat-pane-placement.ts";
-import { applySelectedSessionProjection } from "./chat-pane-state.ts";
-import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  resolveAssistantAttachmentAuthToken,
+} from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";

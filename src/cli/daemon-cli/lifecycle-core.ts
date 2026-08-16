@@ -4,13 +4,16 @@ import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
-import type { GatewayServiceStartRepairIssue, GatewayServiceState } from "../../daemon/service.js";
+import type {
+  GatewayServiceStartRepairIssue,
+  GatewayServiceState,
+  GatewayService,
+} from "../../daemon/service.js";
 import {
   describeGatewayServiceRestart,
   inspectGatewayServiceStartRepair,
   startGatewayService,
 } from "../../daemon/service.js";
-import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";

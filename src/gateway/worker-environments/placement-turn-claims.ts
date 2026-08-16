@@ -26,10 +26,6 @@ import {
   signalWorkerTurnClaimClosed,
   waitersFor,
 } from "./placement-turn-claim-events.js";
-export {
-  registerWorkerTurnClaimClosedHandler,
-  signalWorkerTurnClaimClosed,
-} from "./placement-turn-claim-events.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import {
   clearWorkerWorkspacePendingResult,
@@ -42,6 +38,10 @@ import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-reconcile.js";
+export {
+  registerWorkerTurnClaimClosedHandler,
+  signalWorkerTurnClaimClosed,
+} from "./placement-turn-claim-events.js";
 
 type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
   owner: WorkerSessionTurnOwner;

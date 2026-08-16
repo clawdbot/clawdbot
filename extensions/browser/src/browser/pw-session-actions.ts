@@ -32,8 +32,8 @@ import {
   pageTargetInfo,
   retirePlaywrightBrowserConnectionExact,
   takeCachedPlaywrightBrowserConnection,
+  ensureContextState,
 } from "./pw-session-connection.js";
-import { ensureContextState } from "./pw-session-connection.js";
 import {
   cachedByCdpUrl,
   connectingByCdpUrl,

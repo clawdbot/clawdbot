@@ -1,7 +1,10 @@
 // Openai API module exposes the plugin public contract.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type { ProviderAuthContext, ProviderAuthResult } from "openclaw/plugin-sdk/plugin-entry";
-import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderAuthContext,
+  ProviderAuthResult,
+  ProviderAuthMethod,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   OPENAI_ACCOUNT_WIZARD_GROUP,

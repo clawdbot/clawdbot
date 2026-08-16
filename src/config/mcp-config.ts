@@ -1,6 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Normalizes MCP server config for runtime launch and validation.
-import { stableStringify } from "@openclaw/normalization-core";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";

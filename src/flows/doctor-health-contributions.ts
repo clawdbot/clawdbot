@@ -11,8 +11,10 @@ import type {
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
-import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
-import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
+import {
+  resolveDoctorMode,
+  resolveDoctorWorkspaceDir,
+} from "./doctor-health-contribution-utils.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";

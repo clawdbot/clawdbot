@@ -2,7 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import type { resolveMSTeamsInboundMedia } from "./inbound-media.js";
-import "./message-handler-mock-support.test-support.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 
 const inboundMediaMockState = vi.hoisted(() => ({

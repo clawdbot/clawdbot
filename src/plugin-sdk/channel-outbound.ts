@@ -4,6 +4,10 @@ import type {
   DurableMessageSendContext,
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
+import {
+  resolveChannelProgressDraftConfig as readProgressDraftConfig,
+  type StreamingCompatEntry as ProgressDraftCompatEntry,
+} from "../channels/streaming.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 type ChannelDurableDeliveryModule = typeof import("../channels/turn/durable-delivery.js");
@@ -131,10 +135,6 @@ export {
   createChannelProgressDraftCompositor,
   createChannelProgressReceiptTracker,
 } from "../channels/progress-draft-compositor.js";
-import {
-  resolveChannelProgressDraftConfig as readProgressDraftConfig,
-  type StreamingCompatEntry as ProgressDraftCompatEntry,
-} from "../channels/streaming.js";
 
 /** @deprecated The streaming.progress.render key was retired (#122927). */
 export type ChannelProgressDraftRenderMode = "rich" | "text";

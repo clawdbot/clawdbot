@@ -13,7 +13,9 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { MarkdownTableMode, MSTeamsReplyStyle, OpenClawConfig } from "../runtime-api.js";
+import { AI_GENERATED_ENTITY } from "./ai-entity.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import type { MSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
@@ -29,6 +31,9 @@ import { parseMentions } from "./mentions.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
+import type { MSTeamsActivityLike } from "./sdk-types.js";
+import type { MSTeamsApp } from "./sdk.js";
 
 /**
  * MSTeams-specific media size limit (100MB).
@@ -41,11 +46,6 @@ const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
  * Files >= 4MB use consent flow; smaller images can use inline base64.
  */
 const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
-
-import type { MSTeamsSdkCloudOptions } from "./cloud.js";
-import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
-import type { MSTeamsActivityLike } from "./sdk-types.js";
-import type { MSTeamsApp } from "./sdk.js";
 
 type MSTeamsConversationReference = {
   activityId?: string;
@@ -274,8 +274,6 @@ export function renderReplyPayloadsToMessages(
 
   return out;
 }
-
-import { AI_GENERATED_ENTITY } from "./ai-entity.js";
 
 async function buildActivity(
   msg: MSTeamsRenderedMessage,
