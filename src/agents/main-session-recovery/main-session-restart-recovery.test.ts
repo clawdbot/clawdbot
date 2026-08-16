@@ -66,6 +66,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../internal-runtime-context.js";
 import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "../run-termination.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import {
   createAssistantToolCallMessage,
   createSessionEntry,
@@ -1429,6 +1430,72 @@ describe("main-session-restart-recovery", () => {
       (agentRequests[1]!.params as Record<string, unknown>)
         .internalExecutionIdentityRecoveryAttempt,
     ).toBe(2);
+  });
+
+  it("mints a fresh transcript identity after a prior-lifecycle recovery was admitted", async () => {
+    const previousRecoveryRunId = "recovery-run-a";
+    const sourceRunId = "channel-run";
+    const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
+      sessionKey: "agent:main:discord:direct:123",
+      restartRecoveryDeliveryRunId: previousRecoveryRunId,
+      restartRecoveryDeliverySourceRunId: sourceRunId,
+      restartRecoveryDeliveryContext: discordDeliveryContext,
+      restartRecoveryRuns: [
+        { runId: previousRecoveryRunId, lifecycleGeneration: "previous-generation" },
+      ],
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      makeUserMessage("original channel turn", { idempotencyKey: `${sourceRunId}:user` }),
+      makeUserMessage("first restart continuation", {
+        idempotencyKey: `${previousRecoveryRunId}:user`,
+      }),
+      makeMessageToolCall("later-tool-call"),
+      makeMessageToolResult("later-tool-call"),
+    ]);
+    let dispatchedRunId: string | undefined;
+    let dispatchError: unknown;
+    vi.mocked(callGateway).mockImplementationOnce(async ({ method, params }) => {
+      expect(method).toBe("agent");
+      dispatchedRunId = String((params as { idempotencyKey?: unknown }).idempotencyKey);
+      const sessionManager = SessionManager.open(
+        { agentId: "main", sessionId: "main-session", sessionKey, storePath },
+        sessionsDir,
+      );
+      try {
+        sessionManager.appendMessage(
+          makeUserMessage("[System] continue after restart", {
+            idempotencyKey: `${dispatchedRunId}:user`,
+          }),
+        );
+      } catch (error) {
+        dispatchError = error;
+        throw error;
+      }
+      return { runId: dispatchedRunId, status: "accepted" };
+    });
+
+    const recoveryResult = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(dispatchError).toBeUndefined();
+    expect(recoveryResult).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(dispatchedRunId).toEqual(expect.any(String));
+    expect(dispatchedRunId).not.toBe(previousRecoveryRunId);
+    expect(gatewayParams()).toMatchObject({
+      channel: "discord",
+      idempotencyKey: dispatchedRunId,
+      to: "discord:dm:123",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      restartRecoveryDeliveryContext: discordDeliveryContext,
+      restartRecoveryDeliveryRunId: dispatchedRunId,
+      restartRecoveryDeliverySourceRunId: sourceRunId,
+    });
+    const transcript = await loadTestTranscript(sessionKey, storePath);
+    expect(
+      transcript
+        .map((event) => event.message?.idempotencyKey)
+        .filter((key) => typeof key === "string"),
+    ).toEqual([`${sourceRunId}:user`, `${previousRecoveryRunId}:user`, `${dispatchedRunId}:user`]);
   });
 
   it("does not manufacture recovery identity before collection is disabled", async () => {
