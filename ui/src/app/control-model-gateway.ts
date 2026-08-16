@@ -121,6 +121,7 @@ export function createControlModelGatewayBridge(options: {
 
   const bridge: ControlModelGatewayBridge = {
     binding: {
+      ...({ getSessionMessageSubscriptionClient: options.getClient } as object),
       getConnectionSnapshot: readConnectionSnapshot,
       subscribeConnection(listener) {
         connectionListeners.add(listener);
