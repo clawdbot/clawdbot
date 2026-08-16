@@ -60,9 +60,9 @@ import {
 } from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
+  createRememberSessionKeyWriter,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
-  writeTuiLastSessionKey,
 } from "./tui-last-session.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
@@ -1018,16 +1018,13 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     });
   };
 
-  const rememberCurrentSessionKey = (sessionKey: string) => {
-    const trimmed = sessionKey.trim();
-    if (!trimmed || trimmed === "unknown") {
-      return;
-    }
-    void writeTuiLastSessionKey({
-      scopeKey: buildLastSessionScopeKeyFor(trimmed),
-      sessionKey: trimmed,
-    }).catch(() => undefined);
-  };
+  const rememberCurrentSessionKey = createRememberSessionKeyWriter({
+    buildScopeKey: buildLastSessionScopeKeyFor,
+    reportFailure: (message) => {
+      chatLog.addSystem(`session memory write failed: ${message}`);
+      tui.requestRender();
+    },
+  });
 
   const restoreRememberedSession = async (expectedConnectionGeneration: number) => {
     if (initialSessionInput || rememberedSessionApplied) {
