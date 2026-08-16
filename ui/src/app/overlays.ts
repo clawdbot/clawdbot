@@ -19,6 +19,7 @@ import {
   setDevicePairSetupAccess as setPairAccess,
   syncDevicePairSetupCountdown,
 } from "../lib/device-pair-setup.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import {
   createDeviceAuthMigrationLoader,
   EMPTY_DEVICE_AUTH_MIGRATION,
@@ -518,7 +519,7 @@ export function createApplicationOverlays(
           updateStatusBanner: {
             tone: "danger",
             text: t("updates.error", {
-              error: error instanceof Error ? error.message : String(error),
+              error: formatUiError(error),
             }),
           },
         };
@@ -570,7 +571,7 @@ export function createApplicationOverlays(
         return response.ok;
       } catch (error) {
         if (!disposed && gateway.snapshot.client === client) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = formatUiError(error);
           publishUpdateBanner({ tone: "danger", text: t("updates.error", { error: message }) });
         }
         return false;
@@ -634,10 +635,7 @@ export function createApplicationOverlays(
           isCurrentOperation() &&
           promptState.execApprovalQueue.some((entry) => entry.id === active.id)
         ) {
-          promptState.execApprovalErrors.set(
-            active.id,
-            `Approval failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
+          promptState.execApprovalErrors.set(active.id, `Approval failed: ${formatUiError(error)}`);
         }
       } finally {
         // Reconnect can admit a new decision while this request is still settling.

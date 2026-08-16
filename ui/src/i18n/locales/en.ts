@@ -3857,6 +3857,7 @@ export const en: TranslationMap = {
   palette: {
     placeholder: "Search chats and commands…",
     noResults: "No results",
+    searchFailed: "Chat search failed — check the gateway logs and retry",
     categories: {
       search: "Search",
       navigation: "Navigation",

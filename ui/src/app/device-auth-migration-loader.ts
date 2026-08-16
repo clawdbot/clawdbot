@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import type {
   DeviceAuthMigrationController,
   DeviceAuthMigrationSnapshot,
@@ -40,7 +41,7 @@ export function createDeviceAuthMigrationLoader(params: {
           params.onChange({
             ...EMPTY_DEVICE_AUTH_MIGRATION,
             error: t("login.deviceAuthMigration.loadFailed", {
-              error: error instanceof Error ? error.message : String(error),
+              error: formatUiError(error),
             }),
           });
         }

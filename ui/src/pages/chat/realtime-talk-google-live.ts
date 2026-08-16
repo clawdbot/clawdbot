@@ -1,4 +1,5 @@
 // Control UI chat module implements realtime talk google live behavior.
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   bytesToBase64,
   estimateBase64DecodedByteLength,
@@ -529,7 +530,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     if (this.closed) {
       return;
     }
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUiError(error);
     this.ctx.callbacks.onStatus?.("error", message);
   }
 

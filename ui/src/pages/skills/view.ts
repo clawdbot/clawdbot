@@ -24,6 +24,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import "../../styles/plugins.css";
@@ -767,7 +768,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
 
           ${message
             ? html`<div class="callout ${message.kind === "error" ? "danger" : "success"}">
-                ${message.message}
+                ${formatUiExternalText(message.message)}
               </div>`
             : nothing}
           ${skill.primaryEnv
@@ -847,11 +848,13 @@ function renderInstalledClawHubOverview(
   if (link.status === "invalid") {
     return html`<div class="callout danger">
       <div style="font-weight: 600; margin-bottom: 4px;">${t("skillsPage.invalidLink")}</div>
-      <div>${link.reason}</div>
+      <div>${formatUiExternalText(link.reason)}</div>
     </div>`;
   }
   const auditHref = safeExternalHref(verdict?.securityAuditUrl ?? undefined);
-  const reasonText = verdict?.reasons?.length ? verdict.reasons.join(", ") : null;
+  const reasonText = verdict?.reasons?.length
+    ? formatUiExternalText(verdict.reasons.join(", "))
+    : null;
   const installedRef = `${link.ownerHandle ? `@${link.ownerHandle}/` : ""}${link.slug}@${link.installedVersion}`;
   return html`
     <div

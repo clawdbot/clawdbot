@@ -6,10 +6,11 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/web-awesome-popover.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
@@ -551,7 +552,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.gateway.connected &&
         this.connectMachineOpen
       ) {
-        this.connectMachineError = error instanceof Error ? error.message : String(error);
+        this.connectMachineError = formatUiError(error);
       }
     } finally {
       if (requestId === this.connectMachineRequestId) {

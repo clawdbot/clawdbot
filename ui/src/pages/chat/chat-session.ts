@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
@@ -275,8 +276,9 @@ export function flushChatQueueAfterIdleSessionReconciliation(
 }
 
 function setChatError(host: ChatModelSettingsHost, error: string | null, requestUpdate = false) {
-  host.lastError = error;
-  host.chatError = error;
+  const message = error === null ? null : formatUiError(error);
+  host.lastError = message;
+  host.chatError = message;
   if (requestUpdate) {
     host.requestUpdate?.();
   }
@@ -390,7 +392,7 @@ export function switchChatFastMode(
       return true;
     } catch (err) {
       rollback();
-      setChatError(host, `Failed to set speed: ${String(err)}`, true);
+      setChatError(host, `Failed to set speed: ${formatUiError(err)}`, true);
       return false;
     }
   })();
@@ -455,7 +457,7 @@ export async function switchChatModel(
       return true;
     } catch (err) {
       if (ownsModelOverride()) {
-        setChatError(host, `Failed to set model: ${String(err)}`, true);
+        setChatError(host, `Failed to set model: ${formatUiError(err)}`, true);
       }
       return false;
     } finally {
@@ -533,7 +535,7 @@ export function switchChatThinkingLevel(
       return true;
     } catch (err) {
       rollback();
-      setChatError(host, `Failed to set thinking level: ${String(err)}`, true);
+      setChatError(host, `Failed to set thinking level: ${formatUiError(err)}`, true);
       return false;
     }
   })();

@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
+import { formatUiError } from "../../format-error.ts";
 import { isActiveWorkboardCard, nextWorkboardCardPosition } from "../../workboard/card-state.ts";
 import { moveWorkboardCard } from "../../workboard/mutations.ts";
 import { normalizeCardsPayload } from "../../workboard/normalization.ts";
@@ -164,7 +165,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
       }
     },
     onError: (error) => {
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = formatUiError(error);
       this.requestRender();
     },
   });

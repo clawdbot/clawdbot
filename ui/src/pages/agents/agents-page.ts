@@ -38,6 +38,7 @@ import {
   runCronJob,
   type CronState,
 } from "../../lib/cron/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   canCallGatewayMethod,
   type GatewayMethodOperatorScope,
@@ -491,7 +492,7 @@ class AgentsPage
       .ensure(ids)
       .catch((err: unknown) => {
         if (this.isCurrentRequest(client, generation, undefined, { agentIdentity })) {
-          this.agentIdentityError = String(err);
+          this.agentIdentityError = formatUiError(err);
         }
       })
       .finally(() => {
@@ -590,7 +591,7 @@ class AgentsPage
       .catch((error: unknown) => {
         if (this.isCurrentRequest(client, generation, agentId)) {
           this.chatModelCatalogAgentId = null;
-          this.chatModelCatalogError = error instanceof Error ? error.message : String(error);
+          this.chatModelCatalogError = formatUiError(error);
         }
       })
       .finally(() => {

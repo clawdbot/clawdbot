@@ -2,6 +2,7 @@ import { readMissingScopeError } from "@openclaw/gateway-client/browser";
 import { html, nothing, render } from "lit";
 import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { renderSessionMenuItem } from "../pages/new-session/cloud-target.ts";
 import type { BrowserTarget } from "../pages/new-session/discovery.ts";
 import { folderDisplayName, isAbsolutePath } from "../pages/new-session/path.ts";
@@ -65,7 +66,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
           worktree: data.get("mode") === "worktree",
         });
       } catch (error) {
-        failure = String(error);
+        failure = formatUiError(error);
       }
       if (!failure) {
         finish();
@@ -123,9 +124,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         }
         browserError = readMissingScopeError(error)?.missingScope
           ? t("newSession.browseRequiresAdmin")
-          : error instanceof Error
-            ? error.message
-            : t("newSession.browserLoadFailed");
+          : formatUiError(error, t("newSession.browserLoadFailed"));
       } finally {
         if (requestToken === browserRequestToken) {
           browserLoading = false;

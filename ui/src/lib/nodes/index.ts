@@ -1,4 +1,3 @@
-// Shared Nodes operations used by the Control UI page and Gateway event hooks.
 // Presentation-free by contract: confirmations and secret reveals belong to the owning
 // page, because native window.confirm/window.prompt silently answer in webviews with no
 // dialog bridge and would end the action with no outcome and no recorded reason.
@@ -13,6 +12,8 @@ import {
 } from "../../../../src/shared/device-auth.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
+// Shared Nodes operations used by the Control UI page and Gateway event hooks.
+import { formatUiError } from "../format-error.ts";
 
 type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -231,7 +232,7 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
     }
   } catch (err) {
     if (!opts?.quiet && isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = String(err);
+      state.lastError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -263,7 +264,7 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
     }
   } catch (err) {
     if (!opts?.quiet && isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -285,7 +286,7 @@ export async function approveDevicePairing(state: DevicesState, requestId: strin
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
   }
 }
@@ -303,7 +304,7 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
   }
 }
@@ -352,7 +353,7 @@ export async function removeInventoryEntry(state: InventoryState, entry: Invento
     await removeInventoryEntryRpc(client, entry);
     await reloadInventory(state);
   } catch (err) {
-    await reloadInventory(state, { error: String(err) });
+    await reloadInventory(state, { error: formatUiError(err) });
   }
 }
 
@@ -369,7 +370,7 @@ export async function removeStaleInventoryEntries(
     try {
       await removeInventoryEntryRpc(client, entry);
     } catch (err) {
-      failures.push(`${entry.name}: ${String(err)}`);
+      failures.push(`${entry.name}: ${formatUiError(err)}`);
     }
   }
   await reloadInventory(
@@ -390,7 +391,7 @@ export async function approveNodePairingRequest(state: InventoryState, requestId
     await state.client.request("node.pair.approve", { requestId });
     await reloadInventory(state);
   } catch (err) {
-    await reloadInventory(state, { error: String(err) });
+    await reloadInventory(state, { error: formatUiError(err) });
   }
 }
 
@@ -402,7 +403,7 @@ export async function rejectNodePairingRequest(state: InventoryState, requestId:
     await state.client.request("node.pair.reject", { requestId });
     await reloadInventory(state);
   } catch (err) {
-    await reloadInventory(state, { error: String(err) });
+    await reloadInventory(state, { error: formatUiError(err) });
   }
 }
 
@@ -528,7 +529,7 @@ export async function rotateDeviceToken(
     return outcome;
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
     return null;
   }
@@ -565,7 +566,7 @@ export async function revokeDeviceToken(
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = String(err);
+      state.devicesError = formatUiError(err);
     }
   }
 }
@@ -616,7 +617,7 @@ export async function loadExecApprovals(
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = String(err);
+      state.lastError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -680,7 +681,7 @@ export async function saveExecApprovals(
     await loadExecApprovals(state, target);
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = String(err);
+      state.lastError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {

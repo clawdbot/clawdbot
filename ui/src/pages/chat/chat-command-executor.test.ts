@@ -1984,7 +1984,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe(
-      t("chat.commandResults.steer.requestFailed", { error: "Error: connection lost" }),
+      t("chat.commandResults.steer.requestFailed", { error: "connection lost" }),
     );
   });
 });
@@ -2135,7 +2135,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     );
 
     expect(result.content).toBe(
-      t("chat.commandResults.redirect.requestFailed", { error: "Error: connection lost" }),
+      t("chat.commandResults.redirect.requestFailed", { error: "connection lost" }),
     );
   });
 });

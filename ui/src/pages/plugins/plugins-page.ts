@@ -30,7 +30,7 @@ import {
   type McpServerSummary,
   type McpServersPatchBuildResult,
 } from "../../lib/config/mcp-servers.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
@@ -112,7 +112,10 @@ function mutationSuccessMessage(
     ? `pluginsPage.${action}Restart`
     : `pluginsPage.${action}Success`;
   const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-  const lines = [t(key, { name: result.plugin.name }), ...warnings];
+  const lines = [
+    t(key, { name: result.plugin.name }),
+    ...warnings.map((warning) => formatUiExternalText(warning)),
+  ];
   return lines.filter(Boolean).join("\n");
 }
 
@@ -863,7 +866,7 @@ class PluginsPage extends OpenClawLightDomElement {
           kind: "success",
           text: [
             t("pluginsPage.removedRestart", { name: result.pluginId }),
-            ...(result.warnings ?? []),
+            ...(result.warnings ?? []).map((warning) => formatUiExternalText(warning)),
             refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
           ]
             .filter(Boolean)

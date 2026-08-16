@@ -155,7 +155,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (options.reconciliation === "background") {
         void reconciliation.catch((error: unknown) => {
           if (host.connection.isCurrent(scope)) {
-            host.publish({ ...host.readState(), error: String(error) }, "operation");
+            host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
           }
         });
       } else {
@@ -167,7 +167,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return result;
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       return null;
     }
@@ -191,7 +191,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return host.connection.isCurrent(scope) ? result : null;
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       return null;
     }
@@ -389,7 +389,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         return null;
       }
       if (ownsModelOverride()) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       throw error;
     }
@@ -489,7 +489,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return host.connection.isCurrent(scope) ? "completed" : "uncertain";
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       // Reset can commit before awaited lifecycle work rejects; never infer safe retry.
       return "uncertain";
