@@ -295,7 +295,9 @@ describe("queued message edit round-trip", () => {
     updateQueuedMessageEdit(host as never, "message 2, corrected");
     rejectStoredGrowth();
 
-    await handleSendChat(host as never, "message 2, corrected");
+    await handleSendChat(host as never, "message 2, corrected", {
+      resumeQueuedMessageEditId: host.chatQueuedEdit!.id,
+    });
 
     // Retiring the original before its replacement is stored would lose both, in
     // the one failure the offline queue exists to survive. The edit stays open on
