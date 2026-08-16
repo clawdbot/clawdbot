@@ -78,7 +78,10 @@ suite.define(() => {
       }
       await route.continue();
     });
-    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["connect"],
+      sessionKey: "agent:example-agent:example-session",
+    });
     const mismatch = {
       code: "UNAVAILABLE",
       message: "Control UI updated; reload this page to continue",
