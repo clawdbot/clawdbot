@@ -1269,7 +1269,7 @@ export function registerMcpCli(program: Command) {
         const approvalMode = parseMcpApprovalModeOption(opts.approval);
         if (approvalMode) {
           next.codex = {
-            ...(asRecord(next.codex) ?? {}),
+            ...asRecord(next.codex),
             defaultToolsApprovalMode: approvalMode,
           };
         }
