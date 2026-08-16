@@ -285,7 +285,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -1: remove the orphan diagnostic traceparent propagation export.
-      4329,
+      // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
+      4330,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -359,7 +360,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -1: remove the orphan diagnostic traceparent propagation export.
-      2576,
+      // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
+      2577,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
