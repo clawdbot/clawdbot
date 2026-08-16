@@ -213,7 +213,9 @@ export async function writeFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
 }): Promise<void> {
-  const fsRoot = await fsSafeRoot(params.rootDir);
+  // Public Plugin SDK entry point: take the wrapped root so SDK callers get the
+  // same errno-bearing write failure as `root(...).write(...)`.
+  const fsRoot = await root(params.rootDir);
   await fsRoot.write(params.relativePath, params.data, {
     encoding: params.encoding,
     mkdir: params.mkdir,
