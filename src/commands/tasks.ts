@@ -98,7 +98,7 @@ type GatewayTaskCancelResult = {
 async function tryCancelGatewayOwnedTaskViaGateway(
   task: TaskRecord,
 ): Promise<GatewayTaskCancelResult | null> {
-  if (task.runtime !== "cron" && task.runtime !== "acp") {
+  if (task.runtime === "cli") {
     return null;
   }
   try {
@@ -109,16 +109,16 @@ async function tryCancelGatewayOwnedTaskViaGateway(
       timeoutMs: 5_000,
     });
   } catch (error) {
-    if (task.runtime === "acp") {
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        found: true,
-        cancelled: false,
-        reason: `ACP task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
-        task,
-      };
+    if (task.runtime === "cron") {
+      return null;
     }
-    return null;
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      found: true,
+      cancelled: false,
+      reason: `${task.runtime.toUpperCase()} task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
+      task,
+    };
   }
 }
 

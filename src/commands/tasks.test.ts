@@ -327,15 +327,40 @@ describe("tasks commands", () => {
     });
   });
 
-  it("routes cron task cancellation through the live gateway before local fallback", async () => {
+  it.each([
+    {
+      label: "Cron",
+      runtime: "cron",
+      ownerKey: "",
+      scopeKind: "system",
+      childSessionKey: "agent:main:cron:nightly-gmail-sync",
+      runId: "cron:nightly-gmail-sync:123",
+    },
+    {
+      label: "ACP",
+      runtime: "acp",
+      ownerKey: "agent:jarvis:main",
+      scopeKind: "session",
+      childSessionKey: "agent:codex:acp:child",
+      runId: "run-acp-cancel",
+    },
+    {
+      label: "Subagent",
+      runtime: "subagent",
+      ownerKey: "agent:jarvis:main",
+      scopeKind: "session",
+      childSessionKey: "agent:worker:subagent:child",
+      runId: "run-subagent-cancel",
+    },
+  ] as const)("routes $label task cancellation through the live gateway", async (testCase) => {
     await withTaskCommandStateDir(async () => {
       const task = createTaskRecord({
-        runtime: "cron",
-        sourceId: "nightly-gmail-sync",
-        ownerKey: "",
-        scopeKind: "system",
-        runId: "cron:nightly-gmail-sync:123",
-        task: "Nightly Gmail sync",
+        runtime: testCase.runtime,
+        ownerKey: testCase.ownerKey,
+        scopeKind: testCase.scopeKind,
+        childSessionKey: testCase.childSessionKey,
+        runId: testCase.runId,
+        task: `Cancel ${testCase.label} child`,
         status: "running",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
@@ -345,7 +370,7 @@ describe("tasks commands", () => {
         cancelled: true,
         task: {
           taskId: task.taskId,
-          runtime: "cron",
+          runtime: testCase.runtime,
           runId: task.runId,
         },
       });
@@ -361,48 +386,7 @@ describe("tasks commands", () => {
         }),
       );
       expect(runtime.log).toHaveBeenCalledWith(
-        `Cancelled ${task.taskId} (cron) run cron:nightly-gmail-sync:123.`,
-      );
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-    });
-  });
-
-  it("routes ACP task cancellation through the live gateway before local fallback", async () => {
-    await withTaskCommandStateDir(async () => {
-      const task = createTaskRecord({
-        runtime: "acp",
-        ownerKey: "agent:jarvis:main",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child",
-        runId: "run-acp-cancel",
-        task: "Cancel ACP child",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-      });
-      mocks.callGateway.mockResolvedValueOnce({
-        found: true,
-        cancelled: true,
-        task: {
-          taskId: task.taskId,
-          runtime: "acp",
-          runId: task.runId,
-        },
-      });
-      const runtime = createRuntime();
-
-      await tasksCancelCommand({ lookup: task.taskId }, runtime);
-
-      expect(mocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "tasks.cancel",
-          params: { taskId: task.taskId },
-          timeoutMs: 5_000,
-        }),
-      );
-      expect(runtime.log).toHaveBeenCalledWith(
-        `Cancelled ${task.taskId} (acp) run run-acp-cancel.`,
+        `Cancelled ${task.taskId} (${testCase.runtime}) run ${testCase.runId}.`,
       );
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
@@ -457,38 +441,54 @@ describe("tasks commands", () => {
     },
   );
 
-  it("fails ACP task cancellation loudly when the live gateway is unavailable", async () => {
-    await withTaskCommandStateDir(async () => {
-      const task = createTaskRecord({
-        runtime: "acp",
-        ownerKey: "agent:jarvis:main",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child",
-        runId: "run-acp-cancel-gateway-down",
-        task: "Cancel ACP child",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
+  it.each([
+    {
+      label: "ACP",
+      runtime: "acp",
+      childSessionKey: "agent:codex:acp:child",
+      runId: "run-acp-cancel-gateway-down",
+    },
+    {
+      label: "Subagent",
+      runtime: "subagent",
+      childSessionKey: "agent:worker:subagent:child",
+      runId: "run-subagent-cancel-gateway-down",
+    },
+  ] as const)(
+    "fails $label task cancellation loudly when the live gateway is unavailable",
+    async (testCase) => {
+      await withTaskCommandStateDir(async () => {
+        const task = createTaskRecord({
+          runtime: testCase.runtime,
+          ownerKey: "agent:jarvis:main",
+          scopeKind: "session",
+          childSessionKey: testCase.childSessionKey,
+          runId: testCase.runId,
+          task: `Cancel ${testCase.label} child`,
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
+        mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+        const runtime = createRuntime();
+
+        await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+        expect(mocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "tasks.cancel",
+            params: { taskId: task.taskId },
+            timeoutMs: 5_000,
+          }),
+        );
+        expect(runtime.error).toHaveBeenCalledWith(
+          `${testCase.runtime.toUpperCase()} task cancellation requires the live Gateway tasks.cancel path: gateway unavailable`,
+        );
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        expect(runtime.log).not.toHaveBeenCalled();
       });
-      mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
-      const runtime = createRuntime();
-
-      await tasksCancelCommand({ lookup: task.taskId }, runtime);
-
-      expect(mocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "tasks.cancel",
-          params: { taskId: task.taskId },
-          timeoutMs: 5_000,
-        }),
-      );
-      expect(runtime.error).toHaveBeenCalledWith(
-        "ACP task cancellation requires the live Gateway tasks.cancel path: gateway unavailable",
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.log).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
   it("explains stale running tasks retained by backing sessions in maintenance JSON", async () => {
     await withTaskCommandStateDir(async (state) => {
