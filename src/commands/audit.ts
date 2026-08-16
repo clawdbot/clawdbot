@@ -19,6 +19,7 @@ import {
   AUDIT_ACTIVITY_DIRECTIONS,
   AUDIT_ACTIVITY_KINDS,
   AUDIT_ACTIVITY_STATUSES,
+  findAuditActivityFilterConflict,
 } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parsePositiveAuditCursor } from "../audit/audit-cursor.js";
@@ -176,6 +177,26 @@ function validateAuditFilter(
   if (value !== undefined && !allowed.includes(value)) {
     throw new Error(`${flag} must be ${formatHumanList(allowed)}.`);
   }
+}
+
+const AUDIT_FILTER_FLAGS = {
+  sessionKey: "--session",
+  direction: "--direction",
+  channel: "--channel",
+} as const;
+
+function validateAuditFilterCombination(options: AuditListCommandOptions): void {
+  const conflict = findAuditActivityFilterConflict(options);
+  if (!conflict) {
+    return;
+  }
+  const flag = AUDIT_FILTER_FLAGS[conflict.field];
+  if (conflict.type === "kind") {
+    throw new Error(`${flag} only applies to --kind ${formatHumanList(conflict.supportedKinds)}.`);
+  }
+  throw new Error(
+    `${flag} cannot be combined with ${AUDIT_FILTER_FLAGS[conflict.conflictingField]}.`,
+  );
 }
 
 function formatAuditGatewayError(error: unknown): Error {
@@ -526,6 +547,7 @@ export async function auditListCommand(
   validateAuditFilter(options.kind, "--kind", AUDIT_ACTIVITY_KINDS);
   validateAuditFilter(options.status, "--status", AUDIT_ACTIVITY_STATUSES);
   validateAuditFilter(options.direction, "--direction", AUDIT_ACTIVITY_DIRECTIONS);
+  validateAuditFilterCombination(options);
   const after = parseAuditTimestamp(options.after, "--after");
   const before = parseAuditTimestamp(options.before, "--before");
   if (after !== undefined && before !== undefined && after > before) {

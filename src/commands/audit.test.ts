@@ -50,6 +50,8 @@ describe("audit command parsing", () => {
     callGateway.mockReset();
     callGateway.mockResolvedValue({ events: [] });
     vi.mocked(runtime.log).mockClear();
+    vi.mocked(runtime.error).mockClear();
+    vi.mocked(runtime.exit).mockClear();
   });
 
   it("converts ISO and millisecond timestamps before querying the Gateway", async () => {
@@ -127,8 +129,32 @@ describe("audit command parsing", () => {
       options: { direction: "sideways" as never },
       message: "--direction must be inbound or outbound.",
     },
+    {
+      options: { kind: "agent_run" as const, direction: "inbound" as const },
+      message: "--direction only applies to --kind message.",
+    },
+    {
+      options: { kind: "agent_run" as const, channel: "telegram" },
+      message: "--channel only applies to --kind message.",
+    },
+    {
+      options: { kind: "message" as const, sessionKey: "agent:main:main" },
+      message: "--session only applies to --kind agent_run or tool_action.",
+    },
+    {
+      options: { sessionKey: "agent:main:main", direction: "inbound" as const },
+      message: "--direction cannot be combined with --session.",
+    },
+    {
+      options: { sessionKey: "agent:main:main", channel: "telegram" },
+      message: "--channel cannot be combined with --session.",
+    },
   ])("rejects invalid audit filters before querying the Gateway", async ({ options, message }) => {
-    await expect(auditListCommand({ ...options, limit: "10" }, runtime)).rejects.toThrow(message);
+    await runCommandWithRuntime(runtime, () =>
+      auditListCommand({ ...options, limit: "10" }, runtime),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(message);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -200,20 +226,22 @@ describe("audit command gateway compatibility", () => {
     vi.mocked(runtime.exit).mockClear();
   });
 
-  it("forwards all filters to audit.activity.list", async () => {
-    await auditListCommand(
-      {
-        agentId: "main",
-        kind: "message",
-        status: "failed",
-        direction: "outbound",
-        channel: "telegram",
-        after: "100",
-        before: "200",
-        cursor: "42",
-        limit: "25",
-      },
-      runtime,
+  it("forwards valid filters unchanged and keeps an empty page successful", async () => {
+    await runCommandWithRuntime(runtime, () =>
+      auditListCommand(
+        {
+          agentId: "main",
+          kind: "message",
+          status: "failed",
+          direction: "inbound",
+          channel: "telegram",
+          after: "100",
+          before: "200",
+          cursor: "42",
+          limit: "25",
+        },
+        runtime,
+      ),
     );
 
     expect(callGateway).toHaveBeenCalledTimes(1);
@@ -224,13 +252,15 @@ describe("audit command gateway compatibility", () => {
         agentId: "main",
         kind: "message",
         status: "failed",
-        direction: "outbound",
+        direction: "inbound",
         channel: "telegram",
         after: 100,
         before: 200,
         cursor: "42",
       },
     });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("falls back to audit.list only with legacy-compatible filters", async () => {

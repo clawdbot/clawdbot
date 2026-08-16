@@ -217,6 +217,28 @@ describe("audit gateway methods", () => {
     });
   });
 
+  it.each([
+    { kind: "agent_run", direction: "inbound" },
+    { kind: "agent_run", channel: "telegram" },
+    { kind: "message", sessionKey: "agent:main:main" },
+    { sessionKey: "agent:main:main", direction: "inbound" },
+    { sessionKey: "agent:main:main", channel: "telegram" },
+  ])(
+    "rejects impossible activity filters before storage: $kind $direction $channel",
+    async (params) => {
+      const respond = await runAuditHandler("audit.activity.list", params);
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("invalid audit.activity.list filters"),
+        }),
+      );
+      expect(listAuditEvents).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["audit.list", "audit.activity.list"] as const)(
     "rejects malformed cursors and inverted ranges for %s",
     async (method) => {
