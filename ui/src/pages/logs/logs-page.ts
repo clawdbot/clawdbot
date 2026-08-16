@@ -90,11 +90,7 @@ class LogsPage extends OpenClawLightDomElement {
           );
         let payload = await requestTail(reset ? undefined : (cursor ?? undefined));
         const sourceChanged =
-          !reset &&
-          !payload.reset &&
-          file !== null &&
-          typeof payload.file === "string" &&
-          payload.file !== file;
+          !reset && file !== null && payload.file !== undefined && payload.file !== file;
         if (sourceChanged) {
           payload = await requestTail();
         }
@@ -145,8 +141,12 @@ class LogsPage extends OpenClawLightDomElement {
       this.logsTaskQuiet = false;
       void this.logsTask.run([null, null, null, null, false, false]);
     },
-    onSnapshot: () => {
+    onSnapshot: (change) => {
       this.syncPolling();
+      if (change.becameConnected && this.logsFile !== null) {
+        void this.loadLogs({ reset: true, quiet: true });
+        return;
+      }
       this.ensureInitialLogs();
     },
   });

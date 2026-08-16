@@ -17,7 +17,10 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/logs-lifecycle");
+const proofDir = path.resolve(
+  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() || ".artifacts/control-ui-e2e",
+  "logs-lifecycle",
+);
 const viewport = { height: 900, width: 1_440 };
 
 function logLine(message: string, level: "error" | "info" | "warn", second: number) {
@@ -71,7 +74,12 @@ suite.define(() => {
     const lineBPrefix = logLine(messageBPrefix, "info", 2);
     const lineBTail = logLine("source B tail", "error", 3);
     const lineBAppended = logLine("source B appended", "warn", 4);
-    const lineBAfterReconnect = logLine("source B after reconnect", "info", 5);
+    const messageBRestartPrefix = `source B restart prefix ${"y".repeat(
+      Buffer.byteLength(`${lineBPrefix}\n${lineBTail}\n${lineBAppended}\n`),
+    )}`;
+    const lineBRestartPrefix = logLine(messageBRestartPrefix, "info", 5);
+    const lineBRestartTail = logLine("source B restart tail", "error", 6);
+    const lineBAfterReconnect = logLine("source B after reconnect", "warn", 7);
     await Promise.all([
       writeFile(sourceA, `${lineA}\n`, "utf8"),
       writeFile(sourceB, `${lineBPrefix}\n${lineBTail}\n`, "utf8"),
@@ -173,6 +181,7 @@ suite.define(() => {
             .poll(() => page.locator(".sidebar-footer-bar__status").textContent())
             .toContain("Reconnecting…");
           await expect.poll(() => visibleMessages(page)).toHaveLength(3);
+          await writeFile(sourceB, `${lineBRestartPrefix}\n${lineBRestartTail}\n`, "utf8");
           gateway = await startGatewayServer(port, {
             auth: { mode: "none" },
             bind: "loopback",
@@ -180,15 +189,13 @@ suite.define(() => {
             sidecarStartup: "defer",
           });
           await waitForControlUiGatewayReady(page);
+          await expect
+            .poll(() => visibleMessages(page))
+            .toEqual([messageBRestartPrefix, "source B restart tail"]);
           await appendFile(sourceB, `${lineBAfterReconnect}\n`, "utf8");
           await expect
             .poll(() => visibleMessages(page))
-            .toEqual([
-              messageBPrefix,
-              "source B tail",
-              "source B appended",
-              "source B after reconnect",
-            ]);
+            .toEqual([messageBRestartPrefix, "source B restart tail", "source B after reconnect"]);
           await capture(page, "03-reconnected-tail-complete.png");
           expect(pageErrors).toEqual([]);
         },

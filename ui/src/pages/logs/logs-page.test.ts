@@ -217,7 +217,12 @@ describe("LogsPage lifecycle", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ cursor: 6, file: "/tmp/source-a.log", lines: ["A-one"] })
-      .mockResolvedValueOnce({ cursor: 18, file: "/tmp/source-b.log", lines: ["B-tail"] })
+      .mockResolvedValueOnce({
+        cursor: 18,
+        file: "/tmp/source-b.log",
+        lines: ["B-tail"],
+        reset: true,
+      })
       .mockResolvedValueOnce({
         cursor: 18,
         file: "/tmp/source-b.log",
