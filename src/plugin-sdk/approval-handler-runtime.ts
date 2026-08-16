@@ -9,6 +9,8 @@ export {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   type ApprovalActionView,
   type ApprovalMetadataView,
+  type ApprovalRequest,
+  type ApprovalResolved,
   type ApprovalViewModel,
   type ExecApprovalExpiredView,
   type ExecApprovalPendingView,
@@ -24,6 +26,7 @@ export {
   type ChannelApprovalHandler,
   type ChannelApprovalHandlerAdapter,
   type ChannelApprovalCapabilityHandlerContext,
+  type ChannelApprovalKind,
   type ExpiredApprovalView,
   type PendingApprovalView,
   type PluginApprovalExpiredView,
@@ -33,11 +36,11 @@ export {
 } from "../infra/approval-handler-runtime.js";
 export { resolveApprovalOverGateway } from "./approval-gateway-runtime.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import type { ApprovalRequest, ApprovalResolved } from "../infra/approval-handler-runtime.js";
 import type {
   ExpiredApprovalView,
   ResolvedApprovalView,
 } from "../infra/approval-view-model.types.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
 import {
   buildPluginApprovalExpiredMessage,
   buildPluginApprovalResolvedMessage,
@@ -45,9 +48,6 @@ import {
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
 import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
-
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 
 /** Builds channel-visible resolved approval text for exec and plugin approvals. */
 export function buildChannelApprovalResolvedText(params: {
