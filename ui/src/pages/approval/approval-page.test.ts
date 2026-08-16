@@ -7,6 +7,7 @@ import type {
   ApprovalResolveResult,
   ExpiredApprovalSnapshot,
   PendingApprovalSnapshot,
+  PluginApprovalPresentation,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -71,7 +72,9 @@ function expiredApproval(): ExpiredApprovalSnapshot {
   } as ExpiredApprovalSnapshot;
 }
 
-function pluginApproval(severity = "warning"): PendingApprovalSnapshot {
+function pluginApproval(
+  severity: NonNullable<PluginApprovalPresentation["severity"]> = "warning",
+): PendingApprovalSnapshot {
   return pendingApproval({
     id: "plugin:approval-1",
     urlPath: "/approve/plugin%3Aapproval-1",
@@ -469,7 +472,7 @@ describe("ApprovalPage", () => {
     ["info", "info"],
     ["warning", "warning"],
     ["critical", "danger"],
-  ])("maps plugin severity %s to the %s page accent", async (severity, expected) => {
+  ] as const)("maps plugin severity %s to the %s page accent", async (severity, expected) => {
     const approval = pluginApproval(severity);
     const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
     const { page } = createPage({
