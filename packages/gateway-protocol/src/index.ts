@@ -1,11 +1,4 @@
-export * from "./clawhub-trust-error-details.js";
-export * from "./install-policy-warning-error-details.js";
-export * from "./system-agent-error-details.js";
-export {
-  isMcpAppViewExpiredError,
-  readMissingScopeError,
-  readMissingScopeErrorDetails,
-} from "./gateway-error-details.js";
+export * from "./error-details.js";
 export * from "./session-agent-status.js";
 export * from "./terminal-validators.js";
 export {
@@ -18,16 +11,6 @@ export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
-export type {
-  CronJobNotFoundErrorDetails,
-  GatewayErrorDetails,
-  McpAppViewExpiredErrorDetails,
-  MissingScopeErrorDetails,
-  UserPrefsLimitExceededErrorDetails,
-  ProjectCloneErrorDetails,
-  ProjectCloneFailureCause,
-  WizardNotFoundErrorDetails,
-} from "./schema/error-codes.js";
 export * from "./schema/board.js";
 export {
   SessionCreatedActorSchema,
@@ -77,12 +60,6 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
-  CronJobNotFoundErrorDetailsSchema,
-  GatewayErrorDetailsSchema,
-  MissingScopeErrorDetailsSchema,
-  UserPrefsLimitExceededErrorDetailsSchema,
-  ProjectCloneErrorDetailsSchema,
-  WizardNotFoundErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,
   WorkerAdmissionResponseFrameSchema,
@@ -687,12 +664,6 @@ export {
   FsDirEntrySchema,
   FsListDirParamsSchema,
   FsListDirResultSchema,
-  ErrorCodes,
-  buildMissingScopeErrorDetails,
-  GatewayErrorDetailCodes,
-  readCronJobNotFoundError,
-  errorShape,
-  missingScopeErrorShape,
 } from "./schema-modules.js";
 export {
   MIN_CLIENT_PROTOCOL_VERSION,
