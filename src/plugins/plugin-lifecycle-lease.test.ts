@@ -1,6 +1,7 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -8,14 +9,16 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 
-const activeLeaseChildren = new Set<ChildProcessWithoutNullStreams>();
+type LeaseChild = ChildProcessByStdio<null, Readable, Readable>;
+
+const activeLeaseChildren = new Set<LeaseChild>();
 
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await Promise.all(Array.from(activeLeaseChildren, terminateLeaseChild));
 });
 
-async function terminateLeaseChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+async function terminateLeaseChild(child: LeaseChild): Promise<void> {
   await new Promise<void>((resolve) => {
     const onClose = () => resolve();
     child.once("close", onClose);
