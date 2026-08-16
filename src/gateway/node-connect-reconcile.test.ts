@@ -8,7 +8,10 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
-import { registerComputerUseProvider } from "../plugins/computer-use-contract.js";
+import {
+  registerComputerUseProvider,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
@@ -46,7 +49,7 @@ function makePendingPairingRequest(requestId: string) {
   }));
 }
 
-function computerUseDescriptor() {
+function computerUseDescriptor(): ComputerUseCapabilityDescriptor {
   return {
     contractVersion: 2 as const,
     provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
