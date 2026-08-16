@@ -113,4 +113,20 @@ describe("readConfiguredLogTail", () => {
     expect(result.file).toBe(configured);
     expect(result.lines).toEqual([]);
   });
+
+  it("sets truncated flag when line count exceeds the limit", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-truncated-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+
+    // Write more lines than the default limit (500) to trigger truncation.
+    const lines = Array.from({ length: 600 }, (_, i) => `line-${i}`);
+    await fs.writeFile(file, lines.join("\n") + "\n");
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredLogTail({ limit: 100 });
+
+    expect(result.lines).toHaveLength(100);
+    expect(result.truncated).toBe(true);
+  });
 });
