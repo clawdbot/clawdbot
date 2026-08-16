@@ -142,7 +142,7 @@ function upsertSqliteSession(
               session_key = ?, cwd = ?, complete = ?, updated_at = ?
         WHERE session_id = ?`,
     ).run(
-      params.sessionKey.length + cwd.length,
+      byteLength(params.sessionKey) + byteLength(cwd),
       params.sessionKey,
       cwd,
       complete,
@@ -215,12 +215,17 @@ function estimateSqliteLedgerBytes(db: DatabaseSync): number {
   return normalizeSqliteInteger(row?.total ?? 0);
 }
 
+const textEncoder = new TextEncoder();
+function byteLength(value: string): number {
+  return textEncoder.encode(value).byteLength;
+}
+
 function estimateSessionRowBytes(params: {
   sessionId: string;
   sessionKey: string;
   cwd: string;
 }): number {
-  return params.sessionId.length + params.sessionKey.length + params.cwd.length + 32;
+  return byteLength(params.sessionId) + byteLength(params.sessionKey) + byteLength(params.cwd) + 32;
 }
 
 function estimateEventRowBytes(params: {
@@ -230,10 +235,10 @@ function estimateEventRowBytes(params: {
   updateJson: string;
 }): number {
   return (
-    params.sessionId.length +
-    params.sessionKey.length +
-    params.updateJson.length +
-    (params.runId?.length ?? 0) +
+    byteLength(params.sessionId) +
+    byteLength(params.sessionKey) +
+    byteLength(params.updateJson) +
+    (params.runId ? byteLength(params.runId) : 0) +
     32
   );
 }
@@ -374,7 +379,7 @@ function appendSqliteUpdate(
             session_key = ?, updated_at = ?, next_seq = ?
       WHERE session_id = ?`,
   ).run(
-    params.sessionKey.length + eventBytes,
+    byteLength(params.sessionKey) + eventBytes,
     params.sessionKey,
     now,
     session.nextSeq + 1,

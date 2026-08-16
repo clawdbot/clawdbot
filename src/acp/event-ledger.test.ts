@@ -397,6 +397,33 @@ describe("ACP event ledger", () => {
     expect(replay.events).toEqual([]);
   });
 
+  it("uses byte length rather than character length for footprint estimates", async () => {
+    const ledger = createInMemoryAcpEventLedger({ now: () => 1000 });
+    // Multi-byte characters: each emoji is 4 bytes in UTF-8 but 2 JS chars.
+    const multiByteKey = "agent:main:\u{1F600}\u{1F600}\u{1F600}";
+    await ledger.startSession({
+      sessionId: "session-byte",
+      sessionKey: multiByteKey,
+      cwd: "/work",
+      complete: true,
+    });
+    await ledger.recordUpdate({
+      sessionId: "session-byte",
+      sessionKey: multiByteKey,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "\u{1F600}".repeat(100) },
+      },
+    });
+
+    const replay = await ledger.readReplay({
+      sessionId: "session-byte",
+      sessionKey: multiByteKey,
+    });
+    expect(replay.complete).toBe(true);
+    expect(replay.events).toHaveLength(1);
+  });
+
   it("marks replay incomplete when serialized byte retention trims payloads", async () => {
     const ledger = createInMemoryAcpEventLedger({ maxSerializedBytes: 900 });
     await ledger.startSession({
