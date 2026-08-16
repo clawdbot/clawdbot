@@ -80,6 +80,23 @@ function createDmPlugin(
 }
 
 describe("security audit channel dm policy", () => {
+  it("keeps legacy channel warning severity independent of prose", async () => {
+    const plugin = createDmPlugin();
+    if (!plugin.security) {
+      throw new Error("test plugin security adapter missing");
+    }
+    plugin.security.collectWarnings = () => [
+      "- public access warning",
+      "- disabled integration warning",
+    ];
+
+    const findings = await collectChannelSecurityFindingsCore({ cfg: {}, plugins: [plugin] });
+    expect(findings.filter((finding) => finding.title.endsWith("security warning"))).toEqual([
+      expect.objectContaining({ severity: "warn", detail: "public access warning" }),
+      expect.objectContaining({ severity: "warn", detail: "disabled integration warning" }),
+    ]);
+  });
+
   it.each([
     {
       name: "global main + winning isolated binding is safe",
