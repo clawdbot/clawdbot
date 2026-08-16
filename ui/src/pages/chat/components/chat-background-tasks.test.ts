@@ -139,6 +139,17 @@ afterEach(() => {
 });
 
 describe("background tasks rail state", () => {
+  it("redacts secrets in task list failures", async () => {
+    const { host } = createHost({
+      request: () => Promise.reject(new Error("OPENAI_API_KEY=sk-1234567890abcdef")),
+    });
+
+    createBackgroundTasksProps(host);
+    await flushAsync();
+
+    expect(createBackgroundTasksProps(host).error).toBe("OPENAI_API_KEY=sk-123...cdef");
+  });
+
   it("loads session-scoped tasks eagerly while the rail is collapsed", async () => {
     const { host, request } = createHost({
       request: (method, params) => {
@@ -245,6 +256,28 @@ describe("background tasks rail state", () => {
     expect(props.cancellingTaskIds.has("task-1")).toBe(false);
   });
 
+  it("redacts secrets in cancellation failures", async () => {
+    const running = makeTask({ id: "task-1" });
+    const { host } = createHost({
+      request: (method) =>
+        method === "tasks.list"
+          ? Promise.resolve({ tasks: [running] })
+          : Promise.reject(new Error("OPENAI_API_KEY=sk-1234567890abcdef")),
+    });
+    host.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: ["operator.write"] },
+    };
+    createBackgroundTasksProps(host);
+    await flushAsync();
+
+    createBackgroundTasksProps(host).onCancel("task-1");
+    await flushAsync();
+
+    expect(createBackgroundTasksProps(host).error).toBe("OPENAI_API_KEY=sk-123...cdef");
+  });
+
   it("routes row selection to the task panel and loads its bounded prompt on demand", async () => {
     const running = makeTask({
       id: "task-1",
@@ -287,7 +320,7 @@ describe("background tasks rail state", () => {
           return Promise.resolve({ tasks: [running] });
         }
         return failLookup
-          ? Promise.reject(new Error("lookup blew up"))
+          ? Promise.reject(new Error("lookup blew up: OPENAI_API_KEY=sk-1234567890abcdef"))
           : Promise.resolve({ task: { ...running, prompt: "Recovered prompt" } });
       },
     });
@@ -296,7 +329,9 @@ describe("background tasks rail state", () => {
 
     createBackgroundTasksProps(host, { onOpenTaskDetail: () => {} }).onLoadDetail?.(running);
     await flushAsync();
-    expect(createBackgroundTasksProps(host).taskDetailErrors.get("task-1")).toBe("lookup blew up");
+    expect(createBackgroundTasksProps(host).taskDetailErrors.get("task-1")).toBe(
+      "lookup blew up: OPENAI_API_KEY=sk-123...cdef",
+    );
 
     // Selection clears the recorded error so the panel's render-driven load
     // (which must skip errored tasks to avoid a retry loop) can run again.
