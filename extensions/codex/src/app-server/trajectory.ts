@@ -121,6 +121,13 @@ function createCodexHostTrajectorySink(params: {
   };
 }
 
+let warnedSqliteRecorderUnavailable = false;
+
+/** Clears the process-wide missing-recorder warn-once flag between tests. */
+export function resetCodexTrajectoryRecorderWarningForTest(): void {
+  warnedSqliteRecorderUnavailable = false;
+}
+
 /** Creates a trajectory recorder when trajectory capture is enabled for the environment. */
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
@@ -136,10 +143,15 @@ export function createCodexTrajectoryRecorder(
   // from a session-file string silently drops every capture once the host
   // stops emitting the legacy `sqlite:` marker.
   if (!params.trajectoryRecorder) {
-    params.warn?.("codex trajectory capture requires the SQLite host recorder", {
-      sessionId: params.attempt.sessionId,
-      reason: "sqlite-recorder-unavailable",
-    });
+    // A missing host recorder is a static config condition; repeating the warn
+    // on every attempt buries real diagnostics, so emit it once per process.
+    if (!warnedSqliteRecorderUnavailable) {
+      warnedSqliteRecorderUnavailable = true;
+      params.warn?.("codex trajectory capture requires the SQLite host recorder", {
+        sessionId: params.attempt.sessionId,
+        reason: "sqlite-recorder-unavailable",
+      });
+    }
     return null;
   }
   const sink = createCodexHostTrajectorySink({ recorder: params.trajectoryRecorder });

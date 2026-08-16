@@ -137,7 +137,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
     const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(state.client);
-    embeddedAgentLog.info("codex app-server one-shot cleanup checked shared client retirement", {
+    // Runs on every one-shot attempt teardown; routine retirement checks are
+    // diagnostic detail, not operator-facing info.
+    embeddedAgentLog.debug("codex app-server one-shot cleanup checked shared client retirement", {
       runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,

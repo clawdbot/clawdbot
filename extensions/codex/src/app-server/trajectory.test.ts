@@ -18,6 +18,7 @@ import {
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
+  resetCodexTrajectoryRecorderWarningForTest,
 } from "./trajectory.js";
 
 type CodexTrajectoryRecorder = NonNullable<ReturnType<typeof createCodexTrajectoryRecorder>>;
@@ -117,20 +118,26 @@ function createSqliteHostTrajectoryRecorder(params: {
 }
 
 describe("Codex trajectory recorder", () => {
-  it("warns when the SQLite host recorder is unavailable", () => {
+  it("warns once per process when the SQLite host recorder is unavailable", () => {
+    resetCodexTrajectoryRecorderWarningForTest();
     const warn = vi.fn();
-    const recorder = createCodexTrajectoryRecorder({
-      cwd: testWorkspace.dir,
-      attempt: {
-        sessionFile: "agent:main:session-1",
-        sessionId: "session-1",
-        model: { api: "responses" },
-      } as never,
-      env: {},
-      warn,
-    });
+    const makeRecorder = (sessionId: string) =>
+      createCodexTrajectoryRecorder({
+        cwd: testWorkspace.dir,
+        attempt: {
+          sessionFile: `agent:main:${sessionId}`,
+          sessionId,
+          model: { api: "responses" },
+        } as never,
+        env: {},
+        warn,
+      });
 
-    expect(recorder).toBeNull();
+    expect(makeRecorder("session-1")).toBeNull();
+    // Static config condition: repeated attempts must not repeat the warn.
+    expect(makeRecorder("session-2")).toBeNull();
+
+    expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "codex trajectory capture requires the SQLite host recorder",
       { sessionId: "session-1", reason: "sqlite-recorder-unavailable" },
