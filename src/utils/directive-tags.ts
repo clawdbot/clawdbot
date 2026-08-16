@@ -52,7 +52,7 @@ function replaceOutsideCode(
   regex: RegExp,
   replacement: (match: string, captures: unknown[], offset: number, source: string) => string,
 ): string {
-  const codeRegions = text.includes("`") || text.includes("~~~") ? findCodeRegions(text) : [];
+  const codeRegions = text.includes("[[") ? findCodeRegions(text) : [];
   return text.replace(regex, (...args: unknown[]) => {
     const match = String(args[0]);
     const offset = args.at(-2);

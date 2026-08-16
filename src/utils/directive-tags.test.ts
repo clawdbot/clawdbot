@@ -92,6 +92,21 @@ describe("parseInlineDirectives markdown code", () => {
     expect(stripInlineDirectiveTagsForDisplay(input)).toEqual({ text: input, changed: false });
     expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
   });
+
+  it.each([
+    ["four-space", "    [[reply_to_current]]\n    [[audio_as_voice]]"],
+    ["tab", "\t[[reply_to_current]]\n\t[[audio_as_voice]]"],
+  ])("leaves directives inside standalone %s-indented code untouched", (_name, input) => {
+    expect(parseInlineDirectives(input)).toEqual({
+      text: input,
+      audioAsVoice: false,
+      replyToCurrent: false,
+      hasAudioTag: false,
+      hasReplyTag: false,
+    });
+    expect(stripInlineDirectiveTagsForDisplay(input)).toEqual({ text: input, changed: false });
+    expect(stripInlineDirectiveTagsForDelivery(input)).toEqual({ text: input, changed: false });
+  });
 });
 
 describe("parseInlineDirectives", () => {
