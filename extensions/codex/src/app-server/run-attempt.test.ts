@@ -3669,8 +3669,17 @@ describe("runCodexAppServerAttempt", () => {
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
+      collaborationMode?: { settings?: { developer_instructions?: string | null } };
     };
     expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
+    // Lightweight cron keeps its context-free contract on the turn-scoped carrier too,
+    // not just on thread/start: bootstrap files are empty for this mode, so the sandbox
+    // project-doc fallback has nothing to inject even when the exec cwd is remapped.
+    // The carrier is asserted present first, so the exclusion below cannot pass vacuously.
+    const cronDeveloperInstructions = turnStartParams.collaborationMode?.settings
+      ?.developer_instructions as string;
+    expect(cronDeveloperInstructions).toContain("This is an OpenClaw cron automation turn.");
+    expect(cronDeveloperInstructions).not.toContain("Follow AGENTS guidance.");
     expect(result.systemPromptReport?.skills).toMatchObject({ promptChars: 0, entries: [] });
     expect(result.systemPromptReport?.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
   });
