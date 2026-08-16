@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,22 +8,24 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 
-afterEach(() => {
+const activeLeaseChildren = new Set<ChildProcessWithoutNullStreams>();
+
+afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
+  await Promise.all(Array.from(activeLeaseChildren, terminateLeaseChild));
 });
 
-async function waitForPath(filePath: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      await fs.access(filePath);
+async function terminateLeaseChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const onClose = () => resolve();
+    child.once("close", onClose);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      child.off("close", onClose);
+      resolve();
       return;
-    } catch {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 25);
-      });
     }
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
+    child.kill("SIGKILL");
+  });
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -34,22 +36,72 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-function runLeaseChild(scriptPath: string, args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
+function runLeaseChild(
+  scriptPath: string,
+  args: string[],
+): { ready: Promise<void>; completed: Promise<void> } {
+  const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  activeLeaseChildren.add(child);
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+
+  let stdout = "";
+  let stderr = "";
+  let pendingLine = "";
+  let readySettled = false;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+    pendingLine += chunk;
+    const lines = pendingLine.split("\n");
+    pendingLine = lines.pop() ?? "";
+    if (!readySettled && lines.includes("ready")) {
+      readySettled = true;
+      resolveReady();
+    }
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+
+  const completed = new Promise<void>((resolve, reject) => {
+    child.once("error", (error) => {
+      activeLeaseChildren.delete(child);
+      const failure = new Error(`failed to start lease child: ${error.message}`, {
+        cause: error,
+      });
+      if (!readySettled) {
+        readySettled = true;
+        rejectReady(failure);
+      }
+      reject(failure);
     });
-    let output = "";
-    child.stdout.on("data", (chunk) => (output += chunk));
-    child.stderr.on("data", (chunk) => (output += chunk));
-    child.on("close", (code) => {
+    child.once("close", (code, signal) => {
+      activeLeaseChildren.delete(child);
+      const output = `stdout:\n${stdout}\nstderr:\n${stderr}`;
+      if (!readySettled) {
+        readySettled = true;
+        rejectReady(
+          new Error(`lease child exited before readiness (${code ?? signal})\n${output}`),
+        );
+      }
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`lease child exited ${code}: ${output}`));
+        reject(new Error(`lease child exited ${code ?? signal}\n${output}`));
       }
     });
   });
+  void completed.catch(() => {});
+  return { ready, completed };
 }
 
 describe("plugin lifecycle lease", () => {
@@ -130,10 +182,8 @@ describe("plugin lifecycle lease", () => {
 
   it("serializes lifecycle work across processes", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-processes" }, async (state) => {
-      const firstMarker = state.path("first-entered");
       const releaseMarker = state.path("release-first");
       const secondMarker = state.path("second-entered");
-      const secondReady = state.path("second-ready");
       const secondResult = state.path("second-result");
       const leaseModuleUrl = pathToFileURL(
         path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
@@ -143,10 +193,10 @@ describe("plugin lifecycle lease", () => {
         `
           import fs from "node:fs/promises";
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
-          const [role, stateDir, firstMarker, releaseMarker, secondMarker, secondReady, secondResult] = process.argv.slice(2);
+          const [role, stateDir, releaseMarker, secondMarker, secondResult] = process.argv.slice(2);
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
           if (role === "second") {
-            await fs.writeFile(secondReady, "ready");
+            process.stdout.write("ready\\n");
             try {
               await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 0 }, async () => {
                 await fs.writeFile(secondMarker, "entered");
@@ -157,7 +207,7 @@ describe("plugin lifecycle lease", () => {
             }
           } else {
             await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
-              await fs.writeFile(firstMarker, "entered");
+              process.stdout.write("ready\\n");
               while (true) {
                 try {
                   await fs.access(releaseMarker);
@@ -173,21 +223,14 @@ describe("plugin lifecycle lease", () => {
         `,
       );
 
-      const childArgs = [
-        state.stateDir,
-        firstMarker,
-        releaseMarker,
-        secondMarker,
-        secondReady,
-        secondResult,
-      ];
+      const childArgs = [state.stateDir, releaseMarker, secondMarker, secondResult];
       const first = runLeaseChild(childScript, ["first", ...childArgs]);
-      await waitForPath(firstMarker);
+      await first.ready;
       const second = runLeaseChild(childScript, ["second", ...childArgs]);
-      await waitForPath(secondReady);
+      await second.ready;
       // Wait for the child to close so its result write is fully flushed before
       // reading; file existence alone can race with the write after open().
-      await second;
+      await second.completed;
 
       let assertionError: unknown;
       try {
@@ -200,7 +243,7 @@ describe("plugin lifecycle lease", () => {
       } finally {
         await fs.writeFile(releaseMarker, "release");
       }
-      await Promise.all([first, second]);
+      await Promise.all([first.completed, second.completed]);
       if (assertionError) {
         throw assertionError instanceof Error
           ? assertionError
@@ -218,8 +261,6 @@ describe("plugin lifecycle lease", () => {
         path.resolve("src/plugins/installed-plugin-index-records.ts"),
       ).href;
       const goMarker = state.path("go");
-      const readyAlpha = state.path("ready-alpha");
-      const readyBeta = state.path("ready-beta");
       const childScript = await state.writeText(
         "record-cache-child.mts",
         `
@@ -229,11 +270,11 @@ describe("plugin lifecycle lease", () => {
             loadInstalledPluginIndexInstallRecords,
             writePersistedInstalledPluginIndexInstallRecords,
           } from ${JSON.stringify(recordsModuleUrl)};
-          const [pluginId, stateDir, readyMarker, goMarker] = process.argv.slice(2);
+          const [pluginId, stateDir, goMarker] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
           await loadInstalledPluginIndexInstallRecords();
-          await fs.writeFile(readyMarker, "ready");
+          process.stdout.write("ready\\n");
           while (true) {
             try {
               await fs.access(goMarker);
@@ -257,11 +298,11 @@ describe("plugin lifecycle lease", () => {
         `,
       );
 
-      const alpha = runLeaseChild(childScript, ["alpha", state.stateDir, readyAlpha, goMarker]);
-      const beta = runLeaseChild(childScript, ["beta", state.stateDir, readyBeta, goMarker]);
-      await Promise.all([waitForPath(readyAlpha), waitForPath(readyBeta)]);
+      const alpha = runLeaseChild(childScript, ["alpha", state.stateDir, goMarker]);
+      const beta = runLeaseChild(childScript, ["beta", state.stateDir, goMarker]);
+      await Promise.all([alpha.ready, beta.ready]);
       await fs.writeFile(goMarker, "go");
-      await Promise.all([alpha, beta]);
+      await Promise.all([alpha.completed, beta.completed]);
 
       closeOpenClawStateDatabaseForTest();
       const persisted = await readPersistedInstalledPluginIndex({ env: state.env });
