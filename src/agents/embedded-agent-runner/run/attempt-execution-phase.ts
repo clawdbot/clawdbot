@@ -195,6 +195,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     builtinToolNames,
     replaySafeToolNames,
     sideEffectToolOwners,
+    trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({

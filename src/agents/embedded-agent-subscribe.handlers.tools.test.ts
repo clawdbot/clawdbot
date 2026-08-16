@@ -143,6 +143,10 @@ function createTestContext(): {
   >;
   onAgentEvent: ReturnType<typeof vi.fn>;
   onExecutionPhase: ReturnType<typeof vi.fn>;
+  trajectoryRecorder: {
+    recordEvent: ReturnType<typeof vi.fn>;
+    flush: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  };
   trace: ReturnType<typeof vi.fn>;
   isEnabled: ReturnType<typeof vi.fn>;
 } {
@@ -151,6 +155,10 @@ function createTestContext(): {
   const onBlockReplyFlush = vi.fn<NonNullable<ToolHandlerContext["params"]["onBlockReplyFlush"]>>();
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
+  const trajectoryRecorder = {
+    recordEvent: vi.fn(),
+    flush: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+  };
   const warn = vi.fn();
   const trace = vi.fn();
   const isEnabled = vi.fn(() => false);
@@ -164,6 +172,7 @@ function createTestContext(): {
       onAgentEvent,
       onExecutionPhase,
       onToolResult: undefined,
+      trajectoryRecorder,
     },
     flushBlockReplyBuffer: vi.fn(),
     hookRunner: undefined,
@@ -210,7 +219,16 @@ function createTestContext(): {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase, trace, isEnabled };
+  return {
+    ctx,
+    warn,
+    onBlockReplyFlush,
+    onAgentEvent,
+    onExecutionPhase,
+    trajectoryRecorder,
+    trace,
+    isEnabled,
+  };
 }
 
 type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
@@ -323,6 +341,72 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
   expect(targets).toHaveLength(1);
   return requireRecord(targets[0], "messaging target");
 }
+
+describe("trajectory tool audit events", () => {
+  it("records tool.call and tool.result for an executed tool", async () => {
+    const { ctx, trajectoryRecorder } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "trajectory-call-1",
+      args: { path: "/tmp/trajectory-fixture.txt" },
+      isError: false,
+      result: { content: "fixture" },
+    });
+
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "tool.call",
+      expect.objectContaining({
+        toolCallId: "trajectory-call-1",
+        name: "read",
+      }),
+    );
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "tool.result",
+      expect.objectContaining({
+        toolCallId: "trajectory-call-1",
+        name: "read",
+        success: true,
+      }),
+    );
+  });
+
+  it("marks failed tool results as success: false in the trajectory", async () => {
+    const { ctx, trajectoryRecorder } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "trajectory-call-2",
+      args: { path: "/tmp/missing.txt" },
+      isError: true,
+      result: { error: "missing file" },
+    });
+
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "tool.result",
+      expect.objectContaining({
+        toolCallId: "trajectory-call-2",
+        name: "read",
+        success: false,
+      }),
+    );
+  });
+
+  it("skips trajectory recording when no recorder is wired", async () => {
+    const { ctx, trajectoryRecorder } = createTestContext();
+    ctx.params.trajectoryRecorder = undefined;
+
+    await executeTool(ctx, {
+      toolName: "read",
+      toolCallId: "trajectory-call-3",
+      args: { path: "/tmp/trajectory-fixture.txt" },
+      isError: false,
+      result: { content: "fixture" },
+    });
+
+    expect(trajectoryRecorder.recordEvent).not.toHaveBeenCalled();
+  });
+});
 
 describe("handleToolExecutionStart read path checks", () => {
   it("delivers a numbered ask_user prompt with question id association", async () => {

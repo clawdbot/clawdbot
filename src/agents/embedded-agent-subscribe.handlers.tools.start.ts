@@ -478,6 +478,12 @@ export function handleToolExecutionStart(
     );
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
+    ctx.params.trajectoryRecorder?.recordEvent("tool.call", {
+      toolCallId,
+      name: toolName,
+      // SAFETY: sanitizeToolArgs returns a plain object; the assertion narrows the type.
+      args: sanitizeToolArgs(args) as Record<string, unknown>,
+    });
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "tool",
