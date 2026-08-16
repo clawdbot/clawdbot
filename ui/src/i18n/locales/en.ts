@@ -997,11 +997,16 @@ export const en: TranslationMap = {
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
     stopCloudWorkerConfirmAction: "Stop worker",
+    stopCloudWorkerStale:
+      'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     cloudWorkerStopResult: 'Cloud worker for "{session}" is {state}.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
+    deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
     deleteSessionsConfirm: "Delete {count} sessions and their transcripts?",
+    deleteSessionsStale:
+      "Gateway connection replaced before {count} sessions were deleted. Try again.",
     deleteSelectedConfirmOne:
       "Delete 1 session?\n\nThis will delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
