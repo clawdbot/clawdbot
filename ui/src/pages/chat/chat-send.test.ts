@@ -14,6 +14,10 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -53,12 +57,12 @@ import {
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
 
-function clientWithRequest(request: unknown): ChatHost["client"] {
-  return { request } as unknown as ChatHost["client"];
+function clientWithRequest(request: GatewayRequestHandler): NonNullable<ChatHost["client"]> {
+  return createTestGatewayClient(request);
 }
 
 function asChatPageHost(host: TestChatHost): ChatPageHost {
-  return host as unknown as ChatPageHost;
+  return host as ChatPageHost;
 }
 
 function requireChatMessageCache(host: ChatHost): ChatMessageCache {
@@ -206,6 +210,12 @@ function requestUrl(input: string | URL | Request): string {
     return input.toString();
   }
   return input.url;
+}
+
+function createJsonResponse(body: unknown, options: { ok?: boolean } = {}): Response {
+  const response = new Response(null, { status: options.ok === false ? 500 : 200 });
+  response.json = async () => await body;
+  return response;
 }
 
 type MockCallSource = {
@@ -811,24 +821,24 @@ describe("refreshChatAvatar", () => {
       },
     );
     const metadataUrl = `${basePath.replace(/\/$/, "")}/avatar/main?meta=1`;
-    const fetchMock = vi.fn((input: string | URL | Request) => {
+    const fetchMock = vi.fn<typeof fetch>((input: string | URL | Request) => {
       const url = requestUrl(input);
       if (url === metadataUrl) {
-        return Promise.resolve({ ok: true, json: async () => ({ avatarUrl: "/avatar/main" }) });
+        return Promise.resolve(createJsonResponse({ avatarUrl: "/avatar/main" }));
       }
       if (url === "/avatar/main") {
-        return Promise.resolve({ ok: true, blob: async () => new Blob(["avatar"]) });
+        return Promise.resolve(new Response(new Blob(["avatar"])));
       }
       throw new Error(`Unexpected avatar URL: ${url}`);
     });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal("fetch", fetchMock);
     const host = makeChatHost({ basePath, sessionKey: "agent:main", ...overrides });
 
     await refreshChatAvatar(host);
 
     for (const [index, url] of [metadataUrl, "/avatar/main"].entries()) {
-      expect(fetchUrl(fetchMock as unknown as MockCallSource, index)).toBe(url);
-      const init = fetchInit(fetchMock as unknown as MockCallSource, index);
+      expect(fetchUrl(fetchMock, index)).toBe(url);
+      const init = fetchInit(fetchMock, index);
       expect(init.method).toBe("GET");
       if (expectedToken) {
         expect(init.headers).toEqual({ Authorization: `Bearer ${expectedToken}` });
@@ -841,31 +851,29 @@ describe("refreshChatAvatar", () => {
     expect(host.chatAvatarUrl).toBe(objectUrl);
   });
   it("keeps mounted dashboard avatar endpoints under the normalized base path", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      json: async () => ({}),
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(createJsonResponse({}, { ok: false }));
+    vi.stubGlobal("fetch", fetchMock);
 
     const host = makeChatHost({ basePath: "/openclaw/", sessionKey: "agent:ops:main" });
     await refreshChatAvatar(host);
 
-    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/openclaw/avatar/ops?meta=1");
-    expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
+    expect(fetchUrl(fetchMock, 0)).toBe("/openclaw/avatar/ops?meta=1");
+    expect(fetchInit(fetchMock, 0).method).toBe("GET");
     expect(host.chatAvatarUrl).toBeNull();
   });
 
   it("drops remote avatar metadata so the control UI can rely on same-origin images only", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      createJsonResponse({
         avatarUrl: "https://example.com/avatar.png",
         avatarSource: "https://example.com/avatar.png",
         avatarStatus: "remote",
         avatarReason: null,
       }),
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
     const host = makeChatHost({ basePath: "", sessionKey: "agent:main" });
     await refreshChatAvatar(host);
@@ -876,16 +884,15 @@ describe("refreshChatAvatar", () => {
   });
 
   it("keeps unresolved IDENTITY.md avatar metadata when falling back to the logo", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      createJsonResponse({
         avatarUrl: null,
         avatarSource: "assets/avatars/nova-portrait.png",
         avatarStatus: "none",
         avatarReason: "missing",
       }),
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
     const host = makeChatHost({ basePath: "", sessionKey: "agent:main" });
     await refreshChatAvatar(host);
@@ -931,20 +938,20 @@ describe("refreshChatAvatar", () => {
     const firstRequest = createDeferred<{ avatarUrl?: string }>();
     const opsRequest = createDeferred<{ avatarUrl?: string }>();
     const firstMetadataUrl = `/avatar/${firstAgent}?meta=1`;
-    const fetchMock = vi.fn((input: string | URL | Request) => {
+    const fetchMock = vi.fn<typeof fetch>((input: string | URL | Request) => {
       const url = requestUrl(input);
       if (url === firstMetadataUrl) {
-        return Promise.resolve({ ok: true, json: async () => firstRequest.promise });
+        return Promise.resolve(createJsonResponse(firstRequest.promise));
       }
       if (url === "/avatar/ops?meta=1") {
-        return Promise.resolve({ ok: true, json: async () => opsRequest.promise });
+        return Promise.resolve(createJsonResponse(opsRequest.promise));
       }
       if (url === "/avatar/ops") {
-        return Promise.resolve({ ok: true, blob: async () => new Blob(["avatar"]) });
+        return Promise.resolve(new Response(new Blob(["avatar"])));
       }
       throw new Error(`Unexpected avatar URL: ${url}`);
     });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal("fetch", fetchMock);
     const host = makeChatHost({ basePath: "", ...overrides });
 
     const firstRefresh = refreshChatAvatar(host);
@@ -960,8 +967,8 @@ describe("refreshChatAvatar", () => {
     expect(revokeObjectURL).not.toHaveBeenCalled();
     expect(host.chatAvatarUrl).toBe("blob:ops-avatar");
     for (const [index, url] of [firstMetadataUrl, "/avatar/ops?meta=1", "/avatar/ops"].entries()) {
-      expect(fetchUrl(fetchMock as unknown as MockCallSource, index)).toBe(url);
-      expect(fetchInit(fetchMock as unknown as MockCallSource, index).method).toBe("GET");
+      expect(fetchUrl(fetchMock, index)).toBe(url);
+      expect(fetchInit(fetchMock, index).method).toBe("GET");
     }
   });
 });
@@ -1309,11 +1316,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe("/reset");
     expect(host.chatMessage).toBe("");
@@ -1445,11 +1448,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe(expected);
     expect(host.chatMessage).toBe("");
@@ -1466,11 +1465,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     const runId = String(payload.idempotencyKey);
     const runState = host as ChatHost & {
       chatStreamStartedAt?: number | null;
@@ -1744,11 +1739,7 @@ describe("handleSendChat", () => {
     switchUpdate.resolve(true);
     await send;
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe("use the newly selected model");
     expect(host.chatMessage).toBe("");
@@ -1782,7 +1773,7 @@ describe("handleSendChat", () => {
       chatMessage: "use the new reasoning and speed",
       sessionsResult,
     });
-    const settingsHost = host as unknown as Parameters<typeof switchChatThinkingLevel>[0];
+    const settingsHost: Parameters<typeof switchChatThinkingLevel>[0] = host;
 
     const thinkingPatch = switchChatThinkingLevel(settingsHost, "high");
     const fastModePatch = switchChatFastMode(settingsHost, "on");
@@ -1809,11 +1800,7 @@ describe("handleSendChat", () => {
 
     fastModeUpdate.resolve({});
     await Promise.all([fastModePatch, send]);
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload).toMatchObject({
       message: "use the new reasoning and speed",
       sessionKey: "agent:main",
@@ -2130,7 +2117,7 @@ describe("handleSendChat", () => {
       sessions: settingsPane.sessions,
       sessionsResult,
     });
-    const settingsHost = settingsPane as unknown as Parameters<typeof switchChatThinkingLevel>[0];
+    const settingsHost: Parameters<typeof switchChatThinkingLevel>[0] = settingsPane;
 
     const thinkingPatch = switchChatThinkingLevel(settingsHost, "high");
     const send = handleSendChat(sendPane);
@@ -2146,9 +2133,7 @@ describe("handleSendChat", () => {
     await Promise.all([thinkingPatch, send]);
 
     expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
-    expect(
-      findRequestPayload(request as unknown as MockCallSource, "chat.send", "chat send payload"),
-    ).toMatchObject({
+    expect(findRequestPayload(request, "chat.send", "chat send payload")).toMatchObject({
       message: "wait for the other pane",
       sessionKey: "agent:work:home",
     });
@@ -2330,7 +2315,7 @@ describe("handleSendChat", () => {
       sessionsResult,
     });
     vi.spyOn(host.sessions, "patch").mockResolvedValue(null);
-    const settingsHost = host as unknown as Parameters<typeof switchChatThinkingLevel>[0];
+    const settingsHost: Parameters<typeof switchChatThinkingLevel>[0] = host;
 
     const thinkingPatch = switchChatThinkingLevel(settingsHost, "high");
     const send = handleSendChat(host);
@@ -2368,11 +2353,7 @@ describe("handleSendChat", () => {
     switchUpdate.resolve(true);
     await send;
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe("send this");
     expect(host.chatMessage).toBe("keep typing");
@@ -2408,11 +2389,7 @@ describe("handleSendChat", () => {
     switchUpdate.resolve(true);
     await send;
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.message).toBe("send this");
     const attachments = payload.attachments as Array<Record<string, unknown>>;
     expect(attachments).toHaveLength(1);
@@ -2466,11 +2443,7 @@ describe("handleSendChat", () => {
     switchUpdate.resolve(true);
     await send;
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.message).toBe("send this");
     const attachments = payload.attachments as Array<Record<string, unknown>>;
     expect(attachments).toHaveLength(1);
@@ -2515,11 +2488,7 @@ describe("handleSendChat", () => {
     switchUpdate.resolve(true);
     await send;
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.message).toBe("send this");
     const attachments = payload.attachments as Array<Record<string, unknown>>;
     expect(attachments).toHaveLength(1);
@@ -2555,11 +2524,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.message).toBe("summarize this");
     expect(payload.attachments).toStrictEqual([
       {
@@ -2587,11 +2552,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.sessionKey).toBe("agent:main:matrix:group:!room:Example");
     expect(payload.message).toBe("send in other session");
     otherSessionSwitch.resolve(false);
@@ -2896,11 +2857,7 @@ describe("handleSendChat", () => {
     switchUpdate.resolve(true);
     await send;
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.message).toBe("wait for selected model");
   });
 
@@ -3192,10 +3149,7 @@ describe("handleSendChat", () => {
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        json: async () => ({}),
-      }) as unknown as typeof fetch,
+      vi.fn<typeof fetch>().mockResolvedValue(createJsonResponse({}, { ok: false })),
     );
 
     const refreshCurrentSessionTools = vi.fn();
@@ -3319,11 +3273,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "approval command payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "approval command payload");
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe("/approve approval-123 allow-once");
     expect(payload.deliver).toBe(false);
@@ -3830,11 +3780,7 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     await waitForFast(() => expect(host.request).toHaveBeenCalled());
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
     expect(payload.message).toBe("use the live server mode");
     expect(payload).not.toHaveProperty("queueMode");
   });
@@ -5858,7 +5804,7 @@ describe("handleSendChat", () => {
       },
     });
     const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
+      host.request,
       "skills.proposals.requestRevision",
       "revision request payload",
     );
@@ -5979,7 +5925,7 @@ describe("handleSendChat", () => {
     await Promise.resolve();
 
     const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
+      host.request,
       "skills.proposals.requestRevision",
       "revision slash payload",
     );
@@ -6775,11 +6721,7 @@ describe("handleSendChat", () => {
     host.connected = true;
     await retryReconnectableQueuedChatSends(host);
 
-    const payload = findRequestPayload(
-      request as unknown as MockCallSource,
-      "chat.send",
-      "queued global send payload",
-    );
+    const payload = findRequestPayload(request, "chat.send", "queued global send payload");
     expect(payload.sessionKey).toBe("global");
     expect(payload.agentId).toBe("work");
     expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
@@ -6824,9 +6766,7 @@ describe("handleSendChat", () => {
     host.connected = true;
     await retryReconnectableQueuedChatSends(host);
 
-    expect(
-      findRequestPayload(request as unknown as MockCallSource, "chat.send", "canonical alias"),
-    ).toMatchObject({
+    expect(findRequestPayload(request, "chat.send", "canonical alias")).toMatchObject({
       agentId: "work",
       message: "survive alias canonicalization",
       sessionKey: "global",
@@ -7134,7 +7074,7 @@ describe("handleSendChat", () => {
 
     expect(
       findRequestPayload(
-        host.request as unknown as MockCallSource,
+        host.request,
         "skills.proposals.requestRevision",
         "revision retry payload",
       ),
@@ -7303,9 +7243,10 @@ describe("handleSendChat", () => {
 
     await retryReconnectableQueuedChatSends(host);
 
-    expect(
-      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "tail"),
-    ).toMatchObject({ idempotencyKey: "reconnect-tail-run", message: "safe automatic tail" });
+    expect(findRequestPayload(host.request, "chat.send", "tail")).toMatchObject({
+      idempotencyKey: "reconnect-tail-run",
+      message: "safe automatic tail",
+    });
     expect(host.chatQueue.map((item) => item.id)).toEqual(["manual-head"]);
   });
 
@@ -7372,11 +7313,7 @@ describe("handleSendChat", () => {
     host.connected = true;
     await retryReconnectableQueuedChatSends(host);
 
-    const payload = findRequestPayload(
-      request as unknown as MockCallSource,
-      "chat.send",
-      "queued global send payload",
-    );
+    const payload = findRequestPayload(request, "chat.send", "queued global send payload");
     expect(payload.sessionKey).toBe("global");
     expect(payload.agentId).toBe("work");
     expect(loadChatComposerSnapshot({ ...host, assistantAgentId: "main" }, "global")).toBeNull();
@@ -7432,7 +7369,7 @@ describe("handleSendChat", () => {
       chatMessage: "stay on this branch",
     });
 
-    await loadChatBranches(host as unknown as Parameters<typeof loadChatBranches>[0]);
+    await loadChatBranches(host);
     expect(host.chatBranches).toEqual([
       expect.objectContaining({ leafEntryId: "leaf-server-new", active: true }),
     ]);
@@ -7440,9 +7377,9 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(
-      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "foreground send"),
-    ).toMatchObject({ expectedLeafEntryId: "leaf-rendered" });
+    expect(findRequestPayload(host.request, "chat.send", "foreground send")).toMatchObject({
+      expectedLeafEntryId: "leaf-rendered",
+    });
   });
 
   it("attaches an authoritative empty displayed leaf to a foreground send", async () => {
@@ -7459,9 +7396,10 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(
-      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "empty-leaf send"),
-    ).toHaveProperty("expectedLeafEntryId", null);
+    expect(findRequestPayload(host.request, "chat.send", "empty-leaf send")).toHaveProperty(
+      "expectedLeafEntryId",
+      null,
+    );
   });
 
   it("waits for terminal history reconciliation before sending a follow-up", async () => {
@@ -7477,7 +7415,7 @@ describe("handleSendChat", () => {
       chatDisplayedLeafEntryId: "leaf-before-terminal",
       chatMessage: "immediate follow-up",
     });
-    const historyLoad = loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+    const historyLoad = loadChatHistory(host);
 
     const sending = handleSendChat(host);
     await Promise.resolve();
@@ -7495,9 +7433,9 @@ describe("handleSendChat", () => {
     await Promise.all([historyLoad, sending]);
 
     expect(sendsBeforeHistory).toBe(0);
-    expect(
-      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "follow-up send"),
-    ).toMatchObject({ expectedLeafEntryId: "leaf-after-terminal" });
+    expect(findRequestPayload(host.request, "chat.send", "follow-up send")).toMatchObject({
+      expectedLeafEntryId: "leaf-after-terminal",
+    });
   });
 
   it("omits the active leaf when draining a restored outbox", async () => {
@@ -7525,9 +7463,9 @@ describe("handleSendChat", () => {
 
     await retryReconnectableQueuedChatSends(host);
 
-    expect(
-      findRequestPayload(request as unknown as MockCallSource, "chat.send", "restored send"),
-    ).not.toHaveProperty("expectedLeafEntryId");
+    expect(findRequestPayload(request, "chat.send", "restored send")).not.toHaveProperty(
+      "expectedLeafEntryId",
+    );
   });
 
   it("preserves a foreground leaf past an earlier outbox row", async () => {
@@ -7665,9 +7603,9 @@ describe("handleSendChat", () => {
     host.chatMessage = "after clear";
     await handleSendChat(host);
 
-    expect(
-      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "post-clear send"),
-    ).not.toHaveProperty("expectedLeafEntryId");
+    expect(findRequestPayload(host.request, "chat.send", "post-clear send")).not.toHaveProperty(
+      "expectedLeafEntryId",
+    );
   });
 
   it("preserves the replacement route leaf when post-clear history resolves late", async () => {
@@ -8073,11 +8011,7 @@ describe("handleSendChat", () => {
 
     await steerQueuedChatMessage(host, "queued-1");
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "steered chat send payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "steered chat send payload");
     const idempotencyKey = payload.idempotencyKey;
     expect(typeof idempotencyKey).toBe("string");
     expect(uuidPattern.test(idempotencyKey as string)).toBe(true);
@@ -8121,11 +8055,7 @@ describe("handleSendChat", () => {
 
     await steerQueuedChatMessage(host, original.id);
 
-    const payload = findRequestPayload(
-      host.request as unknown as MockCallSource,
-      "chat.send",
-      "session-row steer payload",
-    );
+    const payload = findRequestPayload(host.request, "chat.send", "session-row steer payload");
     expect(payload).toMatchObject({
       sessionKey: "agent:main:main",
       message: "tighten the plan",
@@ -8218,7 +8148,7 @@ describe("handleSendChat", () => {
       ],
     });
 
-    await loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+    await loadChatHistory(host);
 
     expect(host.chatMessages).toEqual([historyUser]);
     expect(host.chatQueue).toEqual([]);
@@ -8254,7 +8184,7 @@ describe("handleSendChat", () => {
       ],
     });
 
-    await loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+    await loadChatHistory(host);
 
     expect(host.chatMessages).toHaveLength(1);
     expect(host.chatQueue).toEqual([]);
@@ -8287,7 +8217,7 @@ describe("handleSendChat", () => {
       chatQueue: [inflight],
     });
 
-    await loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+    await loadChatHistory(host);
 
     expect(host.chatQueue).toEqual([inflight]);
   });
@@ -9704,7 +9634,7 @@ describe("handleAbortChat", () => {
     const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
     const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
     const host = makeChatHost({
-      client: { request } as unknown as ChatHost["client"],
+      client: clientWithRequest(request),
       chatRunId: null,
       chatMessage: "/stop",
       sessionKey,
@@ -9726,7 +9656,7 @@ describe("handleAbortChat", () => {
   it("keeps selected global aborts on the compatible key-only request", async () => {
     const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
     const host = makeChatHost({
-      client: { request } as unknown as ChatHost["client"],
+      client: clientWithRequest(request),
       chatRunId: null,
       chatMessage: "/stop",
       sessionKey: "global",
@@ -9767,7 +9697,7 @@ describe("handleAbortChat", () => {
     const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
     const sessionKey = "agent:work:main";
     const host = makeChatHost({
-      client: { request } as unknown as ChatHost["client"],
+      client: clientWithRequest(request),
       chatRunId: null,
       sessionKey,
       agentsList: { defaultId: "main", mainKey: "main", scope },
@@ -9829,7 +9759,7 @@ describe("handleAbortChat", () => {
 
   it("queues a typed exact-run stop while disconnected", async () => {
     const request = vi.fn();
-    const client = { request } as unknown as NonNullable<ChatHost["client"]>;
+    const client = clientWithRequest(request);
     const host = makeChatHost({
       client,
       connected: false,
@@ -9850,7 +9780,7 @@ describe("handleAbortChat", () => {
   });
 
   it("queues the active run abort while disconnected", async () => {
-    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
+    const client = clientWithRequest(vi.fn());
     const host = makeChatHost({
       client,
       connected: false,
@@ -9871,7 +9801,7 @@ describe("handleAbortChat", () => {
   });
 
   it("preserves the draft when queueing a toolbar abort while disconnected", async () => {
-    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
+    const client = clientWithRequest(vi.fn());
     const host = makeChatHost({
       client,
       connected: false,
@@ -9893,7 +9823,7 @@ describe("handleAbortChat", () => {
 
   it("does not queue an unversioned session stop while disconnected", async () => {
     const request = vi.fn();
-    const client = { request } as unknown as NonNullable<ChatHost["client"]>;
+    const client = clientWithRequest(request);
     const sessionKey = "agent:main:telegram:direct:queued-user";
     const host = makeChatHost({
       client,
@@ -9916,7 +9846,7 @@ describe("handleAbortChat", () => {
 
   it("does not queue an unversioned global stop while disconnected", async () => {
     const request = vi.fn();
-    const client = { request } as unknown as NonNullable<ChatHost["client"]>;
+    const client = clientWithRequest(request);
     const host = makeChatHost({
       client,
       connected: false,

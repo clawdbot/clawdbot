@@ -1,4 +1,5 @@
 // Telegram plugin module implements send harness behavior.
+import type { Bot } from "grammy";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildOutboundMediaLoadOptions,
@@ -8,6 +9,18 @@ import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
 import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
+
+type TelegramApiTestOverrides = {
+  [Key in keyof Bot["api"] as Bot["api"][Key] extends (...args: never[]) => unknown
+    ? Key
+    : never]?: MockFn;
+};
+
+export function makeTelegramApiTestMock<Overrides extends TelegramApiTestOverrides>(
+  overrides: Overrides,
+): Overrides & Partial<Bot["api"]> {
+  return overrides as Overrides & Partial<Bot["api"]>;
+}
 
 function richMessagePlainTextForTest(richMessage: {
   blocks?: InputRichBlock[];
