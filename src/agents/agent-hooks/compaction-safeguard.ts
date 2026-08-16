@@ -4,6 +4,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  computeFileLists,
+  formatFileOperations,
+  MAX_FILE_OPS_LIST_CHARS,
+  MAX_FILE_OPS_SECTION_CHARS,
+} from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { isAbortError } from "../../infra/abort-signal.js";
@@ -38,7 +44,7 @@ import { isTimeoutError } from "../failover-error.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
-import type { ExtensionAPI, ExtensionContext, FileOperations } from "../sessions/index.js";
+import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
@@ -68,8 +74,6 @@ const TURN_PREFIX_INSTRUCTIONS =
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
 const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
-const MAX_FILE_OPS_SECTION_CHARS = 2_000;
-const MAX_FILE_OPS_LIST_CHARS = 900;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const CONTEXT_TRUNCATED_MARKER = "\n\n[Earlier compaction context truncated to fit budget]\n\n";
 // Split-turn context supplements the generated summary and must not claim its
@@ -560,54 +564,6 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
     lines.push(`- ...and ${failures.length - MAX_TOOL_FAILURES} more`);
   }
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
-}
-
-function computeFileLists(fileOps: FileOperations): {
-  readFiles: string[];
-  modifiedFiles: string[];
-} {
-  const modified = new Set([...fileOps.edited, ...fileOps.written]);
-  const readFiles = [...fileOps.read].filter((f) => !modified.has(f)).toSorted();
-  const modifiedFiles = [...modified].toSorted();
-  return { readFiles, modifiedFiles };
-}
-
-function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-  function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
-    if (files.length === 0 || maxChars <= 0) {
-      return "";
-    }
-    const openTag = `<${tag}>\n`;
-    const closeTag = `\n</${tag}>`;
-    const lines: string[] = [];
-    let usedChars = openTag.length + closeTag.length;
-
-    for (let i = 0; i < files.length; i++) {
-      const line = `${files[i]}\n`;
-      const remaining = files.length - i - 1;
-      const overflowLine = remaining > 0 ? `...and ${remaining} more\n` : "";
-      const projected = usedChars + line.length + overflowLine.length;
-      if (projected > maxChars) {
-        const overflow = `...and ${files.length - i} more\n`;
-        if (usedChars + overflow.length <= maxChars) {
-          lines.push(overflow);
-        }
-        break;
-      }
-      lines.push(line);
-      usedChars += line.length;
-    }
-
-    return lines.length > 0 ? `${openTag}${lines.join("")}${closeTag}` : "";
-  }
-
-  const sections = [
-    formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
-    formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
-  ].filter(Boolean);
-  return sections.length > 0
-    ? capCompactionSummary(`\n\n${sections.join("\n\n")}`, MAX_FILE_OPS_SECTION_CHARS)
-    : "";
 }
 
 function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
