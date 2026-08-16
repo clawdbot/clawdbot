@@ -895,6 +895,7 @@ type LoginOptions = {
    * because credentials already exist on disk.
    */
   force?: boolean;
+  repeat?: boolean;
 };
 
 export type ModelsAuthLoginFlowResult = {
@@ -1100,10 +1101,26 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  await runModelsAuthLoginFlowCore({
-    ...opts,
-    runtime,
-    prompter: createClackPrompter(),
-  });
+  const prompter = createClackPrompter();
+  let provider = opts.provider;
+  let first = true;
+  do {
+    await runModelsAuthLoginFlowCore({
+      ...opts,
+      provider,
+      ...(first ? {} : { force: false, setDefault: false }),
+      runtime,
+      prompter,
+    });
+    if (!opts.repeat) break;
+    const addAnother = await clackConfirm({ message: "Add another provider API key?", initialValue: true });
+    if (!addAnother) break;
+    provider = undefined;
+    first = false;
+    // Provider method and profile ids are scoped to the first provider. Do not
+    // carry them into the next picker iteration where they can be invalid or
+    // overwrite a profile belonging to another provider.
+    opts = { ...opts, method: undefined, profileId: undefined };
+  } while (true);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
