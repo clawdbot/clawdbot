@@ -53,6 +53,13 @@ const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 
+const prepareApprovalWithoutMutableFile: AgentHarnessHostCapabilities["prepareMutableFileApproval"] =
+  async () => ({
+    ok: true,
+    requiresOneShot: false,
+    revalidate: async () => ({ ok: true }),
+  });
+
 function gatewayCallAt(callIndex = 0) {
   const call = mockCallGatewayTool.mock.calls[callIndex];
   if (!call) {
@@ -204,6 +211,10 @@ describe("Codex app-server approval bridge", () => {
         payload: { version: 1 },
       },
     } as EmbeddedRunAttemptParams;
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
+    };
 
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
@@ -385,6 +396,10 @@ describe("Codex app-server approval bridge", () => {
     try {
       await fs.writeFile(scriptPath, "#!/bin/sh\necho approved\n");
       const params = createParams();
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareMutableFileApproval: prepareSystemRunMutableFileApproval,
+      };
       mockCallGatewayTool
         .mockResolvedValueOnce({ id: "plugin:script-drift", status: "accepted" })
         .mockImplementationOnce(async () => {
@@ -421,6 +436,10 @@ describe("Codex app-server approval bridge", () => {
     try {
       await fs.writeFile(scriptPath, "#!/bin/sh\necho approved\n");
       const params = createParams();
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareMutableFileApproval: prepareSystemRunMutableFileApproval,
+      };
       mockCallGatewayTool
         .mockResolvedValueOnce({ id: "plugin:script-stable", status: "accepted" })
         .mockResolvedValueOnce({ id: "plugin:script-stable", decision: "allow-always" });
@@ -452,6 +471,10 @@ describe("Codex app-server approval bridge", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-script-missing-"));
     try {
       const params = createParams();
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareMutableFileApproval: prepareSystemRunMutableFileApproval,
+      };
       const result = await handleCodexAppServerApprovalRequest({
         method: "item/commandExecution/requestApproval",
         requestParams: {
@@ -1071,6 +1094,12 @@ describe("Codex app-server approval bridge", () => {
     "sudo -EH bash -lc 'openclaw channels login --channel whatsapp'",
   ])("fails closed or routes unsafe control command approval: %s", async (command) => {
     const params = createParams();
+    if (!command.startsWith("/approve ")) {
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
+      };
+    }
     params.config = {
       tools: {
         exec: {
@@ -1111,6 +1140,10 @@ describe("Codex app-server approval bridge", () => {
 
   it("keeps security audit suppression edits on the plugin approval route", async () => {
     const params = createParams();
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
+    };
     params.config = {
       tools: {
         exec: {
