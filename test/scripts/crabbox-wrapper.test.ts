@@ -66,6 +66,7 @@ const defaultGitResponses: Record<string, { status?: number; stdout?: string; st
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
 };
+const remoteTestboxBootstrap = `if [ -n "$(git status --porcelain=v1)" ]; then git add -A && git -c user.name=OpenClaw -c user.email=ci@openclaw.local -c commit.gpgsign=false commit --no-verify -qm remote-testbox-sync || exit $?; fi; export CI=true;`;
 
 function makeFakeCrabbox(helpText: string): string {
   const cached = fakeCrabboxBinDirs.get(helpText);
@@ -1680,7 +1681,7 @@ describe("scripts/crabbox-wrapper", () => {
       "tbx_owned",
       "--shell",
       "--",
-      `export CI=true; ${remotePosixHydratedModulesBootstrap} 'echo ok'`,
+      `${remoteTestboxBootstrap} ${remotePosixHydratedModulesBootstrap} 'echo ok'`,
     ]);
   });
 
@@ -1897,7 +1898,7 @@ describe("scripts/crabbox-wrapper", () => {
       "blue-hermit",
       "--shell",
       "--",
-      `export CI=true; ${remotePosixHydratedModulesBootstrap} 'echo ok'`,
+      `${remoteTestboxBootstrap} ${remotePosixHydratedModulesBootstrap} 'echo ok'`,
     ]);
   });
 
@@ -1917,7 +1918,7 @@ describe("scripts/crabbox-wrapper", () => {
       "blacksmith-testbox",
       "--shell",
       "--",
-      `export CI=true; ${remotePosixHydratedModulesBootstrap} cd packages && pnpm install && pnpm build`,
+      `${remoteTestboxBootstrap} ${remotePosixHydratedModulesBootstrap} cd packages && pnpm install && pnpm build`,
     ]);
   });
 

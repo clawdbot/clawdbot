@@ -3741,21 +3741,21 @@ function injectFullCheckoutLeaseReclaim(commandArgs: string[]) {
   return normalizedArgs;
 }
 
-function injectRemoteTestboxCi(commandArgs: string[], providerName: string) {
+function injectRemoteTestboxBootstrap(commandArgs: string[], providerName: string) {
   if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
     return commandArgs;
   }
-  const normalizedArgs = [...commandArgs];
-  const { start } = parseRunInvocation(help.text, normalizedArgs);
-  if (start < 0) {
-    return normalizedArgs;
+  const invocation = parseRunInvocation(help.text, commandArgs);
+  if (invocation.start < 0) {
+    return commandArgs;
   }
-  if (hasOption(normalizedArgs, "--shell")) {
-    normalizedArgs[start] = `export CI=true; ${normalizedArgs[start]}`;
-  } else {
-    normalizedArgs.splice(start, 0, "env", "CI=true");
-  }
-  return normalizedArgs;
+  const snapshot = hasOption(commandArgs, "--no-sync")
+    ? ""
+    : `if [ -n "$(git status --porcelain=v1)" ]; then git add -A && git -c user.name=OpenClaw -c user.email=ci@openclaw.local -c commit.gpgsign=false commit --no-verify -qm remote-testbox-sync || exit $?; fi; `;
+  return replaceRunCommandWithShell(
+    invocation,
+    `${snapshot}export CI=true; ${renderRunShellCommand(invocation)}`,
+  );
 }
 
 function applyRunTransforms(
@@ -3807,7 +3807,7 @@ function applyRunTransforms(
   invocation = parseRunInvocation(help.text, transformedArgs);
   transformedArgs = injectRemotePosixHydratedNodeModulesBootstrap(invocation);
   return {
-    args: injectRemoteTestboxCi(transformedArgs, options.provider),
+    args: injectRemoteTestboxBootstrap(transformedArgs, options.provider),
     wsl2ScriptBootstrap,
   };
 }
