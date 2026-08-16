@@ -18,7 +18,6 @@ import {
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
-  resetCodexTrajectoryRecorderWarningForTest,
 } from "./trajectory.js";
 
 type CodexTrajectoryRecorder = NonNullable<ReturnType<typeof createCodexTrajectoryRecorder>>;
@@ -118,11 +117,14 @@ function createSqliteHostTrajectoryRecorder(params: {
 }
 
 describe("Codex trajectory recorder", () => {
-  it("warns once per process when the SQLite host recorder is unavailable", () => {
-    resetCodexTrajectoryRecorderWarningForTest();
+  it("warns once per process when the SQLite host recorder is unavailable", async () => {
+    // Import a fresh module instance so the process-wide warn-once flag starts
+    // clean without a test-only reset export in production code.
+    vi.resetModules();
+    const { createCodexTrajectoryRecorder: createFreshRecorder } = await import("./trajectory.js");
     const warn = vi.fn();
     const makeRecorder = (sessionId: string) =>
-      createCodexTrajectoryRecorder({
+      createFreshRecorder({
         cwd: testWorkspace.dir,
         attempt: {
           sessionFile: `agent:main:${sessionId}`,

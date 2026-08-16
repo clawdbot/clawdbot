@@ -123,11 +123,6 @@ function createCodexHostTrajectorySink(params: {
 
 let warnedSqliteRecorderUnavailable = false;
 
-/** Clears the process-wide missing-recorder warn-once flag between tests. */
-export function resetCodexTrajectoryRecorderWarningForTest(): void {
-  warnedSqliteRecorderUnavailable = false;
-}
-
 /** Creates a trajectory recorder when trajectory capture is enabled for the environment. */
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
