@@ -543,12 +543,14 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         if (stopPromise) {
           return stopPromise;
         }
-        stopped = true;
-        clearInterval(placementReconcileInterval);
-        placementReconcileInterval = undefined;
-        uninstallSessionIdentityMutation();
-        uninstallPlacementAdmission();
-        stopPromise = (async () => {
+        if (!stopped) {
+          stopped = true;
+          clearInterval(placementReconcileInterval);
+          placementReconcileInterval = undefined;
+          uninstallSessionIdentityMutation();
+          uninstallPlacementAdmission();
+        }
+        const currentStop = (async () => {
           await Promise.allSettled(
             [placementReconcile.current, diskSpaceSweep.current].filter(
               (operation): operation is Promise<void> => operation !== undefined,
@@ -557,7 +559,13 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           await nodeWorkspaceRetention.stop();
           await params.environments.stop();
         })();
-        return stopPromise;
+        stopPromise = currentStop;
+        void currentStop.catch(() => {
+          if (stopPromise === currentStop) {
+            stopPromise = undefined;
+          }
+        });
+        return currentStop;
       },
     };
     // Close must see the drain handle before reconciliation can yield.

@@ -194,4 +194,51 @@ describe("worker placement startup health lifetime", () => {
     await Promise.all([stopping, repeatedStop]);
     expect(environments.stop).toHaveBeenCalledOnce();
   });
+
+  it("retries worker environment cleanup after a failed stop attempt", async () => {
+    const stopError = new Error("tunnel cleanup failed");
+    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+      read: vi.fn(),
+      version: vi.fn(() => 0),
+      sweep: vi.fn().mockResolvedValue(undefined),
+    });
+    runtimeFactoryMocks.createDispatch.mockReturnValue({
+      dispatch: vi.fn(),
+      forceDestroyEnvironment: vi.fn(),
+      reclaim: vi.fn(),
+      reconcile: vi.fn().mockResolvedValue(undefined),
+      reconcileActive: vi.fn().mockResolvedValue(undefined),
+    });
+    const environments = {
+      start: vi.fn(),
+      stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
+    };
+    const runtime = createGatewayWorkerPlacementRuntime({
+      placements: {
+        get: () => undefined,
+        list: () => [],
+        retireSessionPlacement: vi.fn(),
+        pruneOrphanedWorkspaceReconciliations: () => [],
+        listWorkspaceReconciliationOwners: () => [],
+      } as never,
+      environments: environments as never,
+      gatewayNamespace: "gateway-test",
+      revokeSessionAuthority: vi.fn(),
+      warn: vi.fn(),
+    });
+    const sidecar = await runtime.startRuntime({
+      isClosePreludeStarted: () => false,
+      registerSidecar: vi.fn(),
+    });
+    if (!sidecar) {
+      throw new Error("worker placement runtime did not start");
+    }
+
+    const firstStop = sidecar.stop();
+    expect(sidecar.stop()).toBe(firstStop);
+    await expect(firstStop).rejects.toBe(stopError);
+    await expect(sidecar.stop()).resolves.toBeUndefined();
+
+    expect(environments.stop).toHaveBeenCalledTimes(2);
+  });
 });
