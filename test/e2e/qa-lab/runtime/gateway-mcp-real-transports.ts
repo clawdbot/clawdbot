@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 // QA Lab producer proves Gateway and MCP scenarios across real process and protocol boundaries.
@@ -34,7 +35,11 @@ const MCP_PLUGIN_TOOLS_REQUEST_TIMEOUT_MS = 180_000;
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts";
 const requireFromHere = createRequire(import.meta.url);
 
-type ScenarioId = "gateway-smoke" | "mcp-gateway-connect-startup-retry" | "mcp-plugin-tools-call";
+type ScenarioId =
+  | "gateway-smoke"
+  | "mcp-gateway-connect-startup-retry"
+  | "mcp-plugin-tools-call"
+  | "gateway-deferred-sidecar-failure";
 
 type ProducerOptions = {
   artifactBase: string;
@@ -103,6 +108,12 @@ const SCENARIOS = {
     sourcePath: "qa/scenarios/plugins/mcp-plugin-tools-call.yaml",
     docsRefs: ["docs/cli/mcp.md", "docs/gateway/protocol.md"],
     codeRefs: [SOURCE_PATH, "src/mcp/plugin-tools-serve.ts", "src/mcp/plugin-tools-handlers.ts"],
+  },
+  "gateway-deferred-sidecar-failure": {
+    title: "Gateway deferred sidecar failure transport evidence",
+    sourcePath: "qa/scenarios/runtime/gateway-deferred-sidecar-failure.yaml",
+    docsRefs: ["docs/gateway/index.md", "docs/gateway/protocol.md"],
+    codeRefs: [SOURCE_PATH, "src/gateway/server-startup-finish.ts"],
   },
 } as const;
 
@@ -366,6 +377,98 @@ function parseJsonFrame(data: RawData): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+async function waitForGatewayFrame(
+  frames: Array<Record<string, unknown>>,
+  predicate: (frame: Record<string, unknown>) => boolean,
+  timeoutMs = 10_000,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frame = frames.find(predicate);
+    if (frame) {
+      return frame;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  throw new Error(`timed out waiting for Gateway frame: ${JSON.stringify(frames)}`);
+}
+
+async function captureDeferredStartupHandshake(wsUrl: string, token: string) {
+  const socket = new WebSocket(wsUrl);
+  const frames: Array<Record<string, unknown>> = [];
+  socket.on("message", (data) => {
+    const frame = parseJsonFrame(data);
+    if (frame) {
+      frames.push(frame);
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  await waitForGatewayFrame(
+    frames,
+    (frame) => frame.type === "event" && frame.event === "connect.challenge",
+  );
+  const requestId = `deferred-startup-${Date.now()}`;
+  socket.send(
+    JSON.stringify({
+      type: "req",
+      id: requestId,
+      method: "connect",
+      params: {
+        minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "qa-deferred-sidecar-proof",
+          platform: process.platform,
+          mode: "backend",
+        },
+        role: "operator",
+        scopes: ["operator.admin"],
+        auth: { token },
+      },
+    }),
+  );
+  const response = await waitForGatewayFrame(
+    frames,
+    (frame) => frame.type === "res" && frame.id === requestId,
+  );
+  await new Promise<void>((resolve) => {
+    socket.once("close", () => resolve());
+    socket.close();
+    setTimeout(resolve, 1_000).unref();
+  });
+  return { frames, response };
+}
+
+async function waitForGatewayLog(tempRoot: string, text: string, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let logs = "";
+  while (Date.now() < deadline) {
+    const files = await Promise.all(
+      ["gateway.stdout.log", "gateway.stderr.log"].map(async (name) => {
+        try {
+          return await fs.readFile(path.join(tempRoot, name), "utf8");
+        } catch {
+          return "";
+        }
+      }),
+    );
+    logs = files.join("\n");
+    if (logs.includes(text)) {
+      return logs;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+  return logs;
 }
 
 async function startGatewayProxy(
@@ -754,6 +857,104 @@ async function runMcpPluginToolsProof(options: ProducerOptions): Promise<string>
   return details;
 }
 
+async function runDeferredWorkerFailureProof(options: ProducerOptions): Promise<string> {
+  const sentinel = "QA worker environment sidecar failure sentinel";
+  let observation:
+    | {
+        healthBody: string;
+        healthStatus: number;
+        logContainsSentinel: boolean;
+        readyBody: string;
+        readyStatus: number;
+        response: Record<string, unknown>;
+      }
+    | undefined;
+  try {
+    await startQaGatewayChild({
+      repoRoot: options.repoRoot,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: ["--import", "tsx", path.join(options.repoRoot, "src/entry.ts")],
+        cwd: options.repoRoot,
+        usePackagedPlugins: false,
+      },
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiEnabled: false,
+      allowUnhealthyStartup: true,
+      onListening: async (context) => {
+        const health = await fetch(`${context.baseUrl}/healthz`);
+        const healthBody = await health.text();
+        const ready = await fetch(`${context.baseUrl}/readyz`);
+        const readyBody = await ready.text();
+        const handshake = await captureDeferredStartupHandshake(context.wsUrl, context.token);
+        const logs = await waitForGatewayLog(path.dirname(context.configPath), sentinel);
+        const responseError = handshake.response.error as Record<string, unknown> | undefined;
+        const responseDetails = responseError?.details as Record<string, unknown> | undefined;
+        if (
+          health.status !== 200 ||
+          ready.status !== 503 ||
+          handshake.response.ok !== false ||
+          responseError?.retryable !== true ||
+          responseDetails?.reason !== "startup-sidecars"
+        ) {
+          throw new Error(
+            `unexpected deferred startup observation: ${JSON.stringify({
+              health: { status: health.status, body: healthBody },
+              ready: { status: ready.status, body: readyBody },
+              response: handshake.response,
+            })}`,
+          );
+        }
+        observation = {
+          healthBody,
+          healthStatus: health.status,
+          logContainsSentinel: logs.includes(sentinel),
+          readyBody,
+          readyStatus: ready.status,
+          response: handshake.response,
+        };
+        if (!observation.logContainsSentinel) {
+          throw new Error(`Gateway logs did not contain ${sentinel}`);
+        }
+        await fs.mkdir(options.artifactBase, { recursive: true });
+        await fs.writeFile(
+          path.join(options.artifactBase, "deferred-sidecar-observation.json"),
+          `${JSON.stringify(
+            {
+              ...observation,
+              exactHead: execFileSync("git", ["rev-parse", "HEAD"], {
+                cwd: options.repoRoot,
+                encoding: "utf8",
+              }).trim(),
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+        throw new Error("QA deferred sidecar observation complete");
+      },
+      runtimeEnvPatch: {
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_QA_FAIL_WORKER_START: "1",
+      },
+    });
+  } catch (error) {
+    if (!observation) {
+      throw error;
+    }
+  }
+  return [
+    "real Gateway child listener stayed alive",
+    `/healthz=${observation?.healthStatus} ${observation?.healthBody}`,
+    `/readyz=${observation?.readyStatus} ${observation?.readyBody}`,
+    "connect response retryable=true",
+    "connect error reason=startup-sidecars",
+    "worker failure sentinel logged",
+  ].join("; ");
+}
+
 async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   const startedAt = Date.now();
   try {
@@ -762,7 +963,9 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
         ? await runGatewaySmokeProof(options)
         : options.scenarioId === "mcp-gateway-connect-startup-retry"
           ? await runMcpGatewayStartupRetryProof(options)
-          : await runMcpPluginToolsProof(options);
+          : options.scenarioId === "mcp-plugin-tools-call"
+            ? await runMcpPluginToolsProof(options)
+            : await runDeferredWorkerFailureProof(options);
     return { details, durationMs: Math.max(1, Date.now() - startedAt), status: "pass" };
   } catch (error) {
     return {

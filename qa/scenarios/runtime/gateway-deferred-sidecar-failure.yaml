@@ -1,0 +1,31 @@
+title: Gateway deferred sidecar failure transport evidence
+
+scenario:
+  id: gateway-deferred-sidecar-failure
+  surface: runtime
+  coverage:
+    primary:
+      - gateway.startup-sidecars
+      - gateway.deferred-worker-startup
+      - gateway.startup-transport-errors
+  objective: Exercise the real Gateway listener and protocol response while a deferred worker-environment sidecar fails during startup.
+  successCriteria:
+    - The live Gateway listener serves `/healthz` while `/readyz` remains unavailable.
+    - A real WebSocket connect request receives a retryable `startup-sidecars` error.
+    - The worker-environment failure is present in the real Gateway logs.
+  docsRefs:
+    - docs/gateway/index.md
+    - docs/gateway/protocol.md
+  codeRefs:
+    - test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
+    - src/gateway/server-startup-finish.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
+    summary: Starts a real Gateway child with a QA-only worker-start failure and captures health, readiness, log, and WebSocket transport evidence.
+    args:
+      - --scenario
+      - gateway-deferred-sidecar-failure
+      - --artifact-base
+      - ${outputDir}
