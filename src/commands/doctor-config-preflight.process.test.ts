@@ -55,8 +55,9 @@ function createSourceRuntime(root: string): string {
       process.platform === "win32" ? "junction" : "dir",
     );
   }
-  fs.copyFileSync(path.resolve("package.json"), path.join(runtimeRoot, "package.json"));
-  fs.copyFileSync(path.resolve("tsconfig.json"), path.join(runtimeRoot, "tsconfig.json"));
+  for (const filename of ["node-version.mjs", "package.json", "tsconfig.json"]) {
+    fs.copyFileSync(path.resolve(filename), path.join(runtimeRoot, filename));
+  }
   fs.writeFileSync(
     path.join(runtimeRoot, "dist", "build-info.json"),
     JSON.stringify({ builtAt: "2026-08-05T00:00:00.000Z" }),
