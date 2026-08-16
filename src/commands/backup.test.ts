@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -410,6 +411,74 @@ describe("backup commands", () => {
         output: path.join(stateDir, "backups"),
       }),
     ).rejects.toThrow(/must not be written inside a source path/i);
+  });
+
+  it("creates missing output parent directories", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const outputPath = path.join(tempHome.home, "backups", "daily", "backup.tar.gz");
+    await mockStateOnlyBackupPlan(stateDir);
+
+    const result = await backupCreateCommand(createBackupTestRuntime(), { output: outputPath });
+
+    expect(result.archivePath).toBe(outputPath);
+    expect(await fs.readFile(outputPath, "utf8")).toBe("archive-bytes");
+  });
+
+  it.each([
+    {
+      code: "ENOENT",
+      detail: "Backup output directory could not be created",
+      recovery: "Check the path and run `openclaw backup create --output <archive>` again.",
+    },
+    {
+      code: "EACCES",
+      detail: "Backup output directory is not writable",
+      recovery:
+        "Check the path and directory permissions, then run `openclaw backup create --output <archive>` again.",
+    },
+    {
+      code: "ENOSPC",
+      detail: "The destination does not have enough free space",
+      recovery: "Free up disk space and run `openclaw backup create --output <archive>` again.",
+    },
+  ])("reports an actionable $code output-parent failure", async ({ code, detail, recovery }) => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const outputParent = path.join(tempHome.home, "missing-parent", "daily");
+    const outputPath = path.join(outputParent, "backup.tar.gz");
+    await mockStateOnlyBackupPlan(stateDir);
+    vi.spyOn(fs, "mkdir").mockRejectedValueOnce(
+      Object.assign(new Error(`${code}: filesystem error, mkdir '${outputParent}'`), {
+        code,
+        path: outputParent,
+        syscall: "mkdir",
+      }),
+    );
+
+    const error = await backupCreateCommand(createBackupTestRuntime(), {
+      output: outputPath,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(formatErrorMessage(error)).toBe(
+      `Backup archive creation failed: ${outputPath}. ${detail}: ${outputParent}. ${recovery}`,
+    );
+  });
+
+  it("does not describe an output parent file as a missing directory", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const outputParent = path.join(tempHome.home, "not-a-directory");
+    const outputPath = path.join(outputParent, "backup.tar.gz");
+    await fs.writeFile(outputParent, "file\n", "utf8");
+    await mockStateOnlyBackupPlan(stateDir);
+
+    const error = await backupCreateCommand(createBackupTestRuntime(), {
+      output: outputPath,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(formatErrorMessage(error)).toBe(
+      `Backup archive creation failed: ${outputPath}. Backup output parent is not a directory: ${outputParent}. Choose a directory path and run \`openclaw backup create --output <archive>\` again.`,
+    );
   });
 
   it("rejects symlinked output paths even when intermediate directories do not exist yet", async () => {
