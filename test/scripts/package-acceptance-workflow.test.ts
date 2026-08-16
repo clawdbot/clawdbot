@@ -4159,6 +4159,45 @@ describe("package artifact reuse", () => {
     expect(reportStep.if).toBe("steps.run_lane.outcome == 'success'");
   });
 
+  it("overlays only trusted Anthropic mock tooling for frozen-target QA parity", () => {
+    const job = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_lab_parity_lane_release_checks");
+    const trustedCheckout = workflowStep(job, "Checkout trusted QA Anthropic mock tooling");
+    const installTooling = workflowStep(job, "Install trusted QA Anthropic mock tooling");
+    const stepNames = job.steps?.map((step) => step.name) ?? [];
+
+    expect(trustedCheckout).toMatchObject({
+      if: "inputs.target_context_ref != ''",
+      uses: "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
+      with: {
+        "persist-credentials": false,
+        ref: "${{ github.sha }}",
+        path: ".release-qa-tooling-trusted",
+        "sparse-checkout": "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
+        "sparse-checkout-cone-mode": false,
+      },
+    });
+    expect(installTooling.if).toBe("inputs.target_context_ref != ''");
+    expect(installTooling.run).toContain("trap 'rm -rf -- \"$trusted_checkout\"' EXIT");
+    const installLines = (installTooling.run ?? "").split("\n").map((line) => line.trim());
+    const sourceArgument =
+      '"$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \\';
+    const sourceArgumentIndex = installLines.indexOf(sourceArgument);
+    expect(sourceArgumentIndex).toBeGreaterThanOrEqual(0);
+    expect(installLines[sourceArgumentIndex + 1]).toBe(
+      "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
+    );
+    expect(installTooling.run).toContain('rm -rf -- "$trusted_checkout"');
+    expect(stepNames.indexOf("Checkout selected ref")).toBeLessThan(
+      stepNames.indexOf("Checkout trusted QA Anthropic mock tooling"),
+    );
+    expect(stepNames.indexOf("Install trusted QA Anthropic mock tooling")).toBeLessThan(
+      stepNames.indexOf("Setup Node environment"),
+    );
+    expect(stepNames.indexOf("Install trusted QA Anthropic mock tooling")).toBeLessThan(
+      stepNames.indexOf("Build private QA runtime"),
+    );
+  });
+
   it("runs the core gateway restart pair on its pinned live model", () => {
     const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_runtime_token_efficiency");
     const credentialStep = workflowStep(job, "Validate required QA credential env");

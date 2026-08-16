@@ -1261,6 +1261,32 @@ jobs:
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
+      - name: Checkout trusted QA Anthropic mock tooling
+        if: inputs.target_context_ref != ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          path: .release-qa-tooling-trusted
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          sparse-checkout: extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
+          sparse-checkout-cone-mode: false
+          submodules: false
+
+      - name: Install trusted QA Anthropic mock tooling
+        if: inputs.target_context_ref != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          trusted_checkout=.release-qa-tooling-trusted
+          trap 'rm -rf -- "$trusted_checkout"' EXIT
+          install -m 0644 \
+            "$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \
+            extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
+          rm -rf -- "$trusted_checkout"
+          trap - EXIT
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
