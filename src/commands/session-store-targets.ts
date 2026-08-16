@@ -47,28 +47,32 @@ function validateExplicitSessionStorePath(params: {
     resolvedPath,
     storePath,
   });
-  let stat: fs.Stats;
+  let stat: fs.Stats | undefined;
+  let statFailure: { error: unknown } | undefined;
   try {
     stat = fs.statSync(resolvedPath);
   } catch (error) {
+    statFailure = { error };
+  }
+  if (statFailure) {
+    const error = statFailure.error;
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new Error(
         `Session store target does not exist: ${displayTarget}. Pass a selector whose resolved SQLite target exists.`,
-        { cause: error },
       );
     }
     throw new Error(
       `Could not inspect session store target ${displayTarget}: ${formatErrorMessage(error)}`,
-      { cause: error },
     );
   }
-  if (!stat.isFile()) {
+  if (!stat?.isFile()) {
     throw new Error(
       `Session store target is not a regular file: ${displayTarget}. Pass a selector whose resolved SQLite target is a regular file.`,
     );
   }
 
   let database;
+  let databaseFailure: { error: unknown } | undefined;
   try {
     database = openNodeSqliteDatabase(resolvedPath, { readOnly: true });
     const applicationTables = database
@@ -81,12 +85,14 @@ function validateExplicitSessionStorePath(params: {
       throw new Error("the SQLite file has application tables but no OpenClaw schema metadata");
     }
   } catch (error) {
-    throw new Error(
-      `Session store target is not a session store: ${displayTarget}. ${formatErrorMessage(error)}. Pass a legacy store selector or SQLite target reported by openclaw sessions or openclaw status.`,
-      { cause: error },
-    );
+    databaseFailure = { error };
   } finally {
     database?.close();
+  }
+  if (databaseFailure) {
+    throw new Error(
+      `Session store target is not a session store: ${displayTarget}. ${formatErrorMessage(databaseFailure.error)}. Pass a legacy store selector or SQLite target reported by openclaw sessions or openclaw status.`,
+    );
   }
   return storePath;
 }
