@@ -1462,7 +1462,6 @@ describe("uninstallPlugin", () => {
     const stateDir = path.join(tempDir, "state");
     const extensionsDir = path.join(stateDir, "extensions");
     const npmDir = path.join(stateDir, "npm");
-    const projectsDir = path.join(npmDir, "projects");
     const projectRoot = resolvePluginNpmProjectDir({
       npmDir,
       packageName: "@openclaw/kitchen-sink",
@@ -1494,13 +1493,13 @@ describe("uninstallPlugin", () => {
     }
     expect(plan.directoryRemoval.target).toBe(projectRoot);
 
-    const outsideProjectsDir = path.join(tempDir, "outside-projects-race");
-    const outsideProjectRoot = path.join(outsideProjectsDir, path.basename(projectRoot));
+    const outsideNpmDir = path.join(tempDir, "outside-npm-race");
+    const outsideProjectRoot = path.join(outsideNpmDir, "projects", path.basename(projectRoot));
     const sentinel = path.join(outsideProjectRoot, "must-remain.txt");
     await fs.mkdir(outsideProjectRoot, { recursive: true });
     await fs.writeFile(sentinel, "preserve me");
-    await fs.rename(projectsDir, `${projectsDir}-original`);
-    await fs.symlink(outsideProjectsDir, projectsDir, "dir");
+    await fs.rename(npmDir, `${npmDir}-original`);
+    await fs.symlink(outsideNpmDir, npmDir, "dir");
 
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
 
