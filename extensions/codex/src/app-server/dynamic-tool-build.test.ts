@@ -1025,7 +1025,7 @@ describe("Codex app-server dynamic tool build", () => {
       "configured sandbox backend",
     );
     expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
-      "sandbox_exec sessions",
+      "background shell sessions",
     );
   });
 
@@ -1108,7 +1108,7 @@ describe("Codex app-server dynamic tool build", () => {
     const nodeExec = tools.find((tool) => tool.name === "node_exec");
     const nodeProcess = tools.find((tool) => tool.name === "node_process");
     expect(nodeExec?.description).toContain("host=node internally");
-    expect(nodeProcess?.description).toContain("node_exec sessions");
+    expect(nodeProcess?.description).toContain("background shell sessions");
     expect(nodeExec?.parameters).toEqual({
       type: "object",
       properties: {
@@ -1142,7 +1142,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(result?.content).toEqual([
       {
         type: "text",
-        text: "Command still running (session exec-1, pid 123). Use node_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+        text: "Command still running (session exec-1, pid 123). Use remote-node background-session control (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up when available.",
       },
     ]);
 
