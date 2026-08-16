@@ -5920,7 +5920,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }),
     );
 
-    for (const runnerBackend of ["", "github", "hybrid"] as const) {
+    for (const runnerBackend of [undefined, "github", "hybrid"] as const) {
       const push = runCiManifestFixture({
         bundledPlanner: true,
         eventName: "push",
@@ -5931,7 +5931,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         JSON.parse(
           expectDefined(
             push.outputs.checks_node_core_nondist_matrix,
-            `${runnerBackend || "default"} push node core nondist matrix output`,
+            `${runnerBackend ?? "default"} push node core nondist matrix output`,
           ),
         ).include,
       ).toContainEqual(
@@ -5939,7 +5939,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           check_name: "bundled-node-plan",
           env: {
             OPENCLAW_CI_TEST_COMPACT_MODE: "push",
-            OPENCLAW_CI_TEST_RUNNER_BACKEND: runnerBackend,
+            OPENCLAW_CI_TEST_RUNNER_BACKEND: runnerBackend ?? "",
           },
         }),
       );
