@@ -1,17 +1,17 @@
 # PR #124429 exact-head real Gateway proof
 
-Head: `7f9a1a56eba2bb47f4499632ec6ef6772f3a424e`
+Head: `1006b54e816ebdbf2ccfc6098e21bb8621f41738`
 
 The branch was rebased onto `origin/main` before this capture and the literal documentation-bearing head was rebuilt by the Gateway's stale-build guard.
 
 ## Live transport
 
 ```text
-GET http://127.0.0.1:39160/health
+GET http://127.0.0.1:39161/health
 {"ok":true,"status":"live"}
 
 Gateway WebSocket client build:
-2026.8.1-7f9a1a56eba2-2026-08-16T18-50-24.840Z
+2026.8.1-1006b54e816e-2026-08-16T18-52-39.432Z
 ```
 
 ## Real Control UI observations
@@ -24,13 +24,13 @@ Connected to the isolated Gateway with the bundled Control UI in headed Chromium
 - Toggling `browser-automation` changed the panel to `This agent uses a custom skill allowlist.` and saved through the live Gateway.
 - `Reload Config` preserved the checked `browser-automation` state.
 
-The Gateway recorded live `skills.status`, `config.set`, and config hot-reload events at the same `7f9a1a56eba` build.
+The Gateway recorded live `skills.status`, `config.set`, and config hot-reload events at the same `1006b54e816e` build.
 
 ## Inspectable artifacts
 
 - [Current-head browser screenshot after toggle and reload](pr-124429-current-head.png)
 - The captured browser snapshot records the inherited state, `2/54`, and disabled `Enable All` before the toggle; the post-reload snapshot records the custom state, `3/54`, and checked `browser-automation`.
 - `GET /health` returned `{"ok":true,"status":"live"}`.
-- Gateway log records `build=2026.8.1-7f9a1a56eba2`, `skills.status`, `config.set`, and `config hot reload applied`.
+- Gateway log records `build=2026.8.1-1006b54e816e`, `skills.status`, `config.set`, and `config hot reload applied`.
 
-The full local raw snapshots and Gateway log are retained at `/tmp/openclaw-pr124429-exact.9YV5bk/`.
+The full local raw snapshots and Gateway log are retained at `/tmp/openclaw-pr124429-final.6XE3e7/`.
