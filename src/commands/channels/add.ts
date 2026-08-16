@@ -159,7 +159,7 @@ async function channelsAddCommandImpl(
       await import("./add-wizard.js");
     const target = await resolveInitialWizardChannelTarget(opts.channel, cfg);
     if (target.kind === "unresolved") {
-      runtime.error(formatUnknownChannelMessage({ channel: target.input }));
+      runtime.error(target.message);
       runtime.exit(1);
       return;
     }

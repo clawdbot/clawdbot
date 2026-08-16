@@ -24,6 +24,7 @@ import {
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 let channelsAddCommand: typeof import("./channels/add.js").channelsAddCommand;
+let runChannelsSetupWizard: typeof import("./channels/add-wizard.js").runChannelsSetupWizard;
 
 const catalogMocks = vi.hoisted(() => ({
   getChannelPluginCatalogEntry: vi.fn(),
@@ -58,7 +59,9 @@ const channelWizardMocks = vi.hoisted(() => {
     confirm: vi.fn(async () => false),
     note: vi.fn(async () => undefined),
     select: vi.fn(),
+    multiselect: vi.fn(async () => []),
     text: vi.fn(),
+    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
   };
   return {
     prompter,
@@ -462,6 +465,7 @@ async function runSignalAddCommand(
 describe("channelsAddCommand", () => {
   beforeAll(async () => {
     ({ channelsAddCommand } = await import("./channels/add.js"));
+    ({ runChannelsSetupWizard } = await import("./channels/add-wizard.js"));
   });
 
   beforeEach(async () => {
@@ -515,7 +519,9 @@ describe("channelsAddCommand", () => {
     channelWizardMocks.prompter.confirm.mockClear();
     channelWizardMocks.prompter.note.mockClear();
     channelWizardMocks.prompter.select.mockClear();
+    channelWizardMocks.prompter.multiselect.mockClear();
     channelWizardMocks.prompter.text.mockClear();
+    channelWizardMocks.prompter.progress.mockClear();
     channelWizardMocks.setupChannels.mockClear();
     channelWizardMocks.setupChannels.mockImplementation(
       async (...args: unknown[]) => args[0] as OpenClawConfig,
@@ -567,6 +573,73 @@ describe("channelsAddCommand", () => {
       expect(channelWizardMocks.prompter.intro).not.toHaveBeenCalled();
       expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
       expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { label: "empty", channel: "", expectedChannel: "" },
+    { label: "whitespace-only", channel: " \t ", expectedChannel: "" },
+    {
+      label: "unknown",
+      channel: "unknown-channel",
+      expectedChannel: "unknown-channel",
+    },
+  ])(
+    "rejects an explicit $label hosted selector before wizard effects",
+    async ({ channel, expectedChannel }) => {
+      configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+      await expect(
+        runChannelsSetupWizard({ channel }, runtime, channelWizardMocks.prompter),
+      ).rejects.toThrow(
+        `Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
+      );
+
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(channelWizardMocks.prompter.intro).not.toHaveBeenCalled();
+      expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an omitted hosted selector on the shared picker path", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+
+    await runChannelsSetupWizard({}, runtime, channelWizardMocks.prompter);
+
+    expect(setupOptions()).not.toHaveProperty("initialSelection");
+    expect(setupOptions()).not.toHaveProperty("finishAfterInitialSelection");
+    expect(setupOptions().deferDeviceLinkToClient).toBe(true);
+  });
+
+  it.each(["external-chat", "ext"])(
+    "preselects a hosted catalog channel from the %s selector",
+    async (channel) => {
+      const config: OpenClawConfig = { channels: {} };
+      configMocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        sourceConfig: config,
+        config,
+      });
+      catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+        {
+          ...createExternalChatCatalogEntry(),
+          origin: "bundled",
+          trustedSourceLinkedOfficialInstall: true,
+          meta: { ...createExternalChatCatalogEntry().meta, aliases: ["ext"] },
+        },
+      ]);
+
+      await runChannelsSetupWizard({ channel }, runtime, channelWizardMocks.prompter);
+
+      expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+      expect(setupOptions().finishAfterInitialSelection).toBe(true);
+      expect(setupOptions().deferDeviceLinkToClient).toBe(true);
     },
   );
 

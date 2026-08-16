@@ -941,43 +941,115 @@ module.exports = {
       });
 
       try {
-        const start = await client.request<{
-          sessionId?: string;
-          done: boolean;
-          status: "running" | "done" | "cancelled" | "error";
-          step?: { id: string; type: string };
-          channels?: string[];
-          accounts?: Array<{ channel: string; accountId: string }>;
-        }>("wizard.start", { flow: "channels", channel: "telegram" });
-        const sessionId = start.sessionId;
-        expect(typeof sessionId).toBe("string");
+        for (const testCase of [
+          { label: "omitted", channel: undefined, expected: "none" },
+          { label: "canonical", channel: "telegram", expected: "telegram" },
+          { label: "alias", channel: "imsg", expected: "imsg" },
+        ]) {
+          const start = await client.request<{
+            sessionId?: string;
+            done: boolean;
+            status: "running" | "done" | "cancelled" | "error";
+            step?: { id: string; type: string };
+            channels?: string[];
+            accounts?: Array<{ channel: string; accountId: string }>;
+          }>("wizard.start", {
+            flow: "channels",
+            ...(testCase.channel === undefined ? {} : { channel: testCase.channel }),
+          });
+          const sessionId = start.sessionId;
+          expect(typeof sessionId, testCase.label).toBe("string");
 
-        let next = start;
-        const seenSteps: string[] = [];
-        while (!next.done) {
-          const step = next.step;
-          if (!step) {
-            throw new Error("wizard missing step");
+          let next = start;
+          const seenSteps: string[] = [];
+          while (!next.done) {
+            const step = next.step;
+            if (!step) {
+              throw new Error("wizard missing step");
+            }
+            seenSteps.push(step.type);
+            next = await client.request(
+              "wizard.next",
+              {
+                sessionId,
+                answer: {
+                  stepId: step.id,
+                  value: step.type === "select" ? testCase.expected : null,
+                },
+              },
+              { timeoutMs: 60_000 },
+            );
           }
-          seenSteps.push(step.type);
-          next = await client.request(
-            "wizard.next",
-            {
-              sessionId,
-              answer: { stepId: step.id, value: step.type === "select" ? "telegram" : null },
-            },
-            { timeoutMs: 60_000 },
-          );
-        }
 
-        expect(next.status, `seenSteps=${seenSteps.join(",")}`).toBe("done");
-        expect(seenSteps).toContain("select");
-        expect(channelRuns).toEqual(["telegram"]);
-        expect(next.channels).toEqual(["telegram"]);
-        expect(next.accounts).toEqual([{ channel: "telegram", accountId: "default" }]);
+          expect(next.status, `${testCase.label}: seenSteps=${seenSteps.join(",")}`).toBe("done");
+          expect(seenSteps, testCase.label).toContain("select");
+          expect(next.channels, testCase.label).toEqual([testCase.expected]);
+          expect(next.accounts, testCase.label).toEqual([
+            { channel: testCase.expected, accountId: "default" },
+          ]);
+        }
+        expect(channelRuns).toEqual([undefined, "telegram", "imsg"]);
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "wizard channels flow complete" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it(
+    "returns targeted channel resolution errors without wizard or config effects",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-wizard-channel-target-home-",
+        minimalGateway: true,
+      });
+      const configPath = await createGatewayConfigPath(tempHome);
+      const initialConfig = "{}\n";
+      await fs.writeFile(configPath, initialConfig, "utf8");
+      const wizardToken = nextGatewayId("wiz-channel-target");
+      const port = await getGatewayE2ePortBlock();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token: wizardToken },
+        controlUiEnabled: false,
+      });
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: wizardToken,
+        clientDisplayName: "vitest-wizard-channel-target",
+      });
+
+      try {
+        for (const testCase of [
+          { label: "whitespace", channel: " \t ", expectedChannel: "" },
+          {
+            label: "unknown",
+            channel: "unknown-channel",
+            expectedChannel: "unknown-channel",
+          },
+        ]) {
+          const result = await client.request<{
+            done: boolean;
+            status: "running" | "done" | "cancelled" | "error";
+            error?: string;
+            step?: unknown;
+          }>("wizard.start", { flow: "channels", channel: testCase.channel });
+          expect(result, testCase.label).toMatchObject({
+            done: true,
+            status: "error",
+            error: `Error: Unknown channel "${testCase.expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
+          });
+          expect(result.step, testCase.label).toBeUndefined();
+        }
+
+        await expect(client.request("health", {})).resolves.toBeDefined();
+        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(initialConfig);
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard channel target validation E2E complete" });
         await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }

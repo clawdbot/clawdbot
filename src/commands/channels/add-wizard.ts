@@ -5,6 +5,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { readConfigFileSnapshot, type OpenClawConfig } from "../../config/config.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
@@ -24,7 +25,11 @@ async function loadOnboardChannels(): Promise<OnboardChannelsModule> {
 type InitialWizardChannelTarget =
   | { kind: "omitted" }
   | { kind: "resolved"; channel: ChannelChoice }
-  | { kind: "unresolved"; input: string };
+  | { kind: "unresolved"; message: string };
+
+function unresolvedInitialWizardChannelTarget(channel: string): InitialWizardChannelTarget {
+  return { kind: "unresolved", message: formatUnknownChannelMessage({ channel }) };
+}
 
 /** Resolve omitted, matched, and unmatched channel targets without collapsing caller intent. */
 export async function resolveInitialWizardChannelTarget(
@@ -36,7 +41,7 @@ export async function resolveInitialWizardChannelTarget(
   }
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
-    return { kind: "unresolved", input: "" };
+    return unresolvedInitialWizardChannelTarget("");
   }
   const [{ listActiveChannelSetupPlugins }, { resolveChannelSetupEntries }] = await Promise.all([
     import("../../channels/plugins/setup-registry.js"),
@@ -58,7 +63,7 @@ export async function resolveInitialWizardChannelTarget(
     );
   return matchedEntry
     ? { kind: "resolved", channel: matchedEntry.id }
-    : { kind: "unresolved", input: raw.trim() };
+    : unresolvedInitialWizardChannelTarget(raw.trim());
 }
 
 type ChannelsAddWizardFlowParams = {
@@ -284,6 +289,9 @@ export async function runChannelsSetupWizard(
   }
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const target = await resolveInitialWizardChannelTarget(opts.channel, cfg);
+  if (target.kind === "unresolved") {
+    throw new Error(target.message);
+  }
   await runChannelsAddWizardFlow({
     cfg,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
