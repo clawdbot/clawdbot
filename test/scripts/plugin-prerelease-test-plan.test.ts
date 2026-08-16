@@ -378,9 +378,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const installInventory = nodeShard.steps.find(
       (step: WorkflowStep) => step.name === "Install trusted npm security inventory",
     );
-    const configureExclusions = nodeShard.steps.find(
-      (step: WorkflowStep) => step.name === "Configure frozen-target Node exclusions",
-    );
     const runNodeShard = nodeShard.steps.find(
       (step: WorkflowStep) => step.name === "Run release-only plugin Node shard",
     );
@@ -427,13 +424,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "src/plugins/npm-install-security-scan.release.test.ts",
     );
     expect(installInventory?.run).toContain('rm -rf -- "$trusted_checkout"');
-    expect(configureExclusions?.env?.NODE_TEST_EXCLUDE_PATTERNS_JSON).toBe(
+    expect(runNodeShard?.env?.NODE_TEST_EXCLUDE_PATTERNS_JSON).toBe(
       "${{ needs.preflight.outputs.node_test_exclude_patterns_json }}",
     );
-    expect(configureExclusions?.run).toContain("${RUNNER_TEMP:?}");
-    expect(configureExclusions?.run).toContain("OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE=");
-    expect(runNodeShard?.run).toContain("OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE");
-    expect(runNodeShard?.run).toContain("`--exclude=${pattern}`");
+    expect(runNodeShard?.run).toContain('process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON ?? "[]"');
+    expect(runNodeShard?.run).toContain('pattern.slice("src/plugins/".length)');
+    expect(runNodeShard?.run).toContain("`--exclude=${pattern.slice");
     expect(runNodeShard?.run).toContain('["test", "--", ...configs, "--", ...excludeArgs]');
     expect(pluginSource).not.toContain("runtime-llm.runtime.test.ts");
 

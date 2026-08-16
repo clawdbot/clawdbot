@@ -406,19 +406,10 @@ jobs:
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
 
-      - name: Configure frozen-target Node exclusions
-        env:
-          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.preflight.outputs.node_test_exclude_patterns_json }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          exclude_file="${RUNNER_TEMP:?}/plugin-prerelease-node-excludes-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
-          printf '%s\n' "$NODE_TEST_EXCLUDE_PATTERNS_JSON" > "$exclude_file"
-          echo "OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE=$exclude_file" >> "$GITHUB_ENV"
-
       - name: Run release-only plugin Node shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.preflight.outputs.node_test_exclude_patterns_json }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
@@ -428,7 +419,7 @@ jobs:
           set -euo pipefail
           node --input-type=module <<'EOF'
           import { spawnSync } from "node:child_process";
-          import { readFileSync, writeFileSync } from "node:fs";
+          import { writeFileSync } from "node:fs";
           import { join } from "node:path";
 
           const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
@@ -439,20 +430,17 @@ jobs:
           const includePatterns = JSON.parse(
             process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
           );
-          const childEnv = { ...process.env };
-          const excludeFile = childEnv.OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE;
-          if (!excludeFile) {
-            console.error("Missing frozen-target Node exclusion file");
-            process.exit(1);
-          }
-          const excludePatterns = JSON.parse(readFileSync(excludeFile, "utf8"));
+          const excludePatterns = JSON.parse(
+            process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON ?? "[]",
+          );
           if (
             !Array.isArray(excludePatterns) ||
             excludePatterns.some((pattern) => typeof pattern !== "string")
           ) {
-            console.error("Invalid frozen-target Node exclusion file");
+            console.error("Invalid frozen-target Node exclusions");
             process.exit(1);
           }
+          const childEnv = { ...process.env };
           if (Array.isArray(includePatterns) && includePatterns.length > 0) {
             const includeFile = join(
               process.env.RUNNER_TEMP ?? ".",
@@ -462,7 +450,9 @@ jobs:
             childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
           }
 
-          const excludeArgs = excludePatterns.map((pattern) => `--exclude=${pattern}`);
+          const excludeArgs = excludePatterns.map(
+            (pattern) => `--exclude=${pattern.slice("src/plugins/".length)}`,
+          );
           const result = spawnSync("pnpm", ["test", "--", ...configs, "--", ...excludeArgs], {
             env: childEnv,
             stdio: "inherit",
