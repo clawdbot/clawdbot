@@ -441,6 +441,37 @@ const CronFailureNotificationDeliverySchema = closedObject({
   error: Type.Optional(Type.String()),
 });
 
+const CronDeliveryTraceTargetProperties = {
+  channel: Type.Optional(Type.String()),
+  to: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  accountId: Type.Optional(Type.String()),
+  threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+  source: Type.Optional(Type.Union([Type.Literal("explicit"), Type.Literal("last")])),
+};
+
+const CronDeliveryTraceSchema = closedObject({
+  intended: Type.Optional(closedObject(CronDeliveryTraceTargetProperties)),
+  resolved: Type.Optional(
+    closedObject({
+      ...CronDeliveryTraceTargetProperties,
+      ok: Type.Boolean(),
+      error: Type.Optional(Type.String()),
+    }),
+  ),
+  messageToolSentTo: Type.Optional(
+    Type.Array(
+      closedObject({
+        channel: Type.String(),
+        to: Type.Optional(Type.String()),
+        accountId: Type.Optional(Type.String()),
+        threadId: Type.Optional(Type.String()),
+      }),
+    ),
+  ),
+  fallbackUsed: Type.Optional(Type.Boolean()),
+  delivered: Type.Optional(Type.Boolean()),
+});
+
 const CronAutoDisabledSchema = closedObject({
   reason: Type.Union([Type.Literal("consecutive-failures"), Type.Literal("schedule-errors")]),
   atMs: CronDateTimestampMsSchema,
@@ -728,6 +759,7 @@ export const CronRunLogEntrySchema = closedObject({
   deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   deliveryError: Type.Optional(Type.String()),
   failureNotificationDelivery: Type.Optional(CronFailureNotificationDeliverySchema),
+  delivery: Type.Optional(CronDeliveryTraceSchema),
   sessionId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
