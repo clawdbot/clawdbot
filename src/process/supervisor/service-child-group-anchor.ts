@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
@@ -10,7 +11,6 @@ import {
 type WithoutEnvelope<T> = T extends unknown ? Omit<T, "generation" | "sequence"> : never;
 type ServiceChildAnchorPayload = WithoutEnvelope<ServiceChildAnchorMessage>;
 
-const TERM_GRACE_MS = 1_000;
 const LINEAGE_EXIT_OBSERVATION_MS = 100;
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
@@ -142,7 +142,7 @@ export function runServiceChildGroupAnchor(): void {
     }
     state = "closing";
     forceCleanup = signal === "SIGKILL";
-    const termGraceDone = delay(TERM_GRACE_MS);
+    const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
     if (!forceCleanup) {
       // The anchor catches its own signal while every command-group member receives it.
       process.kill(0, "SIGTERM");

@@ -269,7 +269,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
-  it("preserves the TERM grace for a delayed authentic root result", async () => {
+  it("preserves the supervisor TERM grace for a delayed authentic root result", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const tempDir = tempDirs.make("openclaw-service-child-term-grace-");
     const descendantPath = path.join(tempDir, "descendant.cjs");
@@ -297,7 +297,11 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
         });
         process.on("SIGTERM", () => {
           fs.closeSync(3);
-          setTimeout(() => process.exit(0), 300);
+          setTimeout(() => {
+            fs.writeSync(1, "graceful stdout\\n");
+            fs.writeSync(2, "graceful stderr\\n");
+            process.exit(0);
+          }, 1500);
         });
         child.once("message", () => {
           process.stdout.write(process.pid + " " + child.pid + "\\n");
@@ -307,21 +311,38 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       `,
       "utf8",
     );
-    const adapter = await createChildAdapter({
+    let streamedStdout = "";
+    let streamedStderr = "";
+    const run = await createProcessSupervisor().spawn({
+      mode: "child",
       argv: [process.execPath, rootPath],
       stdinMode: "pipe-closed",
+      sessionId: "service-term-grace-test",
+      backendId: "service-term-grace-test",
+      onStdout: (chunk) => {
+        streamedStdout += chunk;
+      },
+      onStderr: (chunk) => {
+        streamedStderr += chunk;
+      },
     });
-    let output = "";
-    adapter.onStdout((chunk) => {
-      output += chunk;
-    });
-    await waitFor(() => /^\d+ \d+/u.test(output));
-    const [rootPid, descendantPid] = parsePidPair(output);
+    await waitFor(() => /^\d+ \d+/u.test(streamedStdout));
+    const [rootPid, descendantPid] = parsePidPair(streamedStdout);
     activePids.add(rootPid);
     activePids.add(descendantPid);
 
-    adapter.kill("SIGTERM");
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    run.cancel();
+    const exit = await run.wait();
+
+    expect(exit).toMatchObject({
+      reason: "manual-cancel",
+      exitCode: 0,
+      exitSignal: null,
+    });
+    expect(exit.stdout).toContain("graceful stdout\n");
+    expect(exit.stderr).toBe("graceful stderr\n");
+    expect(streamedStdout).toContain("graceful stdout\n");
+    expect(streamedStderr).toBe("graceful stderr\n");
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
