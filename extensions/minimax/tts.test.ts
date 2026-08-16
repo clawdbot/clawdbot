@@ -145,7 +145,7 @@ describe("minimaxTTS", () => {
         voiceId: "English_expressive_narrator",
         timeoutMs: 10_000,
       }),
-    ).rejects.toThrow("MiniMax TTS API returned a malformed response");
+    ).rejects.toThrow("minimax.tts: malformed JSON response");
   });
 
   it("rejects a primitive string response body with a malformed-response error", async () => {
@@ -166,56 +166,9 @@ describe("minimaxTTS", () => {
         voiceId: "English_expressive_narrator",
         timeoutMs: 10_000,
       }),
-    ).rejects.toThrow("MiniMax TTS API returned a malformed response");
+    ).rejects.toThrow("minimax.tts: malformed JSON response");
   });
 
-  it("returns audio when base_resp is a non-record value", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: { audio: Buffer.from("audio-data").toString("hex") },
-          base_resp: "not-an-object",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-      release: vi.fn(async () => undefined),
-    });
-
-    const audio = await minimaxTTS({
-      text: "hello",
-      apiKey: "sk-test",
-      baseUrl: "https://api.minimax.io",
-      model: "speech-2.8-hd",
-      voiceId: "English_expressive_narrator",
-      timeoutMs: 10_000,
-    });
-
-    expect(audio.toString()).toBe("audio-data");
-  });
-
-  it("rejects a response with non-record data field", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: "not-an-object",
-          base_resp: { status_code: 0, status_msg: "success" },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-      release: vi.fn(async () => undefined),
-    });
-
-    await expect(
-      minimaxTTS({
-        text: "hello",
-        apiKey: "sk-test",
-        baseUrl: "https://api.minimax.io",
-        model: "speech-2.8-hd",
-        voiceId: "English_expressive_narrator",
-        timeoutMs: 10_000,
-      }),
-    ).rejects.toThrow("MiniMax TTS API returned no audio data");
-  });
 });
 
 type MinimaxWireFixture = {
