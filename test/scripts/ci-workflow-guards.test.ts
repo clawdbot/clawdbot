@@ -7276,9 +7276,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(validateStep.env.INPUT_REF).toBe(trustedInput);
       const ordered = [
         "Checkout trusted QA harness",
+        "Restore trusted QA harness revision",
         "Setup Node environment",
         "Checkout selected ref",
-        "Verify selected checkout SHA",
         "Install selected dependencies",
         "Fetch protocol comparison base",
         "Build private QA runtime",
@@ -7558,10 +7558,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaAuthorizeStep.with?.script).toContain(
       'core.setOutput("authorized", trustedMainCaller ? "true" : "false")',
     );
-    expect(qaValidateJob.outputs).toMatchObject({
-      workflow_repository: "${{ steps.workflow.outputs.workflow_repository }}",
-      workflow_sha: "${{ steps.workflow.outputs.workflow_sha }}",
-    });
+    expect(qaValidateJob.outputs.workflow_sha).toBe("${{ steps.workflow.outputs.workflow_sha }}");
+    expect(qaValidateJob.outputs).not.toHaveProperty("workflow_repository");
     const workflowIdentityStep = qaValidateJob.steps[0];
     expect(workflowIdentityStep).toMatchObject({
       name: "Resolve job workflow identity",
@@ -7606,6 +7604,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         job.steps.find((step: WorkflowStep) => step.name === "Checkout trusted QA harness"),
         "trusted QA harness checkout",
       );
+      const restoreTrusted = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Restore trusted QA harness revision"),
+        "trusted QA harness revision restore",
+      );
       const setupStep = expectDefined(
         job.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
         "trusted QA harness Node setup",
@@ -7613,10 +7615,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const selectedCheckout = expectDefined(
         job.steps.find((step: WorkflowStep) => step.name === "Checkout selected ref"),
         "selected QA checkout",
-      );
-      const verifySelected = expectDefined(
-        job.steps.find((step: WorkflowStep) => step.name === "Verify selected checkout SHA"),
-        "selected QA checkout verification",
       );
       const installSelected = expectDefined(
         job.steps.find((step: WorkflowStep) => step.name === "Install selected dependencies"),
@@ -7642,31 +7640,62 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         name: "Checkout trusted QA harness",
         uses: CHECKOUT_V6,
         with: {
-          repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
-          ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+          repository: "openclaw/openclaw",
+          ref: "main",
           "fetch-depth": 1,
           "persist-credentials": false,
         },
       });
-      expect(job.steps.filter((step: WorkflowStep) => step.uses === CHECKOUT_V6)).toHaveLength(2);
+      const checkoutSteps = job.steps.filter((step: WorkflowStep) =>
+        step.uses?.startsWith("actions/checkout@"),
+      );
+      expect(checkoutSteps).toHaveLength(1);
+      expect(checkoutSteps[0]?.with).toMatchObject({
+        repository: "openclaw/openclaw",
+        ref: "main",
+      });
+      expect(restoreTrusted).toMatchObject({
+        env: {
+          EXPECTED_WORKFLOW_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+        },
+        shell: "bash",
+      });
+      expect(restoreTrusted.run).toContain("^[0-9a-f]{40}$");
+      expect(restoreTrusted.run).toContain(
+        'git fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"',
+      );
+      expect(restoreTrusted.run).toContain('git checkout --detach "$EXPECTED_WORKFLOW_SHA"');
+      expect(restoreTrusted.run).toContain(
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"',
+      );
       expect(job.steps.some((step: WorkflowStep) => step.uses?.startsWith("actions/cache/"))).toBe(
         false,
       );
       expect(setupStep.with?.["install-deps"]).toBe("false");
       expect(setupStep.with?.["use-actions-cache"]).toBe("false");
       expect(selectedCheckout).toMatchObject({
-        uses: CHECKOUT_V6,
-        with: {
-          ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-          path: "selected",
-          "fetch-depth": 1,
-          "persist-credentials": false,
+        env: {
+          EXPECTED_SHA: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
         },
+        shell: "bash",
       });
-      expect(verifySelected.run).toContain("git -C selected rev-parse HEAD");
-      expect(verifySelected.env?.EXPECTED_SHA).toBe(
-        "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      expect(selectedCheckout).not.toHaveProperty("uses");
+      expect(selectedCheckout.run).toContain("^[0-9a-f]{40}$");
+      expect(selectedCheckout.run).toContain("[[ ! -e selected ]]");
+      expect(selectedCheckout.run).toContain("git init selected");
+      expect(selectedCheckout.run).toContain(
+        'git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"',
       );
+      expect(selectedCheckout.run).toContain(
+        'git -C selected fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"',
+      );
+      expect(selectedCheckout.run).toContain("git -C selected checkout --detach FETCH_HEAD");
+      expect(selectedCheckout.run).toContain(
+        'test "$(git -C selected rev-parse HEAD)" = "$EXPECTED_SHA"',
+      );
+      expect(
+        job.steps.some((step: WorkflowStep) => step.name === "Verify selected checkout SHA"),
+      ).toBe(false);
       expect(installSelected["working-directory"]).toBe("selected");
       expect(installSelected.run).toContain(
         '--store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store"',
@@ -7680,14 +7709,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ]) {
         expect(installSelected.run).toContain(installFlag);
       }
-      const ordered = [
-        stepIndex("Require authorized workflow actor"),
-        stepIndex("Checkout trusted QA harness"),
-        stepIndex("Setup Node environment"),
-        stepIndex("Checkout selected ref"),
-        stepIndex("Verify selected checkout SHA"),
-        stepIndex("Install selected dependencies"),
+      const securitySequence = [
+        "Require authorized workflow actor",
+        "Checkout trusted QA harness",
+        "Restore trusted QA harness revision",
+        "Setup Node environment",
+        "Checkout selected ref",
+        "Install selected dependencies",
       ];
+      expect(
+        job.steps.slice(0, securitySequence.length).map((step: WorkflowStep) => step.name),
+      ).toEqual(securitySequence);
+      const ordered = securitySequence.map(stepIndex);
       expect(ordered.every((index, position) => index > (ordered[position - 1] ?? -1))).toBe(true);
       for (const codeStepName of codeStepNames) {
         const codeStep = expectDefined(

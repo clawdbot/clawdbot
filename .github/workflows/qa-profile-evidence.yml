@@ -161,7 +161,6 @@ jobs:
       protocol_base_revision: ${{ steps.validate.outputs.protocol_base_revision }}
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
-      workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
       workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
     steps:
       # github.workflow_sha identifies the caller during workflow_call. Resolve the called
@@ -192,7 +191,7 @@ jobs:
           }
           fs.appendFileSync(
             outputPath,
-            `workflow_repository=${job.workflow_repository}\nworkflow_sha=${job.workflow_sha}\n`,
+            `workflow_sha=${job.workflow_sha}\n`,
           );
           NODE
 
@@ -337,10 +336,24 @@ jobs:
       - name: Checkout trusted QA harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
-          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          repository: openclaw/openclaw
+          ref: main
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Restore trusted QA harness revision
+        env:
+          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected workflow SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"
+          git checkout --detach "$EXPECTED_WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -351,20 +364,21 @@ jobs:
           use-actions-cache: "false"
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
-          fetch-depth: 1
-          path: selected
-          persist-credentials: false
-
-      - name: Verify selected checkout SHA
         env:
           EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git -C selected rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          [[ ! -e selected ]] || { echo "Selected checkout path already exists." >&2; exit 1; }
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected selected SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          git init selected
+          git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          git -C selected fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"
+          git -C selected checkout --detach FETCH_HEAD
+          test "$(git -C selected rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Install selected dependencies
         shell: bash
@@ -484,10 +498,24 @@ jobs:
       - name: Checkout trusted QA harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
-          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          repository: openclaw/openclaw
+          ref: main
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Restore trusted QA harness revision
+        env:
+          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected workflow SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"
+          git checkout --detach "$EXPECTED_WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -498,20 +526,21 @@ jobs:
           use-actions-cache: "false"
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
-          fetch-depth: 1
-          path: selected
-          persist-credentials: false
-
-      - name: Verify selected checkout SHA
         env:
           EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git -C selected rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          [[ ! -e selected ]] || { echo "Selected checkout path already exists." >&2; exit 1; }
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected selected SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          git init selected
+          git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          git -C selected fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"
+          git -C selected checkout --detach FETCH_HEAD
+          test "$(git -C selected rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Install selected dependencies
         shell: bash
@@ -773,10 +802,24 @@ jobs:
       - name: Checkout trusted QA harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
-          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          repository: openclaw/openclaw
+          ref: main
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Restore trusted QA harness revision
+        env:
+          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected workflow SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"
+          git checkout --detach "$EXPECTED_WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -787,20 +830,21 @@ jobs:
           use-actions-cache: "false"
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
-          fetch-depth: 1
-          path: selected
-          persist-credentials: false
-
-      - name: Verify selected checkout SHA
         env:
           EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git -C selected rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          [[ ! -e selected ]] || { echo "Selected checkout path already exists." >&2; exit 1; }
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected selected SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          git init selected
+          git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          git -C selected fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"
+          git -C selected checkout --detach FETCH_HEAD
+          test "$(git -C selected rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Install selected dependencies
         shell: bash
