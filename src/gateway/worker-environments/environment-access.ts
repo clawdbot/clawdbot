@@ -272,11 +272,11 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     return {
       environmentId: tunnel.environmentId,
       ownerEpoch: tunnel.ownerEpoch,
-      quiesceWorkspace: tunnel.quiesceWorkspace,
-      reconcileWorkspace: tunnel.reconcileWorkspace,
-      runWorkspaceCommand: tunnel.runWorkspaceCommand,
-      stop: tunnel.stop,
-      syncWorkspace: tunnel.syncWorkspace,
+      quiesceWorkspace: (remoteWorkspaceDir) => tunnel.quiesceWorkspace(remoteWorkspaceDir),
+      reconcileWorkspace: (reconcileRequest) => tunnel.reconcileWorkspace(reconcileRequest),
+      runWorkspaceCommand: (command) => tunnel.runWorkspaceCommand(command),
+      stop: () => tunnel.stop(),
+      syncWorkspace: (syncRequest) => tunnel.syncWorkspace(syncRequest),
     };
   };
 

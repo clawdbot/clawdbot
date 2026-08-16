@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, vi } from "vitest";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type {
   WorkerDesktopEndpoint,
@@ -69,7 +70,7 @@ export const NPM_ARTIFACT: WorkerInstallationArtifact = {
   protocolFeatures: [],
   packageSpec: "openclaw@2026.7.2",
 };
-export const BOOTSTRAP_RECEIPT = {
+export const BOOTSTRAP_RECEIPT: WorkerAdmissionHandshake = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.7.2",
   protocolFeatures: [],

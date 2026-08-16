@@ -45,7 +45,7 @@ describe("worker environment service", () => {
 
     await expect(
       workerService.startTunnel({ environmentId: "worker-tunnel", ownerEpoch: 0 }),
-    ).rejects.toThrow("owner credential is not current");
+    ).rejects.toThrow("environment owner is not current");
     expect(tunnelManager.start).not.toHaveBeenCalled();
 
     await workerService.startTunnel({

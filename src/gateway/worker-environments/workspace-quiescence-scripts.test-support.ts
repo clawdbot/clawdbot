@@ -39,6 +39,22 @@ export async function fixture() {
     '#!/bin/sh\nstall() { printf "%s\\n" "$$" >> "$OPENCLAW_TEST_PS_STALL_PID"; trap "" TERM; exec sleep 30; }\nif [ -f "$OPENCLAW_TEST_PS_STALL" ]; then rm -f "$OPENCLAW_TEST_PS_STALL"; stall; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_ALL" ]; then case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) stall ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; then rm -f "$OPENCLAW_TEST_PS_STALL_ONCE_TARGET"; stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_STALL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_STALL_TARGET"; then stall; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_DELAY_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_DELAY_TARGET"; then sleep 0.9; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_FAIL_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_FAIL_TARGET"; then exit 2; fi ;; esac; fi\nif [ -f "$OPENCLAW_TEST_PS_ZOMBIE_TARGET" ]; then target=""; for argument in "$@"; do target=$argument; done; case "$*" in *"stat=,lstart= -p"*) if grep -qx "$target" "$OPENCLAW_TEST_PS_ZOMBIE_TARGET"; then start=$(/bin/ps -o lstart= -p "$target"); if [ -n "$start" ]; then printf "Z %s\\n" "$start"; exit 0; fi; fi ;; esac; fi\ncase "$*" in *"pid=,ppid=,uid=,stat=,lstart="*) if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN.seen" ]; then extra_pid=$(head -n 1 "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o stat= -p "$extra_pid" > "$OPENCLAW_TEST_PS_FAIL_SCAN_STATE"; exit 2; fi ;; esac\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then while IFS= read -r extra_pid; do [ -n "$extra_pid" ] && /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; done < "$OPENCLAW_TEST_PS_EXTRA"; fi; if [ -f "$OPENCLAW_TEST_PS_FAIL_SCAN" ]; then touch "$OPENCLAW_TEST_PS_FAIL_SCAN.seen"; fi ;;\nesac\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    OPENCLAW_TEST_PS_EXTRA: extraProcessPath,
+    OPENCLAW_TEST_PS_STALL: stalledProcessProbePath,
+    OPENCLAW_TEST_PS_STALL_PID: stalledProcessProbePidPath,
+    OPENCLAW_TEST_PS_STALL_ALL: stalledAllProcessProbePath,
+    OPENCLAW_TEST_PS_STALL_TARGET: stalledProcessProbeTargetPath,
+    OPENCLAW_TEST_PS_STALL_ONCE_TARGET: stalledProcessProbeOnceTargetPath,
+    OPENCLAW_TEST_PS_DELAY_TARGET: delayedProcessProbeTargetPath,
+    OPENCLAW_TEST_PS_FAIL_TARGET: failedProcessProbeTargetPath,
+    OPENCLAW_TEST_PS_ZOMBIE_TARGET: zombieProcessProbeTargetPath,
+    OPENCLAW_TEST_PS_FAIL_SCAN: failedProcessScanPath,
+    OPENCLAW_TEST_PS_FAIL_SCAN_STATE: failedProcessScanStatePath,
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+  };
   return {
     bin,
     home,
@@ -54,22 +70,7 @@ export async function fixture() {
     zombieProcessProbeTargetPath,
     failedProcessScanPath,
     failedProcessScanStatePath,
-    env: {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_TEST_PS_EXTRA: extraProcessPath,
-      OPENCLAW_TEST_PS_STALL: stalledProcessProbePath,
-      OPENCLAW_TEST_PS_STALL_PID: stalledProcessProbePidPath,
-      OPENCLAW_TEST_PS_STALL_ALL: stalledAllProcessProbePath,
-      OPENCLAW_TEST_PS_STALL_TARGET: stalledProcessProbeTargetPath,
-      OPENCLAW_TEST_PS_STALL_ONCE_TARGET: stalledProcessProbeOnceTargetPath,
-      OPENCLAW_TEST_PS_DELAY_TARGET: delayedProcessProbeTargetPath,
-      OPENCLAW_TEST_PS_FAIL_TARGET: failedProcessProbeTargetPath,
-      OPENCLAW_TEST_PS_ZOMBIE_TARGET: zombieProcessProbeTargetPath,
-      OPENCLAW_TEST_PS_FAIL_SCAN: failedProcessScanPath,
-      OPENCLAW_TEST_PS_FAIL_SCAN_STATE: failedProcessScanStatePath,
-      PATH: `${bin}:${process.env.PATH ?? ""}`,
-    },
+    env,
   };
 }
 

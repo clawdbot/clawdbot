@@ -153,6 +153,9 @@ describe("failed worker placement redispatch", () => {
           ownerEpoch: active.activeOwnerEpoch,
           expectedGeneration: active.generation,
         });
+        if (draining.state !== "draining") {
+          throw new Error("expected draining worker placement");
+        }
         const reconciling = store.startReconcile({
           sessionId: draining.sessionId,
           environmentId: draining.environmentId,
