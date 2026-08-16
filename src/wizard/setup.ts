@@ -602,7 +602,9 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
-    const { setupChannels } = await import("../commands/onboard-channels.js");
+    const { createChannelSetupTransaction, setupChannels } =
+      await import("../commands/onboard-channels.js");
+    const channelSetup = createChannelSetupTransaction({ runtime });
     const quickstartAllowFromChannels =
       flow === "quickstart"
         ? listChannelPlugins()
@@ -618,12 +620,19 @@ async function runSetupWizardOnce(
       skipConfirm: flow === "quickstart",
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
+      onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
     });
+    nextConfig = await channelSetup.commit(
+      nextConfig,
+      async (config) => await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
+    );
   }
 
-  nextConfig = await writeSetupConfigFile(nextConfig, {
-    allowConfigSizeDrop: false,
-  });
+  if (opts.skipChannels) {
+    nextConfig = await writeSetupConfigFile(nextConfig, {
+      allowConfigSizeDrop: false,
+    });
+  }
   let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);

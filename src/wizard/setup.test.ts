@@ -343,7 +343,8 @@ function expectMockCallArgNotNull(
   }
 }
 
-vi.mock("../commands/onboard-channels.js", () => ({
+vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
   setupChannels,
 }));
 
@@ -2291,6 +2292,56 @@ describe("runSetupWizard", () => {
         quickstartDefaults: true,
       },
       "channel setup options",
+    );
+  });
+
+  it("persists classic channel setup before hooks and Gateway finalization", async () => {
+    const beforeConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
+    const configured = {
+      ...beforeConfig,
+      channels: { matrix: { accounts: { ops: { enabled: true } } } },
+    } satisfies OpenClawConfig;
+    const hook = vi.fn();
+    const isConfiguredWrite = (value: OpenClawConfig) =>
+      value.channels?.matrix?.accounts?.ops?.enabled === true;
+    setupChannels.mockImplementationOnce(async (_cfg, _runtime, _prompter, options) => {
+      const setupOptions = options as {
+        onPostWriteHook?: (value: {
+          channel: "matrix";
+          accountId: string;
+          run: typeof hook;
+        }) => void;
+      };
+      setupOptions.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run: hook });
+      return configured;
+    });
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(beforeConfig));
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    const configuredWriteIndex = replaceConfigFile.mock.calls.findIndex(([params]) =>
+      isConfiguredWrite(params.nextConfig),
+    );
+    expect(configuredWriteIndex).toBeGreaterThanOrEqual(0);
+    expect(replaceConfigFile.mock.invocationCallOrder[configuredWriteIndex]).toBeLessThan(
+      hook.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(hook).toHaveBeenCalledWith({ cfg: configured, runtime: expect.any(Object) });
+    expect(hook.mock.invocationCallOrder[0]).toBeLessThan(
+      finalizeSetupWizard.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 

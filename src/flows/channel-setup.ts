@@ -55,17 +55,36 @@ import {
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
 
-export function createChannelOnboardingPostWriteHookCollector() {
+export function createChannelSetupTransaction(params: {
+  runtime: RuntimeEnv;
+  beforePersistentEffect?: () => Promise<void>;
+}) {
   const hooks = new Map<string, ChannelOnboardingPostWriteHook>();
+  const runPostWriteHooks = async (cfg: OpenClawConfig) => {
+    await runCollectedChannelOnboardingPostWriteHooks({
+      hooks: [...hooks.values()],
+      cfg,
+      runtime: params.runtime,
+      ...(params.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
+    });
+    hooks.clear();
+  };
   return {
-    collect(hook: ChannelOnboardingPostWriteHook) {
+    onPostWriteHook(hook: ChannelOnboardingPostWriteHook) {
       hooks.set(`${hook.channel}:${hook.accountId}`, hook);
     },
-    drain(): ChannelOnboardingPostWriteHook[] {
-      const next = [...hooks.values()];
-      hooks.clear();
-      return next;
+    async commit(
+      nextConfig: OpenClawConfig,
+      write: (config: OpenClawConfig) => Promise<OpenClawConfig>,
+    ): Promise<OpenClawConfig> {
+      await params.beforePersistentEffect?.();
+      const committedConfig = await write(nextConfig);
+      await runPostWriteHooks(committedConfig);
+      return committedConfig;
     },
+    runPostWriteHooks,
   };
 }
 
