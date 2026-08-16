@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
@@ -346,7 +347,7 @@ function runReleaseChecksShellStep(
 
 function createReleaseChecksContextFixture() {
   const root = tempDirs.make("release-checks-context-repo-");
-  const repo = resolve(root, ".release-qa-context");
+  const repo = resolve(root, "context-source");
   mkdirSync(repo);
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
@@ -363,7 +364,7 @@ function createReleaseChecksContextFixture() {
   git("tag", "-a", "v2026.8.1", "-m", "release", branchHeadSha);
   const tree = git("rev-parse", "HEAD^{tree}");
   const unrelatedSha = git("commit-tree", tree, "-m", "unrelated root");
-  return { branchHeadSha, candidateSha, git, root, unrelatedSha };
+  return { branchHeadSha, candidateSha, repoUrl: pathToFileURL(repo).href, unrelatedSha };
 }
 
 function runFullReleaseTargetSummary(rerunGroup: string, skipTelegram: string) {
@@ -4204,7 +4205,6 @@ describe("package artifact reuse", () => {
   it("overlays only trusted Anthropic mock tooling for frozen-target QA parity", () => {
     const resolveTarget = workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target");
     const contextValidation = workflowStep(resolveTarget, "Validate trusted QA tooling context");
-    const contextCheckout = workflowStep(resolveTarget, "Checkout trusted QA tooling context");
     const eligibility = workflowStep(resolveTarget, "Validate trusted QA tooling eligibility");
     const resolveStepNames = resolveTarget.steps?.map((step) => step.name) ?? [];
     const job = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_lab_parity_lane_release_checks");
@@ -4219,26 +4219,22 @@ describe("package artifact reuse", () => {
       "${{ steps.trusted_qa_tooling.outputs.eligible }}",
     );
     expect(contextValidation.if).toBe("inputs.target_context_ref != ''");
-    expect(contextCheckout).toMatchObject({
-      if: "steps.trusted_qa_context.outputs.checkout_ref != ''",
-      uses: "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
-      with: {
-        "fetch-depth": 0,
-        path: ".release-qa-context",
-        "persist-credentials": false,
-        ref: "${{ steps.trusted_qa_context.outputs.checkout_ref }}",
-        "sparse-checkout": "package.json",
-        "sparse-checkout-cone-mode": false,
-        submodules: false,
-      },
-    });
-    expect(eligibility.if).toBe("steps.trusted_qa_context.outputs.checkout_ref != ''");
+    expect(
+      resolveTarget.steps?.find((step) => step.name === "Checkout trusted QA tooling context"),
+    ).toBeUndefined();
+    expect(eligibility.if).toBe("steps.trusted_qa_context.outputs.fetch_ref != ''");
     expect(resolveStepNames.indexOf("Validate trusted QA tooling context")).toBeLessThan(
-      resolveStepNames.indexOf("Checkout trusted QA tooling context"),
-    );
-    expect(resolveStepNames.indexOf("Checkout trusted QA tooling context")).toBeLessThan(
       resolveStepNames.indexOf("Validate trusted QA tooling eligibility"),
     );
+    expect(eligibility.env?.TRUSTED_REPOSITORY_URL).toBe(
+      "https://github.com/${{ github.repository }}.git",
+    );
+    expect(eligibility.run).toContain('context_repo="$(mktemp -d)"');
+    expect(eligibility.run).toContain("git init --bare --quiet");
+    expect(eligibility.run).toContain("--filter=blob:none");
+    expect(eligibility.run).toContain("FETCH_HEAD^{commit}");
+    expect(eligibility.run).not.toContain("git checkout");
+    expect(eligibility.run).not.toContain("git worktree");
 
     for (const contextRef of [
       "release/2026.8.1",
@@ -4298,17 +4294,24 @@ describe("package artifact reuse", () => {
         1,
         "is not reachable from branch",
       ],
+      [
+        "tag",
+        "refs/tags/v2026.8.1-beta.99",
+        fixture.branchHeadSha,
+        1,
+        "Failed to fetch trusted QA tooling context",
+      ],
     ] as const;
-    for (const [contextKind, checkoutRef, targetRef, expectedStatus, error] of relationshipCases) {
-      fixture.git("checkout", "-q", "--detach", checkoutRef);
+    for (const [contextKind, fetchRef, targetRef, expectedStatus, error] of relationshipCases) {
       const { output, result } = runReleaseChecksShellStep(
         "Validate trusted QA tooling eligibility",
         {
           CONTEXT_KIND: contextKind,
-          CONTEXT_REF: checkoutRef.replace(/^refs\/(heads|tags)\//u, ""),
+          CONTEXT_FETCH_REF: fetchRef,
+          CONTEXT_REF: fetchRef.replace(/^refs\/(heads|tags)\//u, ""),
           TARGET_REF: targetRef,
+          TRUSTED_REPOSITORY_URL: fixture.repoUrl,
         },
-        fixture.root,
       );
       expect(result.status, `${contextKind} ${targetRef}: ${result.stderr}`).toBe(expectedStatus);
       expect(output).toBe(expectedStatus === 0 ? "eligible=true\n" : "");

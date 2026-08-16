@@ -218,10 +218,10 @@ jobs:
           esac
           if [[ "$normalized_context_ref" =~ ^(release/[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*|extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
             context_kind=branch
-            checkout_ref="refs/heads/${normalized_context_ref}"
+            fetch_ref="refs/heads/${normalized_context_ref}"
           elif [[ "$normalized_context_ref" =~ ^v[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?$ ]]; then
             context_kind=tag
-            checkout_ref="refs/tags/${normalized_context_ref}"
+            fetch_ref="refs/tags/${normalized_context_ref}"
           else
             echo "target_context_ref must be a canonical OpenClaw release branch or tag." >&2
             exit 1
@@ -232,30 +232,28 @@ jobs:
           fi
           echo "normalized_ref=${normalized_context_ref}" >> "$GITHUB_OUTPUT"
           echo "context_kind=${context_kind}" >> "$GITHUB_OUTPUT"
-          echo "checkout_ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout trusted QA tooling context
-        if: steps.trusted_qa_context.outputs.checkout_ref != ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ steps.trusted_qa_context.outputs.checkout_ref }}
-          path: .release-qa-context
-          fetch-depth: 0
-          persist-credentials: false
-          sparse-checkout: package.json
-          sparse-checkout-cone-mode: false
-          submodules: false
+          echo "fetch_ref=${fetch_ref}" >> "$GITHUB_OUTPUT"
 
       - name: Validate trusted QA tooling eligibility
         id: trusted_qa_tooling
-        if: steps.trusted_qa_context.outputs.checkout_ref != ''
+        if: steps.trusted_qa_context.outputs.fetch_ref != ''
         env:
+          CONTEXT_FETCH_REF: ${{ steps.trusted_qa_context.outputs.fetch_ref }}
           CONTEXT_KIND: ${{ steps.trusted_qa_context.outputs.context_kind }}
           CONTEXT_REF: ${{ steps.trusted_qa_context.outputs.normalized_ref }}
           TARGET_REF: ${{ inputs.ref }}
+          TRUSTED_REPOSITORY_URL: https://github.com/${{ github.repository }}.git
         run: |
           set -euo pipefail
-          context_sha="$(git -C .release-qa-context rev-parse HEAD)"
+          context_repo="$(mktemp -d)"
+          trap 'rm -rf -- "$context_repo"' EXIT
+          git init --bare --quiet "$context_repo"
+          if ! GIT_TERMINAL_PROMPT=0 git -C "$context_repo" fetch --quiet --no-tags --filter=blob:none \
+            "$TRUSTED_REPOSITORY_URL" "$CONTEXT_FETCH_REF"; then
+            echo "Failed to fetch trusted QA tooling context ${CONTEXT_REF}." >&2
+            exit 1
+          fi
+          context_sha="$(git -C "$context_repo" rev-parse --verify 'FETCH_HEAD^{commit}')"
           normalized_context_sha="$(printf '%s' "$context_sha" | tr '[:upper:]' '[:lower:]')"
           normalized_target_sha="$(printf '%s' "$TARGET_REF" | tr '[:upper:]' '[:lower:]')"
           case "$CONTEXT_KIND" in
@@ -266,7 +264,7 @@ jobs:
               fi
               ;;
             branch)
-              if ! git -C .release-qa-context merge-base --is-ancestor "$normalized_target_sha" "$normalized_context_sha" 2>/dev/null; then
+              if ! git -C "$context_repo" merge-base --is-ancestor "$normalized_target_sha" "$normalized_context_sha" 2>/dev/null; then
                 echo "Target ${TARGET_REF} is not reachable from branch ${CONTEXT_REF} at ${context_sha}." >&2
                 exit 1
               fi
