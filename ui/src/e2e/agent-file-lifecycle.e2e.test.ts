@@ -285,6 +285,7 @@ suite.define(() => {
           await expect.poll(() => editor.inputValue()).toBe("# Real writer instructions\n");
 
           await selectAgent(page, "main");
+          await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
           await editor.fill("# Saved through real Gateway\n");
           const save = page.locator(".agent-file-actions").getByRole("button", { name: "Save" });
           await save.click();
