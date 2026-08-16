@@ -22,7 +22,6 @@ import type {
 } from "../infra/startup-migration-checkpoint.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
-import { ExitError } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
@@ -45,6 +44,13 @@ import {
   runStartupUpgradeConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
 import * as cronMigration from "./doctor-config-preflight.cron.js";
+import {
+  formatStartupMigrationFailure,
+  refuseStartupMigrationsForLiveGatewayOwner,
+  throwStartupMigrationGuardRejected,
+  throwStartupMigrationIdentityChanged,
+  throwStartupMigrationRefusal,
+} from "./doctor-startup-migration-refusal.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
@@ -131,36 +137,6 @@ function noteStateMigrationResult(result: {
   }
 }
 
-function formatStartupMigrationFailure(params: { warnings: string[]; blockers: string[] }): string {
-  const details = [
-    ...params.warnings.map((warning) => `- ${warning}`),
-    ...params.blockers.map((blocker) => `- ${blocker}`),
-  ];
-  return [
-    "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
-    ...details,
-    'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
-  ].join("\n");
-}
-
-function throwStartupMigrationRefusal(message: string): never {
-  // ExitError bypasses entry.ts's generic failure formatter, so report the owned reason here.
-  console.error(message);
-  throw new ExitError(1, message);
-}
-
-function throwStartupMigrationGuardRejected(): never {
-  throw new Error(
-    "OpenClaw startup migrations were skipped because the selected config changed during startup; refusing to report the gateway ready. Retry startup so the new config can be validated.",
-  );
-}
-
-function throwStartupMigrationIdentityChanged(): never {
-  throwStartupMigrationRefusal(
-    "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
-  );
-}
-
 /**
  * Runs early doctor config checks before the main config repair flow.
  *
@@ -232,6 +208,9 @@ export async function runDoctorConfigPreflight(
   const ensureStartupMigrationLease = async () => {
     if (startupMigrationLease || !migrationCheckpoint) {
       return;
+    }
+    if (gatewayStartupCheckpointRequired) {
+      await refuseStartupMigrationsForLiveGatewayOwner(startupMigrationEnv);
     }
     startupMigrationLease = await migrationCheckpoint.acquireStartupMigrationLeaseWithWait({
       env: startupMigrationEnv,

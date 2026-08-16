@@ -8,8 +8,10 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 
 const STARTUP_REFUSAL =
   "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.";
@@ -224,6 +226,82 @@ describe.concurrent("gateway startup-migration refusal", () => {
       expect(result.stderr).toContain(STARTUP_RECOVERY);
       expect(result.stderr.split(STARTUP_REFUSAL)).toHaveLength(2);
       expect(result.stderr).not.toContain("[openclaw] Could not start the CLI.");
+      expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  }, 45_000);
+
+  it("refuses before relocating legacy state when a live gateway owns the state directory", async () => {
+    const temporaryRoot = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-live-owner-refusal-"),
+    );
+    const root = await fs.promises.realpath(temporaryRoot);
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+
+    try {
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
+      );
+      // A pending automatic migration: legacy agent dir relocation moves this
+      // file to agents/main/agent/ on the first unguarded gateway startup.
+      const legacyAgentDir = path.join(stateDir, "agent");
+      const legacyArtifactPath = path.join(legacyAgentDir, "auth-profiles.json");
+      fs.mkdirSync(legacyAgentDir, { recursive: true });
+      fs.writeFileSync(legacyArtifactPath, JSON.stringify({ profiles: {} }));
+      // A live gateway owner: this test process is alive and its start time
+      // matches, which is exactly how a real concurrent gateway verifies.
+      const lockDir = resolveGatewayLockDir(stateDir);
+      fs.mkdirSync(lockDir, { recursive: true });
+      const startTime = getFileLockProcessStartTime(process.pid);
+      fs.writeFileSync(
+        path.join(lockDir, "gateway.state.lock"),
+        JSON.stringify({
+          pid: process.pid,
+          ownerId: "live-owner-refusal-test",
+          createdAt: new Date().toISOString(),
+          configPath,
+          port: 18789,
+          stateDir,
+          ...(startTime !== null ? { startTime } : {}),
+        }),
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", path.resolve("src/entry.ts"), "gateway", "run", "--allow-unconfigured"],
+        {
+          cwd: path.resolve("."),
+          encoding: "utf8",
+          env,
+          timeout: 30_000,
+        },
+      );
+      const output = `${result.stderr}\n${result.stdout}`;
+
+      expect(result.error, output).toBeUndefined();
+      // The refused startup must be side-effect-free: the pending legacy
+      // relocation stayed untouched for the live owner.
+      expect(fs.existsSync(legacyArtifactPath), output).toBe(true);
+      expect(fs.existsSync(path.join(stateDir, "agents", "main", "agent")), output).toBe(false);
+      expect(result.status, output).toBe(1);
+      expect(result.stderr, output).toContain("already owns this state directory");
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);
     } finally {
       await fs.promises.rm(root, { recursive: true, force: true });
