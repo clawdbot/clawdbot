@@ -37,7 +37,7 @@ type BundledHealthCheckSelection = {
   readonly includeAllChecks?: boolean;
 };
 
-export type BundledHealthCheckPluginStateMode = "direct" | "deferred" | "isolated";
+type BundledHealthCheckPluginStateMode = "direct" | "deferred" | "isolated";
 
 function loadMemoryCoreHealthApi(): BundledHealthApi {
   return loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
