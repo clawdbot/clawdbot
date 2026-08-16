@@ -111,6 +111,6 @@ export function getCommanderErrorCommandNames(program: Command): string[] | unde
     ? command
         .createHelp()
         .visibleCommands(command)
-        .map((child) => child.name())
+        .flatMap((child) => child.aliases().concat(child.name()))
     : undefined;
 }
