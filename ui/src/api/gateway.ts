@@ -72,6 +72,11 @@ export class GatewayRequestError extends GatewayProtocolRequestError {
   }
 }
 
+function browserSecureContext(): boolean {
+  const win = typeof window !== "undefined" ? window : undefined;
+  return win?.isSecureContext === true;
+}
+
 function isLoopbackIPv4Host(host: string): boolean {
   const octets = host.split(".");
   return (
@@ -399,7 +404,8 @@ export class GatewayBrowserClient {
 
   private connectPlanTimingPayload(plan: ConnectPlan): Partial<GatewayConnectTiming> {
     return {
-      secureContext: Boolean(plan.deviceIdentity),
+      // Device identity no longer implies a secure context; report the real fact.
+      secureContext: browserSecureContext(),
       hasDeviceIdentity: Boolean(plan.deviceIdentity),
       hasDevice: Boolean(plan.params.device),
       hasAuthToken: Boolean(plan.selectedAuth.authToken),
@@ -441,7 +447,7 @@ export class GatewayBrowserClient {
     const deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null =
       await loadOrCreateDeviceIdentity().catch(() => null);
     this.client.recordTiming("device-identity-ready", generation, undefined, {
-      secureContext: typeof window !== "undefined" && window.isSecureContext,
+      secureContext: browserSecureContext(),
       hasDeviceIdentity: deviceIdentity !== null,
     });
     if (deviceIdentity) {

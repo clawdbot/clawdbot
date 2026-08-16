@@ -1042,7 +1042,9 @@ describe("GatewayBrowserClient", () => {
       phase: "hello",
       hasChallenge: true,
       usedFallback: false,
-      secureContext: true,
+      // The Node test host has no window, so the reported browser secure-context
+      // fact is false even though a device identity is present.
+      secureContext: false,
       hasDeviceIdentity: true,
       hasDevice: true,
       hasAuthToken: true,

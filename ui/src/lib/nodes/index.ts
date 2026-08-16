@@ -931,6 +931,11 @@ async function generateIdentity(): Promise<DeviceIdentity> {
   };
 }
 
+// Storage-blocked pages (for example private browsing) must still present one
+// stable device per page lifetime; minting a fresh key on every reconnect
+// would raise a new unpaired request each time and never retain approval.
+let sessionDeviceIdentity: DeviceIdentity | null = null;
+
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
   const storage = getSafeLocalStorage();
   try {
@@ -967,6 +972,9 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
     // Invalid local identity is replaced below.
   }
 
+  if (sessionDeviceIdentity) {
+    return sessionDeviceIdentity;
+  }
   const identity = await generateIdentity();
   const stored: StoredIdentity = {
     version: 1,
@@ -975,7 +983,12 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
     privateKey: identity.privateKey,
     createdAtMs: Date.now(),
   };
-  storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(stored));
+  try {
+    storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // A write-rejecting store still gets the in-memory identity below.
+  }
+  sessionDeviceIdentity = identity;
   return identity;
 }
 
