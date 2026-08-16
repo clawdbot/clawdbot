@@ -42,23 +42,29 @@ authorized release operator:
 ```bash
 cd /path/to/elevation-artifact-set
 export PREFIX="OpenClaw-<full-openclaw-sha>-Peekaboo-<full-peekaboo-sha>-stable"
+export RECEIPT_SHA256="<authenticated-receipt-sha256>"
 shasum -a 256 -c "$PREFIX.zip.sha256"
 shasum -a 256 -c "$PREFIX-installer.sh.sha256"
-./"$PREFIX-installer.sh" verify --archive "$PREFIX.zip" --receipt "$PREFIX.json"
+./"$PREFIX-installer.sh" verify \
+  --archive "$PREFIX.zip" \
+  --receipt "$PREFIX.json" \
+  --receipt-sha256 "$RECEIPT_SHA256"
 ./"$PREFIX-installer.sh" migration-plan \
   --migrate-launch-agent "$HOME/Library/LaunchAgents/ai.openclaw.node.plist"
 ./"$PREFIX-installer.sh" install \
   --archive "$PREFIX.zip" \
   --receipt "$PREFIX.json" \
+  --receipt-sha256 "$RECEIPT_SHA256" \
   --migrate-launch-agent "$HOME/Library/LaunchAgents/ai.openclaw.node.plist"
 ./"$PREFIX-installer.sh" status --state-dir "<existing-state-dir>"
 ```
 
 Transfer the complete artifact set: archive, receipt, portable installer, and both checksum files. The target Mac does
-not need an OpenClaw source checkout. Run `verify` before planning a cutover; it binds the executing installer to the
-receipt and revalidates the Foundation-signed app, notarization, staple, Gatekeeper result, architectures,
-entitlements, and both source revisions. The portable installer is not covered by the app's code signature, so the
-authorized release-operator handoff remains part of this internal workflow's trust boundary.
+not need an OpenClaw source checkout. The authorized operator handoff must independently provide the installer and
+receipt SHA-256 digests. Run `verify` with the authenticated receipt digest before planning a cutover; the receipt then
+selects the approved archive and `verify` revalidates the Foundation-signed app, notarization, staple, Gatekeeper result,
+architectures, entitlements, and both source revisions. The portable installer is not covered by the app's code
+signature, so this explicit two-digest release-operator handoff remains part of the internal trust boundary.
 
 The managed elevation workflow upgrades an already paired Mac. Its selected state and config must define an
 app-readable direct remote Gateway route with string token or password auth, and the selected macOS node identity must

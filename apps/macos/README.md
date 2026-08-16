@@ -74,14 +74,19 @@ scripts/mac-elevation-host.sh package \
   --peekaboo-source-commit <full-peekaboo-sha>
 cd dist/elevation-host
 export PREFIX="OpenClaw-<full-openclaw-sha>-Peekaboo-<full-peekaboo-sha>-stable"
+export RECEIPT_SHA256="<authenticated-receipt-sha256>"
 shasum -a 256 -c "$PREFIX.zip.sha256"
 shasum -a 256 -c "$PREFIX-installer.sh.sha256"
-./"$PREFIX-installer.sh" verify --archive "$PREFIX.zip" --receipt "$PREFIX.json"
+./"$PREFIX-installer.sh" verify \
+  --archive "$PREFIX.zip" \
+  --receipt "$PREFIX.json" \
+  --receipt-sha256 "$RECEIPT_SHA256"
 ./"$PREFIX-installer.sh" migration-plan \
   --migrate-launch-agent "$HOME/Library/LaunchAgents/ai.openclaw.node.plist"
 ./"$PREFIX-installer.sh" install \
   --archive "$PREFIX.zip" \
   --receipt "$PREFIX.json" \
+  --receipt-sha256 "$RECEIPT_SHA256" \
   --migrate-launch-agent "$HOME/Library/LaunchAgents/ai.openclaw.node.plist"
 ./"$PREFIX-installer.sh" status --state-dir "<existing-state-dir>"
 ```
@@ -92,10 +97,12 @@ and verifies a freshly extracted copy. The same source-addressed artifact set
 includes a portable installer copied from that exact Git commit plus separate
 archive and installer checksum files. Transfer the archive, receipt, portable
 installer, and both checksums; the target Mac does not need a source checkout.
-`verify` binds the executing installer to the receipt, archive, signer,
+The release operator must deliver the receipt SHA-256 through the authenticated
+handoff alongside the separately authenticated installer digest. `verify` uses
+that receipt digest to select the approved archive and then checks its signer,
 entitlements, architectures, and both source revisions. The portable installer
-is not covered by the app's code signature, so the authorized release-operator
-handoff remains part of this internal workflow's trust boundary.
+is not covered by the app's code signature, so this explicit two-digest operator
+handoff remains part of the internal workflow's trust boundary.
 
 Installation requires an existing app-readable remote Gateway config and a
 paired macOS node identity in the selected state directory. Use
