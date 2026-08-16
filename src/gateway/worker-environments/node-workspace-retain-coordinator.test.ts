@@ -171,11 +171,7 @@ describe("node workspace retain coordinator", () => {
   });
 
   it("skips nodes that are not worker hosts", async () => {
-    const { coordinator, invoke } = createHarness({
-      results: [{ applied: true, deleted: 0, hasMore: false }],
-    });
-
-    // Replace the transport with a node that is not a worker host (no workerBuild)
+    // Create a coordinator with a node that is not a worker host (no workerBuild)
     const invokeFiltered = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
       ok: true,
       payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
