@@ -17,6 +17,7 @@ function renderComposer(
     canSubmit?: boolean;
     requiresModifier?: boolean;
     submitDisabledReason?: string;
+    blockedSubmitNotice?: string;
     terminalAction?: {
       canStart: boolean;
       disabledReason?: string;
@@ -54,6 +55,7 @@ function renderComposer(
       modelControl: new NewSessionModelControl(() => undefined),
       requiresModifier: overrides.requiresModifier ?? false,
       submitDisabledReason: overrides.submitDisabledReason,
+      blockedSubmitNotice: overrides.blockedSubmitNotice,
       terminalAction: overrides.terminalAction,
       submitting: overrides.submitting ?? false,
       textareaController,
@@ -97,7 +99,7 @@ describe("new-session composer keyboard submission", () => {
     { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
     { label: "Ctrl+Enter", requiresModifier: true, ctrlKey: true, metaKey: false },
     { label: "Meta+Enter", requiresModifier: true, ctrlKey: false, metaKey: true },
-  ])("keeps $label native when starting a session is disabled", (testCase) => {
+  ])("keeps $label native when submission is silently gated", (testCase) => {
     const onSubmit = vi.fn();
     const { composer } = renderComposer({
       canSubmit: false,
@@ -149,6 +151,39 @@ describe("new-session composer keyboard submission", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("forwards Enter to onSubmit while a reasoned gate blocks submission", () => {
+    // Silent-swallow regression: an Enter press during a transient gate
+    // (preference restore, reconnect) must reach the submission flow so it
+    // can surface the blocking reason, not die in the keydown handler.
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({
+      canSubmit: false,
+      submitDisabledReason: "Restoring your last session setup…",
+      onSubmit,
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" });
+
+    textarea.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("renders the blocked-submit notice near the composer", () => {
+    const { composer } = renderComposer({
+      canSubmit: false,
+      blockedSubmitNotice: "Restoring your last session setup…",
+    });
+    const notice = composer.querySelector<HTMLElement>(".new-session-page__blocked-submit");
+
+    expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");
   });
 });
 
