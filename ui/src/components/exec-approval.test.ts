@@ -115,7 +115,7 @@ describe("openclaw-exec-approval", () => {
   });
 
   it("exposes labelled, focusable decision buttons", async () => {
-    await renderApproval(createExecRequest());
+    await renderOpenedApproval(createExecRequest());
     await getRenderedModalDialog(container);
 
     const buttons = Array.from(
