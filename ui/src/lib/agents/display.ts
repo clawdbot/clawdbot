@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   expandToolGroups,
   normalizeToolPolicyName,
@@ -228,7 +229,12 @@ type AgentConfigEntry = {
 
 type ConfigSnapshot = {
   agents?: {
-    defaults?: { workspace?: string; model?: unknown; models?: Record<string, { alias?: string }> };
+    defaults?: {
+      workspace?: string;
+      model?: unknown;
+      models?: Record<string, { alias?: string }>;
+      skills?: string[];
+    };
     entries?: Record<string, AgentConfigEntry>;
   };
   tools?: {
@@ -321,6 +327,17 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
     defaults: cfg?.agents?.defaults,
     globalTools: cfg?.tools,
   };
+}
+
+/** Resolves the effective skill allowlist, including inherited agent defaults. */
+export function resolveAgentSkillsFilter(config: Record<string, unknown> | null, agentId: string) {
+  const resolved = resolveAgentConfig(config, agentId);
+  if (Array.isArray(resolved.entry?.skills)) {
+    return normalizeStringEntries(resolved.entry.skills);
+  }
+  return Array.isArray(resolved.defaults?.skills)
+    ? normalizeStringEntries(resolved.defaults.skills)
+    : undefined;
 }
 
 export type AgentContext = {

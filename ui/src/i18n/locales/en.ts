@@ -1279,6 +1279,7 @@ export const en: TranslationMap = {
       subtitle: "Per-agent skill allowlist and workspace skills.",
       loadConfig: "Load the gateway config to set per-agent skills.",
       customAllowlist: "This agent uses a custom skill allowlist.",
+      inheritedAllowlist: "This agent inherits the default skill allowlist.",
       allEnabled: "All skills are enabled. Disabling any skill will create a per-agent allowlist.",
       loadAgent: "Load skills for this agent to view workspace-specific entries.",
       filter: "Filter",

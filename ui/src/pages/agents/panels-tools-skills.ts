@@ -28,6 +28,7 @@ import {
   isAllowedByPolicy,
   matchesList,
   resolveAgentConfig,
+  resolveAgentSkillsFilter,
   resolveToolProfileOptions,
   resolveToolProfile,
   resolveToolSections,
@@ -922,12 +923,16 @@ export function renderAgentSkills(params: {
     !params.configLoading &&
     !params.configSaving;
   const config = resolveAgentConfig(params.configForm, params.agentId);
-  const allowlist = Array.isArray(config.entry?.skills) ? config.entry?.skills : undefined;
-  const allowSet = new Set(normalizeStringEntries(allowlist ?? []));
+  const explicitAllowlist = Array.isArray(config.entry?.skills)
+    ? normalizeStringEntries(config.entry.skills)
+    : undefined;
+  const allowlist = resolveAgentSkillsFilter(params.configForm, params.agentId);
+  const allowSet = new Set(allowlist ?? []);
   const usingAllowlist = allowlist !== undefined;
+  const inheritedAllowlist = explicitAllowlist === undefined && usingAllowlist;
   const canClear =
     params.canPatchConfig &&
-    usingAllowlist &&
+    explicitAllowlist !== undefined &&
     Boolean(params.configForm) &&
     !params.configLoading &&
     !params.configSaving;
@@ -952,7 +957,13 @@ export function renderAgentSkills(params: {
       ? html`<div class="callout info">${t("agents.skillsPanel.loadConfig")}</div>`
       : nothing}
     ${usingAllowlist
-      ? html`<div class="callout info">${t("agents.skillsPanel.customAllowlist")}</div>`
+      ? html`<div class="callout info">
+          ${t(
+            inheritedAllowlist
+              ? "agents.skillsPanel.inheritedAllowlist"
+              : "agents.skillsPanel.customAllowlist",
+          )}
+        </div>`
       : html`<div class="callout info">${t("agents.skillsPanel.allEnabled")}</div>`}
     ${!reportReady && !params.loading
       ? html`<div class="callout info">${t("agents.skillsPanel.loadAgent")}</div>`

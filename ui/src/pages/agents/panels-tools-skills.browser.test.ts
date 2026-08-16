@@ -504,6 +504,78 @@ describe("agents tools panel (browser)", () => {
 });
 
 describe("agents skills panel (browser)", () => {
+  it("reflects an inherited default skill allowlist", async () => {
+    const container = document.createElement("div");
+    const skill = (name: string, blockedByAgentFilter: boolean): SkillStatusEntry => ({
+      name,
+      description: `${name} skill`,
+      source: "openclaw-managed",
+      bundled: false,
+      filePath: `/tmp/skills/${name}/SKILL.md`,
+      baseDir: `/tmp/skills/${name}`,
+      skillKey: name,
+      always: false,
+      disabled: false,
+      blockedByAllowlist: false,
+      blockedByAgentFilter,
+      eligible: true,
+      requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
+      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+      configChecks: [],
+      install: [],
+    });
+
+    render(
+      renderAgentSkills({
+        agentId: "main",
+        canPatchConfig: true,
+        canUpdateConfig: true,
+        report: {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          agentId: "main",
+          agentSkillFilter: ["github"],
+          skills: [skill("github", false), skill("weather", true)],
+        },
+        loading: false,
+        error: null,
+        activeAgentId: "main",
+        configForm: {
+          agents: {
+            defaults: { skills: ["github"] },
+            entries: { main: { default: true } },
+          },
+        },
+        configLoading: false,
+        configSaving: false,
+        configDirty: false,
+        filter: "",
+        onFilterChange: () => undefined,
+        onRefresh: () => undefined,
+        onToggle: () => undefined,
+        onClear: () => undefined,
+        onDisableAll: () => undefined,
+        onConfigReload: () => undefined,
+        onConfigSave: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".callout.info")?.textContent).toContain(
+      "inherits the default skill allowlist",
+    );
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>(".agent-skill-row wa-switch")).map(
+        (toggle) => (toggle as HTMLElement & { checked: boolean }).checked,
+      ),
+    ).toEqual([true, false]);
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons[0]?.disabled).toBe(true);
+    expect(buttons[1]?.disabled).toBe(false);
+    expect(buttons[2]?.disabled).toBe(true);
+  });
+
   it("gates allowlist clearing separately from staged config edits", async () => {
     const container = document.createElement("div");
     render(

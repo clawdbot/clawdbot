@@ -16,6 +16,7 @@ import {
   listSelectableAgents,
   normalizeAgentLabel,
   normalizeAgentTargetLabel,
+  resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
   resolveToolProfileOptions,
   resolveToolSections,
@@ -370,6 +371,36 @@ describe("resolveChatAvatarRenderUrl", () => {
         identity: { avatarUrl: "/avatar/main" },
       }),
     ).toBe("/avatar/main");
+  });
+});
+
+describe("resolveAgentSkillsFilter", () => {
+  it("inherits the default filter when the agent has no override", () => {
+    expect(
+      resolveAgentSkillsFilter(
+        {
+          agents: {
+            defaults: { skills: [" github ", "weather"] },
+            entries: { main: { default: true } },
+          },
+        },
+        "main",
+      ),
+    ).toEqual(["github", "weather"]);
+  });
+
+  it("prefers an explicit empty agent filter over inherited defaults", () => {
+    expect(
+      resolveAgentSkillsFilter(
+        {
+          agents: {
+            defaults: { skills: ["github"] },
+            entries: { main: { skills: [] } },
+          },
+        },
+        "main",
+      ),
+    ).toEqual([]);
   });
 });
 
