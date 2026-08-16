@@ -65,6 +65,7 @@ function prepare(input: {
   toolSearchRuntimeConfig: OpenClawConfig;
   catalogRef: ReturnType<typeof createToolSearchCatalogRef>;
   uncompactedEffectiveTools?: ReturnType<typeof createStubTool>[];
+  clientTools?: ReturnType<typeof clientTool>[];
 }) {
   return prepareEmbeddedAttemptClientTools({
     attempt: {
@@ -83,7 +84,7 @@ function prepare(input: {
     toolSearchCatalogRef: input.catalogRef,
     toolSearchRuntimeConfig: input.toolSearchRuntimeConfig,
     uncompactedEffectiveTools: input.uncompactedEffectiveTools ?? [],
-    clientTools: [clientTool("client_probe")],
+    clientTools: input.clientTools ?? [clientTool("client_probe")],
   } as unknown as Parameters<typeof prepareEmbeddedAttemptClientTools>[0]);
 }
 
@@ -157,5 +158,51 @@ describe("prepareEmbeddedAttemptClientTools", () => {
         ["memory_forget", '["memory-lancedb","memory_forget"]'],
       ]),
     );
+  });
+
+  it.each(["memory_store", "Memory_Store"])(
+    "keeps client shadow %s admitted but drops ambiguous side-effect ownership",
+    (clientName) => {
+      const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
+      const memoryStore = createStubTool("memory_store");
+      setPluginToolMeta(memoryStore as never, {
+        pluginId: "memory-lancedb",
+        optional: false,
+        sideEffecting: true,
+      });
+
+      const result = prepare({
+        codeModeControlsEnabledForRun: false,
+        attemptConfig: CATALOGS_DISABLED_CONFIG,
+        toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+        catalogRef,
+        uncompactedEffectiveTools: [memoryStore],
+        clientTools: [clientTool(clientName)],
+      });
+
+      expect(result.clientToolDefs.map((tool) => tool.name)).toEqual([clientName]);
+      expect(result.sideEffectToolOwners).toEqual(new Map());
+    },
+  );
+
+  it("keeps non-side-effecting plugin shadows admissible", () => {
+    const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
+    const pluginTool = createStubTool("plugin_probe");
+    setPluginToolMeta(pluginTool as never, {
+      pluginId: "example-plugin",
+      optional: false,
+    });
+
+    const result = prepare({
+      codeModeControlsEnabledForRun: false,
+      attemptConfig: CATALOGS_DISABLED_CONFIG,
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef,
+      uncompactedEffectiveTools: [pluginTool],
+      clientTools: [clientTool("plugin_probe")],
+    });
+
+    expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["plugin_probe"]);
+    expect(result.sideEffectToolOwners).toEqual(new Map());
   });
 });

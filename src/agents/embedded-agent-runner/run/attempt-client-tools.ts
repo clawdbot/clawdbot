@@ -81,12 +81,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
     params.uncompactedEffectiveTools,
     params.replaySafetyOptions,
   );
-  const sideEffectToolOwners = collectSideEffectToolOwners(params.uncompactedEffectiveTools, {
-    declaredOwner: (tool) =>
-      getPluginToolSideEffectOwnerKey(
-        tool as Parameters<typeof getPluginToolSideEffectOwnerKey>[0],
-      ),
-  });
   const clientConflictToolNames = params.deferredDirectoryToolsCallable
     ? builtinToolNames
     : coreBuiltinToolNames;
@@ -141,6 +135,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
         },
       )
     : [];
+  // Terminal observations are name-only, so ownership is valid only when one
+  // concrete OpenClaw or client tool owns the normalized name.
+  const sideEffectToolOwners = collectSideEffectToolOwners(
+    [...params.uncompactedEffectiveTools, ...clientToolDefs],
+    {
+      declaredOwner: (tool) =>
+        getPluginToolSideEffectOwnerKey(
+          tool as Parameters<typeof getPluginToolSideEffectOwnerKey>[0],
+        ),
+    },
+  );
   const addClientToolsToCatalog = params.codeModeControlsEnabledForRun
     ? addClientToolsToCodeModeCatalog
     : addClientToolsToToolSearchCatalog;
