@@ -100,6 +100,43 @@ describe("custodian channel onboarding", () => {
     expect(context.channels.refresh).toHaveBeenNthCalledWith(2, false);
   });
 
+  it("shows an error instead of a healthy nudge when refresh fails with a stale snapshot", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Ready.",
+      action: "none",
+    });
+    const { context, setChannelsError } = createContext(request, ["openclaw.chat"], {
+      channelsSnapshot: channelSnapshot(),
+    });
+    const { page } = await mountPage(context, { onboarding: true });
+
+    setChannelsError("status unavailable");
+    await page.updateComplete;
+
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Channel status is unavailable",
+    );
+    expect(page.textContent).not.toContain("The web app already works");
+  });
+
+  it("does not refresh after the channel prompt is dismissed", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Ready.",
+      action: "none",
+    });
+    const { context, setChannelsConnected } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: true });
+    await waitForFast(() => expect(context.channels.refresh).toHaveBeenCalledOnce());
+
+    page.store.dismissChannelOnboardingNudge();
+    setChannelsConnected(false);
+    setChannelsConnected(true);
+
+    expect(context.channels.refresh).toHaveBeenCalledOnce();
+  });
+
   it.each([
     {
       name: "normal caretaker visits",

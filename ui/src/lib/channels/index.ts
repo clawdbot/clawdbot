@@ -654,9 +654,9 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       state.channelsLoading = false;
       state.channelsLoadingProbe = null;
       state.channelsRefreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
+      state.channelsError = connected || !nextChannelReadAccess ? null : state.channelsError;
       if (!nextChannelReadAccess) {
         state.channelsSnapshot = null;
-        state.channelsError = null;
         state.channelsLastSuccess = null;
       }
     }

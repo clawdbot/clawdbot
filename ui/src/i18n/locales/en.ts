@@ -2527,6 +2527,8 @@ export const en: TranslationMap = {
         "The web app already works. Add a channel only if you want to message OpenClaw from another service.",
       channelSetupAction: "Set up a channel",
       channelSetupDismiss: "Keep using the web app",
+      channelStatusErrorTitle: "Channel status is unavailable",
+      channelStatusErrorBody: "Retry the check, or keep using the web app without a channel.",
     },
   },
   mcpServers: {
