@@ -226,7 +226,10 @@ describe("runNodeHost optional publications", () => {
         ).toEqual([
           [
             NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-            { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+            {
+              protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+              workerHost: { enabled: false },
+            },
           ],
         ]);
       });
