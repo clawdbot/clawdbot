@@ -38,6 +38,49 @@ function buildAssistantMessage(text: string) {
 }
 
 describe("SessionManager persistence compatibility", () => {
+  it("persists canonical delivery facts and keeps the live assistant bytes identical", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-directives-");
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "directive-session";
+    const sessionKey = "agent:main:dashboard:directives";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+
+    const manager = SessionManager.open(scope, dir);
+    const tagged = buildAssistantMessage(
+      "[[reply_to_current]]\n[[reply_to:message-7]]\n[[audio_as_voice]]\nFinal answer",
+    );
+    const codeExampleText = [
+      "Use `[[reply_to_current]]` literally.",
+      "```text",
+      "[[audio_as_voice]]",
+      "```",
+    ].join("\n");
+    const codeExample = buildAssistantMessage(codeExampleText);
+    manager.appendMessage(tagged);
+    manager.appendMessage(codeExample);
+
+    expect(tagged.content).toEqual([{ type: "text", text: "Final answer" }]);
+    expect(tagged).toMatchObject({
+      openclawDelivery: {
+        audioAsVoice: true,
+        replyToCurrent: true,
+        replyToId: "message-7",
+      },
+    });
+    expect(codeExample.content).toEqual([{ type: "text", text: codeExampleText }]);
+    expect(codeExample).not.toHaveProperty("openclawDelivery");
+
+    const persistedMessages = (await loadTranscriptEvents(scope))
+      .filter((event) => (event as { type?: unknown }).type === "message")
+      .map((event) => (event as { message: unknown }).message);
+    expect(persistedMessages).toEqual([tagged, codeExample]);
+    expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual([
+      tagged,
+      codeExample,
+    ]);
+  });
+
   it("rewrites SQLite transcript rows when removing trailing entries", async () => {
     const dir = tempDirs.make("openclaw-session-manager-compat-");
     const storePath = path.join(dir, "sessions.json");
