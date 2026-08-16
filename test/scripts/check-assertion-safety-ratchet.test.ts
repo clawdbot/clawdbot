@@ -62,7 +62,9 @@ describe("check-assertion-safety-ratchet", () => {
     ].join("\n");
 
     expect(countUnsafeAssertions(source, "src/example.ts")).toBe(2);
-    expect(countUnsafeAssertions("value as unknown as Shape;", "src/agents/example.ts")).toBe(1);
+    expect(
+      countUnsafeAssertions("value as unknown as Shape;", "src/agents/agent-model-discovery.ts"),
+    ).toBe(1);
     expect(countUnsafeAssertions("value as unknown as Shape;", "src/example.ts")).toBe(2);
     expect(
       countUnsafeAssertions("declare const value: unknown as Shape;", "src/example.d.ts"),
