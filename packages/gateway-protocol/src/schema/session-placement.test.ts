@@ -4,6 +4,8 @@ import {
   SessionPlacementSchema,
   SessionPlacementStateSchema,
   validateSessionsDispatchParams,
+  validateSessionsMoveParams,
+  validateSessionsMoveResult,
   validateSessionsReclaimParams,
   validateSessionsReclaimResult,
 } from "../index.js";
@@ -357,5 +359,81 @@ describe("session dispatch protocol schemas", () => {
         extra: true,
       }),
     ).toBe(false);
+  });
+
+  it.each([
+    { kind: "gateway" },
+    { kind: "profile", profileId: "development" },
+    { kind: "device", deviceId: "device-1" },
+  ] as const)("accepts the closed $kind move target", (target) => {
+    expect(
+      validateSessionsMoveParams({
+        key: "agent:main:dispatch",
+        agentId: "main",
+        expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+        target,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { kind: "gateway", profileId: "development" },
+    { kind: "profile" },
+    { kind: "profile", profileId: "development", deviceId: "device-1" },
+    { kind: "device" },
+    { kind: "other" },
+  ])("rejects an invalid or mixed move target %#", (target) => {
+    expect(
+      validateSessionsMoveParams({
+        key: "agent:main:dispatch",
+        expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+        target,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { generation: -1, environmentId: "environment-1", ownerEpoch: 7 },
+    { generation: 1.5, environmentId: "environment-1", ownerEpoch: 7 },
+    { generation: 4, environmentId: "", ownerEpoch: 7 },
+    { generation: 4, environmentId: "environment-1", ownerEpoch: 0 },
+    { generation: 4, environmentId: "environment-1", ownerEpoch: 7, extra: true },
+  ])("rejects an inexact move source %#", (expected) => {
+    expect(
+      validateSessionsMoveParams({
+        key: "agent:main:dispatch",
+        expected,
+        target: { kind: "gateway" },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the move result bounded to target identity and placement state", () => {
+    const result = {
+      ok: true,
+      key: "agent:main:dispatch",
+      sessionId: "session-dispatch",
+      target: { kind: "device", deviceId: "device-1" },
+      placement: { state: "active", generation: 5 },
+    };
+    expect(validateSessionsMoveResult(result)).toBe(true);
+    for (const state of ["requested", "reclaimed"] as const) {
+      expect(
+        validateSessionsMoveResult({
+          ...result,
+          placement: { state, generation: result.placement.generation },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      validateSessionsMoveResult({
+        ...result,
+        placement: {
+          ...result.placement,
+          remoteWorkspaceDir: "/workspace/session-dispatch",
+        },
+      }),
+    ).toBe(false);
+    expect(validateSessionsMoveResult({ ...result, providerSettings: {} })).toBe(false);
   });
 });

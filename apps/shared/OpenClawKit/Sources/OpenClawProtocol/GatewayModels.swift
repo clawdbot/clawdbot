@@ -152,6 +152,11 @@ public enum SessionPlacementState: String, Codable, Sendable {
     case failed = "failed"
 }
 
+public enum SessionMovePlacementState: String, Codable, Sendable {
+    case local = "local"
+    case active = "active"
+}
+
 public enum SessionDiscussionState: String, Codable, Sendable {
     case none = "none"
     case available = "available"
@@ -7611,6 +7616,247 @@ public struct SessionsReclaimResult: Codable, Sendable {
         case ok
         case key
         case sessionid = "sessionId"
+        case placement
+    }
+}
+
+public struct SessionMoveExpectedSource: Codable, Sendable {
+    public let generation: Int
+    public let environmentid: String
+    public let ownerepoch: Int
+
+    public init(
+        generation: Int,
+        environmentid: String,
+        ownerepoch: Int)
+    {
+        self.generation = generation
+        self.environmentid = environmentid
+        self.ownerepoch = ownerepoch
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generation
+        case environmentid = "environmentId"
+        case ownerepoch = "ownerEpoch"
+    }
+}
+
+public struct SessionMoveGatewayTarget: Codable, Sendable {
+    public let kind: String
+
+    public init(
+        
+    )
+    {
+        self.kind = "gateway"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["kind"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for SessionMoveGatewayTarget: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKind = try container.decode(String.self, forKey: .kind)
+        guard decodedKind == "gateway" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Expected kind to equal gateway"
+            )
+        }
+        self.kind = "gateway"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("gateway", forKey: .kind)
+    }
+}
+
+public struct SessionMoveProfileTarget: Codable, Sendable {
+    public let kind: String
+    public let profileid: String
+
+    public init(
+        profileid: String
+    )
+    {
+        self.kind = "profile"
+        self.profileid = profileid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case profileid = "profileId"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["kind", "profileId"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for SessionMoveProfileTarget: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKind = try container.decode(String.self, forKey: .kind)
+        guard decodedKind == "profile" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Expected kind to equal profile"
+            )
+        }
+        self.kind = "profile"
+        self.profileid = try container.decode(String.self, forKey: .profileid)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("profile", forKey: .kind)
+        try container.encode(profileid, forKey: .profileid)
+    }
+}
+
+public struct SessionMoveDeviceTarget: Codable, Sendable {
+    public let kind: String
+    public let deviceid: String
+
+    public init(
+        deviceid: String
+    )
+    {
+        self.kind = "device"
+        self.deviceid = deviceid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case deviceid = "deviceId"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["kind", "deviceId"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for SessionMoveDeviceTarget: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKind = try container.decode(String.self, forKey: .kind)
+        guard decodedKind == "device" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Expected kind to equal device"
+            )
+        }
+        self.kind = "device"
+        self.deviceid = try container.decode(String.self, forKey: .deviceid)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("device", forKey: .kind)
+        try container.encode(deviceid, forKey: .deviceid)
+    }
+}
+
+public struct SessionsMoveParams: Codable, Sendable {
+    public let key: String
+    public let agentid: String?
+    public let expected: SessionMoveExpectedSource
+    public let target: SessionMoveTarget
+
+    public init(
+        key: String,
+        agentid: String? = nil,
+        expected: SessionMoveExpectedSource,
+        target: SessionMoveTarget)
+    {
+        self.key = key
+        self.agentid = agentid
+        self.expected = expected
+        self.target = target
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+        case expected
+        case target
+    }
+}
+
+public struct SessionMovePlacement: Codable, Sendable {
+    public let state: SessionMovePlacementState
+    public let generation: Int
+
+    public init(
+        state: SessionMovePlacementState,
+        generation: Int)
+    {
+        self.state = state
+        self.generation = generation
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case generation
+    }
+}
+
+public struct SessionsMoveResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let sessionid: String
+    public let target: SessionMoveTarget
+    public let placement: SessionMovePlacement
+
+    public init(
+        ok: Bool,
+        key: String,
+        sessionid: String,
+        target: SessionMoveTarget,
+        placement: SessionMovePlacement)
+    {
+        self.ok = ok
+        self.key = key
+        self.sessionid = sessionid
+        self.target = target
+        self.placement = placement
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case sessionid = "sessionId"
+        case target
         case placement
     }
 }
@@ -20391,6 +20637,40 @@ public enum SessionsReclaimResultPlacement: Codable, Sendable {
         switch self {
         case .local(let value): try value.encode(to: encoder)
         case .reclaimed(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum SessionMoveTarget: Codable, Sendable {
+    case gateway(SessionMoveGatewayTarget)
+    case profile(SessionMoveProfileTarget)
+    case device(SessionMoveDeviceTarget)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "gateway": self = try .gateway(SessionMoveGatewayTarget(from: decoder))
+        case "profile": self = try .profile(SessionMoveProfileTarget(from: decoder))
+        case "device": self = try .device(SessionMoveDeviceTarget(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown SessionMoveTarget discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .gateway(let value): try value.encode(to: encoder)
+        case .profile(let value): try value.encode(to: encoder)
+        case .device(let value): try value.encode(to: encoder)
         }
     }
 }

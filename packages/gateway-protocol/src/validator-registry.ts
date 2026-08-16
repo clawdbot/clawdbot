@@ -233,6 +233,8 @@ export const validateSessionsSendParams = compile(S.SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = compile(S.SessionsDispatchParamsSchema);
 export const validateSessionsReclaimParams = compile(S.SessionsReclaimParamsSchema);
 export const validateSessionsReclaimResult = compile(S.SessionsReclaimResultSchema);
+export const validateSessionsMoveParams = compile(S.SessionsMoveParamsSchema);
+export const validateSessionsMoveResult = compile(S.SessionsMoveResultSchema);
 export const validateSessionsMessagesSubscribeParams = compile(
   S.SessionsMessagesSubscribeParamsSchema,
 );

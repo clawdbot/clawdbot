@@ -1618,6 +1618,18 @@ export interface WorkerSessionPlacements {
   workspace_base_manifest_ref: string | null;
 }
 
+export interface WorkerSessionPlacementMoves {
+  created_at_ms: number;
+  last_error: string | null;
+  session_id: string;
+  source_environment_id: string;
+  source_generation: number;
+  source_owner_epoch: number;
+  target_id: string | null;
+  target_kind: string;
+  updated_at_ms: number;
+}
+
 export interface WorkerSessionToolOperations {
   child_session_key: string | null;
   created_at_ms: number;
@@ -1862,6 +1874,7 @@ export interface DB {
   worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
+  worker_session_placement_moves: WorkerSessionPlacementMoves;
   worker_session_placements: WorkerSessionPlacements;
   worker_session_tool_operations: WorkerSessionToolOperations;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;

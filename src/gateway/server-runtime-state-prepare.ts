@@ -228,7 +228,8 @@ export async function prepareGatewayKernelState(params: {
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
       (method) =>
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || method !== "sessions.reclaim") &&
+        (workerPlacementControlAvailable ||
+          (method !== "sessions.reclaim" && method !== "sessions.move")) &&
         (desktopObserveAvailable || method !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (method !== "desktop.launch" &&

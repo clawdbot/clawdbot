@@ -34,6 +34,7 @@ const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
   ),
 );
 const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
+  "worker_session_placement_moves",
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",
 ] as const;

@@ -231,7 +231,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-60)).toEqual([
+    expect(coreMethods.slice(-61)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -292,6 +292,7 @@ describe("listGatewayMethods", () => {
       "portal.list",
       "portal.open",
       "portal.close",
+      "sessions.move",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -328,6 +329,7 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("portal.list")).toBe(methods.indexOf("device.scopes.waitUpgrade") + 1);
     expect(methods.indexOf("portal.open")).toBe(methods.indexOf("portal.list") + 1);
     expect(methods.indexOf("portal.close")).toBe(methods.indexOf("portal.open") + 1);
+    expect(methods.indexOf("sessions.move")).toBe(methods.indexOf("portal.close") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

@@ -2250,6 +2250,29 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
 
+-- Planned placement moves retain their exact source CAS and bounded target
+-- without widening the stable placement-state vocabulary.
+CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
+  session_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES worker_session_placements(session_id) ON DELETE CASCADE,
+  source_generation INTEGER NOT NULL CHECK (source_generation >= 0),
+  source_environment_id TEXT NOT NULL,
+  source_owner_epoch INTEGER NOT NULL CHECK (source_owner_epoch >= 1),
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('gateway', 'profile', 'device')),
+  target_id TEXT,
+  last_error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK (
+    (target_kind IS 'gateway' AND target_id IS NULL)
+    OR
+    (target_kind IN ('profile', 'device')
+      AND target_id IS NOT NULL
+      AND length(target_id) BETWEEN 1 AND 256
+      AND target_id = trim(target_id))
+  )
+) STRICT;
+
 -- Worker-visible session RPC authority is persisted against the exact turn
 -- claim. The launch descriptor is informative only; Gateway dispatch always
 -- revalidates this record and the live placement claim before executing.
