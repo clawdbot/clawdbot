@@ -312,6 +312,7 @@ function runRealCompiledPeekabooHarness(
     | "ignored"
     | "nested-gitlink"
     | "none"
+    | "replacement-ref"
     | "untracked",
 ) {
   const root = tempDirs.make(`openclaw-compiled-peekaboo-real-${mutation}-`);
@@ -380,6 +381,30 @@ function runRealCompiledPeekabooHarness(
     writeFileSync(path.join(checkout, "Hidden.swift"), "let hidden = true\n", "utf8");
   } else if (mutation === "untracked") {
     writeFileSync(path.join(checkout, "Untracked.swift"), "let untracked = true\n", "utf8");
+  } else if (mutation === "replacement-ref") {
+    const approvedHead = head;
+    writeFileSync(sourcePath, 'let fixture = "replacement"\n', "utf8");
+    const committed = spawnSync("git", ["commit", "-qam", "replacement"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(committed.status, committed.stderr).toBe(0);
+    const replacementHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: checkout,
+      encoding: "utf8",
+    }).stdout.trim();
+    const replaced = spawnSync("git", ["replace", approvedHead, replacementHead], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(replaced.status, replaced.stderr).toBe(0);
+    const detached = spawnSync("git", ["checkout", "-q", "--detach", approvedHead], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(detached.status, detached.stderr).toBe(0);
+    writeFileSync(sourcePath, 'let fixture = "replacement"\n', "utf8");
+    head = approvedHead;
   }
 
   return runHelper(`
@@ -1514,6 +1539,7 @@ describe("package-mac-app plist stamping", () => {
       "export-subst",
       "gitlink-sibling",
       "ignored",
+      "replacement-ref",
       "untracked",
     ] as const) {
       const dirty = runRealCompiledPeekabooHarness(mutation);

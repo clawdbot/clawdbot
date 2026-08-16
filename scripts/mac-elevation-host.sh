@@ -1206,6 +1206,7 @@ tcc_summary() {
 
 write_receipt() {
   local source_commit="$1" peekaboo_commit="$2" archive_sha="$3"
+  local arm64_cdhash="$4" x86_64_cdhash="$5"
   mkdir -p "$STATE_DIR"
   local tmp="${RECEIPT_PATH}.tmp.$$"
   jq -n \
@@ -1228,8 +1229,8 @@ write_receipt() {
     --arg archiveSha256 "$archive_sha" \
     --arg artifactReceiptSha256 "$VERIFIED_ARTIFACT_RECEIPT_SHA" \
     --arg installerSha256 "$VERIFIED_INSTALLER_SHA" \
-    --arg arm64CDHash "$(codesign_value_for_arch "$APP_PATH" CDHash arm64)" \
-    --arg x8664CDHash "$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)" \
+    --arg arm64CDHash "$arm64_cdhash" \
+    --arg x8664CDHash "$x86_64_cdhash" \
     --arg nodeId "$EXPECTED_NODE_ID" \
     --arg nodeProfile "$EXPECTED_NODE_PROFILE" \
     --arg migrationSource "$ROLLBACK_MIGRATION_SOURCE" \
@@ -1635,10 +1636,28 @@ install_host() {
   trap 'commit_signal=INT' INT
   trap 'commit_signal=TERM' TERM
   trap 'commit_signal=HUP' HUP
+  verify_artifact_receipt \
+    "$AUTHENTICATED_RECEIPT_PATH" \
+    "$AUTHENTICATED_ARCHIVE_PATH" \
+    "$APP_PATH" \
+    "${BASH_SOURCE[0]}"
+  local final_arm64_cdhash final_x86_64_cdhash
+  if ! final_arm64_cdhash="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)" ||
+    ! final_x86_64_cdhash="$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)"
+  then
+    fail 'could not resolve final installed app per-architecture CDHashes'
+  fi
+  [[ -n "$final_arm64_cdhash" && -n "$final_x86_64_cdhash" ]] ||
+    fail 'could not resolve final installed app per-architecture CDHashes'
+  [[ "$final_arm64_cdhash" == "$(receipt_string "$AUTHENTICATED_RECEIPT_PATH" '.cdhashes.arm64' cdhashes.arm64)" &&
+    "$final_x86_64_cdhash" == "$(receipt_string "$AUTHENTICATED_RECEIPT_PATH" '.cdhashes.x86_64' cdhashes.x86_64)" ]] ||
+    fail 'final installed app CDHashes do not match the authenticated artifact receipt'
   write_receipt \
     "$source_commit" \
     "$peekaboo_commit" \
-    "$(shasum -a 256 "$AUTHENTICATED_ARCHIVE_PATH" | awk '{print $1}')"
+    "$(shasum -a 256 "$AUTHENTICATED_ARCHIVE_PATH" | awk '{print $1}')" \
+    "$final_arm64_cdhash" \
+    "$final_x86_64_cdhash"
   CUTOVER_COMMITTED=1
   CUTOVER_ACTIVE=0
   finish_custody_signal_deferral "$commit_signal"

@@ -199,7 +199,7 @@ compiled_peekaboo_commit() {
     return 1
   }
   local commit
-  if ! commit="$(git -C "$checkout" rev-parse HEAD)"; then
+  if ! commit="$(git --no-replace-objects -C "$checkout" rev-parse HEAD)"; then
     echo "ERROR: Could not inspect compiled Peekaboo checkout revision" >&2
     return 1
   fi
@@ -219,7 +219,7 @@ commit = sys.argv[2]
 
 def run_git(*arguments: str) -> bytes:
     return subprocess.run(
-        ["git", "-C", os.fsdecode(checkout), *arguments],
+        ["git", "--no-replace-objects", "-C", os.fsdecode(checkout), *arguments],
         check=True,
         stdout=subprocess.PIPE,
     ).stdout

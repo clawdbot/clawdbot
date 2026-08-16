@@ -469,6 +469,9 @@ function createArtifactVerificationHarness() {
       "  else",
       '    cdhash="${cdhash}ARM64"',
       "  fi",
+      '  if [[ "${TEST_FINAL_CDHASH_MISMATCH:-0}" == "1" && "$target" == "${TEST_INSTALLED_APP_PATH:-}" && "$*" == *"--arch x86_64"* && -f "${TEST_LAUNCH_STATE_FILE:-}" && "$(tr -d \'\\n\' <"$TEST_LAUNCH_STATE_FILE")" == "elevation-loaded" ]]; then',
+      "    cdhash=FINALMISMATCHX8664",
+      "  fi",
       "  printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
       "  printf '%s\\n' 'TeamIdentifier=FWJYW4S8P8' >&2",
       "  printf 'CDHash=%s\\n' \"$cdhash\" >&2",
@@ -527,6 +530,7 @@ function createInstallRollbackHarness(
     danglingRollbackDuringMove?: boolean;
     failCurrentReceiptRestoreCopy?: boolean;
     failAfterReceiptCommitMove?: boolean;
+    finalCDHashMismatch?: boolean;
     failLsofInspection?: boolean;
     hupDuringCustody?: boolean;
     launchdBootstrapFails?: boolean;
@@ -775,6 +779,8 @@ function createInstallRollbackHarness(
       TEST_FAIL_CURRENT_RECEIPT_RESTORE_COPY: options.failCurrentReceiptRestoreCopy ? "1" : "0",
       TEST_FAIL_AFTER_RECEIPT_COMMIT_MOVE: options.failAfterReceiptCommitMove ? "1" : "0",
       TEST_FAIL_LSOF_INSPECTION: options.failLsofInspection ? "1" : "0",
+      TEST_FINAL_CDHASH_MISMATCH: options.finalCDHashMismatch ? "1" : "0",
+      TEST_INSTALLED_APP_PATH: appPath,
       TEST_CUSTODY_SIGNAL: options.hupDuringCustody ? "HUP" : "TERM",
       TEST_LAUNCHD_BOOTSTRAP_FAILS: options.launchdBootstrapFails === false ? "0" : "1",
       TEST_LIVE_PID: String(process.pid),
@@ -1654,6 +1660,42 @@ describe("mac elevation host command contract", () => {
         label: harness.label,
         wasLoaded: true,
       });
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "rolls back when final installed code identity diverges before receipt commit",
+    () => {
+      const harness = createInstallRollbackHarness({
+        finalCDHashMismatch: true,
+        launchdBootstrapFails: false,
+      });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("artifact receipt x86_64 CDHash mismatch");
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
     },
   );
 
