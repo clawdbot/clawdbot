@@ -1,5 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import type {
+  ProviderAuthMethod,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -28,7 +29,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENAI_ACCOUNT_WIZARD_GROUP, OPENAI_API_KEY_LABEL } from "./auth-choice-copy.js";
 import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
   classifyOpenAIBaseUrl,
@@ -61,10 +61,11 @@ import {
   resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
 import {
-  buildOpenAIChatGPTAuthMethods,
+  buildOpenAIChatGPTAuthMethodRuns,
   buildOpenAICodexProviderHooks,
 } from "./openai-chatgpt-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { createOpenAIProvider } from "./provider-contract-api.js";
 import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
@@ -892,40 +893,49 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
 }
 
 export function buildOpenAIProvider(): ProviderPlugin {
+  const provider = createOpenAIProvider();
+  const apiKeyDefinition = provider.auth.find((method) => method.id === "api-key");
+  if (!apiKeyDefinition) {
+    throw new Error("OpenAI provider contract is missing API-key auth");
+  }
+  const chatGPTAuthRuns = buildOpenAIChatGPTAuthMethodRuns();
+  const apiKeyRuntime = createProviderApiKeyAuthMethod({
+    providerId: PROVIDER_ID,
+    methodId: apiKeyDefinition.id,
+    label: apiKeyDefinition.label,
+    hint: apiKeyDefinition.hint,
+    optionKey: "openaiApiKey",
+    flagName: "--openai-api-key",
+    envVar: "OPENAI_API_KEY",
+    promptMessage: "Enter OpenAI API key",
+    profileId: "openai:api-key",
+    defaultModel: OPENAI_DEFAULT_MODEL,
+    preserveExistingPrimary: true,
+    expectedProviders: [PROVIDER_ID],
+    applyConfig: (cfg) => applyOpenAIConfig(cfg),
+    wizard: apiKeyDefinition.wizard,
+  });
+  const auth = provider.auth.map((method): ProviderAuthMethod => {
+    if (method.id === "oauth" || method.id === "device-code") {
+      return { ...method, run: chatGPTAuthRuns[method.id] };
+    }
+    if (method.id === "api-key") {
+      return {
+        ...method,
+        starterModel: apiKeyRuntime.starterModel,
+        run: apiKeyRuntime.run,
+        runNonInteractive: apiKeyRuntime.runNonInteractive,
+        validateNonInteractive: apiKeyRuntime.validateNonInteractive,
+      };
+    }
+    throw new Error(`OpenAI provider contract has unknown auth method: ${method.id}`);
+  });
   const codexHooks = buildOpenAICodexProviderHooks();
   const nativeResponsesHooks = buildOpenAIResponsesProviderHooks();
   const responsesHooks = buildOpenAIResponsesProviderHooks({ transport: "sse" });
   return {
-    id: PROVIDER_ID,
-    label: "OpenAI",
-    hookAliases: ["azure-openai", "azure-openai-responses"],
-    docsPath: "/providers/models",
-    envVars: ["OPENAI_API_KEY"],
-    auth: [
-      ...buildOpenAIChatGPTAuthMethods(),
-      createProviderApiKeyAuthMethod({
-        providerId: PROVIDER_ID,
-        methodId: "api-key",
-        label: OPENAI_API_KEY_LABEL,
-        hint: "Use your OpenAI API key directly",
-        optionKey: "openaiApiKey",
-        flagName: "--openai-api-key",
-        envVar: "OPENAI_API_KEY",
-        promptMessage: "Enter OpenAI API key",
-        profileId: "openai:api-key",
-        defaultModel: OPENAI_DEFAULT_MODEL,
-        preserveExistingPrimary: true,
-        expectedProviders: ["openai"],
-        applyConfig: (cfg) => applyOpenAIConfig(cfg),
-        wizard: {
-          choiceId: "openai-api-key",
-          choiceLabel: OPENAI_API_KEY_LABEL,
-          choiceHint: "Use your OpenAI API key directly",
-          assistantPriority: 5,
-          ...OPENAI_ACCOUNT_WIZARD_GROUP,
-        },
-      }),
-    ],
+    ...provider,
+    auth,
     catalog: {
       order: "simple",
       run: async (ctx) => {
