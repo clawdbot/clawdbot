@@ -197,8 +197,18 @@ class SessionsPage extends OpenClawLightDomElement {
             this.ignorePendingSharedRefresh = false;
             return;
           }
-          if (resultChanged) {
+          // Reload only once the shared roster's own debounced event-refresh
+          // coordinator (event-refresh-coordinator.ts) completes a canonical
+          // fetch; that is the only case that can add/remove/reorder rows.
+          // In-place reconcile publishes also change `result` but never toggle
+          // loading (e.g. an active session.message never schedules a
+          // coordinator refresh) — project their row updates into the
+          // page-local result directly instead of dropping them or issuing a
+          // raw sessions.list per event.
+          if (refreshCompleted && resultChanged) {
             this.scheduleSessionReload();
+          } else if (resultChanged && snapshot.result) {
+            this.projectSharedSessionRows(snapshot.result);
           }
         });
         if (sourceChanged && this.routeDataInitialized) {
@@ -510,6 +520,26 @@ class SessionsPage extends OpenClawLightDomElement {
     this.ensureAgentIdentities(this.result);
     if (data.expandedSessionKey) {
       void this.loadCheckpoint(data.expandedSessionKey);
+    }
+  }
+
+  /** Merge rows the shared roster already reconciled into `this.result`, by key, with no network call. */
+  private projectSharedSessionRows(sharedResult: SessionsListResult) {
+    if (!this.result) {
+      return;
+    }
+    const sharedByKey = new Map(sharedResult.sessions.map((row) => [row.key, row]));
+    let changed = false;
+    const sessions = this.result.sessions.map((row) => {
+      const sharedRow = sharedByKey.get(row.key);
+      if (!sharedRow || sharedRow === row) {
+        return row;
+      }
+      changed = true;
+      return sharedRow;
+    });
+    if (changed) {
+      this.result = { ...this.result, sessions };
     }
   }
 
