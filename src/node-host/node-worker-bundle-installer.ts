@@ -1,9 +1,11 @@
+import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   validateWorkerAdmissionHandshake,
@@ -29,6 +31,7 @@ import {
   type NodeWorkerBundleInstallInput,
 } from "../worker/node-bundle-install-protocol.js";
 import { sameWorkerBuild } from "../worker/worker-build-identity.js";
+import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
   NodeWorkerTransferHttpError,
   openNodeWorkerTransferHttpRequest,
@@ -36,6 +39,8 @@ import {
 
 const INSTALL_RECEIPT = "bootstrap-receipt.json";
 const INSTALL_IGNORED_TOP_LEVEL = new Set([INSTALL_RECEIPT]);
+const WORKER_PREWARM_TIMEOUT_MS = 10 * 60_000;
+const execFileAsync = promisify(execFile);
 
 async function responseBody(response: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
   const chunks: Buffer[] = [];
@@ -184,10 +189,30 @@ async function publishBundle(destination: string, staging: string): Promise<void
 export class NodeWorkerBundleInstaller {
   readonly #root: string;
   readonly #operations = new KeyedAsyncQueue();
+  readonly #prewarmedBundles = new Set<string>();
+  readonly #workerEnv: NodeJS.ProcessEnv;
 
   constructor(options: { root?: string; env?: NodeJS.ProcessEnv } = {}) {
     const env = options.env ?? process.env;
     this.#root = path.resolve(options.root ?? path.join(resolveStateDir(env), "node-host"));
+    this.#workerEnv = snapshotNodeWorkerEnv(env);
+  }
+
+  async #prewarmBundle(bundleDir: string): Promise<void> {
+    if (this.#prewarmedBundles.has(bundleDir)) {
+      return;
+    }
+    await execFileAsync(
+      process.execPath,
+      [path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH), "--internal-worker-prewarm"],
+      {
+        cwd: bundleDir,
+        env: this.#workerEnv,
+        timeout: WORKER_PREWARM_TIMEOUT_MS,
+        windowsHide: true,
+      },
+    );
+    this.#prewarmedBundles.add(bundleDir);
   }
 
   async ensure(params: {
@@ -205,6 +230,7 @@ export class NodeWorkerBundleInstaller {
         const bundlesRoot = path.join(this.#root, input.gatewayNamespace, "bundles");
         const destination = path.join(bundlesRoot, input.build.bundleHash);
         if (await validateInstalledBundle(destination, input.build)) {
+          await this.#prewarmBundle(destination);
           return structuredClone(input.build);
         }
         await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
@@ -239,6 +265,7 @@ export class NodeWorkerBundleInstaller {
           if (!(await validateInstalledBundle(destination, input.build))) {
             throw new Error("published worker bundle failed validation");
           }
+          await this.#prewarmBundle(destination);
           return structuredClone(input.build);
         } finally {
           await fsp.rm(operationRoot, { recursive: true, force: true });

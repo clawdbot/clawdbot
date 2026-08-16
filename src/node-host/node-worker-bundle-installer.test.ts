@@ -32,14 +32,22 @@ describe("node worker bundle installer", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function bundleFixture(options: { packageShell?: boolean } = {}): Promise<{
+  async function bundleFixture(
+    options: {
+      packageShell?: boolean;
+      prewarmMarker?: string;
+    } = {},
+  ): Promise<{
     archive: Buffer;
     input: NodeWorkerBundleInstallInput;
   }> {
     const source = path.join(root, "source");
     const archivePath = path.join(root, "bundle.tgz");
     await fs.mkdir(source, { recursive: true });
-    await fs.writeFile(path.join(source, "worker.mjs"), "export {};\n", { mode: 0o700 });
+    const workerSource = options.prewarmMarker
+      ? `import fs from "node:fs";\nif (process.argv[2] !== "--internal-worker-prewarm" || !process.env.NODE_COMPILE_CACHE || process.env.NODE_DISABLE_COMPILE_CACHE) throw new Error("worker bundle was not prewarmed with compile cache");\nfs.writeFileSync(${JSON.stringify(options.prewarmMarker)}, "ready");\n`
+      : "export {};\n";
+    await fs.writeFile(path.join(source, "worker.mjs"), workerSource, { mode: 0o700 });
     const archiveEntries = ["worker.mjs"];
     if (options.packageShell) {
       await fs.mkdir(path.join(source, "dist"));
@@ -99,7 +107,8 @@ describe("node worker bundle installer", () => {
   }
 
   it("atomically installs, reuses, and cleans prior-hash crash staging", async () => {
-    const fixture = await bundleFixture();
+    const prewarmMarker = path.join(root, "worker-prewarmed");
+    const fixture = await bundleFixture({ prewarmMarker });
     const staleBundleHash = "f".repeat(64);
     const staleStaging = path.join(
       root,
@@ -119,6 +128,7 @@ describe("node worker bundle installer", () => {
     ).resolves.toEqual(fixture.input.build);
 
     expect(served.requests).toHaveBeenCalledOnce();
+    await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
     await expect(fs.access(staleStaging)).rejects.toThrow();
     await expect(
       fs.readFile(
