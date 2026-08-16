@@ -12,6 +12,7 @@ import {
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentIdForSession,
@@ -84,8 +85,9 @@ function setChatCommandError(
   host: { lastError?: string | null; chatError?: string | null },
   error: string | null,
 ) {
-  host.lastError = error;
-  host.chatError = error;
+  const message = error === null ? null : formatUiError(error);
+  host.lastError = message;
+  host.chatError = message;
 }
 
 function currentSessionAccessSnapshot(
@@ -429,7 +431,7 @@ export async function dispatchChatSlashCommand(
     });
   } catch (err) {
     if (targetIsCurrent()) {
-      setChatCommandError(host, String(err));
+      setChatCommandError(host, formatUiError(err));
       injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
       scheduleChatScroll(host, false, false, {
         contentChanged: true,

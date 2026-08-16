@@ -5,6 +5,7 @@ import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
@@ -310,7 +311,7 @@ export class BoardWidgetFrameLifecycle {
     }
     this.frameRefreshAttempts += 1;
     void refreshFrame(widget.name).catch((error: unknown) => {
-      this.setError(error instanceof Error ? error.message : String(error));
+      this.setError(formatUiError(error));
     });
     if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
       this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
@@ -406,7 +407,7 @@ export class BoardWidgetFrameLifecycle {
         this.setError("");
       },
       onError: (error) => {
-        this.setError(error instanceof Error ? error.message : String(error));
+        this.setError(formatUiError(error));
       },
     };
   }

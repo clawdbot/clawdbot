@@ -2,6 +2,7 @@
 // as a step/answer state machine for the Control UI wizard modal.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 
 type WizardGatewayClient = Pick<GatewayBrowserClient, "request">;
@@ -138,7 +139,7 @@ export class ChannelWizardController {
       if (this.generation !== generation) {
         return;
       }
-      this.setState({ phase: "error", channel, message: String(err) });
+      this.setState({ phase: "error", channel, message: formatUiError(err) });
     }
   }
 
@@ -198,7 +199,7 @@ export class ChannelWizardController {
         });
         return;
       }
-      this.setState({ phase: "error", channel: this.channel, message: String(err) });
+      this.setState({ phase: "error", channel: this.channel, message: formatUiError(err) });
     }
   }
 

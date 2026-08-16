@@ -2,6 +2,7 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   bytesToBase64,
   floatToG711Ulaw,
@@ -70,7 +71,7 @@ function messageFromError(error: unknown): string {
   if (error instanceof DOMException) {
     return describeRealtimeTalkInputError(error);
   }
-  return error instanceof Error ? error.message : String(error);
+  return formatUiError(error);
 }
 
 function isAbortError(error: unknown): boolean {

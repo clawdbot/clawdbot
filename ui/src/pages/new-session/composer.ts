@@ -2,9 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/tooltip.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
@@ -172,7 +173,9 @@ export function renderDraftError(message: string) {
   return html`
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
       <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span class="callout__content new-session-page__alert-message">${message}</span>
+      <span class="callout__content new-session-page__alert-message"
+        >${formatUiError(message)}</span
+      >
     </div>
   `;
 }

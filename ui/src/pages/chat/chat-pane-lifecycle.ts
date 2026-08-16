@@ -21,6 +21,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -275,7 +276,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         },
       })
       .catch((error: unknown) => {
-        setChatError(state, error instanceof Error ? error.message : String(error));
+        setChatError(state, formatUiError(error));
         state.requestUpdate?.();
       });
   }

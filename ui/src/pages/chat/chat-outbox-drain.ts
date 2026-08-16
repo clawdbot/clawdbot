@@ -1,5 +1,6 @@
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
@@ -523,7 +524,7 @@ async function drainStoredChatOutbox(
           dependencies.setChatError(host, null);
         }
       } catch (err) {
-        return failCommand(String(err), true);
+        return failCommand(formatUiError(err), true);
       }
       continue;
     }

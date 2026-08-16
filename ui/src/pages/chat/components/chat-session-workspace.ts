@@ -20,9 +20,10 @@ import {
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../components/tooltip.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { formatByteSize } from "../../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
@@ -355,7 +356,7 @@ function loadWorkspace(
     } catch (error) {
       const current = currentWorkspaceState(state);
       if (current === workspace && current.requestId === requestId) {
-        current.error = String(error);
+        current.error = formatUiError(error);
       }
     } finally {
       const current = currentWorkspaceState(state);
@@ -444,7 +445,7 @@ function openWorkspaceItem<T>(
       }
     } catch (error) {
       if (isCurrentOpenRequest(state, request)) {
-        workspace.error = String(error);
+        workspace.error = formatUiError(error);
       }
     } finally {
       requestUpdate(state);
@@ -550,7 +551,7 @@ function openFile(
                 return {
                   ok: false as const,
                   code: "error" as const,
-                  message: error instanceof Error ? error.message : String(error),
+                  message: formatUiError(error),
                 };
               }
             },

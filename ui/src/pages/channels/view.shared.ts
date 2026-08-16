@@ -5,6 +5,7 @@ import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import { renderSettingsSection, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 
@@ -122,7 +123,7 @@ export function renderChannelErrorRow(message: unknown) {
         <span class="settings-row__title"
           >${renderSettingsStatus({ kind: "danger", label: t("channels.lastError") })}</span
         >
-        <span class="settings-row__desc">${message}</span>
+        <span class="settings-row__desc">${formatUiError(message)}</span>
       </div>
     </div>
   `;

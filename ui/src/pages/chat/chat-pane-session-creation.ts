@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -154,7 +155,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         return false;
       }
       if (recovery.continuation.status === "rejected") {
-        setChatError(state, recovery.continuation.error.message);
+        setChatError(state, formatUiError(recovery.continuation.error));
         state.requestUpdate?.();
         return false;
       }

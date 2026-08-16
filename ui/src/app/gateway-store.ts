@@ -12,6 +12,7 @@ import {
 } from "../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -448,7 +449,9 @@ export function createApplicationGateway(
           hello: null,
           canvasPluginSurfaceUrl: null,
           selfUser: null,
-          lastError: error?.message ?? `disconnected (${code}): ${reason || "no reason"}`,
+          lastError: error
+            ? formatUiError(error)
+            : `disconnected (${code}): ${reason || "no reason"}`,
           lastErrorCode: resolveGatewayErrorDetailCode(error) ?? error?.code ?? null,
         });
       },

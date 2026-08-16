@@ -8,6 +8,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -221,7 +222,7 @@ async function loadChannels(
         state.channelsSnapshot = null;
         state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
       } else {
-        state.channelsError = String(err);
+        state.channelsError = formatUiError(err);
       }
     } finally {
       if (isCurrentChannelRefresh(state, client, refreshSeq)) {
@@ -278,7 +279,7 @@ async function loadChannelPairing(
     state.pairingLastSuccess = Date.now();
   } catch (error) {
     if (isCurrentPairingRefresh(state, client, refreshSeq)) {
-      state.pairingError = String(error);
+      state.pairingError = formatUiError(error);
     }
   } finally {
     if (isCurrentPairingRefresh(state, client, refreshSeq)) {
@@ -349,7 +350,7 @@ async function approveChannelPairing(
     return isCurrentPairingMutation(state, mutation) ? result : null;
   } catch (error) {
     if (isCurrentPairingMutation(state, mutation)) {
-      state.pairingError = String(error);
+      state.pairingError = formatUiError(error);
     }
     return null;
   } finally {
@@ -386,7 +387,7 @@ async function dismissChannelPairing(
     return isCurrentPairingMutation(state, mutation);
   } catch (error) {
     if (isCurrentPairingMutation(state, mutation)) {
-      state.pairingError = String(error);
+      state.pairingError = formatUiError(error);
     }
     return false;
   } finally {
@@ -464,14 +465,14 @@ async function startWhatsAppLogin(
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
     }
-    state.whatsappLoginMessage = res.message ?? null;
+    state.whatsappLoginMessage = res.message ? formatUiError(res.message) : null;
     state.whatsappLoginQrDataUrl = res.qrDataUrl ?? null;
     state.whatsappLoginConnected = typeof res.connected === "boolean" ? res.connected : null;
   } catch (err) {
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
     }
-    state.whatsappLoginMessage = String(err);
+    state.whatsappLoginMessage = formatUiError(err);
     state.whatsappLoginQrDataUrl = null;
     state.whatsappLoginConnected = null;
   } finally {
@@ -501,7 +502,7 @@ async function waitWhatsAppLogin(state: ChannelsState, accountId?: string): Prom
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
     }
-    state.whatsappLoginMessage = res.message ?? null;
+    state.whatsappLoginMessage = res.message ? formatUiError(res.message) : null;
     state.whatsappLoginConnected = res.connected ?? null;
     if (res.qrDataUrl) {
       state.whatsappLoginQrDataUrl = res.qrDataUrl;
@@ -512,7 +513,7 @@ async function waitWhatsAppLogin(state: ChannelsState, accountId?: string): Prom
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
     }
-    state.whatsappLoginMessage = String(err);
+    state.whatsappLoginMessage = formatUiError(err);
     state.whatsappLoginConnected = null;
   } finally {
     if (isCurrentWhatsAppOperation(state, operation)) {
@@ -546,7 +547,7 @@ async function logoutWhatsApp(state: ChannelsState, accountId?: string): Promise
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
     }
-    state.whatsappLoginMessage = String(err);
+    state.whatsappLoginMessage = formatUiError(err);
   } finally {
     if (isCurrentWhatsAppOperation(state, operation)) {
       state.whatsappBusy = false;

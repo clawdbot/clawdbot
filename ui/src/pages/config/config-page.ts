@@ -48,6 +48,7 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -526,7 +527,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     } catch (error) {
       // Discovery is best-effort in blocked/inactive contexts; a rejection
       // must not wedge the picker in its loading state.
-      this.microphoneError = error instanceof Error ? error.message : String(error);
+      this.microphoneError = formatUiError(error);
     } finally {
       this.microphoneLoading = false;
       this.microphoneRefreshRequestsPermission = false;
@@ -555,7 +556,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         ? realtimeTalkDeviceIssueMessage(result.issue, "videoinput")
         : null;
     } catch (error) {
-      this.cameraError = error instanceof Error ? error.message : String(error);
+      this.cameraError = formatUiError(error);
     } finally {
       this.cameraLoading = false;
       this.cameraRefreshRequestsPermission = false;
@@ -1015,7 +1016,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       });
     } catch (error) {
       if (request === this.cameraSelectionRequest) {
-        this.cameraError = error instanceof Error ? error.message : String(error);
+        this.cameraError = formatUiError(error);
       }
     }
   }

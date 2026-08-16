@@ -1,5 +1,6 @@
 // Control UI controller for the Logbook tab: state, gateway calls, polling.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type {
   LogbookDaysPayload,
   LogbookStatusPayload,
@@ -181,7 +182,7 @@ export async function loadLogbook(
     state.error = null;
   } catch (err) {
     if (ownsClient(state, client, clientGeneration) && generation === state.loadGeneration) {
-      state.error = err instanceof Error ? err.message : String(err);
+      state.error = formatUiError(err);
     }
   } finally {
     let shouldNotify =
@@ -344,7 +345,7 @@ export async function setLogbookCapturePaused(
     }
   } catch (err) {
     if (ownsClient(state, client, clientGeneration)) {
-      state.error = err instanceof Error ? err.message : String(err);
+      state.error = formatUiError(err);
     }
   } finally {
     if (ownsClient(state, client, clientGeneration)) {
@@ -374,7 +375,7 @@ export async function runLogbookAnalysisNow(
     }
   } catch (err) {
     if (ownsClient(state, client, clientGeneration)) {
-      state.error = err instanceof Error ? err.message : String(err);
+      state.error = formatUiError(err);
     }
   } finally {
     if (ownsClient(state, client, clientGeneration)) {
@@ -407,7 +408,7 @@ export async function loadLogbookStandup(
     }
   } catch (err) {
     if (ownsClient(state, client, clientGeneration)) {
-      state.error = err instanceof Error ? err.message : String(err);
+      state.error = formatUiError(err);
     }
   } finally {
     if (ownsClient(state, client, clientGeneration)) {
@@ -440,7 +441,7 @@ export async function askLogbook(
     }
   } catch (err) {
     if (ownsClient(state, client, clientGeneration)) {
-      state.error = err instanceof Error ? err.message : String(err);
+      state.error = formatUiError(err);
     }
   } finally {
     if (ownsClient(state, client, clientGeneration)) {

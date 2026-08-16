@@ -7,6 +7,7 @@ import type {
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
@@ -201,7 +202,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       if (!isCurrent()) {
         return;
       }
-      scope.state.lastError = error instanceof Error ? error.message : String(error);
+      scope.state.lastError = formatUiError(error);
       scope.state.chatError = scope.state.lastError;
     } finally {
       if (this.taskSuggestionOperations.get(suggestion.id) === operation) {

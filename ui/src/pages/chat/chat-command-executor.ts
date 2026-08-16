@@ -1,12 +1,11 @@
-/**
- * Client-side execution engine for slash commands.
- * Calls gateway RPC methods and returns formatted results.
- */
-
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+/**
+ * Client-side execution engine for slash commands.
+ * Calls gateway RPC methods and returns formatted results.
+ */
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -36,6 +35,7 @@ import {
   resolveCurrentThinkingLevel,
   resolveThinkingLevelInput,
 } from "../../lib/chat/thinking.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -254,7 +254,7 @@ async function executeCompact(
     return { content: t("chat.commandResults.compaction.skipped"), action: "refresh" };
   } catch (err) {
     return {
-      content: t("chat.commandResults.compaction.failedWithReason", { reason: String(err) }),
+      content: t("chat.commandResults.compaction.failedWithReason", { reason: formatUiError(err) }),
       failed: true,
     };
   }
@@ -297,7 +297,7 @@ async function executeModel(
       return { content: lines.join("\n") };
     } catch (err) {
       return {
-        content: t("chat.commandResults.model.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.model.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -350,7 +350,7 @@ async function executeModel(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.model.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.model.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -381,7 +381,7 @@ async function executeThink(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.thinking.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.thinking.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -398,7 +398,7 @@ async function executeThink(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.thinking.resetFailed", { error: String(err) }),
+        content: t("chat.commandResults.thinking.resetFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -432,7 +432,7 @@ async function executeThink(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.thinking.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.thinking.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -459,7 +459,7 @@ async function executeVerbose(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.verbose.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.verbose.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -482,7 +482,7 @@ async function executeVerbose(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.verbose.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.verbose.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -513,7 +513,7 @@ async function executeFast(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.fast.getFailed", { error: String(err) }),
+        content: t("chat.commandResults.fast.getFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -530,7 +530,7 @@ async function executeFast(
       };
     } catch (err) {
       return {
-        content: t("chat.commandResults.fast.resetFailed", { error: String(err) }),
+        content: t("chat.commandResults.fast.resetFailed", { error: formatUiError(err) }),
         failed: true,
       };
     }
@@ -556,7 +556,7 @@ async function executeFast(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.fast.setFailed", { error: String(err) }),
+      content: t("chat.commandResults.fast.setFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -615,7 +615,7 @@ async function executeUsage(
     return { content: lines.join("\n") };
   } catch (err) {
     return {
-      content: t("chat.commandResults.usage.failed", { error: String(err) }),
+      content: t("chat.commandResults.usage.failed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -641,7 +641,7 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
     return { content: lines.join("\n") };
   } catch (err) {
     return {
-      content: t("chat.commandResults.agents.failed", { error: String(err) }),
+      content: t("chat.commandResults.agents.failed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -912,7 +912,7 @@ async function executeSteer(
     return result;
   } catch (err) {
     return {
-      content: t("chat.commandResults.steer.requestFailed", { error: String(err) }),
+      content: t("chat.commandResults.steer.requestFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }
@@ -951,7 +951,7 @@ async function executeRedirect(
     };
   } catch (err) {
     return {
-      content: t("chat.commandResults.redirect.requestFailed", { error: String(err) }),
+      content: t("chat.commandResults.redirect.requestFailed", { error: formatUiError(err) }),
       failed: true,
     };
   }

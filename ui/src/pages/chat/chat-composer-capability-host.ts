@@ -324,7 +324,7 @@ export class ChatComposerCapabilityHost {
       }
       return { ok: true };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatUiError(error);
       if (isCurrentPatch()) {
         try {
           await refreshCurrentChatSessionList(state);
