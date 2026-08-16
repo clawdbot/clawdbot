@@ -580,8 +580,10 @@ test("sessions.reset of an incognito session broadcasts a delete, not a reset", 
   expect(reset.ok).toBe(true);
   expect(reset.payload?.deleted).toBe(true);
   // The row is gone; only reason "delete" makes clients drop it and navigate away.
-  expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
+  expect(broadcast.mock.calls[0]?.[0]).toBe("socket.drain");
   expect(broadcast.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ reason: "delete" }));
+  expect(broadcast.mock.calls[1]?.[0]).toBe("sessions.changed");
+  expect(broadcast.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ reason: "delete" }));
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {

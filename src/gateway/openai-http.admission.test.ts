@@ -14,9 +14,9 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { getFreePort } from "../test-utils/ports.js";
 import {
-  agentCommand,
-  getFreePort,
+  agentCommandMock,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
 } from "./test-helpers.js";
@@ -65,10 +65,10 @@ function parseSseDataLines(text: string): string[] {
 
 describe("OpenAI-compatible HTTP drain-503 mapping (e2e)", () => {
   it("maps a GatewayDrainingError run rejection to a non-streaming 503 gateway_unavailable envelope", async () => {
-    agentCommand.mockClear();
+    agentCommandMock.mockClear();
     // The detached run loses process admission mid-flight; agentCommandFromIngress
     // surfaces that as a GatewayDrainingError rather than a generic failure.
-    agentCommand.mockRejectedValueOnce(new GatewayDrainingError() as never);
+    agentCommandMock.mockRejectedValueOnce(new GatewayDrainingError() as never);
 
     const res = await postChatCompletions(enabledPort, {
       model: "openclaw",
@@ -84,12 +84,12 @@ describe("OpenAI-compatible HTTP drain-503 mapping (e2e)", () => {
       type: "service_unavailable",
       code: "gateway_unavailable",
     });
-    expect(agentCommand).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it("maps a GatewayDrainingError run rejection to a streaming 503 error chunk, not 'Error: internal error'", async () => {
-    agentCommand.mockClear();
-    agentCommand.mockRejectedValueOnce(new GatewayDrainingError() as never);
+    agentCommandMock.mockClear();
+    agentCommandMock.mockRejectedValueOnce(new GatewayDrainingError() as never);
 
     const res = await postChatCompletions(enabledPort, {
       stream: true,
@@ -129,7 +129,7 @@ describe("OpenAI-compatible HTTP drain-503 mapping (e2e)", () => {
       .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
       .filter((v): v is string => typeof v === "string");
     expect(emittedContent).not.toContain("Error: internal error");
-    expect(agentCommand).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 });
 

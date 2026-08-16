@@ -1,5 +1,4 @@
-// Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
@@ -171,10 +170,16 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
   if (isTeardown) {
     let msgSubs: ReadonlySet<string> = new Set<string>();
     if (payload.sessionKey) {
+      const cfg = context.getRuntimeConfig();
+      const defaultAgentId =
+        payload.sessionKey === "global"
+          ? (tryResolveSessionCompatibilityOwnerAgentId(cfg, payload.sessionKey) ??
+            tryResolveDefaultAgentId(cfg))
+          : undefined;
       const subscriptionKey = resolveSessionMessageSubscriptionKey({
         canonicalKey: payload.sessionKey,
         agentId: payload.agentId,
-        defaultAgentId: resolveDefaultAgentId(context.getRuntimeConfig()),
+        defaultAgentId,
       });
       msgSubs = context.getSessionMessageSubscriberConnIds?.(subscriptionKey) ?? new Set();
     }
