@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import {
   resolveSafeInstallDir,
   safeDirName,
@@ -135,15 +136,24 @@ export function resolvePluginNpmGenerationProjectDirPrefix(packageName: string):
   return `${encodePluginNpmProjectDirName(packageName)}${PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR}`;
 }
 
-/** Checks that an existing managed path preserves its npm-root-relative real path. */
-export function isPluginNpmManagedPath(params: { managedPath: string; npmDir?: string }): boolean {
+/** Checks that a managed path preserves its npm-root-relative real path. */
+export function isPluginNpmManagedPath(params: {
+  managedPath: string;
+  npmDir?: string;
+  allowMissing?: boolean;
+}): boolean {
   const npmDir = path.resolve(params.npmDir ?? resolveDefaultPluginNpmDir());
   const managedPath = path.resolve(params.managedPath);
   try {
     return (
       lstatSync(npmDir).isDirectory() &&
       path.relative(npmDir, managedPath) ===
-        path.relative(realpathSync(npmDir), realpathSync(managedPath))
+        path.relative(
+          realpathSync(npmDir),
+          params.allowMissing
+            ? resolvePathViaExistingAncestorSync(managedPath)
+            : realpathSync(managedPath),
+        )
     );
   } catch {
     return false;
@@ -162,6 +172,10 @@ export function isPluginNpmProjectDir(params: {
     return false;
   }
   if (!isPluginNpmManagedPath({ managedPath: projectDir, npmDir })) {
+    return false;
+  }
+  const packageDir = path.join(projectDir, "node_modules", ...params.packageName.split("/"));
+  if (!isPluginNpmManagedPath({ managedPath: packageDir, npmDir, allowMissing: true })) {
     return false;
   }
   if (projectDir === path.resolve(resolvePluginNpmProjectDir(params))) {

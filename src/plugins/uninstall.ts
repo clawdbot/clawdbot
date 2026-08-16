@@ -463,6 +463,13 @@ function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {
   ) {
     return false;
   }
+  const manifestPath = path.join(cleanup.npmRoot, "package.json");
+  if (
+    pluginUninstallTargetExists(manifestPath) &&
+    !isPluginNpmManagedPath({ managedPath: manifestPath, npmDir })
+  ) {
+    return false;
+  }
   if (path.resolve(removal.target) === path.resolve(cleanup.npmRoot)) {
     return (
       projectRoot &&
@@ -524,21 +531,6 @@ export async function applyPluginUninstallDirectoryRemoval(
   if (!isOwnedNpmRemoval(removal)) {
     return { directoryRemoved: false, warnings: [ownershipWarning] };
   }
-  if (
-    removal.cleanup?.kind === "npm" &&
-    !removesNpmProject &&
-    npmCleanupManifestExists &&
-    !isPluginNpmManagedPath({
-      managedPath: npmCleanupManifestPath,
-      npmDir:
-        path.basename(path.dirname(removal.cleanup.npmRoot)) === "projects"
-          ? path.dirname(path.dirname(removal.cleanup.npmRoot))
-          : removal.cleanup.npmRoot,
-    })
-  ) {
-    return { directoryRemoved: false, warnings: [ownershipWarning] };
-  }
-
   if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists && !removesNpmProject) {
     const uninstall = await runCommandWithTimeout(
       [
