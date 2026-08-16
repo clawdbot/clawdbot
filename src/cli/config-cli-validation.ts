@@ -2,7 +2,7 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import type { ConfigFileSnapshot } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
-import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -61,15 +61,7 @@ export async function loadValidConfig(
     return snapshot;
   }
   runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
-  const displayIssues = attachConfigIssueDiagnostics(snapshot.issues, {
-    raw: snapshot.raw,
-    parsed: snapshot.parsed,
-    effective: snapshot.sourceConfig,
-    configPath: snapshot.path,
-    formatPathForDisplay: true,
-    includeReceivedValueHint: true,
-  });
-  for (const line of formatConfigIssueLines(displayIssues, "-", { normalizeRoot: true })) {
+  for (const line of renderConfigValidationIssueLines(snapshot)) {
     runtime.error(line);
   }
   runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));

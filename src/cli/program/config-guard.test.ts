@@ -7,6 +7,7 @@ import { note } from "../../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
 import { ExitError } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 
@@ -28,12 +29,15 @@ vi.mock("../../config/config.js", () => ({
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
-type ConfigIssue = { path: string; message: string };
+type ConfigIssue = { path: string; pathSegments?: Array<string | number>; message: string };
 
 function makeSnapshot() {
   return {
     exists: false,
     valid: true,
+    raw: null as string | null,
+    parsed: {},
+    sourceConfig: {},
     issues: [] as ConfigIssue[],
     warnings: [] as ConfigIssue[],
     legacyIssues: [] as ConfigIssue[],
@@ -676,7 +680,7 @@ describe("ensureConfigReady", () => {
     }
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
-    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, undefined);
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, {});
   });
 
   it("exits for invalid config on non-allowlisted commands", async () => {
@@ -695,6 +699,56 @@ describe("ensureConfigReady", () => {
     ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+
+  it("renders unknown keys and received values with the shared source diagnostics", async () => {
+    setInvalidSnapshot({
+      raw: '{\n  "meta": { "migrations": { "futureMarker": true } },\n  "gateway": { "port": "nope" }\n}',
+      parsed: {
+        meta: { migrations: { futureMarker: true } },
+        gateway: { port: "nope" },
+      },
+      sourceConfig: {
+        meta: { migrations: { futureMarker: true } },
+        gateway: { port: "nope" },
+      },
+      issues: [
+        {
+          path: "meta",
+          pathSegments: ["meta"],
+          message: 'Unrecognized key: "migrations"',
+        },
+        {
+          path: "gateway.port",
+          pathSegments: ["gateway", "port"],
+          message: "Invalid input: expected number",
+        },
+      ],
+    });
+
+    const runtime = await runEnsureConfigReady(["message"]);
+    const output = plainErrorCalls(runtime).join("\n");
+
+    expect(output).toContain('  - openclaw.json:2 — meta: Unrecognized key: "migrations"');
+    expect(output).toContain(
+      '  - openclaw.json:3 — gateway.port: Invalid input: expected number, got: "nope"',
+    );
+  });
+
+  it.each([
+    { touchedVersion: "9999.1.1", expected: true },
+    { touchedVersion: VERSION, expected: false },
+  ])(
+    "shows a config version-skew hint only for newer writers ($touchedVersion)",
+    async ({ touchedVersion, expected }) => {
+      setInvalidSnapshot({ sourceConfig: { meta: { lastTouchedVersion: touchedVersion } } });
+
+      const runtime = await runEnsureConfigReady(["message"]);
+      const output = plainErrorCalls(runtime).join("\n");
+      const hint = `Config was last written by OpenClaw ${touchedVersion}, but you are running ${VERSION} — upgrade or re-run setup.`;
+
+      expect(output.includes(hint)).toBe(expected);
+    },
+  );
 
   it("runs doctor and retries the config guard once after consent", async () => {
     writeLegacyTaskSidecarMarker(useTempOpenClawHome());
