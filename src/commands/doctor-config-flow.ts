@@ -4,6 +4,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { readAgentRosterProperty, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
@@ -158,12 +159,24 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await runDoctorConfigPreflight({
-    repairPrefixedConfig: shouldRepair,
-    recoverCorruptTargetStore: shouldRepair,
-    doctorOnlyStateMigrations: shouldRepair,
-    preparePluginMetadataSnapshot: true,
-  });
+  const preflight = await withProgress(
+    {
+      label: "Checking OpenClaw state…",
+      enabled: params.options.nonInteractive !== true && params.options.json !== true,
+      delayMs: 200,
+    },
+    (progress) =>
+      runDoctorConfigPreflight({
+        repairPrefixedConfig: shouldRepair,
+        recoverCorruptTargetStore: shouldRepair,
+        doctorOnlyStateMigrations: shouldRepair,
+        preparePluginMetadataSnapshot: true,
+        measure: async (name, run) => {
+          progress.setLabel(`${name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " ")}…`);
+          return await run();
+        },
+      }),
+  );
   const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
