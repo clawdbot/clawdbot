@@ -13,6 +13,7 @@ export type MediaFileRef = {
   raw: string;
   type: "path" | "media-uri";
   resolved: string;
+  workspaceDir?: string;
 };
 
 export type MediaImageRef = MediaFileRef & {
@@ -20,7 +21,6 @@ export type MediaImageRef = MediaFileRef & {
   detect?: boolean;
   factIndex: number;
   hydrate: boolean;
-  workspaceDir?: string;
 };
 
 export function isOpenClawCliImageCachePath(filePath: string): boolean {

@@ -257,8 +257,12 @@ async function loadMediaFromRef(
         })
       : await loadWebMedia(
           targetPath,
-          options?.workspaceOnly || options?.localRoots
-            ? { maxBytes: options.maxBytes, localRoots: options.localRoots ?? [workspaceDir] }
+          options?.workspaceOnly || options?.localRoots || ref.workspaceDir
+            ? {
+                maxBytes: options.maxBytes,
+                localRoots:
+                  options.localRoots ?? (ref.workspaceDir ? [ref.workspaceDir] : [workspaceDir]),
+              }
             : options?.maxBytes,
         );
 
