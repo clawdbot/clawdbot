@@ -512,11 +512,7 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
     consistently across native approvals, reply suppression, inbound dedupe,
     cron delivery, and session routing.
 
-    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget` or
-    `resolveChannelRouteTargetWithParser(...)` from
-    `plugin-sdk/channel-route` - those are deprecated and remain only for older
-    plugins. New channel plugins should use
-    `messaging.targetResolver.resolveTarget(...)` for target-id normalization
+    Channel plugins use `messaging.targetResolver.resolveTarget(...)` for target-id normalization
     and directory-miss fallback,
     `messaging.inferTargetChatType(...)` when core needs an early peer kind,
     and `messaging.resolveOutboundSessionRoute(...)` for provider-native

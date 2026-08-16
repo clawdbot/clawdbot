@@ -300,12 +300,9 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "channel-explicit-target-parser",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-28",
-    deprecated: "2026-05-23",
-    warningStarts: "2026-05-23",
-    removeAfter: "2026-08-23",
     replacement:
       "`messaging.targetResolver` for target normalization and `messaging.resolveOutboundSessionRoute` for session/thread identity",
     docsPath: "/plugins/sdk-migration",
@@ -320,15 +317,14 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/channels/plugins/contracts/test-helpers/surface-contract-suite.ts",
       "src/plugins/compat/registry.test.ts",
     ],
+    releaseNote:
+      "The deprecated channel explicit-target parser was removed; plugins must normalize targets with `messaging.targetResolver` and project session identity with `messaging.resolveOutboundSessionRoute`.",
   },
   {
     code: "channel-messaging-targets-subpath",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-04-28",
-    deprecated: "2026-05-23",
-    warningStarts: "2026-05-23",
-    removeAfter: "2026-08-23",
     replacement: "`openclaw/plugin-sdk/channel-targets`",
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk/messaging-targets"],
@@ -337,6 +333,8 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
       "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
     ],
+    releaseNote:
+      "The deprecated `openclaw/plugin-sdk/messaging-targets` subpath was removed; import target helpers from `openclaw/plugin-sdk/channel-targets`.",
   },
   {
     code: "bundled-plugin-allowlist",

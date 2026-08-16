@@ -1180,10 +1180,6 @@
       "types": "./dist/plugin-sdk/media-understanding-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-understanding-runtime.js"
     },
-    "./plugin-sdk/messaging-targets": {
-      "types": "./dist/plugin-sdk/messaging-targets.d.ts",
-      "default": "./dist/plugin-sdk/messaging-targets.js"
-    },
     "./plugin-sdk/request-url": {
       "default": "./dist/plugin-sdk/request-url.js"
     },

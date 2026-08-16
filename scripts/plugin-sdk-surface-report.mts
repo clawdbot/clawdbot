@@ -172,7 +172,6 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
-  "messaging-targets": 12,
   "provider-auth": 19,
   "telegram-account": 3,
 } satisfies Record<string, number>);

@@ -82,7 +82,6 @@ The remaining dated compatibility areas are:
 - the `api.on("subagent_spawning", ...)` hook alias
 - memory-specific embedding registration and the beta.5 session-store bridge
 - WhatsApp inbound callback aliases described below
-- explicit channel target parsing and `openclaw/plugin-sdk/messaging-targets`
 - the shipped agent-harness SDK aliases, whose removal is pending a new
   externally documented migration decision
 - the October 2026 SDK annotation families listed below

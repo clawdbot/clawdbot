@@ -1,26 +1,9 @@
 // Plugin compatibility registry tests cover compatibility metadata loading and validation.
 import fs from "node:fs";
-import { beforeAll, describe, expect, it } from "vitest";
-import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
+import { describe, expect, it } from "vitest";
 import { listPluginCompatRecords, type PluginCompatCode } from "./registry.js";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
-const sourceRootsForDeprecatedCallGuard = [
-  "src",
-  "extensions",
-  "packages",
-  "test",
-  "scripts",
-] as const;
-const deprecatedTargetParserCallPattern =
-  /\.parseExplicitTarget\?\.\s*\(|parseExplicitTargetFor(?:Channel|LoadedChannel)\s*\(|resolveRouteTargetFor(?:Channel|LoadedChannel)\s*\(/u;
-const deprecatedTargetParserCompatFiles = new Set([
-  "src/auto-reply/reply/group-id.ts",
-  "src/channels/plugins/target-parsing-loaded.ts",
-  "src/infra/outbound/outbound-session.ts",
-  "src/infra/outbound/outbound-session.test-helpers.ts",
-  "src/plugins/compat/registry.test.ts",
-]);
 const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
   "plugin-sdk-tool-plugin-public-demotion",
   "agent-harness-sdk-alias",
@@ -66,23 +49,7 @@ function expectNonEmptyStringList(values: readonly string[], label: string) {
   }
 }
 
-function listTrackedSourceFiles(): string[] {
-  const files = listGitTrackedFiles({ pathspecs: sourceRootsForDeprecatedCallGuard });
-  if (!files) {
-    throw new Error("unable to list tracked source files for the deprecated-call guard");
-  }
-  return files.filter((file) => /\.(?:ts|tsx|mts|cts)$/u.test(file));
-}
-
 describe("plugin compatibility registry", () => {
-  let deprecatedTargetParserOffenders: string[] = [];
-
-  beforeAll(() => {
-    deprecatedTargetParserOffenders = listTrackedSourceFiles()
-      .filter((file) => !deprecatedTargetParserCompatFiles.has(file))
-      .filter((file) => deprecatedTargetParserCallPattern.test(fs.readFileSync(file, "utf8")));
-  });
-
   it("keeps every record actionable", () => {
     for (const record of listPluginCompatRecords()) {
       expect(record.introduced, record.code).toMatch(datePattern);
@@ -235,7 +202,18 @@ describe("plugin compatibility registry", () => {
     expect(record?.removeAfter).toBeUndefined();
   });
 
-  it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
-    expect(deprecatedTargetParserOffenders).toEqual([]);
+  it("keeps removed channel target compatibility as migration tombstones", () => {
+    const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
+
+    for (const code of [
+      "channel-explicit-target-parser",
+      "channel-messaging-targets-subpath",
+    ] as const) {
+      expect(records.get(code)).toMatchObject({
+        status: "removed",
+        releaseNote: expect.stringMatching(/\S/u),
+      });
+      expect(records.get(code)?.removeAfter).toBeUndefined();
+    }
   });
 });
