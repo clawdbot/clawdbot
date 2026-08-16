@@ -3084,7 +3084,8 @@ button.chat-reply-preview--message:disabled {
   }
 
   .chat-send-btn--voice-live .agent-chat__voice-activity,
-  .chat-send-btn__voice-stop-glyph {
+  .chat-send-btn__voice-stop-glyph,
+  .chat-talk-input-picker {
     transition: none !important;
   }
 }
@@ -3273,24 +3274,43 @@ button.chat-reply-preview--message:disabled {
   cursor: not-allowed;
 }
 
-/* Idle voice fill stays muted so the idle -> hover -> recording progression
-   escalates (10% -> 18% -> live meter + breathing glow); a full-strength idle
-   fill makes recording state indistinguishable at a glance. */
+/* The composer mic progresses transparent idle -> subtle hover -> full accent
+   recording; Talk-session controls retain the louder accent treatment. */
 .chat-send-btn--voice {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
+  background: var(--chat-voice-background, color-mix(in srgb, var(--accent) 10%, transparent));
+  color: var(--chat-voice-color, var(--accent));
   box-shadow: none;
 }
 
+.chat-talk-control:not(.chat-talk-control--active) .chat-send-btn--voice:disabled {
+  opacity: 0.4;
+}
+
 .chat-send-btn--voice:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: var(
+    --chat-voice-hover-background,
+    color-mix(in srgb, var(--accent) 18%, transparent)
+  );
+  color: var(--chat-voice-hover-color, var(--accent));
   box-shadow: none;
 }
 
 .chat-talk-control {
+  --chat-voice-background: transparent;
+  --chat-voice-color: var(--muted);
+  --chat-voice-hover-background: var(--bg-hover);
+  --chat-voice-hover-color: var(--text);
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
+}
+
+.chat-talk-control--active {
+  --chat-picker-border: color-mix(in srgb, var(--accent) 24%, transparent);
+  --chat-picker-background: color-mix(in srgb, var(--accent) 14%, transparent);
+  --chat-picker-color: var(--accent);
+  --chat-picker-hover-background: color-mix(in srgb, var(--accent) 20%, transparent);
+  --chat-picker-hover-color: var(--accent);
 }
 
 .chat-talk-control > openclaw-tooltip {
@@ -3301,41 +3321,43 @@ button.chat-reply-preview--message:disabled {
   border-radius: var(--radius-full) 0 0 var(--radius-full);
 }
 
-/* Stretch instead of a fixed height so the picker always matches the voice
-   button, including the 44px mobile bump in layout.mobile.css. */
 .chat-talk-input-picker {
   display: inline-flex;
   align-self: stretch;
+  width: 20px;
+  transition:
+    width 120ms ease,
+    opacity 100ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .chat-talk-control:not(.chat-talk-control--active, :hover, :focus-within)
+    .chat-talk-input-picker:not([open]) {
+    width: 0;
+    min-width: 0;
+    opacity: 0;
+  }
 }
 
 .chat-talk-input-picker__trigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
   min-width: 20px;
   height: 100%;
   padding: 0;
   border: 0;
-  border-left: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-left: 1px solid var(--chat-picker-border, var(--border));
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
+  background: var(--chat-picker-background, transparent);
+  color: var(--chat-picker-color, var(--muted));
   transition: background var(--duration-fast) ease;
-}
-
-.chat-talk-control--active .chat-talk-input-picker__trigger {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .chat-talk-input-picker__trigger:hover,
 .chat-talk-input-picker[open] .chat-talk-input-picker__trigger {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-/* Keep both halves of the voice pill visually joined when Talk is unavailable. */
-.chat-talk-control:has(.chat-send-btn:disabled) .chat-talk-input-picker__trigger {
-  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  background: var(--chat-picker-hover-background, var(--bg-hover));
+  color: var(--chat-picker-hover-color, var(--text));
 }
 
 .chat-talk-input-picker__trigger:focus-visible {

@@ -155,11 +155,13 @@ function renderComposerVoiceButton(props: ChatRunControlsProps) {
     : active
       ? t("chat.composer.dictationReleaseToInsert")
       : t("chat.composer.startVoiceInput");
+  const tooltip =
+    props.dictation && !(active || finalizing) ? t("chat.composer.voiceGestureHint") : label;
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return html`
     <span class="chat-talk-control">
-      <openclaw-tooltip .content=${label}>
+      <openclaw-tooltip .content=${tooltip}>
         <button
           class=${active
             ? `chat-send-btn chat-send-btn--dictating${finalizing ? " chat-send-btn--dictation-finalizing" : ""}`

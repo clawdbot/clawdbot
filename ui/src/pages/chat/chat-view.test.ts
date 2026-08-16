@@ -2925,7 +2925,7 @@ describe("chat voice controls", () => {
     const tooltip = talkButton.parentElement as (HTMLElement & { content?: string }) | null;
     expect(talkButton.getAttribute("title")).toBeNull();
     expect(tooltip?.localName).toBe("openclaw-tooltip");
-    expect(tooltip?.content).toBe(startTalkLabel);
+    expect(tooltip?.content).toBe(t("chat.composer.voiceGestureHint"));
     expect(talkButton.textContent?.trim()).toBe(startTalkLabel);
     requireElement(
       container,

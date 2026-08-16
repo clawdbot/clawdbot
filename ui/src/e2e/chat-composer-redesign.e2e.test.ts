@@ -189,6 +189,7 @@ suite.define(() => {
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
+      const microphonePickerShell = page.locator(".chat-talk-input-picker");
 
       await expect.poll(() => model.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
@@ -522,6 +523,10 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 393, height: 852 });
       await expect.poll(() => camera.count()).toBe(0);
+      expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(false);
+      await expect
+        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
+        .toBe(0);
       // Resize re-layout is async; wait for the header controls to adopt the
       // mobile width before sampling one-shot bounding boxes below.
       await expect
@@ -612,22 +617,24 @@ suite.define(() => {
       await page.setViewportSize({ width: 1280, height: 900 });
       await gateway.setOnline(false);
       await expect.poll(() => voice.isDisabled()).toBe(true);
+      await page.mouse.move(0, 0);
+      await expect.poll(() => page.locator("wa-tooltip[open]").count()).toBe(0);
       await expect
-        .poll(async () => {
-          const [voiceBackground, pickerBackground] = await Promise.all([
-            voice.evaluate((node) => getComputedStyle(node).backgroundColor),
-            microphonePicker.evaluate((node) => getComputedStyle(node).backgroundColor),
-          ]);
-          return voiceBackground === pickerBackground;
-        })
-        .toBe(true);
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await composerShell.screenshot({
-          animations: "disabled",
-          path: `${artifactDir}/voice-picker-disabled-background.png`,
-        });
-      }
+        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
+        .toBe(0);
+      await expect.poll(() => voice.evaluate((node) => getComputedStyle(node).opacity)).toBe("0.4");
+
+      await voice.hover();
+      await expect
+        .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
+        .toBe(20);
+      await expect
+        .poll(() => microphonePickerShell.evaluate((node) => getComputedStyle(node).opacity))
+        .toBe("1");
+      await captureUiProof(page, "05-mic-hover-reveals-picker.png");
+      await microphonePicker.click();
+      await expect.poll(() => microphonePicker.getAttribute("aria-expanded")).toBe("true");
+      await expect.poll(() => page.locator(".chat-talk-input-picker[open]").count()).toBe(1);
     });
   });
 

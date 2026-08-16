@@ -318,6 +318,28 @@ describe("renderChatComposer controls", () => {
     },
   );
 
+  it.each([
+    [undefined, "Tap to talk · Hold to dictate"],
+    [false, t("chat.composer.startVoiceInput")],
+  ])(
+    "uses the gesture hint only when hold-to-dictate is available",
+    (composerHoldToRecord, tooltipContent) => {
+      const { container } = renderComposer({
+        composerHoldToRecord,
+        onToggleRealtimeTalk: vi.fn(),
+      });
+      const voice = button(container, t("chat.composer.startVoiceInput"));
+      const tooltip = voice.closest("openclaw-tooltip") as
+        | (HTMLElement & {
+            content?: string;
+          })
+        | null;
+
+      expect(voice.getAttribute("aria-label")).toBe(t("chat.composer.startVoiceInput"));
+      expect(tooltip?.content).toBe(tooltipContent);
+    },
+  );
+
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
     discoverRealtimeTalkInputsMock.mockResolvedValue({
       devices: [

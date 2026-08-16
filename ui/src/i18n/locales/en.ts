@@ -5498,6 +5498,7 @@ export const en: TranslationMap = {
       selectedCameraUnavailable:
         "The selected camera is unavailable. Choose another camera or System default.",
       startVoiceInput: "Start voice input",
+      voiceGestureHint: "Tap to talk · Hold to dictate",
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",
