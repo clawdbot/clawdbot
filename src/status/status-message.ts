@@ -840,7 +840,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         return DEFAULT_CONTEXT_TOKENS;
       })()
     : (() => {
-        const resolved = resolveContextTokensForModel({
+        const resolvedContextTokens = resolveContextTokensForModel({
           cfg: contextConfig,
           ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
           model: contextLookupModel,
@@ -851,9 +851,11 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
           cappedPersistedContextTokens ??
           explicitRuntimeContextTokens;
         if (runtimeLimit === undefined) {
-          return resolved ?? DEFAULT_CONTEXT_TOKENS;
+          return resolvedContextTokens ?? DEFAULT_CONTEXT_TOKENS;
         }
-        return resolved === undefined ? runtimeLimit : Math.min(runtimeLimit, resolved);
+        return resolvedContextTokens === undefined
+          ? runtimeLimit
+          : Math.min(runtimeLimit, resolvedContextTokens);
       })();
 
   const thinkLevel =

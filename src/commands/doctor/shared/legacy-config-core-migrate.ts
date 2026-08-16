@@ -132,7 +132,7 @@ export function normalizeCompatibilityConfigValues(
 } {
   const changes: string[] = [];
   let contextBudgetConfig = cfg;
-  let contextBudgetWarnings: string[] = [];
+  let contextBudgetWarnings: string[];
   if (options.sourceConfigBeforeMigrations === undefined) {
     const migration = migrateLegacyContextBudgetConfig(cfg);
     contextBudgetConfig = migration.config;
