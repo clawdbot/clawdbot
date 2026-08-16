@@ -7,6 +7,8 @@ import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
 import type { SkillCommandSpec } from "../types.js";
 
 const MAX_EXPLICIT_SKILL_REFERENCES = 8;
+const MAX_EXPLICIT_SKILL_REFERENCE_CHARS = 512;
+const MAX_EXPLICIT_SKILL_INSTRUCTION_CHARS = 1_000;
 
 /** Lists slash command names reserved by built-in chat commands and callers. */
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
@@ -207,20 +209,37 @@ export function expandExplicitSkillReferences(params: {
   if (available.length === 0) {
     return { body: params.text, skills: [] };
   }
+  const referenceLines = available.map((skill) =>
+    skill.modelVisible === false && skill.skillFile
+      ? `- ${skill.skillName} (SKILL.md: ${skill.skillFile})`
+      : `- ${skill.skillName}`,
+  );
+  // The reference-count cap alone does not bound operator-provided names or paths.
+  // Keep both each item and the complete injected prefix within fixed prompt budgets.
+  if (referenceLines.some((line) => line.length > MAX_EXPLICIT_SKILL_REFERENCE_CHARS)) {
+    return {
+      body: params.text,
+      error: `Skill reference metadata is too long. Keep each rendered reference at ${MAX_EXPLICIT_SKILL_REFERENCE_CHARS} characters or less.`,
+      skills: [],
+    };
+  }
+  const instructionPrefix = [
+    "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+    ...referenceLines,
+    "",
+    "User request:",
+    "",
+  ].join("\n");
+  if (instructionPrefix.length > MAX_EXPLICIT_SKILL_INSTRUCTION_CHARS) {
+    return {
+      body: params.text,
+      error:
+        "Combined skill reference metadata is too long. Use fewer or shorter skill references.",
+      skills: [],
+    };
+  }
   return {
-    body: [
-      "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
-      // Hidden skills are absent from the available-skills prompt, so explicit invocation
-      // carries the SKILL.md path the model needs to load them.
-      ...available.map((skill) =>
-        skill.modelVisible === false && skill.skillFile
-          ? `- ${skill.skillName} (SKILL.md: ${skill.skillFile})`
-          : `- ${skill.skillName}`,
-      ),
-      "",
-      "User request:",
-      params.text,
-    ].join("\n"),
+    body: `${instructionPrefix}${params.text}`,
     skills: available,
   };
 }

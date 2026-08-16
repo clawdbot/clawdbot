@@ -321,6 +321,44 @@ describe("expandExplicitSkillReferences", () => {
       }),
     ).toEqual({ body: text, skills: [] });
   });
+
+  it("rejects a rendered skill reference that exceeds its prompt budget", () => {
+    const text = "/demo_skill";
+    expect(
+      expandExplicitSkillReferences({
+        text,
+        skillCommands: [
+          {
+            name: "demo_skill",
+            skillName: "demo-skill",
+            description: "Demo",
+            modelVisible: false,
+            skillFile: `/tmp/${"nested/".repeat(80)}SKILL.md`,
+          },
+        ],
+      }),
+    ).toEqual({
+      body: text,
+      error:
+        "Skill reference metadata is too long. Keep each rendered reference at 512 characters or less.",
+      skills: [],
+    });
+  });
+
+  it("rejects a combined reference prefix that exceeds its prompt budget", () => {
+    const skillCommands = Array.from({ length: 8 }, (_, index) => ({
+      name: `skill_${index + 1}`,
+      skillName: `skill-${index + 1}-${"x".repeat(110)}`,
+      description: `Skill ${index + 1}`,
+    }));
+    const text = skillCommands.map((skill) => `$${skill.name}`).join(" ");
+    expect(expandExplicitSkillReferences({ text, skillCommands })).toEqual({
+      body: text,
+      error:
+        "Combined skill reference metadata is too long. Use fewer or shorter skill references.",
+      skills: [],
+    });
+  });
 });
 
 describe("listSkillCommandsForAgents", () => {
