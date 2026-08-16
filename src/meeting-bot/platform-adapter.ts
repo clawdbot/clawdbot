@@ -126,41 +126,39 @@ const meetingTranscriptLineSchema = z
     text,
   }));
 
-const meetingBrowserStatusSchema = z
-  .looseObject({
-    inCall: optionalBrowserBoolean,
-    micMuted: optionalBrowserBoolean,
-    cameraOff: optionalBrowserBoolean,
-    lobbyWaiting: optionalBrowserBoolean,
-    captionCaptureRequested: optionalBrowserBoolean,
-    captioning: optionalBrowserBoolean,
-    captionsEnabledAttempted: optionalBrowserBoolean,
-    transcriptLines: optionalBrowserNumber,
-    lastCaptionAt: optionalBrowserString,
-    lastCaptionSpeaker: optionalBrowserString,
-    lastCaptionText: optionalBrowserString,
-    recentTranscript: z
-      .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
-      .transform((lines) => lines.filter((line) => line !== null))
-      .optional()
-      .catch(undefined),
-    audioInputRouted: optionalBrowserBoolean,
-    audioInputDeviceLabel: optionalBrowserString,
-    audioInputRouteError: optionalBrowserString,
-    audioOutputRouted: optionalBrowserBoolean,
-    audioOutputDeviceLabel: optionalBrowserString,
-    audioOutputRouteError: optionalBrowserString,
-    audioOutputRouteRetryable: optionalBrowserBoolean,
-    manualAction: z.object({ reason: z.string(), message: z.string() }).optional().catch(undefined),
-    url: optionalBrowserString,
-    title: optionalBrowserString,
-    notes: z
-      .array(z.union([z.string(), invalidBrowserArrayItemSchema]))
-      .transform((notes) => notes.filter((note) => note !== null))
-      .optional()
-      .catch(undefined),
-  })
-  .catch({});
+const meetingBrowserStatusSchema = z.looseObject({
+  inCall: optionalBrowserBoolean,
+  micMuted: optionalBrowserBoolean,
+  cameraOff: optionalBrowserBoolean,
+  lobbyWaiting: optionalBrowserBoolean,
+  captionCaptureRequested: optionalBrowserBoolean,
+  captioning: optionalBrowserBoolean,
+  captionsEnabledAttempted: optionalBrowserBoolean,
+  transcriptLines: optionalBrowserNumber,
+  lastCaptionAt: optionalBrowserString,
+  lastCaptionSpeaker: optionalBrowserString,
+  lastCaptionText: optionalBrowserString,
+  recentTranscript: z
+    .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
+    .transform((lines) => lines.filter((line) => line !== null))
+    .optional()
+    .catch(undefined),
+  audioInputRouted: optionalBrowserBoolean,
+  audioInputDeviceLabel: optionalBrowserString,
+  audioInputRouteError: optionalBrowserString,
+  audioOutputRouted: optionalBrowserBoolean,
+  audioOutputDeviceLabel: optionalBrowserString,
+  audioOutputRouteError: optionalBrowserString,
+  audioOutputRouteRetryable: optionalBrowserBoolean,
+  manualAction: z.object({ reason: z.string(), message: z.string() }).optional().catch(undefined),
+  url: optionalBrowserString,
+  title: optionalBrowserString,
+  notes: z
+    .array(z.union([z.string(), invalidBrowserArrayItemSchema]))
+    .transform((notes) => notes.filter((note) => note !== null))
+    .optional()
+    .catch(undefined),
+});
 
 function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
   result: unknown,
