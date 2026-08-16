@@ -835,20 +835,22 @@ module.exports = {
     },
   );
 
-  it.each([
-    { flow: "setup", exitCode: 0, status: "done" },
-    { flow: "setup", exitCode: 23, status: "error" },
-    { flow: "channels", exitCode: 0, status: "done" },
-    { flow: "channels", exitCode: 23, status: "error" },
-  ] as const)(
-    "keeps the authenticated Gateway alive after a $flow wizard exits $exitCode",
+  it(
+    "keeps the authenticated Gateway alive after all hosted wizard exits",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
-    async ({ flow, exitCode, status }) => {
+    async () => {
+      const testCases = [
+        { flow: "setup", exitCode: 0, status: "done" },
+        { flow: "setup", exitCode: 23, status: "error" },
+        { flow: "channels", exitCode: 0, status: "done" },
+        { flow: "channels", exitCode: 23, status: "error" },
+      ] as const;
       const { envSnapshot, tempHome } = await setupGatewayTempHome({
-        prefix: `openclaw-wizard-${flow}-exit-home-`,
+        prefix: "openclaw-wizard-contained-exit-home-",
         minimalGateway: true,
       });
       const wizardToken = nextGatewayId("wiz-contained-exit");
+      let exitCode = 0;
       const port = await getGatewayE2ePortBlock();
       const server = await startGatewayServer(port, {
         bind: "loopback",
@@ -875,23 +877,27 @@ module.exports = {
       });
 
       try {
-        const start = await client.request<WizardStartResult>(
-          "wizard.start",
-          flow === "channels" ? { flow } : { mode: "local" },
-        );
-        expect(start).toMatchObject({ done: false, status: "running" });
-        expect(start.step?.id).toBeTruthy();
+        for (const testCase of testCases) {
+          exitCode = testCase.exitCode;
+          const label = `${testCase.flow} wizard exit ${exitCode}`;
+          const start = await client.request<WizardStartResult>(
+            "wizard.start",
+            testCase.flow === "channels" ? { flow: testCase.flow } : { mode: "local" },
+          );
+          expect(start, label).toMatchObject({ done: false, status: "running" });
+          expect(start.step?.id, label).toBeTruthy();
 
-        const result = await client.request<WizardNextResult>("wizard.next", {
-          sessionId: start.sessionId,
-          answer: { stepId: start.step?.id, value: null },
-        });
-        expect(result).toMatchObject({ done: true, status });
-        if (exitCode !== 0) {
-          expect(result.error).toContain(String(exitCode));
+          const result = await client.request<WizardNextResult>("wizard.next", {
+            sessionId: start.sessionId,
+            answer: { stepId: start.step?.id, value: null },
+          });
+          expect(result, label).toMatchObject({ done: true, status: testCase.status });
+          if (exitCode !== 0) {
+            expect(result.error, label).toContain(String(exitCode));
+          }
+          expect(processExit, label).not.toHaveBeenCalled();
+          await expect(client.request("health", {}), label).resolves.toBeDefined();
         }
-        expect(processExit).not.toHaveBeenCalled();
-        await expect(client.request("health", {})).resolves.toBeDefined();
       } finally {
         processExit.mockRestore();
         await disconnectGatewayClient(client);
