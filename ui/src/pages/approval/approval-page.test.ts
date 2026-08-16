@@ -41,7 +41,7 @@ function pendingApproval(
       commandPreview: "printf …",
       warningText: null,
       host: "gateway",
-      nodeId: null,
+      nodeId: "runner-1",
       agentId: "main",
       allowedDecisions: ["allow-once", "deny"],
     },
@@ -69,6 +69,24 @@ function expiredApproval(): ExpiredApprovalSnapshot {
     reason: "timeout",
     resolvedAtMs: 2_000,
   } as ExpiredApprovalSnapshot;
+}
+
+function pluginApproval(severity = "warning"): PendingApprovalSnapshot {
+  return pendingApproval({
+    id: "plugin:approval-1",
+    urlPath: "/approve/plugin%3Aapproval-1",
+    presentation: {
+      kind: "plugin",
+      title: "Claude native tool: Bash",
+      description: '{"command":"printf …"}',
+      detail: '{"command":"printf \\"line one\\nline two\\""}',
+      severity,
+      pluginId: "claude-cli",
+      toolName: "Bash",
+      agentId: "main",
+      allowedDecisions: ["allow-once", "deny"],
+    },
+  });
 }
 
 function createGateway(
@@ -405,6 +423,13 @@ describe("ApprovalPage", () => {
       "Waiting for your decision",
     );
     expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");
+    expect(page.querySelector(".approval-page__card--severity-warning")).not.toBeNull();
+    expect(page.querySelector('[data-approval-chip="agent"]')?.textContent).toBe("main");
+    expect(page.querySelector('[data-approval-chip="plugin"]')).toBeNull();
+    expect(page.querySelector('[data-approval-chip="tool"]')).toBeNull();
+    expect(
+      [...page.querySelectorAll(".approval-page__meta-row dt")].map((label) => label.textContent),
+    ).toEqual(["Host", "Node"]);
 
     (page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).click();
     await settle(page);
@@ -419,21 +444,7 @@ describe("ApprovalPage", () => {
   });
 
   it("renders reviewer-only plugin detail in a preformatted block", async () => {
-    const approval = pendingApproval({
-      id: "plugin:approval-1",
-      urlPath: "/approve/plugin%3Aapproval-1",
-      presentation: {
-        kind: "plugin",
-        title: "Claude native tool: Bash",
-        description: '{"command":"printf …"}',
-        detail: '{"command":"printf \\\"line one\\nline two\\\""}',
-        severity: "warning",
-        pluginId: "claude-cli",
-        toolName: "Bash",
-        agentId: "main",
-        allowedDecisions: ["allow-once", "deny"],
-      },
-    });
+    const approval = pluginApproval();
     const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
     const { page } = createPage({
       client: { request } as unknown as GatewayBrowserClient,
@@ -445,6 +456,30 @@ describe("ApprovalPage", () => {
     expect(page.querySelector("pre.approval-page__preview.mono")?.textContent).toBe(
       approval.presentation.kind === "plugin" ? approval.presentation.detail : undefined,
     );
+    expect(page.querySelector('[data-approval-chip="plugin"]')?.textContent).toBe("claude-cli");
+    expect(page.querySelector('[data-approval-chip="tool"]')?.textContent).toBe("Bash");
+    expect(page.querySelector('[data-approval-chip="agent"]')?.textContent).toBe("main");
+    expect(page.querySelectorAll(".approval-page__meta-row")).toHaveLength(0);
+    expect(page.textContent).not.toContain("Severity:");
+    expect(page.textContent).not.toContain("Plugin:");
+    expect(page.textContent).not.toContain("Agent:");
+  });
+
+  it.each([
+    ["info", "info"],
+    ["warning", "warning"],
+    ["critical", "danger"],
+  ])("maps plugin severity %s to the %s page accent", async (severity, expected) => {
+    const approval = pluginApproval(severity);
+    const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      id: approval.id,
+    });
+
+    await settle(page);
+
+    expect(page.querySelector(`.approval-page__card--severity-${expected}`)).not.toBeNull();
   });
 
   it("keeps the selected decision named while a resolution is in flight", async () => {

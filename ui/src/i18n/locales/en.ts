@@ -1764,14 +1764,11 @@ export const en: TranslationMap = {
     details: "Details",
     labels: {
       host: "Host",
-      agent: "Agent",
       session: "Session",
       cwd: "CWD",
       resolved: "Resolved",
       security: "Security",
       ask: "Ask",
-      severity: "Severity",
-      plugin: "Plugin",
     },
   },
   approvalPage: {

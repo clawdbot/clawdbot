@@ -37,8 +37,7 @@ function isUnavailableApprovalError(error: unknown): boolean {
   const reason = isRecord(error.details) ? error.details.reason : undefined;
   return (
     reason === "APPROVAL_NOT_FOUND" ||
-    error.gatewayCode === "APPROVAL_NOT_FOUND" ||
-    error.gatewayCode === "INVALID_REQUEST"
+    ["APPROVAL_NOT_FOUND", "INVALID_REQUEST"].includes(error.gatewayCode ?? "")
   );
 }
 
@@ -50,28 +49,25 @@ function formatApprovalTime(timestampMs: number): string {
 }
 
 function decisionLabel(decision: ApprovalDecision): string {
-  switch (decision) {
-    case "allow-once":
-      return t("execApproval.allowOnce");
-    case "allow-always":
-      return t("execApproval.alwaysAllow");
-    case "deny":
-      return t("execApproval.deny");
-  }
-  const unreachable: never = decision;
-  return unreachable;
+  return t(
+    decision === "allow-once"
+      ? "execApproval.allowOnce"
+      : decision === "allow-always"
+        ? "execApproval.alwaysAllow"
+        : "execApproval.deny",
+  );
 }
 
 function appliedDecisionMatches(
   result: ApprovalResolveResult,
   decision: ApprovalDecision,
 ): boolean {
-  if (!result.applied) {
-    return true;
-  }
-  return decision === "deny"
-    ? result.approval.status === "denied"
-    : result.approval.status === "allowed" && result.approval.decision === decision;
+  return (
+    !result.applied ||
+    (decision === "deny"
+      ? result.approval.status === "denied"
+      : result.approval.status === "allowed" && result.approval.decision === decision)
+  );
 }
 
 function renderMetaRow(label: string, value?: string | null) {
@@ -80,6 +76,13 @@ function renderMetaRow(label: string, value?: string | null) {
         <dt>${label}</dt>
         <dd title=${value}><bdi dir="ltr">${value}</bdi></dd>
       </div>`
+    : nothing;
+}
+
+function renderApprovalChip(kind: "plugin" | "tool" | "agent", value?: string | null) {
+  const text = value?.trim();
+  return text
+    ? html`<span class="approval-page__chip mono" data-approval-chip=${kind}>${text}</span>`
     : nothing;
 }
 
@@ -100,7 +103,6 @@ function renderPresentation(presentation: ApprovalPresentation) {
       <dl class="approval-page__meta">
         ${renderMetaRow(t("execApproval.labels.host"), presentation.host)}
         ${renderMetaRow(t("approvalPage.nodeLabel"), presentation.nodeId)}
-        ${renderMetaRow(t("execApproval.labels.agent"), presentation.agentId)}
       </dl>
     `;
   }
@@ -111,19 +113,6 @@ function renderPresentation(presentation: ApprovalPresentation) {
     ${presentation.kind === "plugin" && presentation.detail
       ? html`<pre class="approval-page__preview mono" dir="ltr">${presentation.detail}</pre>`
       : nothing}
-    <dl class="approval-page__meta">
-      ${
-        // severity/pluginId/toolName exist only on the plugin presentation.
-        // exec is rendered in its own branch above and carries no toolName
-        // (ExecApprovalPresentationSchema is closed); system-agent has none.
-        presentation.kind === "plugin"
-          ? html`${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
-            ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
-            ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}`
-          : nothing
-      }
-      ${renderMetaRow(t("execApproval.labels.agent"), presentation.agentId)}
-    </dl>
   `;
 }
 function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
@@ -149,8 +138,7 @@ function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): st
     case "pending":
       return t("approvalPage.pending");
   }
-  const unreachable: never = status;
-  return unreachable;
+  return status satisfies never;
 }
 
 function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
@@ -172,8 +160,7 @@ function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigi
     case "pending":
       return t("approvalPage.pendingDescription");
   }
-  const unreachable: never = status;
-  return unreachable;
+  return status satisfies never;
 }
 
 export class ApprovalPage extends OpenClawLightDomElement {
@@ -627,6 +614,13 @@ export class ApprovalPage extends OpenClawLightDomElement {
       </div>
       <div class="approval-page__heading">
         <h1 id="approval-page-title" tabindex=${pending ? nothing : -1}>${title}</h1>
+        <div class="approval-page__chips">
+          ${presentation.kind === "plugin"
+            ? html`${renderApprovalChip("plugin", presentation.pluginId)}
+              ${renderApprovalChip("tool", presentation.toolName)}`
+            : nothing}
+          ${renderApprovalChip("agent", presentation.agentId)}
+        </div>
         <p>${statusDescription}</p>
       </div>
       ${renderPresentation(presentation)}
@@ -685,11 +679,20 @@ export class ApprovalPage extends OpenClawLightDomElement {
         : disconnected
           ? "connection-error"
           : (this.approval?.status ?? "loading");
+    const active = this.approval?.presentation;
+    const rawSeverity = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
+    // Keep this mapping aligned with the sibling exec-approval-card.ts surface.
+    const severity =
+      active?.kind === "exec" || ["warning", "warn"].includes(rawSeverity ?? "")
+        ? "warning"
+        : ["danger", "critical", "error"].includes(rawSeverity ?? "")
+          ? "danger"
+          : "info";
     return html`
       <main class="approval-page" data-state=${documentState}>
         <div class="approval-page__backdrop" aria-hidden="true"></div>
         <section
-          class="approval-page__card"
+          class="approval-page__card approval-page__card--severity-${severity}"
           aria-labelledby="approval-page-title"
           aria-busy=${this.loading || this.resolving ? "true" : "false"}
         >
