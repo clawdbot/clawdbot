@@ -1455,7 +1455,7 @@ extensions/workboard/src/store-core.ts	5
 extensions/workboard/src/store-normalizers.ts	33
 extensions/workboard/src/store-workflow.ts	2
 extensions/workboard/src/store.ts	5
-extensions/workboard/src/tools.ts	25
+extensions/workboard/src/tools.ts	11
 extensions/workboard/src/workspace-access.ts	1
 extensions/xai/code-execution.ts	2
 extensions/xai/image-generation-provider.ts	1
