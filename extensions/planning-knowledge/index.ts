@@ -1,9 +1,11 @@
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import {
   createPlanningKnowledgeCaptureTool,
+  createPlanningKnowledgeMaintenanceTool,
   createPlanningKnowledgeSearchTool,
   planningKnowledgeConfigSchema,
   planningKnowledgeCaptureParameters,
+  planningKnowledgeMaintenanceParameters,
   planningKnowledgeSearchParameters,
   resolvePlanningKnowledgeConfig,
 } from "./src/planning-knowledge-tool.js";
@@ -43,6 +45,23 @@ export default defineToolPlugin({
         }
         const resolved = resolvePlanningKnowledgeConfig(config, api.resolvePath);
         return createPlanningKnowledgeCaptureTool(resolved ?? undefined);
+      },
+    }),
+    tool({
+      name: "planning_knowledge_maintenance",
+      label: "Planning Knowledge Maintenance",
+      description:
+        "Run bounded read-only Planning Knowledge validation, health, quality review and OneLibrary audit. Canonical mutation, derived repair, candidate acceptance, migration and restore are not available through this tool.",
+      parameters: planningKnowledgeMaintenanceParameters,
+      optional: true,
+      factory: ({ api, config, toolContext }) => {
+        if (toolContext.senderIsOwner === false) {
+          return null;
+        }
+        const resolved = resolvePlanningKnowledgeConfig(config, api.resolvePath);
+        return resolved?.maintenanceScriptPath
+          ? createPlanningKnowledgeMaintenanceTool(resolved)
+          : null;
       },
     }),
   ],

@@ -6,9 +6,11 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   createPlanningKnowledgeCaptureTool,
+  createPlanningKnowledgeMaintenanceTool,
   createPlanningKnowledgeSearchTool,
   planningKnowledgeCaptureParameters,
   planningKnowledgeConfigSchema,
+  planningKnowledgeMaintenanceParameters,
   resolvePlanningKnowledgeConfig,
 } from "./planning-knowledge-tool.js";
 
@@ -29,6 +31,11 @@ const config = {
 const writerConfig = {
   ...config,
   writerScriptPath: "/opt/Goal_Agent/tools/planning/knowledge_notes.py",
+};
+
+const maintenanceConfig = {
+  ...config,
+  maintenanceScriptPath: "/opt/Goal_Agent/tools/planning/knowledge_maintenance.py",
 };
 
 const validHit = {
@@ -78,6 +85,7 @@ describe("planning-knowledge config", () => {
   it("declares a strict configuration schema", () => {
     expect(planningKnowledgeConfigSchema).toMatchObject({ additionalProperties: false });
     expect(planningKnowledgeCaptureParameters).toMatchObject({ additionalProperties: false });
+    expect(planningKnowledgeMaintenanceParameters).toMatchObject({ additionalProperties: false });
   });
 
   it("resolves absolute external paths without the plugin-local path resolver", () => {
@@ -95,6 +103,13 @@ describe("planning-knowledge config", () => {
   it("accepts an explicit Planning-owned writer path", () => {
     const resolved = resolvePlanningKnowledgeConfig(writerConfig, () => undefined);
     expect(resolved).toMatchObject({ writerScriptPath: writerConfig.writerScriptPath });
+  });
+
+  it("accepts an explicit read-only maintenance path", () => {
+    const resolved = resolvePlanningKnowledgeConfig(maintenanceConfig, () => undefined);
+    expect(resolved).toMatchObject({
+      maintenanceScriptPath: maintenanceConfig.maintenanceScriptPath,
+    });
   });
 
   it("fails closed when a relative path is outside the plugin resolver boundary", () => {
@@ -430,5 +445,74 @@ describe("planning-knowledge capture in PLN-500C", () => {
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("planning-knowledge bounded maintenance", () => {
+  it("runs only the fixed Level-A read-only command and returns its portable contract", async () => {
+    const runner = runnerReturning({
+      schema: "planning_knowledge_maintenance",
+      schema_version: 1,
+      read_only: true,
+      result: "completed",
+      writes: { canonical_knowledge: 0, derived_index: 0 },
+    });
+    const tool = createPlanningKnowledgeMaintenanceTool(maintenanceConfig, runner);
+
+    const result = await tool.execute("call-1", { trigger: "scheduled" });
+
+    expect(result.details).toMatchObject({
+      schema: "planning_knowledge_maintenance",
+      schema_version: 1,
+      read_only: true,
+      result: "completed",
+    });
+    const request = vi.mocked(runner).mock.calls[0]?.[0];
+    expect(request?.args).toEqual([
+      maintenanceConfig.maintenanceScriptPath,
+      "run",
+      "--root",
+      "/tmp/goal-agent",
+      "--onelibrary-script",
+      config.scriptPath,
+      "--index",
+      config.indexPath,
+      "--python",
+      config.pythonExecutable,
+      "--trigger",
+      "scheduled",
+      "--runtime-tool-visible",
+    ]);
+    expect(request?.args).not.toContain("--repair");
+  });
+
+  it("fails closed when the maintenance capability is not authorized", async () => {
+    const tool = createPlanningKnowledgeMaintenanceTool(maintenanceConfig, runnerReturning({}), {
+      authorized: false,
+    });
+    await expect(tool.execute("call-1", {})).rejects.toThrow(/access denied/);
+  });
+
+  it("rejects a non-read-only or path-bearing maintenance result", async () => {
+    const writable = createPlanningKnowledgeMaintenanceTool(
+      maintenanceConfig,
+      runnerReturning({
+        schema: "planning_knowledge_maintenance",
+        schema_version: 1,
+        read_only: false,
+      }),
+    );
+    await expect(writable.execute("call-1", {})).rejects.toThrow(/invalid contract/);
+
+    const pathBearing = createPlanningKnowledgeMaintenanceTool(
+      maintenanceConfig,
+      runnerReturning({
+        schema: "planning_knowledge_maintenance",
+        schema_version: 1,
+        read_only: true,
+        output: "/Users/private/secret",
+      }),
+    );
+    await expect(pathBearing.execute("call-1", {})).rejects.toThrow(/local path/);
   });
 });
