@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { detectPackageManager } from "./detect-package-manager.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { tryReadJson, writeJson } from "./json-files.js";
@@ -322,21 +323,25 @@ export async function installPackageDir<
       await sanitizeManifestForNpmInstall(stageDir);
       const hiddenProjectNpmConfig = await hideProjectNpmConfigForInstall(stageDir);
       params.logger?.info?.(params.depsLogMessage);
+
+      // Detect if the staged directory requires pnpm (workspace:* protocol or pnpm-lock.yaml)
+      const detectedPm = await detectPackageManager(stageDir);
+      const usePnpm = detectedPm === "pnpm";
+      const installCommand = usePnpm ? "pnpm" : "npm";
+      const installArgs = usePnpm
+        ? ["install", "--prod", "--ignore-scripts"]
+        : createSafeNpmInstallArgs({ omitDev: true, loglevel: "error" });
+      const installEnv = usePnpm
+        ? { ...process.env, CI: "true" }
+        : createSafeNpmInstallEnv(process.env, { npmConfigCwd: stageDir });
+
       const npmRes = await (async () => {
         try {
-          return await runCommandWithTimeout(
-            // Plugins install into isolated directories, so omitting peer deps can strip
-            // runtime requirements that npm would otherwise materialize for the package.
-            // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
-            // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
-            // stays quiet on success while preserving the actionable npm failure text.
-            ["npm", ...createSafeNpmInstallArgs({ omitDev: true, loglevel: "error" })],
-            {
-              timeoutMs: Math.max(params.timeoutMs, 300_000),
-              cwd: stageDir,
-              env: createSafeNpmInstallEnv(process.env, { npmConfigCwd: stageDir }),
-            },
-          );
+          return await runCommandWithTimeout([installCommand, ...installArgs], {
+            timeoutMs: Math.max(params.timeoutMs, 300_000),
+            cwd: stageDir,
+            env: installEnv,
+          });
         } finally {
           await restoreProjectNpmConfigAfterInstall(hiddenProjectNpmConfig);
         }
