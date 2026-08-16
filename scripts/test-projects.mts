@@ -6,10 +6,6 @@ import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import { formatMs } from "./lib/check-timing-summary.mts";
 import {
-  acquireLocalHeavyCheckLockSync,
-  withLocalHeavyCheckLockHeld,
-} from "./lib/local-heavy-check-runtime.mts";
-import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
   resolveLocalVitestEnv,
@@ -42,7 +38,6 @@ import {
   resolveParallelFullSuiteConcurrency,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTargetArgs,
-  shouldAcquireLocalHeavyCheckLock,
   shouldRetryVitestNoOutputTimeout,
   type FailedVitestShard,
   type VitestRunSpec as BaseVitestRunSpec,
@@ -58,19 +53,6 @@ type VitestCommandOutcome = {
 };
 
 type ShardTiming = NonNullable<ReturnType<typeof createShardTimingSample>>;
-
-// Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
-// cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
-let releaseLock = () => {};
-let lockReleased = false;
-
-const releaseLockOnce = () => {
-  if (lockReleased) {
-    return;
-  }
-  lockReleased = true;
-  releaseLock();
-};
 
 function isWrapperMetadataRequest(args: string[]) {
   for (const arg of args) {
@@ -193,7 +175,6 @@ async function runLoggedVitestSpec(spec: VitestRunSpec) {
   }
   if (result.signal) {
     console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
-    releaseLockOnce();
     process.kill(process.pid, result.signal);
     return null;
   }
@@ -328,21 +309,6 @@ async function main() {
     return;
   }
 
-  const acquiresLocalHeavyCheckLock = shouldAcquireLocalHeavyCheckLock(runSpecs, baseEnv);
-  releaseLock = acquiresLocalHeavyCheckLock
-    ? acquireLocalHeavyCheckLockSync({
-        cwd: process.cwd(),
-        env: baseEnv,
-        toolName: "test",
-      })
-    : () => {};
-  if (acquiresLocalHeavyCheckLock || baseEnv.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD === "1") {
-    runSpecs = runSpecs.map((spec) => ({
-      ...spec,
-      env: withLocalHeavyCheckLockHeld(spec.env),
-    }));
-  }
-
   const isFullSuiteRun =
     targetArgs.length === 0 &&
     changedTargetArgs === null &&
@@ -390,7 +356,6 @@ async function main() {
       for (const line of formatFailedShardDigest(failures)) {
         console.error(line);
       }
-      releaseLockOnce();
       if (parallelExitCode !== 0) {
         process.exitCode = parallelExitCode;
       }
@@ -412,7 +377,6 @@ async function main() {
       exitCode = exitCode || result.code;
       if (spec.continueOnFailure !== true) {
         printTestSummary("failed", timings.length, performance.now() - suiteStartedAt);
-        releaseLockOnce();
         process.exitCode = result.code;
         return;
       }
@@ -425,7 +389,6 @@ async function main() {
     performance.now() - suiteStartedAt,
   );
 
-  releaseLockOnce();
   if (exitCode !== 0) {
     process.exitCode = exitCode;
   }
@@ -444,7 +407,6 @@ function printTestSummary(
 }
 
 main().catch((error: unknown) => {
-  releaseLockOnce();
   console.error(error);
   process.exitCode = 1;
 });
