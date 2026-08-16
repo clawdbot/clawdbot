@@ -310,7 +310,9 @@ export async function applyShortTermPromotions(
       if (candidate.signalCount < minRecallCount) {
         return false;
       }
-      if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
+      // Recheck actual query diversity at the write boundary; recall-day
+      // spacing is a separate ranking signal and cannot satisfy this gate.
+      if (candidate.uniqueQueries < minUniqueQueries) {
         return false;
       }
       if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {

@@ -225,6 +225,9 @@ export async function repairShortTermPromotionArtifacts(params: {
                 Math.floor((entry as { groundedCount?: number }).groundedCount ?? 0),
               ),
               queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
+              ...(entry.userQueryHashes
+                ? { userQueryHashes: entry.userQueryHashes.slice(-MAX_QUERY_HASHES) }
+                : {}),
               recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
               conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
             } satisfies ShortTermRecallEntry,

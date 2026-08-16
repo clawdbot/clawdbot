@@ -356,6 +356,12 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       const queryHashes = Array.isArray(entry.queryHashes)
         ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
         : [];
+      // queryHashes historically mixed scheduler and interactive inputs, so it
+      // cannot be migrated safely. Missing provenance intentionally normalizes
+      // to no user-query evidence until fresh interactive recalls arrive.
+      const userQueryHashes = Array.isArray(entry.userQueryHashes)
+        ? normalizeDistinctStrings(entry.userQueryHashes, MAX_QUERY_HASHES)
+        : undefined;
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
             .map((recallDay) => (typeof recallDay === "string" ? normalizeIsoDay(recallDay) : null))
@@ -423,6 +429,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         firstRecalledAt,
         lastRecalledAt,
         queryHashes,
+        ...(userQueryHashes ? { userQueryHashes } : {}),
         recallDays: recallDays.slice(-MAX_RECALL_DAYS),
         conceptTags,
         ...(provenance ? { provenance } : {}),

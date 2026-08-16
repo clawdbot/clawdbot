@@ -778,7 +778,53 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("merges a repeated claim across three day files and clears the default gates", async () => {
+  it("does not let recall days bypass the apply query-diversity gate", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Move backups to S3 Glacier."]);
+      const recallDays = ["2026-04-01", "2026-04-02", "2026-04-03"];
+      for (const day of recallDays) {
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "glacier retention",
+          dayBucket: day,
+          nowMs: Date.parse(`${day}T10:00:00.000Z`),
+          dedupeByQueryPerDay: true,
+          results: [
+            {
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.96,
+              snippet: "Move backups to S3 Glacier.",
+              source: "memory",
+            },
+          ],
+        });
+      }
+
+      const candidates = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]).toMatchObject({ uniqueQueries: 1, recallDays });
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 2,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+      expect(applied.applied).toBe(0);
+    });
+  });
+
+  it("merges a repeated claim across three day files without faking user-query diversity", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const queryDays = ["2026-04-01", "2026-04-02", "2026-04-03"];
       let candidateKey;
@@ -842,6 +888,8 @@ describe("short-term promotion", () => {
 
       const ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
+        minScore: 0,
+        minUniqueQueries: 0,
         nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
       });
 
@@ -852,10 +900,17 @@ describe("short-term promotion", () => {
       expect(ranked[0]?.recallCount).toBe(0);
       expect(ranked[0]?.dailyCount).toBe(3);
       expect(ranked[0]?.signalCount).toBe(3);
-      expect(ranked[0]?.uniqueQueries).toBe(3);
+      expect(ranked[0]?.uniqueQueries).toBe(0);
       expect(ranked[0]?.recallDays).toEqual(queryDays);
-      expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
+      expect(ranked[0]?.score).toBeLessThan(0.75);
       expect(ranked[0] && isPromotionOriginBlocked(ranked[0])).toBe(false);
+
+      await expect(
+        rankShortTermPromotionCandidates({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+        }),
+      ).resolves.toHaveLength(0);
     });
   });
 
@@ -982,7 +1037,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("lets grounded durable evidence satisfy default deep thresholds", async () => {
+  it("does not let grounded backfill keys satisfy user-query diversity", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
         'Always use "Happy Together" calendar for flights and reservations.',
@@ -1029,17 +1084,28 @@ describe("short-term promotion", () => {
 
       const ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
+        minScore: 0,
+        minUniqueQueries: 0,
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
       });
 
       expect(ranked).toHaveLength(1);
       expect(ranked[0]?.groundedCount).toBe(3);
-      expect(ranked[0]?.uniqueQueries).toBe(3);
+      expect(ranked[0]?.uniqueQueries).toBe(0);
       expect(ranked[0]?.avgScore).toBeGreaterThan(0.85);
+
+      await expect(
+        rankShortTermPromotionCandidates({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        }),
+      ).resolves.toHaveLength(0);
 
       const applied = await applyShortTermPromotions({
         workspaceDir,
         candidates: ranked,
+        minScore: 0,
+        minUniqueQueries: 0,
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
       });
 
@@ -1111,6 +1177,74 @@ describe("short-term promotion", () => {
       expect(ranked[0]?.snippet).toContain("Live recall-backed rule");
       expect(ranked[0]?.groundedCount).toBe(2);
       expect(ranked[0]?.recallCount).toBe(1);
+    });
+  });
+
+  it("preserves qualified user queries across a grounded backfill rerun", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = "Keep encrypted router backups in S3 Glacier.";
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+      const groundedItem = {
+        path: "memory/2026-04-03.md",
+        startLine: 1,
+        endLine: 1,
+        snippet,
+        score: 0.9,
+        query: "__dreaming_grounded_backfill__:candidate",
+        signalCount: 1,
+        dayBucket: "2026-04-03",
+      };
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [groundedItem],
+        nowMs: Date.parse("2026-04-03T09:00:00.000Z"),
+      });
+      for (const query of ["router backups", "encrypted retention", "glacier storage"]) {
+        await recordShortTermRecalls({
+          workspaceDir,
+          query,
+          nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+          results: [
+            {
+              path: groundedItem.path,
+              startLine: groundedItem.startLine,
+              endLine: groundedItem.endLine,
+              snippet,
+              score: 0.92,
+              source: "memory",
+            },
+          ],
+        });
+      }
+
+      const before = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 1,
+      });
+      expect(before).toHaveLength(1);
+      expect(before[0]?.uniqueQueries).toBe(3);
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [groundedItem],
+        nowMs: Date.parse("2026-04-03T11:00:00.000Z"),
+      });
+
+      const after = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 1,
+      });
+      expect(after).toHaveLength(1);
+      expect(after[0]?.key).toBe(before[0]?.key);
+      expect(after[0]?.uniqueQueries).toBe(3);
+      expect(after[0]?.groundedCount).toBe(2);
     });
   });
 
@@ -1799,6 +1933,7 @@ describe("short-term promotion", () => {
             firstRecalledAt: "2026-04-03T00:00:00.000Z",
             lastRecalledAt: "2026-04-04T00:00:00.000Z",
             queryHashes: ["a", "b"],
+            userQueryHashes: ["a", "b"],
             recallDays: ["2026-04-03", "2026-04-04"],
             conceptTags: ["assistant"],
           },

@@ -45,6 +45,8 @@ export type ShortTermRecallEntry = {
   firstRecalledAt: string;
   lastRecalledAt: string;
   queryHashes: string[];
+  /** Hashes from interactive recall only. Legacy stores omit this and fail closed for diversity. */
+  userQueryHashes?: string[];
   recallDays: string[];
   conceptTags: string[];
   claimHash?: string;

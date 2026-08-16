@@ -1073,6 +1073,10 @@ function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): Shor
       duplicate.totalScore = Math.max(duplicate.totalScore, entry.totalScore);
       duplicate.maxScore = Math.max(duplicate.maxScore, entry.maxScore);
       duplicate.queryHashes = uniqueStrings([...duplicate.queryHashes, ...entry.queryHashes]);
+      duplicate.userQueryHashes = uniqueStrings([
+        ...(duplicate.userQueryHashes ?? []),
+        ...(entry.userQueryHashes ?? []),
+      ]);
       duplicate.recallDays = [
         ...new Set([...duplicate.recallDays, ...entry.recallDays]),
       ].toSorted();

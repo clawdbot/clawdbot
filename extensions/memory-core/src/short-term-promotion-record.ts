@@ -266,6 +266,10 @@ export async function recordShortTermRecalls(params: {
         const totalScore = Math.max(0, (existing?.totalScore ?? 0) + (dedupeSignal ? 0 : score));
         const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
         const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
+        const userQueryHashes =
+          signalType === "recall"
+            ? mergeQueryHashes(existing?.userQueryHashes ?? [], queryHash)
+            : (existing?.userQueryHashes ?? []);
         const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
         const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
         const provenance = mergeRecallProvenance(existing?.provenance, result.provenance, nowMs);
@@ -304,6 +308,7 @@ export async function recordShortTermRecalls(params: {
           firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
           lastRecalledAt,
           queryHashes,
+          userQueryHashes,
           recallDays,
           conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
           provenance,
@@ -473,6 +478,9 @@ export async function recordGroundedShortTermCandidates(params: {
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
         lastRecalledAt,
         queryHashes,
+        // Grounded backfill is synthetic and must not add qualified queries,
+        // but a rerun must preserve interactive evidence already on the key.
+        ...(existing?.userQueryHashes ? { userQueryHashes: existing.userQueryHashes } : {}),
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
         provenance,

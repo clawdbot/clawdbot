@@ -49,6 +49,7 @@ function createRecallEntry(params: {
     firstRecalledAt: "2026-04-01T10:00:00.000Z",
     lastRecalledAt: NOW_ISO,
     queryHashes: params.queryHashes,
+    userQueryHashes: params.queryHashes,
     recallDays: params.recallDays,
     conceptTags: params.conceptTags,
   };
@@ -189,6 +190,72 @@ describe("short-term promotion score calibration", () => {
       minRecallCount: DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
       minUniqueQueries: DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
     });
+  });
+
+  it("does not treat recall days as query diversity", async () => {
+    const workspaceDir = await createTempWorkspace("promotion-query-diversity-");
+    const repeatedQuery = createRecallEntry({
+      key: "repeated-query",
+      signalCount: 3,
+      avgScore: 1,
+      queryHashes: ["query-a"],
+      recallDays: RECALL_DAYS,
+      conceptTags: ["backup", "backups", "glacier", "s3"],
+    });
+    await shortTermTestState.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: NOW_ISO,
+      entries: { "repeated-query": repeatedQuery },
+    });
+
+    await expect(
+      rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 2,
+        nowMs: NOW_MS,
+      }),
+    ).resolves.toHaveLength(0);
+
+    const ranked = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 1,
+      nowMs: NOW_MS,
+    });
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]?.components.diversity).toBeCloseTo(0.2);
+    expect(ranked[0]?.components.consolidation).toBeGreaterThan(0.4);
+  });
+
+  it("fails closed for legacy opaque query hashes without user-query provenance", async () => {
+    const workspaceDir = await createTempWorkspace("promotion-legacy-query-provenance-");
+    const legacy = createRecallEntry({
+      key: "legacy-opaque-queries",
+      signalCount: 3,
+      avgScore: 1,
+      queryHashes: THREE_QUERY_HASHES,
+      recallDays: RECALL_DAYS,
+      conceptTags: ["backup", "glacier"],
+    });
+    delete legacy.userQueryHashes;
+    await shortTermTestState.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: NOW_ISO,
+      entries: { legacy },
+    });
+
+    await expect(
+      rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 1,
+        nowMs: NOW_MS,
+      }),
+    ).resolves.toHaveLength(0);
   });
 
   it("keeps the minimum score boundary inclusive", async () => {
