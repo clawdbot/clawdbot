@@ -9,7 +9,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -50,6 +50,9 @@ function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
 }
 
 function resolveDefaultAgentBoundAccountId(cfg: OpenClawConfig, channelId: string): string | null {
+  if (cfg.agents?.ownership === "explicit" && listAgentIds(cfg).length !== 1) {
+    return null;
+  }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   for (const binding of cfg.bindings ?? []) {
     const resolved = resolveBindingAccount({ binding, channelId });
