@@ -612,6 +612,12 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
       throw error;
     }
     if (error instanceof NodeWorkerTransferHttpError) {
+      if (error.reason === "cloudflare-access-requires-tls") {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: Cloudflare Access credentials require HTTPS",
+          { cause: error },
+        );
+      }
       if (error.reason === "tls-fingerprint-mismatch") {
         throw new NodeWorkerWorkspaceTransferError(
           "workspace-transfer-failed: gateway TLS fingerprint mismatch",

@@ -501,6 +501,11 @@ export class GatewayClient {
 
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
+    if (this.opts.cloudflareAccess && new URL(url).protocol !== "wss:") {
+      throw new GatewayWebSocketTransportConfigurationError(
+        "Cloudflare Access credentials require a wss:// Gateway URL",
+      );
+    }
     // Block plaintext before device-token lookup. Credentials may be loaded from
     // host storage later in sendConnect(), and chat payloads are sensitive too.
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({

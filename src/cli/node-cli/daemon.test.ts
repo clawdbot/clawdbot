@@ -225,6 +225,27 @@ describe("runNodeDaemonInstall", () => {
     );
   });
 
+  it("rejects Access credentials before installing a plaintext node service", async () => {
+    mocks.loadNodeHostConfig.mockResolvedValue({
+      gateway: {
+        host: "saved-gateway.local",
+        port: 18789,
+        tls: false,
+        cloudflareAccess: {
+          clientId: "$CF_ACCESS_CLIENT_ID",
+          clientSecret: "$CF_ACCESS_CLIENT_SECRET",
+        },
+      },
+    });
+
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Cloudflare Access credentials require --tls for the node Gateway connection",
+    );
+  });
+
   it.each([
     ["an invalid explicit port", { port: "abc" }, "Invalid --port"],
     ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node"'],

@@ -151,24 +151,23 @@ describe("node worker bundle installer", () => {
     ).resolves.toContain(fixture.input.build.bundleHash);
   });
 
-  it("sends the Cloudflare Access pair on the bundle transfer", async () => {
+  it("rejects the Cloudflare Access pair before a plaintext bundle transfer", async () => {
     const fixture = await bundleFixture();
     const served = await serve(fixture.archive, fixture.input.archive.token);
     const installer = new NodeWorkerBundleInstaller({ root });
 
-    await installer.ensure({
-      input: fixture.input,
-      gatewayUrl: served.gatewayUrl,
-      gatewayCloudflareAccess: {
-        clientId: "cf-bundle-id",
-        clientSecret: "cf-bundle-secret",
-      },
-    });
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        gatewayCloudflareAccess: {
+          clientId: "cf-bundle-id",
+          clientSecret: "cf-bundle-secret",
+        },
+      }),
+    ).rejects.toThrow("worker-bundle-install-failed: Cloudflare Access credentials require HTTPS");
 
-    expect(served.requests.mock.calls[0]?.[1]).toMatchObject({
-      "cf-access-client-id": "cf-bundle-id",
-      "cf-access-client-secret": "cf-bundle-secret",
-    });
+    expect(served.requests).not.toHaveBeenCalled();
   });
 
   it("reports installed only after full bundle validation", async () => {

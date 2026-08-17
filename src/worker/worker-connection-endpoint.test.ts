@@ -3,6 +3,7 @@ import type { CertMeta, WebSocket } from "ws";
 import {
   parseWorkerConnectionEndpoint,
   resolveWorkerConnectionTarget,
+  type WorkerConnectionEndpoint,
 } from "./worker-connection-endpoint.js";
 
 describe("worker connection endpoint", () => {
@@ -75,5 +76,21 @@ describe("worker connection endpoint", () => {
     expect(() =>
       resolveWorkerConnectionTarget(endpoint, { OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1" }),
     ).not.toThrow();
+  });
+
+  it("rejects Access credentials on plaintext worker endpoints", () => {
+    const endpoint = {
+      kind: "websocket" as const,
+      url: "ws://127.0.0.1/__openclaw__/worker",
+      cloudflareAccess: {
+        clientId: "cf-worker-plaintext-id",
+        clientSecret: "cf-worker-plaintext-secret",
+      },
+    };
+
+    expect(parseWorkerConnectionEndpoint(endpoint)).toBeUndefined();
+    expect(() => resolveWorkerConnectionTarget(endpoint as WorkerConnectionEndpoint)).toThrow(
+      "Cloudflare Access credentials require a wss:// worker endpoint",
+    );
   });
 });

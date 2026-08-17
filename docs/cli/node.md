@@ -120,7 +120,9 @@ For a Gateway behind Cloudflare Access, set `CF_ACCESS_CLIENT_ID` and
 run`, or `openclaw node install`. The node stores env SecretRefs under its
 canonical `gateway.cloudflareAccess.clientId` and `clientSecret` connection
 keys. Installed services keep the values in the managed service environment
-file, not in service arguments or inline supervisor definitions. See
+file, not in service arguments or inline supervisor definitions. Access
+credentials require HTTPS/WSS; plaintext HTTP/WS fails before SecretRef
+resolution while credential-free plaintext node routes remain unchanged. See
 [Gateway deployments that cannot host nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
 
 For a node connecting to a plaintext `ws://` Gateway, loopback, private IP

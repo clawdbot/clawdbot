@@ -10,6 +10,7 @@ import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 
 type NodeWorkerTransferHttpErrorReason =
   | "invalid-gateway-transport"
+  | "cloudflare-access-requires-tls"
   | "invalid-tls-fingerprint"
   | "tls-fingerprint-mismatch";
 
@@ -138,6 +139,12 @@ export async function openNodeWorkerTransferHttpRequest(
   params: NodeWorkerTransferHttpRequest,
 ): Promise<IncomingMessage> {
   const url = transferUrl(params.gatewayUrl, params.routePath);
+  if (params.cloudflareAccess && url.protocol !== "https:") {
+    throw new NodeWorkerTransferHttpError(
+      "cloudflare-access-requires-tls",
+      "Cloudflare Access credentials require HTTPS worker transfer",
+    );
+  }
   const transport = url.protocol === "https:" ? https : http;
   const request = transport.request(url, {
     method: params.method,

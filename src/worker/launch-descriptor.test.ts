@@ -85,6 +85,14 @@ describe("worker launch descriptor", () => {
       },
       {
         kind: "websocket",
+        url: "ws://127.0.0.1/__openclaw__/worker",
+        cloudflareAccess: {
+          clientId: "cf-worker-plaintext-id",
+          clientSecret: "cf-worker-plaintext-secret",
+        },
+      },
+      {
+        kind: "websocket",
         url: "wss://gateway.example/__openclaw__/worker",
         tlsFingerprint: "",
       },

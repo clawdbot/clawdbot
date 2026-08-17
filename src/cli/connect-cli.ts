@@ -143,6 +143,9 @@ async function runConnectCommand(target: string, opts: ConnectCommandOptions): P
         env: process.env,
       })
     : undefined;
+  if (initialCloudflareAccess && joinTarget?.protocol !== "https:") {
+    throw new Error("Cloudflare Access credentials require an HTTPS join URL.");
+  }
   const joinCredentials = await resolveNodeHostCloudflareAccess({
     value: initialCloudflareAccess,
     config: getRuntimeConfig(),

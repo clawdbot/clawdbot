@@ -1,8 +1,12 @@
+import { X509Certificate } from "node:crypto";
+import { createServer as createHttpsServer } from "node:https";
 import { afterEach, expect, test } from "vitest";
 import { WebSocketServer } from "ws";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { GatewayClient } from "./client.js";
 
 let server: WebSocketServer | undefined;
+let httpsServer: ReturnType<typeof createHttpsServer> | undefined;
 
 afterEach(async () => {
   if (!server) {
@@ -19,14 +23,27 @@ afterEach(async () => {
   });
   server = undefined;
   await closing;
+  if (httpsServer) {
+    const closingHttps = new Promise<void>((resolve, reject) => {
+      httpsServer?.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+    httpsServer = undefined;
+    await closingHttps;
+  }
 });
 
 test("sends the closed Cloudflare Access header pair through a rejecting edge", async () => {
   const clientId = ["cf", "gateway", "id"].join("-");
   const clientSecret = ["cf", "gateway", "secret"].join("-");
+  httpsServer = createHttpsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
   server = new WebSocketServer({
-    port: 0,
-    host: "127.0.0.1",
+    server: httpsServer,
     verifyClient: ({ req }, done) => {
       const accepted =
         req.headers["cf-access-client-id"] === clientId &&
@@ -35,10 +52,10 @@ test("sends the closed Cloudflare Access header pair through a rejecting edge", 
     },
   });
   await new Promise<void>((resolve, reject) => {
-    server?.once("error", reject);
-    server?.once("listening", resolve);
+    httpsServer?.once("error", reject);
+    httpsServer?.listen(0, "127.0.0.1", resolve);
   });
-  const address = server.address();
+  const address = httpsServer.address();
   if (!address || typeof address === "string") {
     throw new Error("test edge did not allocate a port");
   }
@@ -46,9 +63,10 @@ test("sends the closed Cloudflare Access header pair through a rejecting edge", 
     server?.once("connection", (_socket, request) => resolve(request.headers));
   });
   const client = new GatewayClient({
-    url: `ws://127.0.0.1:${address.port}`,
+    url: `wss://127.0.0.1:${address.port}`,
     connectChallengeTimeoutMs: 0,
     cloudflareAccess: { clientId, clientSecret },
+    tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
   });
   client.start();
 
@@ -57,4 +75,25 @@ test("sends the closed Cloudflare Access header pair through a rejecting edge", 
     "cf-access-client-secret": clientSecret,
   });
   await client.stopAndWait();
+});
+
+test("rejects the Access pair before a plaintext WebSocket dial", async () => {
+  let resolveConnectError: (error: Error) => void = () => {};
+  const connectError = new Promise<Error>((resolve) => {
+    resolveConnectError = resolve;
+  });
+  const client = new GatewayClient({
+    url: "ws://127.0.0.1:18789",
+    cloudflareAccess: {
+      clientId: "cf-plaintext-id",
+      clientSecret: "cf-plaintext-secret",
+    },
+    onConnectError: resolveConnectError,
+  });
+  client.start();
+
+  await expect(connectError).resolves.toMatchObject({
+    message: "Cloudflare Access credentials require a wss:// Gateway URL",
+  });
+  client.stop();
 });

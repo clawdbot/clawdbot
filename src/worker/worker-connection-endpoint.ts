@@ -81,7 +81,8 @@ function parseWebSocketEndpoint(
     url.search !== "" ||
     url.hash !== "" ||
     !url.pathname.endsWith(WORKER_PUBLIC_INGRESS_PATH) ||
-    (value.tlsFingerprint !== undefined && url.protocol !== "wss:")
+    (value.tlsFingerprint !== undefined && url.protocol !== "wss:") ||
+    (cloudflareAccess !== undefined && url.protocol !== "wss:")
   ) {
     return undefined;
   }
@@ -137,6 +138,11 @@ export function resolveWorkerConnectionTarget(
       options: {},
       validateSocket: () => null,
     };
+  }
+  if (endpoint.cloudflareAccess && new URL(endpoint.url).protocol !== "wss:") {
+    throw new WorkerConnectionEndpointError(
+      "Cloudflare Access credentials require a wss:// worker endpoint",
+    );
   }
   try {
     const transport = resolveGatewayWebSocketTransport({

@@ -313,7 +313,9 @@ export class NodeWorkerBundleInstaller {
           throw new NodeWorkerBundleInstallError(
             error.reason === "tls-fingerprint-mismatch"
               ? "worker-bundle-install-failed: gateway TLS fingerprint mismatch"
-              : "worker-bundle-install-failed: gateway transfer is unavailable",
+              : error.reason === "cloudflare-access-requires-tls"
+                ? "worker-bundle-install-failed: Cloudflare Access credentials require HTTPS"
+                : "worker-bundle-install-failed: gateway transfer is unavailable",
             { cause: error },
           );
         }
