@@ -1136,15 +1136,15 @@ describe("createCopilotToolBridge", () => {
         sessionRef,
       });
 
-      const onYield = getOpts().onYield as (msg?: string) => void;
+      const onYield = getOpts().onYield as (message?: string, acknowledgment?: string) => void;
       // No session bound yet: onYield must no-op the abort path
       // without throwing, but the onYieldDetected notification fires
       // regardless so a yield before session-bind is still surfaced
       // to the final attempt result.
-      expect(() => onYield("early yield")).not.toThrow();
+      expect(() => onYield("early yield", "Starting research.")).not.toThrow();
       expect(abort).toHaveBeenCalledTimes(0);
       expect(onYieldDetected).toHaveBeenCalledTimes(1);
-      expect(onYieldDetected).toHaveBeenCalledWith("early yield");
+      expect(onYieldDetected).toHaveBeenCalledWith("early yield", "Starting research.");
 
       // Bind the session after the fact (attempt.ts does this after
       // createSession/resumeSession resolves) and verify subsequent
@@ -1153,7 +1153,7 @@ describe("createCopilotToolBridge", () => {
       onYield("now yield");
       expect(abort).toHaveBeenCalledTimes(1);
       expect(onYieldDetected).toHaveBeenCalledTimes(2);
-      expect(onYieldDetected).toHaveBeenLastCalledWith("now yield");
+      expect(onYieldDetected).toHaveBeenLastCalledWith("now yield", undefined);
     });
 
     it("onYield still aborts the live session when onYieldDetected throws (defense in depth)", async () => {
@@ -1176,7 +1176,7 @@ describe("createCopilotToolBridge", () => {
         sessionRef,
       });
 
-      const onYield = getOpts().onYield as (msg?: string) => void;
+      const onYield = getOpts().onYield as (message?: string, acknowledgment?: string) => void;
       expect(() => onYield("handler-fails-but-abort-must-fire")).not.toThrow();
       expect(abort).toHaveBeenCalledTimes(1);
       warn.mockRestore();

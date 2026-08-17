@@ -171,6 +171,32 @@ async function buildDynamicToolsForTest(
 }
 
 describe("Codex app-server dynamic tool build", () => {
+  it("forwards the explicit yield acknowledgment without exposing private context", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    let capturedOnYield:
+      | ((message: string, acknowledgment?: string) => Promise<void> | void)
+      | undefined;
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      capturedOnYield = (options as { onYield?: typeof capturedOnYield }).onYield;
+      return [];
+    });
+    const onYieldDetected = vi.fn();
+
+    await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: null as never,
+      onYieldDetected,
+    });
+    await expectDefined(capturedOnYield, "captured onYield callback")(
+      "Resume after the fact-checker replies",
+      "Research started; results will follow.",
+    );
+
+    expect(onYieldDetected).toHaveBeenCalledWith("Research started; results will follow.");
+  });
+
   it("binds a resolver-backed constructed tool surface exactly once", async () => {
     const workspaceDir = path.join(tempDir, "resolver-bound-workspace");
     const params = createParams(path.join(tempDir, "resolver-bound-session.jsonl"), workspaceDir);

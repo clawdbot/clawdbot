@@ -198,9 +198,10 @@ export async function runEmbeddedAttempt(
           effectiveCwd,
           effectiveWorkspace,
           markCoreToolStage: (name) => corePluginToolStages.mark(name),
-          onYield: (message) => {
+          onYield: (message, acknowledgment) => {
             yieldDetected = true;
             yieldMessage = message;
+            yieldAcknowledgment = acknowledgment;
             queueYieldInterruptForSession?.();
             runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
             abortSessionForYield?.();
@@ -256,6 +257,7 @@ export async function runEmbeddedAttempt(
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
     let yieldMessage: string | null = null;
+    let yieldAcknowledgment: string | undefined;
     // Late-binding reference so onYield can abort the session (declared after tool creation)
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
@@ -483,7 +485,12 @@ export async function runEmbeddedAttempt(
         diagnostics: { diagnosticTrace, runTrace },
         state: executionState,
         lifecycle: {
-          readYieldState: () => ({ yieldAbortSettled, yieldDetected, yieldMessage }),
+          readYieldState: () => ({
+            yieldAbortSettled,
+            yieldDetected,
+            yieldMessage,
+            yieldAcknowledgment,
+          }),
           setToolSearchCatalogExecutor: (executor) => {
             toolSearchCatalogExecutor = executor;
           },

@@ -75,7 +75,7 @@ export function resolveGatewayScopedTools(params: {
   modelProvider?: string;
   modelId?: string;
   modelHasVision?: boolean;
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;

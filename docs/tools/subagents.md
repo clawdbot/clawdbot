@@ -287,6 +287,12 @@ answer until those completions arrive.
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
 
+Use the optional `message` field for private context that the resumed turn
+should receive. Use `acknowledgment` for a waiting reply when an interactive
+parent turn would otherwise end silently. The acknowledgment is not sent from
+sub-agent, heartbeat, silent, or message-tool-only turns, and it does not
+replace a reply or message already delivered during the turn.
+
 On native Codex harness turns, `wait_agent` keeps the current turn active and
 is reserved for an intentional same-turn wait when the immediate next step is
 blocked on the child. Use `sessions_yield` instead when a native child's result

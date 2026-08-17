@@ -60,6 +60,7 @@ export function createResult(
     toolMetas?: AgentHarnessAttemptResult["toolMetas"];
     usage?: AssistantUsageSnapshot;
     yieldDetected?: boolean;
+    yieldAcknowledgment?: string;
   },
 ): AttemptResultWithSdkSessionId {
   const promptError = state.promptError;
@@ -137,6 +138,7 @@ export function createResult(
     sessionIdUsed: state.sessionIdUsed ?? readNonEmptyString(params.sessionId) ?? "copilot-session",
     toolMetas,
     yieldDetected: state.yieldDetected === true,
+    ...(state.yieldAcknowledgment ? { yieldAcknowledgment: state.yieldAcknowledgment } : {}),
   };
 }
 export function createPromptError(

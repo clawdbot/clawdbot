@@ -448,6 +448,31 @@ function createAccounting(
 }
 
 describe("resolveFollowupDeliveryDecision", () => {
+  it("delivers a yield acknowledgment after accepting a child spawn", () => {
+    const execution = createSettledExecution();
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.meta = {
+        durationMs: 0,
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      };
+      execution.outcome.result.acceptedSessionSpawns = [
+        { runId: "child", childSessionKey: "agent:main:child" },
+      ];
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn: createTurn(),
+        execution,
+        accounting: createAccounting(),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "Research started; results will follow." }],
+    });
+  });
+
   it("keeps ambient room-event finals silent", () => {
     const turn = createTurn({
       queued: {
