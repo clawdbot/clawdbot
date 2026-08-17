@@ -6,10 +6,12 @@ import { t } from "../../i18n/index.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
 } from "./components/chat-sidebar-region-types.ts";
+import type { SidebarContent } from "./components/chat-sidebar.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
@@ -21,7 +23,8 @@ type SidebarPanelDefinitionParams = {
   chat: TemplateResult;
   workspace: TemplateResult | typeof nothing;
   tasks: TemplateResult | typeof nothing;
-  detail: TemplateResult | null;
+  detailOpen: boolean;
+  renderDetail: (content: SidebarContent) => TemplateResult;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
   startedAt: number | undefined;
@@ -135,8 +138,16 @@ export function sidebarPanelDefinitions(
         .onStateChange=${params.discussion.onStateChange}
       ></openclaw-session-discussion>`
     : null;
+  const detailContent =
+    state?.sidebarContent ??
+    (state && params?.detailOpen ? resolveSessionDiffSidebarContent(state) : null);
   return [
-    definePanel("detail", "review", icons.diff, params?.detail ?? null),
+    definePanel(
+      "detail",
+      "review",
+      icons.diff,
+      detailContent && params ? params.renderDetail(detailContent) : null,
+    ),
     definePanel("terminal", "terminal", icons.terminal, terminal, {
       available: terminalAvailable,
       shortcut: "Ctrl+`",

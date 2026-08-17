@@ -637,17 +637,17 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
-      detail: state.sidebarContent
-        ? renderChatDetailSlot({
-            backgroundTasks,
-            chat: props,
-            content: state.sidebarContent,
-            fullMessageLoader,
-            host: state,
-            layout: sidebarLayout,
-            transcript: this.taskSidebarTranscript,
-          })
-        : null,
+      detailOpen: this.presented && sidebarLayout.open === true && detailSlotOpen(sidebarLayout),
+      renderDetail: (content) =>
+        renderChatDetailSlot({
+          backgroundTasks,
+          chat: props,
+          content,
+          fullMessageLoader,
+          host: state,
+          layout: sidebarLayout,
+          transcript: this.taskSidebarTranscript,
+        }),
       digest: observerDigest ?? null,
       activeRunId: observerRunId ?? null,
       startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
