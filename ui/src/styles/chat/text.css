@@ -202,6 +202,7 @@
 }
 
 .chat-thread .chat-bubble .chat-text :where(table) {
+  display: table;
   width: 100%;
   min-width: 100%;
   margin: 0;
