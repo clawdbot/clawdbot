@@ -55,14 +55,14 @@ export async function clearAgentSkillFilter(
     return false;
   }
   if (target.path[1] === "list") {
-    const agentId = target.entry.id;
-    if (typeof agentId !== "string") {
+    const listAgentId = target.entry.id;
+    if (typeof listAgentId !== "string") {
       return false;
     }
     return runtimeConfig.patch({
       raw: {
         agents: {
-          list: [{ id: agentId, skills: null }],
+          list: [{ id: listAgentId, skills: null }],
         },
       },
       note: "Reset agent skills to inherited defaults",

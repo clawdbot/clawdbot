@@ -82,10 +82,14 @@ suite.define(() => {
           const weather = rows.filter({ hasText: "weather skill" }).locator("wa-switch");
           await expect.poll(() => rows.count()).toBe(2);
           await expect
-            .poll(() => github.evaluate((element) => (element as { checked: boolean }).checked))
+            .poll(() =>
+              github.evaluate((element) => (element as unknown as { checked: boolean }).checked),
+            )
             .toBe(true);
           await expect
-            .poll(() => weather.evaluate((element) => (element as { checked: boolean }).checked))
+            .poll(() =>
+              weather.evaluate((element) => (element as unknown as { checked: boolean }).checked),
+            )
             .toBe(false);
 
           const section = page.locator(".settings-section", { hasText: "Skills" }).first();
