@@ -227,6 +227,7 @@
 }
 
 .chat-thread .chat-bubble .chat-text :where(th, td) {
+  padding-block: 10px;
   border-right: 0;
   border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
   overflow-wrap: break-word;
