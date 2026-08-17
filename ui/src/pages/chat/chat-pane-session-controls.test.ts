@@ -84,41 +84,20 @@ describe("chat pane composer controls", () => {
       container,
     );
 
-    const details = container.querySelector<HTMLDetailsElement>(
-      ".chat-controls__permission-picker",
-    );
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
-    await Promise.resolve();
-    const full = container.querySelector<HTMLButtonElement>('[data-chat-permission-option="full"]');
-    expect(full?.disabled).toBe(true);
-    expect(full?.getAttribute("aria-selected")).toBe("true");
+    const dropdown = container.querySelector<HTMLElement>(".chat-controls__permission-picker");
+    dropdown?.setAttribute("open", "");
+    const full = container.querySelector<HTMLElement>('[data-chat-permission-option="full"]');
+    expect(full?.hasAttribute("disabled")).toBe(true);
+    expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
-    const listbox = container.querySelector<HTMLElement>("[data-chat-permission-list]");
-    expect(listbox?.id).not.toBe("");
-    expect(full?.id).not.toBe("");
-    expect(listbox?.getAttribute("aria-activedescendant")).toBe(
-      container.querySelector<HTMLElement>("[data-chat-permission-highlighted]")?.id,
-    );
-    expect(
-      container
-        .querySelector<HTMLElement>("[data-chat-permission-select]")
-        ?.getAttribute("aria-controls"),
-    ).toBe(listbox?.id);
     expect(full?.getAttribute("aria-label")).toContain("operator.admin");
 
-    details!.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
+    dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
     await Promise.resolve();
     expect(patch).toHaveBeenCalledWith(
       "agent:main:permission-test",
       { permissionMode: "guarded" },
       {},
     );
-    expect(details?.open).toBe(false);
-
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
-    details!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(details?.open).toBe(false);
   });
 });

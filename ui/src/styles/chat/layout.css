@@ -4501,8 +4501,9 @@ button.chat-pr__diff {
   max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
 }
 
-.chat-controls__permission-menu {
+.chat-controls__permission-picker::part(menu) {
   width: min(360px, calc(100vw - 24px));
+  padding: 6px;
   overflow: hidden;
 }
 
@@ -4527,15 +4528,14 @@ button.chat-pr__diff {
   font-weight: 650;
 }
 
-.chat-controls__permission-options {
-  display: grid;
-  gap: 2px;
-  padding: 6px;
-}
-
-.chat-controls__permission-option {
+.chat-controls__permission-option::part(base) {
   align-items: flex-start;
   min-height: 54px;
+  border-radius: var(--radius-sm);
+}
+
+.chat-controls__permission-option--selected::part(base) {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
 .chat-controls__permission-option-copy {
@@ -4570,6 +4570,7 @@ button.chat-pr__diff {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  margin: 6px -6px -6px;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
   color: var(--muted);
