@@ -532,6 +532,8 @@ export {
   ToolsCatalogParamsSchema,
   ToolsGitHubStatusParamsSchema,
   ToolsGitHubStatusResultSchema,
+  ToolsGitHubManagedConfigureParamsSchema,
+  ToolsGitHubInheritConfigureParamsSchema,
   ToolsGitHubConfigureParamsSchema,
   ToolsEffectiveParamsSchema,
   ToolsInvokeParamsSchema,

@@ -14724,6 +14724,58 @@ public struct ToolsGitHubStatusResult: Codable, Sendable {
     }
 }
 
+public struct ToolsGitHubManagedConfigureParams: Codable, Sendable {
+    public let scope: AnyCodable
+    public let agentid: String
+    public let mode: String
+    public let secretname: String
+    public let gitauthor: [String: AnyCodable]?
+
+    public init(
+        scope: AnyCodable,
+        agentid: String,
+        mode: String,
+        secretname: String,
+        gitauthor: [String: AnyCodable]? = nil)
+    {
+        self.scope = scope
+        self.agentid = agentid
+        self.mode = mode
+        self.secretname = secretname
+        self.gitauthor = gitauthor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case agentid = "agentId"
+        case mode
+        case secretname = "secretName"
+        case gitauthor = "gitAuthor"
+    }
+}
+
+public struct ToolsGitHubInheritConfigureParams: Codable, Sendable {
+    public let scope: AnyCodable
+    public let agentid: String
+    public let mode: String
+
+    public init(
+        scope: AnyCodable,
+        agentid: String,
+        mode: String)
+    {
+        self.scope = scope
+        self.agentid = agentid
+        self.mode = mode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scope
+        case agentid = "agentId"
+        case mode
+    }
+}
+
 public struct ToolCatalogProfile: Codable, Sendable {
     public let id: AnyCodable
     public let label: String
@@ -21058,6 +21110,37 @@ public enum AuditRunIdentityV1: Codable, Sendable {
         case .unknown(let value): try value.encode(to: encoder)
         case .unsupported(let value): try value.encode(to: encoder)
         case .ambiguous(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum ToolsGitHubConfigureParams: Codable, Sendable {
+    case managed(ToolsGitHubManagedConfigureParams)
+    case inherit(ToolsGitHubInheritConfigureParams)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "mode"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "managed": self = try .managed(ToolsGitHubManagedConfigureParams(from: decoder))
+        case "inherit": self = try .inherit(ToolsGitHubInheritConfigureParams(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown ToolsGitHubConfigureParams discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .managed(let value): try value.encode(to: encoder)
+        case .inherit(let value): try value.encode(to: encoder)
         }
     }
 }

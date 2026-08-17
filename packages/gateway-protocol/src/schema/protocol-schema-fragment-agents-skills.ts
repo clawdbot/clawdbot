@@ -50,6 +50,8 @@ export const AgentSkillProtocolSchemas = {
   ToolsCatalogParams: agentsModelsSkills.ToolsCatalogParamsSchema,
   ToolsGitHubStatusParams: agentsModelsSkills.ToolsGitHubStatusParamsSchema,
   ToolsGitHubStatusResult: agentsModelsSkills.ToolsGitHubStatusResultSchema,
+  ToolsGitHubManagedConfigureParams: agentsModelsSkills.ToolsGitHubManagedConfigureParamsSchema,
+  ToolsGitHubInheritConfigureParams: agentsModelsSkills.ToolsGitHubInheritConfigureParamsSchema,
   ToolsGitHubConfigureParams: agentsModelsSkills.ToolsGitHubConfigureParamsSchema,
   ToolCatalogProfile: agentsModelsSkills.ToolCatalogProfileSchema,
   ToolCatalogEntry: agentsModelsSkills.ToolCatalogEntrySchema,

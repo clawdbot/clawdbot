@@ -1046,31 +1046,25 @@ export const ToolsGitHubStatusResultSchema = closedObject({
   ]),
 });
 
+const GitHubIdentityScopeSchema = Type.Union([Type.Literal("system"), Type.Literal("agent")]);
+
+export const ToolsGitHubManagedConfigureParamsSchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  agentId: NonEmptyString,
+  mode: Type.Literal("managed"),
+  secretName: GitHubSetupHandleSchema,
+  gitAuthor: Type.Optional(GitHubAuthorSchema),
+});
+
+export const ToolsGitHubInheritConfigureParamsSchema = closedObject({
+  scope: GitHubIdentityScopeSchema,
+  agentId: NonEmptyString,
+  mode: Type.Literal("inherit"),
+});
+
 export const ToolsGitHubConfigureParamsSchema = Type.Union([
-  closedObject({
-    scope: Type.Literal("system"),
-    agentId: NonEmptyString,
-    mode: Type.Literal("managed"),
-    secretName: GitHubSetupHandleSchema,
-    gitAuthor: Type.Optional(GitHubAuthorSchema),
-  }),
-  closedObject({
-    scope: Type.Literal("system"),
-    agentId: NonEmptyString,
-    mode: Type.Literal("inherit"),
-  }),
-  closedObject({
-    scope: Type.Literal("agent"),
-    agentId: NonEmptyString,
-    mode: Type.Literal("managed"),
-    secretName: GitHubSetupHandleSchema,
-    gitAuthor: Type.Optional(GitHubAuthorSchema),
-  }),
-  closedObject({
-    scope: Type.Literal("agent"),
-    agentId: NonEmptyString,
-    mode: Type.Literal("inherit"),
-  }),
+  ToolsGitHubManagedConfigureParamsSchema,
+  ToolsGitHubInheritConfigureParamsSchema,
 ]);
 
 /** Reads the effective tool set for one session. */
@@ -1260,6 +1254,12 @@ export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
 export type ToolsCatalogParams = Static<typeof ToolsCatalogParamsSchema>;
 export type ToolsGitHubStatusParams = Static<typeof ToolsGitHubStatusParamsSchema>;
 export type ToolsGitHubStatusResult = Static<typeof ToolsGitHubStatusResultSchema>;
+export type ToolsGitHubManagedConfigureParams = Static<
+  typeof ToolsGitHubManagedConfigureParamsSchema
+>;
+export type ToolsGitHubInheritConfigureParams = Static<
+  typeof ToolsGitHubInheritConfigureParamsSchema
+>;
 export type ToolsGitHubConfigureParams = Static<typeof ToolsGitHubConfigureParamsSchema>;
 export type ToolCatalogProfile = Static<typeof ToolCatalogProfileSchema>;
 export type ToolCatalogEntry = Static<typeof ToolCatalogEntrySchema>;
