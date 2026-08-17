@@ -58,7 +58,7 @@ describe("installed plugin index policy refresh", () => {
     const createPackagePlugin = (pluginId: string) =>
       recordInstalledPluginIndexInstallOwner(
         {
-          ...createIndex().plugins[0],
+          ...createIndex().plugins[0]!,
           pluginId,
           manifestPath: path.join(packageDir, `${pluginId}.json`),
           rootDir: packageDir,
