@@ -179,6 +179,10 @@
   margin-top: 0.4em;
 }
 
+.chat-text :where(li > ul, li > ol) {
+  margin-top: 0.4em;
+}
+
 /* Keep bullets, checkboxes, and numbers in one marker column while their text
    shares the same start edge. */
 :is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item))::marker {
@@ -264,12 +268,24 @@
 }
 
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
+  appearance: none;
   position: absolute;
   inset-block-start: calc((1lh - var(--space-4)) / 2);
   inset-inline-start: 0;
   inline-size: var(--space-4);
   block-size: var(--space-4);
   margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  opacity: 1;
+}
+
+:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked) {
+  border-color: var(--accent);
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
+    center / 13px no-repeat;
 }
 
 :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary) {
@@ -468,12 +484,13 @@
 :is(.chat-text, .sidebar-markdown) .markdown-external-image {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.35em 0.75em;
-  width: fit-content;
+  width: 100%;
   max-width: 100%;
   margin-top: 0.75em;
-  padding: 0.5em 0.65em;
+  padding: 0.7em 0.8em;
   border: 0;
   border-radius: var(--radius-md);
   background: var(--bg-muted);
