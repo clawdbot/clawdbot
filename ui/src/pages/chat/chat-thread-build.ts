@@ -1,10 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  isToolCallContentType,
-  isToolResultContentType,
-  resolveToolUseId,
-} from "../../../../src/chat/tool-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -65,10 +60,9 @@ import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import {
+  buildLiveRenderedToolRefs,
   buildToolStreamIdentity,
-  extractToolMessageRefs,
-  resolveMatchingLiveToolIdentity,
-  type LiveToolStreamRef,
+  removeLiveToolBlocksFromHistory,
 } from "./tool-stream-identity.ts";
 import type { PlanStatus } from "./tool-stream.ts";
 
@@ -190,51 +184,10 @@ function resolveRunInsertionBounds(
   return currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null;
 }
 
-function liveRenderedToolRefs(toolMessages: unknown[]): LiveToolStreamRef[] {
-  const refs: LiveToolStreamRef[] = [];
-  const seen = new Set<string>();
-  for (const [index, message] of toolMessages.entries()) {
-    for (const ref of extractToolMessageRefs(message)) {
-      const key = JSON.stringify([ref.runId ?? null, ref.id]);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      refs.push({ ...ref, identity: `live:${index}:${key}` });
-    }
-  }
-  return refs;
-}
-
-function removeLiveToolBlocksFromHistory(
-  message: unknown,
-  liveToolRefs: LiveToolStreamRef[],
-): unknown {
-  const record = asRecord(message);
-  if (!record || !Array.isArray(record.content) || liveToolRefs.length === 0) {
-    return message;
-  }
-  const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
-  const topLevelRunId = normalizeOptionalString(record.runId);
-  const content = record.content.filter((block) => {
-    const entry = asRecord(block);
-    if (!entry || (!isToolCallContentType(entry.type) && !isToolResultContentType(entry.type))) {
-      return true;
-    }
-    const id = resolveToolUseId(entry) ?? topLevelToolId;
-    if (!id) {
-      return true;
-    }
-    const runId = normalizeOptionalString(entry.runId) ?? topLevelRunId;
-    return !resolveMatchingLiveToolIdentity({ id, ...(runId ? { runId } : {}) }, liveToolRefs);
-  });
-  return content.length === record.content.length ? message : { ...record, content };
-}
-
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter((message) => asRecord(message) !== null);
-  const liveToolRefs = liveRenderedToolRefs(tools);
+  const liveToolRefs = buildLiveRenderedToolRefs(tools);
   const history = props.messages
     .filter(
       (message) =>
