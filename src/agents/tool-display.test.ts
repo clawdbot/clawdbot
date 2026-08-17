@@ -36,6 +36,16 @@ describe("isShellToolDisplayName", () => {
 });
 
 describe("tool display details", () => {
+  it("uses the curated view_image presentation", () => {
+    const display = resolveToolDisplay({
+      name: "view_image",
+      args: { path: "/tmp/screenshot.png", prompt: "Inspect the error" },
+    });
+
+    expect(display).toMatchObject({ emoji: "🖼️", title: "View Image" });
+    expect(formatToolDetail(display)).toBe("path /tmp/screenshot.png, prompt Inspect the error");
+  });
+
   it("puts the camera PTZ operation before its node and device", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

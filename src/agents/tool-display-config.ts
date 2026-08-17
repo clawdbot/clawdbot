@@ -523,9 +523,9 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Apply Patch",
       detailKeys: [],
     },
-    image: {
+    view_image: {
       emoji: "🖼️",
-      title: "Image",
+      title: "View Image",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
     },
     image_generate: {
