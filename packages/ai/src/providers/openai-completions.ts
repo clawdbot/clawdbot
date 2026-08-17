@@ -43,6 +43,7 @@ import type {
 import {
   clearPendingCommentaryText,
   rememberPendingCommentaryTags,
+  tagInterruptedTextPhases,
   tagPendingCommentaryText,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
@@ -188,6 +189,7 @@ export const streamOpenAICompletions: StreamFunction<
 
       let textBlock: TextContent | null = null;
       let thinkingBlock: ThinkingContent | null = null;
+      let lastInterruptedTextBlock: TextContent | null = null;
       let hasFinishReason = false;
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
@@ -363,6 +365,22 @@ export const streamOpenAICompletions: StreamFunction<
           }
         }
       };
+      const sealTextBeforeReasoning = () => {
+        if (!textBlock && !reasoningTagTextPartitioner.hasPending()) {
+          return;
+        }
+        flushPartitionedContent();
+        if (!textBlock) {
+          return;
+        }
+        // Resumed reasoning makes the preceding visible text interim. Preserve
+        // the candidate boundary only if later text confirms a final answer.
+        if (textBlock.text.trim()) {
+          lastInterruptedTextBlock = textBlock;
+        }
+        finishBlock(textBlock);
+        textBlock = null;
+      };
 
       const guardedOpenaiStream = withFirstStreamEventTimeout(hookedOpenAIStream, {
         provider: model.provider,
@@ -451,8 +469,19 @@ export const streamOpenAICompletions: StreamFunction<
                 break;
               }
             }
+            const contentDeltas = readOpenAICompletionsContentDeltas(
+              choiceDelta.content,
+              choiceDelta.refusal,
+              foundReasoningField ? [deltaFields[foundReasoningField] as string] : [],
+            );
+            const hasSameChunkVisibleText = contentDeltas.some((delta) => delta.kind === "text");
             if (foundReasoningField) {
               reasoningTagTextPartitioner.markStrict();
+              // Same-chunk text can complete buffered Markdown or tag syntax;
+              // only a standalone reasoning delta confirms a lane resumption.
+              if (!hasSameChunkVisibleText) {
+                sealTextBeforeReasoning();
+              }
             }
             if (shouldEmitReasoning && foundReasoningField) {
               const delta = deltaFields[foundReasoningField];
@@ -464,11 +493,7 @@ export const streamOpenAICompletions: StreamFunction<
                 appendThinkingDelta(thinkingSignature, delta);
               }
             }
-            for (const contentDelta of readOpenAICompletionsContentDeltas(
-              choiceDelta.content,
-              choiceDelta.refusal,
-              foundReasoningField ? [deltaFields[foundReasoningField] as string] : [],
-            )) {
+            for (const contentDelta of contentDeltas) {
               if (contentDelta.kind === "thinking") {
                 if (reasoningTagTextPartitioner.hasPending()) {
                   reasoningTagTextPartitioner.markStrict();
@@ -571,6 +596,9 @@ export const streamOpenAICompletions: StreamFunction<
               ? "Request was aborted"
               : "Provider returned an invalid tool call"),
         );
+      }
+      if (output.stopReason !== "toolUse" && lastInterruptedTextBlock) {
+        tagInterruptedTextPhases(output.content, lastInterruptedTextBlock);
       }
       // Tool completion is irreversible: confirm the terminal before closing
       // blocks, then preserve their original text/thinking/tool event order.

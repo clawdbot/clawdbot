@@ -10,6 +10,7 @@ import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import {
   clearPendingCommentaryText,
   rememberPendingCommentaryTags,
+  tagInterruptedTextPhases,
   tagPendingCommentaryText,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
@@ -95,11 +96,13 @@ export async function processCompletionsStream(
     partialArgs: string;
     thoughtSignature?: string;
   };
+  type TextBlock = { type: "text"; text: string; textSignature?: string };
   let currentBlock:
-    | { type: "text"; text: string }
+    | TextBlock
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
     | ToolCallBlock
     | null = null;
+  let lastInterruptedTextBlock: TextBlock | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
   let isFlushingPendingPostToolCallDeltas = false;
@@ -314,10 +317,25 @@ export async function processCompletionsStream(
     }
     appendThinkingDelta({ text: "" });
   };
-  const flushReasoningTagTextPartitionerAtEnd = () => {
+  const flushReasoningTagTextPartitioner = () => {
     for (const delta of reasoningTagTextPartitioner.flush()) {
       appendPartitionedVisibleDelta(delta);
     }
+  };
+  const sealTextBeforeReasoning = () => {
+    if (currentBlock?.type !== "text" && !reasoningTagTextPartitioner.hasPending()) {
+      return;
+    }
+    flushReasoningTagTextPartitioner();
+    if (currentBlock?.type !== "text") {
+      return;
+    }
+    // Resumed reasoning makes the preceding visible text interim. Preserve
+    // the candidate boundary only if later text confirms a final answer.
+    if (currentBlock.text.trim()) {
+      lastInterruptedTextBlock = currentBlock;
+    }
+    currentBlock = null;
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   const guardedStream = withFirstStreamEventTimeout(responseStream as AsyncIterable<unknown>, {
@@ -382,9 +400,9 @@ export async function processCompletionsStream(
         compat.visibleReasoningDetailTypes,
       );
       const hasMirroredReasoning = reasoningDeltas.some((delta) => delta.kind === "thinking");
-      if (hasMirroredReasoning) {
-        reasoningTagTextPartitioner.markStrict();
-      }
+      const hasDedicatedReasoning = reasoningDeltas.some(
+        (delta) => delta.kind === "thinking" && delta.signature !== "reasoning_details",
+      );
       // Share the content/refusal owner to avoid duplicate mirrored refusals.
       const contentDeltas = readOpenAICompletionsContentDeltas(
         choiceDelta.content,
@@ -393,6 +411,15 @@ export async function processCompletionsStream(
           .filter((reasoningDelta) => reasoningDelta.kind === "thinking")
           .map((reasoningDelta) => reasoningDelta.text),
       );
+      const hasSameChunkVisibleText = contentDeltas.some((delta) => delta.kind === "text");
+      if (hasMirroredReasoning) {
+        reasoningTagTextPartitioner.markStrict();
+        // Same-chunk text can complete buffered Markdown or tag syntax;
+        // only a standalone reasoning delta confirms a lane resumption.
+        if (hasDedicatedReasoning && !hasSameChunkVisibleText) {
+          sealTextBeforeReasoning();
+        }
+      }
       const appendReasoningDeltas = () => {
         for (const reasoningDelta of reasoningDeltas) {
           if (reasoningDelta.kind === "thinking" && !emitReasoning) {
@@ -435,7 +462,7 @@ export async function processCompletionsStream(
       const toolCallDeltas = normalizedDelta.toolCalls;
       if (toolCallDeltas.length > 0) {
         sawNativeToolCallDelta = true;
-        flushReasoningTagTextPartitionerAtEnd();
+        flushReasoningTagTextPartitioner();
         rememberPendingCommentaryTags(
           provisionalCommentaryTags,
           tagPendingCommentaryText(output.content),
@@ -502,7 +529,7 @@ export async function processCompletionsStream(
     emitReasoningUsageActivity(hasReasoningUsageActivity);
     await cooperativeScheduler.afterEvent();
   }
-  flushReasoningTagTextPartitionerAtEnd();
+  flushReasoningTagTextPartitioner();
   flushDeepSeekToolCallRecovererAtEnd();
   flushDeepSeekTextFilterAtEnd();
   currentBlock = null;
@@ -530,6 +557,14 @@ export async function processCompletionsStream(
       });
     },
   });
+  if (
+    lastInterruptedTextBlock &&
+    output.stopReason !== "toolUse" &&
+    output.stopReason !== "error" &&
+    output.stopReason !== "aborted"
+  ) {
+    tagInterruptedTextPhases(output.content, lastInterruptedTextBlock);
+  }
   if (output.stopReason !== "toolUse") {
     clearPendingCommentaryText(provisionalCommentaryTags);
   }

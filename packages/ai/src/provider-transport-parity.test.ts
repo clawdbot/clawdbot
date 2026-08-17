@@ -166,6 +166,33 @@ const openAiChunks = [
   },
 ] satisfies OpenAIChunk[];
 
+function makeOpenAiChunk(
+  delta: Record<string, unknown>,
+  finishReason: string | null = null,
+): OpenAIChunk {
+  return {
+    id: "chatcmpl-parity",
+    model: "gpt-5.5-response",
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  };
+}
+
+const openAiInterleavedReasoningChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ reasoning_content: "Second thought." }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
+const openAiTrailingReasoningChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Answer." }),
+  makeOpenAiChunk({ reasoning_content: "Trailing thought." }),
+  makeOpenAiChunk({ content: " " }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
 const anthropicFailure = {
   status: 429,
   body: {
@@ -220,9 +247,12 @@ async function observeStream(stream: AssistantMessageEventStreamLike): Promise<{
   };
 }
 
-function resetOpenAiMock(outcome: ParityFixture["outcome"]): void {
+function resetOpenAiMock(
+  outcome: ParityFixture["outcome"],
+  chunks: readonly OpenAIChunk[] = openAiChunks,
+): void {
   openAiMockState.payloads = [];
-  openAiMockState.chunks = outcome === "success" ? [...openAiChunks] : [];
+  openAiMockState.chunks = outcome === "success" ? [...chunks] : [];
   openAiMockState.error =
     outcome === "error"
       ? Object.assign(new Error("synthetic OpenAI rejection"), {
@@ -237,8 +267,11 @@ function resetOpenAiMock(outcome: ParityFixture["outcome"]): void {
 async function runOpenAi(
   implementation: "provider" | "transport",
   outcome: ParityFixture["outcome"],
+  chunks: readonly OpenAIChunk[] = openAiChunks,
+  emitReasoning = true,
 ): Promise<ParityOutput> {
-  resetOpenAiMock(outcome);
+  resetOpenAiMock(outcome, chunks);
+  const model = emitReasoning ? openAiModel : { ...openAiModel, reasoning: false };
   const [{ streamOpenAICompletions }, { createOpenAICompletionsTransportStreamFn }] =
     await Promise.all([
       import("./providers/openai-completions.js"),
@@ -246,12 +279,12 @@ async function runOpenAi(
     ]);
   const stream =
     implementation === "provider"
-      ? streamOpenAICompletions(openAiModel, context, {
+      ? streamOpenAICompletions(model, context, {
           apiKey: "sk-test",
           reasoningEffort: "medium",
         })
       : await Promise.resolve(
-          createOpenAICompletionsTransportStreamFn()(openAiModel, context, {
+          createOpenAICompletionsTransportStreamFn()(model, context, {
             apiKey: "sk-test",
             reasoningEffort: "medium",
           } as never),
@@ -398,5 +431,73 @@ describe("provider and transport observable parity fixtures", () => {
     ).toMatchFileSnapshot(
       path.join(import.meta.dirname, "../test/fixtures/provider-transport-parity", snapshot),
     );
+  });
+
+  it("marks content interrupted by native reasoning as commentary", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(implementation, "success", openAiInterleavedReasoningChunks);
+
+      expect(result.terminal.content).toEqual([
+        {
+          type: "thinking",
+          thinking: "First thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Second thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+      ]);
+
+      const hiddenReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiInterleavedReasoningChunks,
+        false,
+      );
+      expect(hiddenReasoningResult.terminal.content).toEqual([
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+      ]);
+
+      const trailingReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiTrailingReasoningChunks,
+      );
+      expect(trailingReasoningResult.terminal.content).toEqual([
+        {
+          type: "thinking",
+          thinking: "First thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "Answer." },
+        {
+          type: "thinking",
+          thinking: "Trailing thought.",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: " " },
+      ]);
+    }
   });
 });
