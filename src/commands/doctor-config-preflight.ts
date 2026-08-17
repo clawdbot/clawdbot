@@ -16,6 +16,7 @@ import { resolveCanonicalConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
@@ -99,8 +100,17 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
   try {
     await fs.copyFile(legacyPath, targetPath, fs.constants.COPYFILE_EXCL);
     changes.push(`Migrated legacy config: ${legacyPath} -> ${targetPath}`);
-  } catch {
-    // If it already exists, skip silently.
+  } catch (err) {
+    // EEXIST means a config already lives at the target — nothing to migrate.
+    // Any other failure (EACCES, ENOSPC) must surface: doctor would otherwise
+    // proceed as a fresh install while the operator's legacy config exists.
+    const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+    if (code !== "EEXIST") {
+      throw new Error(
+        `Failed to migrate legacy config ${legacyPath} -> ${targetPath}: ${formatErrorMessage(err)}`,
+        { cause: err },
+      );
+    }
   }
 
   return changes;
@@ -702,7 +712,7 @@ export async function runDoctorConfigPreflight(
           );
         }
         if (shouldRecordStartupCheckpoint) {
-          const convergedSnapshotRead = await readConfigSnapshotForPreflight();
+          const convergedSnapshotRead = await readConfigSnapshotForPreflight(false);
           const convergedBaseConfig =
             convergedSnapshotRead.snapshot.sourceConfig ??
             convergedSnapshotRead.snapshot.config ??

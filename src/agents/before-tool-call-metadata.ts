@@ -55,6 +55,13 @@ export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAg
     value: true,
     enumerable: true,
   });
+  const diagnosticOptions = withBeforeToolCallMetadata(source)[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
+  if (diagnosticOptions) {
+    Object.defineProperty(target, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
+      value: diagnosticOptions,
+      enumerable: false,
+    });
+  }
   const sourceTool = getBeforeToolCallSourceTool(source);
   if (sourceTool) {
     Object.defineProperty(target, BEFORE_TOOL_CALL_SOURCE_TOOL, {

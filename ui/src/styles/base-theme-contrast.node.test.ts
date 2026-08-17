@@ -48,6 +48,18 @@ const CHIP_SURFACE_MIN_STEP = 1.05;
 const CHIP_BORDER_MIN_STEP = 1.25;
 
 /*
+ * Diff syntax uses its own translucent tint inside code surfaces. The ink must
+ * remain readable after that tint is composited onto every surface a markdown
+ * code block can use; missing light-mode overrides previously left additions
+ * at 1.15:1 on --bg-muted.
+ */
+const DIFF_SELECTORS = [
+  ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition",
+  ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion",
+] as const;
+const DIFF_HOST_SURFACES = ["--bg", "--bg-muted", "--card"] as const;
+
+/*
  * Link contrast guardrail for painted chat bubbles.
  *
  * Accent-colored links can collapse into the accent-derived user fill, while
@@ -376,6 +388,37 @@ describe("Control UI theme contrast", () => {
           failures.push(
             `${themeName}: chip border ${chip.border} ${border} on ${hostToken} ${host} = ${borderStep.toFixed(2)}:1 (< ${CHIP_BORDER_MIN_STEP}:1)`,
           );
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps highlighted diff lines at WCAG AA on every code surface", () => {
+    const componentsCss = fs.readFileSync(path.join(stylesDir, "components.css"), "utf8");
+    const diffStyles = DIFF_SELECTORS.map((selector) => {
+      const rule = readRuleBody(componentsCss, selector);
+      const foregroundToken = rule.match(/color:\s*var\((--[\w-]+)\)/u)?.[1];
+      const tint = rule.match(/background:\s*([^;]+);/u)?.[1];
+      if (!foregroundToken || !tint) {
+        throw new Error(`could not read diff colors from "${selector}"`);
+      }
+      return { foregroundToken, tint };
+    });
+    const failures: string[] = [];
+    for (const [themeName, tokens] of themes) {
+      for (const { foregroundToken, tint } of diffStyles) {
+        const foreground = resolveOpaqueColor(`var(${foregroundToken})`, tokens);
+        const resolvedTint = resolveColor(tint, tokens);
+        for (const surfaceToken of DIFF_HOST_SURFACES) {
+          const host = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
+          const background = composite(resolvedTint, host);
+          const ratio = contrastRatio(foreground, background);
+          if (ratio < AA_NORMAL_TEXT_MIN) {
+            failures.push(
+              `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+            );
+          }
         }
       }
     }

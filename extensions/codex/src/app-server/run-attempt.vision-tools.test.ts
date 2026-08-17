@@ -1,14 +1,14 @@
 // Codex tests cover run attempt.vision tools plugin behavior.
 import { describe, expect, it } from "vitest";
-import { filterToolsForVisionInputs } from "./vision-tools.js";
+import { filterCodexVisionTools } from "./vision-tools.js";
 
 describe("Codex dynamic tool filtering", () => {
-  it("drops the image tool when the model already has inbound vision input", () => {
-    const toolNames = filterToolsForVisionInputs(
+  it("drops the image tool when native Codex image inspection is active", () => {
+    const toolNames = filterCodexVisionTools(
       [{ name: "image" }, { name: "read" }, { name: "write" }],
       {
         modelHasVision: true,
-        hasInboundImages: true,
+        nativeImageInspectionEnabled: true,
       },
     ).map((tool) => tool.name);
 
@@ -17,19 +17,19 @@ describe("Codex dynamic tool filtering", () => {
     expect(toolNames).not.toContain("image");
   });
 
-  it("keeps the image tool unless both model vision and inbound images are present", () => {
+  it("keeps the image tool when the model lacks vision or native image inspection is disabled", () => {
     const tools = [{ name: "image" }, { name: "read" }];
 
     expect(
-      filterToolsForVisionInputs(tools, {
+      filterCodexVisionTools(tools, {
         modelHasVision: false,
-        hasInboundImages: true,
+        nativeImageInspectionEnabled: true,
       }),
     ).toBe(tools);
     expect(
-      filterToolsForVisionInputs(tools, {
+      filterCodexVisionTools(tools, {
         modelHasVision: true,
-        hasInboundImages: false,
+        nativeImageInspectionEnabled: false,
       }),
     ).toBe(tools);
   });

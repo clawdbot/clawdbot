@@ -117,9 +117,12 @@ export type UpdateRunResponse = {
 async function requestUpdateRestartStatus(
   client: Pick<GatewayBrowserClient, "request">,
   timeoutMs: number,
+  request: { refreshCheckout?: true } = {},
 ): Promise<UpdateRestartStatusResponse | null> {
   try {
-    return await client.request<UpdateRestartStatusResponse>("update.status", {}, { timeoutMs });
+    return await client.request<UpdateRestartStatusResponse>("update.status", request, {
+      timeoutMs,
+    });
   } catch {
     return null;
   }
@@ -138,7 +141,7 @@ export function createUpdateStatusRefresher(params: {
     if (!client || !params.canRefresh()) {
       return;
     }
-    const response = await requestUpdateRestartStatus(client, 5_000);
+    const response = await requestUpdateRestartStatus(client, 5_000, { refreshCheckout: true });
     if (response && params.isCurrent(client, epoch)) {
       params.onStatus(response);
     }

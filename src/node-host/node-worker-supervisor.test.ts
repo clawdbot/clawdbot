@@ -665,7 +665,7 @@ describe("node worker supervisor", () => {
     const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
     expect(running.state).toBe("running");
     const grandchildPath = path.join(workspaceDir, "grandchild.pid");
-    await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
+    await vi.waitFor(() => expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u));
     const grandchildPid = Number(fs.readFileSync(grandchildPath, "utf8"));
     const grandchild = requireNodeWorkerProcessIdentity(grandchildPid);
     expect(inspectNodeWorkerProcessIdentity(grandchild)).toBe("live");

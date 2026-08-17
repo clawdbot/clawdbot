@@ -124,6 +124,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** Per-model contextTokens cap authored by the operator; absent when none was authored. */
+  authoredContextTokenCap?: number;
   /** Source metadata for the resolved model context budget. */
   contextWindowInfo?: EmbeddedRunContextWindowInfo;
   /** Resolved API key for this run when runtime auth did not replace it. */

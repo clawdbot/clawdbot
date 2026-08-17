@@ -1,6 +1,8 @@
 // Shared CLI execution wrappers and inherited Commander option lookup.
 import type { Command } from "commander";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatCliOperatorError } from "./failure-output.js";
+import { isJsonOutputModeActive } from "./json-output-mode.js";
 
 export { formatErrorMessage };
 
@@ -40,11 +42,14 @@ export async function runCommandWithRuntime(
   try {
     await action();
   } catch (err) {
+    if (isJsonOutputModeActive(process.argv)) {
+      throw err;
+    }
     if (onError) {
       onError(err);
       return;
     }
-    runtime.error(formatErrorMessage(err));
+    runtime.error(formatCliOperatorError(err));
     runtime.exit(1);
   }
 }

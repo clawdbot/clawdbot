@@ -3579,6 +3579,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
                   messages: [{ role: "user", content: "hi" }],
                 },
                 {
+                  "x-forwarded-for": "198.51.100.42",
                   "x-forwarded-proto": "https",
                   "x-forwarded-user": "operator@example.com",
                   "x-openclaw-scopes": scopes,
@@ -3598,6 +3599,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             port,
             { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
             {
+              "x-forwarded-for": "198.51.100.42",
               "x-forwarded-proto": "https",
               "x-openclaw-scopes": "operator.admin, operator.write",
               "x-openclaw-sender-is-owner": "true",

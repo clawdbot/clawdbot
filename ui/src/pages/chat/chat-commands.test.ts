@@ -3,12 +3,20 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import {
+  invalidateChatMetadataStore,
+  rememberChatMetadata,
+} from "../../lib/chat/chat-metadata-store.ts";
+import {
   SLASH_COMMANDS,
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { dispatchChatSlashCommand, refreshSlashCommands } from "./chat-commands.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  dispatchChatSlashCommand,
+  refreshSlashCommands,
+} from "./chat-commands.ts";
 
 function requireCommandByName(name: string): Record<string, unknown> {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);
@@ -33,6 +41,17 @@ function legacyConnectedSessionAccess() {
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     connected: true,
     hello: null,
+  };
+}
+
+function remoteCommand(name: string, description: string) {
+  return {
+    name,
+    textAliases: [`/${name}`],
+    description,
+    source: "plugin" as const,
+    scope: "text" as const,
+    acceptsArgs: false,
   };
 }
 
@@ -250,6 +269,67 @@ describe("refreshSlashCommands", () => {
     expectRecordFields(requireCommandByName("pair"), "pair command", {
       name: "pair",
       description: "Generate setup codes.",
+    });
+  });
+
+  it("reads commands from the chat metadata store without requesting commands.list", async () => {
+    const request = vi.fn();
+    const client = { request } as never;
+    rememberChatMetadata(client, "main", {
+      commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
+    });
+
+    await refreshSlashCommands({ client, agentId: "main" });
+
+    expect(request).not.toHaveBeenCalled();
+    expectRecordFields(requireCommandByName("metadata-command"), "metadata command", {
+      description: "Loaded from chat metadata.",
+      executeLocal: false,
+    });
+  });
+
+  it("prefers stored metadata after the commands.list cache expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue({
+        commands: [remoteCommand("cached-command", "Loaded from commands.list.")],
+      });
+      const client = { request } as never;
+
+      await refreshSlashCommands({ client, agentId: "main" });
+      vi.advanceTimersByTime(60_001);
+      rememberChatMetadata(client, "main", {
+        commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
+      });
+
+      await refreshSlashCommands({ client, agentId: "main" });
+
+      expect(request).toHaveBeenCalledOnce();
+      expectRecordFields(requireCommandByName("metadata-command"), "metadata command", {
+        description: "Loaded from chat metadata.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retain applied metadata commands in the commands.list cache", async () => {
+    const request = vi.fn().mockResolvedValue({
+      commands: [remoteCommand("requested-command", "Loaded after metadata invalidation.")],
+    });
+    const client = { request } as never;
+    const metadata = {
+      commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
+    };
+    rememberChatMetadata(client, "main", metadata);
+    applyRemoteSlashCommandsResult({ client, agentId: "main", result: metadata });
+
+    invalidateChatMetadataStore(client);
+    await refreshSlashCommands({ client, agentId: "main" });
+
+    expect(request).toHaveBeenCalledOnce();
+    expectRecordFields(requireCommandByName("requested-command"), "requested command", {
+      description: "Loaded after metadata invalidation.",
     });
   });
 });

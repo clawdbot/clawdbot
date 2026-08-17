@@ -307,35 +307,64 @@ export function renderRecentSession(params: {
                 >`
               : nothing}${label}</span
           >
-          ${renderSidebarSessionSubtitle({ subtitle, narration })}
+          <span class="sidebar-recent-session__details">
+            ${renderSidebarSessionSubtitle({ subtitle, narration })}
+            <span class="sidebar-recent-session__details-endcap">
+              ${!session.isChild && sessionHasBoard(session.key)
+                ? html`<span
+                    class="sidebar-board-glyph"
+                    role="img"
+                    aria-label=${t("sessionsView.dashboardAvailable")}
+                    title=${t("sessionsView.dashboardAvailable")}
+                    >${icons.layoutDashboard}</span
+                  >`
+                : nothing}
+              <openclaw-viewer-facepile
+                .presencePayload=${host.sessionData.presencePayload}
+                .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
+                .selfInstanceId=${host.sessionData.presenceInstanceId}
+                .sessionKey=${session.key}
+                .excludeUserId=${renderedOwnerId}
+                .maxVisible=${3}
+                variant="session"
+              ></openclaw-viewer-facepile>
+              ${renderSessionRowBadges({
+                ...session,
+                hasComposerDraft: session.hasComposerDraft === true && !session.visuallyActive,
+                pullRequest: session.pullRequest ?? display?.pullRequest,
+                hasApproval: sessionHasPendingApproval(
+                  host.sessionData.approvalBadgeSnapshot(),
+                  session.key,
+                ),
+              })}
+              ${trailingIndicator === nothing
+                ? nothing
+                : html`<span class="session-row-aside">
+                    <span
+                      class="session-row-state"
+                      id=${stateId}
+                      role="img"
+                      aria-label=${trailingDescription}
+                      >${trailingIndicator}</span
+                    >
+                  </span>`}
+              ${hasTrail
+                ? html`<span class="session-row-trail" id=${metaId}
+                    >${session.runtimeMs != null
+                      ? session.hasActiveRun
+                        ? html`<openclaw-elapsed-time
+                            .startMs=${session.runtimeSampledAt! - session.runtimeMs}
+                          ></openclaw-elapsed-time>`
+                        : (formatDurationCompact(session.runtimeMs) ?? "0ms")
+                      : html`<openclaw-elapsed-time
+                          .startMs=${session.startedAt!}
+                          .endMs=${session.endedAt ?? null}
+                        ></openclaw-elapsed-time>`}</span
+                  >`
+                : nothing}
+            </span>
+          </span>
         </span>
-        ${!session.isChild && sessionHasBoard(session.key)
-          ? html`<span
-              class="sidebar-board-glyph"
-              role="img"
-              aria-label=${t("sessionsView.dashboardAvailable")}
-              title=${t("sessionsView.dashboardAvailable")}
-              >${icons.layoutDashboard}</span
-            >`
-          : nothing}
-        <openclaw-viewer-facepile
-          .presencePayload=${host.sessionData.presencePayload}
-          .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
-          .selfInstanceId=${host.sessionData.presenceInstanceId}
-          .sessionKey=${session.key}
-          .excludeUserId=${renderedOwnerId}
-          .maxVisible=${3}
-          variant="session"
-        ></openclaw-viewer-facepile>
-        ${renderSessionRowBadges({
-          ...session,
-          hasComposerDraft: session.hasComposerDraft === true && !session.visuallyActive,
-          pullRequest: session.pullRequest ?? display?.pullRequest,
-          hasApproval: sessionHasPendingApproval(
-            host.sessionData.approvalBadgeSnapshot(),
-            session.key,
-          ),
-        })}
       </a>
       ${session.childSessionKeys.length > 0
         ? html`<button
@@ -365,33 +394,10 @@ export function renderRecentSession(params: {
                 >`}
           </button>`
         : nothing}
-      <span class="sidebar-recent-session__aside session-row-aside">
-        ${trailingIndicator === nothing
-          ? nothing
-          : html`<span
-              class="session-row-state"
-              id=${stateId}
-              role="img"
-              aria-label=${trailingDescription}
-              >${trailingIndicator}</span
-            >`}
-        ${hasTrail
-          ? html`<span class="session-row-trail" id=${metaId}
-              >${session.runtimeMs != null
-                ? session.hasActiveRun
-                  ? html`<openclaw-elapsed-time
-                      .startMs=${session.runtimeSampledAt! - session.runtimeMs}
-                    ></openclaw-elapsed-time>`
-                  : (formatDurationCompact(session.runtimeMs) ?? "0ms")
-                : html`<openclaw-elapsed-time
-                    .startMs=${session.startedAt!}
-                    .endMs=${session.endedAt ?? null}
-                  ></openclaw-elapsed-time>`}</span
-            >`
-          : nothing}
-        ${session.isChild
-          ? nothing
-          : html`<span class="session-row-actions">
+      ${session.isChild
+        ? nothing
+        : html`<span class="sidebar-recent-session__aside session-row-aside">
+            <span class="session-row-actions">
               <button
                 class="session-action session-action--pin"
                 data-sidebar-session-pin="true"
@@ -419,8 +425,8 @@ export function renderRecentSession(params: {
               >
                 ${icons.moreHorizontal}
               </button>
-            </span>`}
-      </span>
+            </span>
+          </span>`}
     </div>
   `;
   // Marquee state mutates the row DOM; keying prevents cross-session reuse.

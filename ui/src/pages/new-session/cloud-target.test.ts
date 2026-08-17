@@ -41,6 +41,23 @@ describe("cloud session startup", () => {
     });
   });
 
+  it("passes a non-default machine class to dispatch", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ placement: { state: "active", environmentId: "worker-fast" } })
+      .mockResolvedValueOnce({ runId: "run-fast" });
+
+    await expect(
+      startCloudInitialTurn(clientWith(request), { ...params, machineClass: "fast" }, () => true),
+    ).resolves.toMatchObject({ status: "started" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.dispatch", {
+      key: params.key,
+      agentId: params.agentId,
+      profileId: params.profileId,
+      machineClass: "fast",
+    });
+  });
+
   it("does not reconcile a definitive dispatch rejection", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({

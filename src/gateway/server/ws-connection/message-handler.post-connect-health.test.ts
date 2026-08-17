@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import {
   onInternalDiagnosticEvent,
@@ -20,11 +21,17 @@ import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-toke
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { HealthSummary } from "../../health/types.js";
+import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import {
+  enforceSharedGatewaySessionGenerationForConfigWrite,
+  getRequiredSharedGatewaySessionGeneration,
+} from "../../server-shared-auth-generation.js";
+import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import { resolvePinnedClientMetadata } from "./connect-device-metadata.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
@@ -36,6 +43,7 @@ const {
   loadConfigMock,
   adoptTailscaleProfileAvatarMock,
   ensureProfileForEmailMock,
+  prepareGatewayNodeConnectMock,
   resolveConnectAuthStateMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
@@ -64,6 +72,7 @@ const {
   })),
   adoptTailscaleProfileAvatarMock: vi.fn(),
   ensureProfileForEmailMock: vi.fn(),
+  prepareGatewayNodeConnectMock: vi.fn(),
   resolveConnectAuthStateMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
@@ -83,6 +92,12 @@ vi.mock("./auth-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./auth-context.js")>();
   resolveConnectAuthStateMock.mockImplementation(actual.resolveConnectAuthState);
   return { ...actual, resolveConnectAuthState: resolveConnectAuthStateMock };
+});
+
+vi.mock("./connect-node-session.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./connect-node-session.js")>();
+  prepareGatewayNodeConnectMock.mockImplementation(actual.prepareGatewayNodeConnect);
+  return { ...actual, prepareGatewayNodeConnect: prepareGatewayNodeConnectMock };
 });
 
 vi.mock("../../../config/config.js", () => ({
@@ -246,9 +261,11 @@ function attachGatewayHarness(options: {
   requestOrigin?: string;
   requestHost?: string;
   headers?: Record<string, string>;
+  ingressAttribution?: GatewayAttributedIngress;
   remoteAddr?: string;
   localAddr?: string;
   resolvedAuth?: ResolvedGatewayAuth;
+  getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   rateLimiter?: AuthRateLimiter;
   client?: unknown;
   close?: CloseGatewayConnection;
@@ -290,6 +307,19 @@ function attachGatewayHarness(options: {
       },
       socket: { localAddress: localAddr, remoteAddress: remoteAddr },
     } as unknown as IncomingMessage,
+    ingressAttribution:
+      options.ingressAttribution ??
+      (remoteAddr === "127.0.0.1"
+        ? {
+            kind: "direct-local",
+            clientIp: remoteAddr,
+            rateLimit: { subject: { key: remoteAddr }, resetOnSuccess: true },
+          }
+        : {
+            kind: "direct-remote",
+            clientIp: remoteAddr,
+            rateLimit: { subject: { key: remoteAddr }, resetOnSuccess: true },
+          }),
     connId: options.connId,
     remoteAddr,
     localAddr,
@@ -297,6 +327,7 @@ function attachGatewayHarness(options: {
     requestOrigin: options.requestOrigin,
     connectNonce: options.connectNonce,
     getResolvedAuth: () => resolvedAuth,
+    getRequiredSharedGatewaySessionGeneration: options.getRequiredSharedGatewaySessionGeneration,
     rateLimiter: options.rateLimiter,
     gatewayMethods: [],
     events: [],
@@ -444,8 +475,14 @@ function connectTrustedProxyUser(connId: string) {
       },
     },
     headers: {
+      "x-forwarded-for": "203.0.113.10",
       "x-forwarded-user": "alice@example.com",
       "x-forwarded-proto": "https",
+    },
+    ingressAttribution: {
+      kind: "trusted-proxy",
+      clientIp: "203.0.113.10",
+      rateLimit: { subject: { key: "203.0.113.10" }, resetOnSuccess: true },
     },
   });
   harness.sendConnect(`connect-${connId}`, {
@@ -817,7 +854,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         authOk: true,
         authMethod: "tailscale",
         sharedAuthOk: true,
-        sharedAuthProvided: false,
       });
       const harness = attachGatewayHarness({
         connId: "conn-tailscale-avatar-detached",
@@ -957,6 +993,77 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     expect(localUserIngress?.facts.invoker).toBeUndefined();
     expect(ensureProfileForEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a shared-auth handshake when credentials rotate before session attachment", async () => {
+    const oldAuth = {
+      mode: "token" as const,
+      token: "gateway-token-old",
+      allowTailscale: false,
+    };
+    const oldGeneration = resolveSharedGatewaySessionGeneration(oldAuth, []);
+    const newGeneration = resolveSharedGatewaySessionGeneration(
+      { ...oldAuth, token: "gateway-token-new" },
+      [],
+    );
+    expect(oldGeneration).toBeTypeOf("string");
+    expect(newGeneration).toBeTypeOf("string");
+    const generationState = { current: oldGeneration, required: null };
+    const preparationStarted = createDeferred();
+    const releasePreparation = createDeferred();
+    prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {
+      preparationStarted.resolve();
+      await releasePreparation.promise;
+      return true;
+    });
+    const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-token-rotated-during-connect",
+      connectNonce: "nonce-token-rotated-during-connect",
+      resolvedAuth: oldAuth,
+      getRequiredSharedGatewaySessionGeneration: () =>
+        getRequiredSharedGatewaySessionGeneration(generationState),
+      close,
+      setCloseCause,
+    });
+
+    harness.sendConnect("connect-token-rotated-during-connect", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      caps: [],
+      auth: { token: oldAuth.token },
+    });
+    await preparationStarted.promise;
+    enforceSharedGatewaySessionGenerationForConfigWrite({
+      state: generationState,
+      nextConfig: {
+        gateway: {
+          auth: { mode: "token", token: "gateway-token-new" },
+          reload: { mode: "off" },
+        },
+      },
+      resolveRuntimeSnapshotGeneration: () => newGeneration,
+      clients: [],
+    });
+    releasePreparation.resolve();
+
+    await waitForFast(() => {
+      expect(close).toHaveBeenCalledWith(4001, "gateway auth changed");
+    });
+    expect(setCloseCause).toHaveBeenCalledWith("gateway-auth-rotated", {
+      authGenerationStale: true,
+    });
+    expect(harness.client).toBeNull();
+    expect(harness.socketSend).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
   });
 
   it("emits a security event for rejected gateway auth", async () => {

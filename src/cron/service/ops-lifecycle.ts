@@ -134,7 +134,7 @@ export async function start(state: CronServiceState): Promise<void> {
       return;
     }
     if (state.deps.legacyDefaultAgentId) {
-      const rewritten = materializeLegacyDefaultCronJobOwners({
+      const rewritten = await materializeLegacyDefaultCronJobOwners({
         storePath: state.deps.storePath,
         legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
       });

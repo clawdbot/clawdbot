@@ -38,18 +38,9 @@ async function dragAcross(page: Page, locator: Locator): Promise<string> {
 async function readFocusOutline(locator: Locator) {
   return locator.evaluate((element) => {
     const styles = getComputedStyle(element);
-    const colorProbe = document.createElement("span");
-    colorProbe.style.color = "var(--muted-strong)";
-    document.body.append(colorProbe);
-    const mutedStrongColor = getComputedStyle(colorProbe).color;
-    colorProbe.remove();
     return {
       focusVisible: element.matches(":focus-visible"),
-      mutedStrongColor,
-      outlineColor: styles.outlineColor,
-      outlineOffset: styles.outlineOffset,
       outlineStyle: styles.outlineStyle,
-      outlineWidth: styles.outlineWidth,
     };
   });
 }
@@ -155,11 +146,8 @@ suite.define(() => {
         const focusedOutline = await readFocusOutline(thread);
         expect(focusedOutline).toMatchObject({
           focusVisible: true,
-          outlineOffset: "-2px",
-          outlineStyle: "solid",
-          outlineWidth: "2px",
+          outlineStyle: "none",
         });
-        expect(focusedOutline.outlineColor).toBe(focusedOutline.mutedStrongColor);
         await captureUiProof(page, "02-chat-thread-keyboard-focus.png");
 
         await page.setViewportSize({ height: 650, width: 1440 });

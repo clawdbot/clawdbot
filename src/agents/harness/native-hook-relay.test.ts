@@ -11,6 +11,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
+  createAgentRuntimeApprovalAuthorityValidator,
+  mintAgentRuntimeIdentityToken,
+} from "../../gateway/agent-runtime-identity-token.js";
+import { validateAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
@@ -21,7 +26,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   closeAdmittedRunDelegatedAuthority,
-  isRetainedAdmittedRunDelegatedAuthorityActive,
+  getAdmittedRunDelegatedAuthority,
 } from "../admitted-run-context.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as nativeHookRelayBridge from "./native-hook-relay-bridge.js";
@@ -458,6 +463,10 @@ describe("native hook relay registry", () => {
     const { admittedRunContext, hostCapabilities } = await createAdmittedHostCapabilityTestFixture({
       runId: "run-retained-child",
     });
+    const delegatedAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+    if (!delegatedAuthority) {
+      throw new Error("Expected admitted delegated authority");
+    }
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
@@ -527,6 +536,23 @@ describe("native hook relay registry", () => {
     expect(afterToolCall).toHaveBeenCalledOnce();
 
     expect(closeAdmittedRunDelegatedAuthority(admittedRunContext)).toBe(true);
+    expect(validateAgentRunDelegatedAuthority(delegatedAuthority)).toBe(false);
+    await expect(
+      mintAgentRuntimeIdentityToken({
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        operationalRunInstance: admittedRunContext.operationalRunInstance,
+      }),
+    ).rejects.toThrow("requires active delegated run authority");
+    expect(
+      createAgentRuntimeApprovalAuthorityValidator()({
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        operationalRunInstance: admittedRunContext.operationalRunInstance,
+        delegatedAuthority: { kind: "local", ...delegatedAuthority },
+      }),
+    ).toBe(false);
     relay.unregister();
     await expect(
       invokeNativeHookRelay({
@@ -605,6 +631,10 @@ describe("native hook relay registry", () => {
       }
       const { admittedRunContext, hostCapabilities } =
         await createAdmittedHostCapabilityTestFixture({ runId: `run-retained-${cause}` });
+      const delegatedAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+      if (!delegatedAuthority) {
+        throw new Error("Expected admitted delegated authority");
+      }
       const controller = new AbortController();
       const relay = registerRetainedNativeHookRelay({
         provider: "codex",
@@ -624,6 +654,7 @@ describe("native hook relay registry", () => {
       });
 
       closeAdmittedRunDelegatedAuthority(admittedRunContext);
+      expect(validateAgentRunDelegatedAuthority(delegatedAuthority)).toBe(false);
       relay.unregister();
       await expect(
         invokeNativeHookRelay({
@@ -633,7 +664,6 @@ describe("native hook relay registry", () => {
           rawPayload: { agent_id: "child-thread", tool_name: "Bash", tool_input: {} },
         }),
       ).resolves.toMatchObject({ exitCode: 0 });
-      expect(isRetainedAdmittedRunDelegatedAuthorityActive(admittedRunContext)).toBe(true);
 
       if (cause === "abort") {
         controller.abort();
@@ -642,7 +672,6 @@ describe("native hook relay registry", () => {
       }
       expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
       expect(testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
-      expect(isRetainedAdmittedRunDelegatedAuthorityActive(admittedRunContext)).toBe(false);
       await expect(
         invokeNativeHookRelay({
           provider: "codex",
@@ -722,7 +751,6 @@ describe("native hook relay registry", () => {
     relay.unregister();
 
     expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
-    expect(isRetainedAdmittedRunDelegatedAuthorityActive(admittedRunContext)).toBe(false);
     expect(onDispose).not.toHaveBeenCalled();
     await expect(
       invokeNativeHookRelay({
@@ -954,7 +982,7 @@ describe("native hook relay registry", () => {
     ).toThrow("bridge setup failed");
     expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     expect(testing.getNativeHookRelayBridgeRecordForTests(relayId)).toBeUndefined();
-    expect(isRetainedAdmittedRunDelegatedAuthorityActive(admittedRunContext)).toBe(false);
+    expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
 
     bridgeFailure.mockRestore();
     const successor = registerNativeHookRelay({
@@ -992,13 +1020,11 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-1",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
-    await Promise.resolve();
-
     const state = getNativeHookRelaySharedStateForTests();
-    expect(state.pendingPermissionApprovals.size).toBe(1);
+    await vi.waitFor(() => expect(state.pendingPermissionApprovals.size).toBe(1));
     expect(state.permissionApprovalWindows.get(relay.relayId)).toHaveLength(1);
 
     resolveDecision?.("allow-always");
@@ -1016,7 +1042,7 @@ describe("native hook relay registry", () => {
           cwd: "/repo",
           tool_name: "Bash",
           tool_use_id: "native-call-2",
-          tool_input: { command: "browserforce tabs" },
+          tool_input: { command: "git status" },
         },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
@@ -1051,7 +1077,7 @@ describe("native hook relay registry", () => {
           cwd: "/repo",
           tool_name: "Bash",
           tool_use_id: "native-call-1",
-          tool_input: { command: "browserforce tabs" },
+          tool_input: { command: "git status" },
         },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
@@ -1068,7 +1094,7 @@ describe("native hook relay registry", () => {
           cwd: "/repo",
           tool_name: "Bash",
           tool_use_id: "native-call-2",
-          tool_input: { command: "browserforce tabs" },
+          tool_input: { command: "git status" },
         },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
@@ -1115,7 +1141,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-1",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
     expect(JSON.parse(duplicateApproval.stdout)).toEqual({
@@ -1136,7 +1162,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-2",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
     expect(JSON.parse(primaryApproval.stdout)).toEqual({
@@ -1246,7 +1272,7 @@ describe("native hook relay registry", () => {
     expect(relay.shouldRelayEvent("permission_request")).toBe(true);
     expect(relay.commandForEvent("pre_tool_use")).toBe(
       `${NATIVE_HOOK_RELAY_EXEC_PREFIX}/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id ` +
-        `${relay.relayId} ${nativeHookRelayStateDbArgForTests()} --generation ${relay.generation} --event pre_tool_use --pre-tool-use-unavailable noop --timeout 1234`,
+        `${relay.relayId} ${nativeHookRelayStateDbArgForTests()} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
     );
   });
 
@@ -1304,6 +1330,7 @@ describe("native hook relay registry", () => {
       preToolUseLoopDetection: false,
     });
 
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
     expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(["apply_patch", "exec"]);
   });
 
@@ -1324,12 +1351,24 @@ describe("native hook relay registry", () => {
     expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(["spawn_agent"]);
   });
 
-  it("keeps pre-tool relays active when native loop detection is not disabled", () => {
+  it("omits loop-detection-only pre-tool relays by default", () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
+  });
+
+  it("installs pre-tool relays when loop detection is explicitly enabled", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      config: { tools: { loopDetection: { enabled: true } } } as never,
       command: {
         executable: "/opt/Open Claw/openclaw.mjs",
         nodeExecutable: "/usr/local/bin/node",
@@ -3843,7 +3882,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-1",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
     relay.unregister();
@@ -3862,7 +3901,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-2",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
 
@@ -3905,7 +3944,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-1",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
     first.unregister();
@@ -3926,7 +3965,7 @@ describe("native hook relay registry", () => {
         cwd: "/repo",
         tool_name: "Bash",
         tool_use_id: "native-call-2",
-        tool_input: { command: "browserforce tabs" },
+        tool_input: { command: "git status" },
       },
     });
 
@@ -3936,7 +3975,7 @@ describe("native hook relay registry", () => {
       agentId: "agent-1",
       sessionId: "session-2",
       sessionKey: "agent:main:session-2",
-      toolInput: { command: "browserforce tabs" },
+      toolInput: { command: "git status" },
     });
   });
 
@@ -4004,7 +4043,7 @@ describe("native hook relay registry", () => {
         rawPayload: {
           hook_event_name: "PermissionRequest",
           tool_name: "Bash",
-          tool_input: { command: "cargo test" },
+          tool_input: { command: "git status" },
         },
       }),
     ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
@@ -4042,8 +4081,7 @@ describe("native hook relay registry", () => {
       rawPayload: payload,
     });
 
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
     resolveDecision?.("allow");
     const responses = await Promise.all([first, second]);
 
@@ -4092,8 +4130,7 @@ describe("native hook relay registry", () => {
       event: "permission_request",
       rawPayload: payload,
     });
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
     expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
 
     firstRelay.unregister();
@@ -4109,8 +4146,7 @@ describe("native hook relay registry", () => {
       event: "permission_request",
       rawPayload: payload,
     });
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
     expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
 
     resolvers[0]?.("allow");
@@ -4123,8 +4159,10 @@ describe("native hook relay registry", () => {
       event: "permission_request",
       rawPayload: payload,
     });
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
 
     resolvers[1]?.("allow");
     await expect(Promise.all([secondApproval, duplicateSecondApproval])).resolves.toHaveLength(2);
@@ -4169,8 +4207,7 @@ describe("native hook relay registry", () => {
       },
     });
 
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
     const secondResponse = await second;
     expect(JSON.parse(secondResponse.stdout)).toEqual({
       hookSpecificOutput: {
@@ -4247,8 +4284,7 @@ describe("native hook relay registry", () => {
         rawPayload: duplicatePayload,
       }),
     );
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
 
     const newRequest = invokeNativeHookRelay({
       provider: "codex",
@@ -4260,8 +4296,7 @@ describe("native hook relay registry", () => {
         tool_input: { command: "curl https://example.com" },
       },
     });
-    await Promise.resolve();
-    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
 
     for (const resolve of resolvers) {
       resolve("allow");

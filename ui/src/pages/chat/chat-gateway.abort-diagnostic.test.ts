@@ -18,6 +18,7 @@ type AbortDiagnosticState = ChatState & {
 function createAbortDiagnosticState(runId = "run-validation-abort"): AbortDiagnosticState {
   return {
     chatAttachments: [],
+    chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],

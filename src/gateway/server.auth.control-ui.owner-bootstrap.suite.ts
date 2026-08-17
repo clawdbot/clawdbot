@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import {
   createOperatorIdentityFixture,
   seedApprovedOperatorReadPairing,
-  startControlUiServer,
+  startProxiedControlUiServer,
 } from "./server.auth.control-ui.fixtures.test-support.js";
 import {
   connectReq,
@@ -24,7 +24,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
     const { resolveSharedGatewaySessionGeneration } =
       await import("./server/ws-shared-generation.js");
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-control-ui-",
@@ -139,7 +139,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
     const { BOOTSTRAP_HANDOFF_OPERATOR_SCOPES } =
       await import("../shared/device-bootstrap-profile.js");
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-control-ui-bounded-",
     );
@@ -213,7 +213,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
     }
 
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     const { identityPath: secondIdentityPath } = await createOperatorIdentityFixture(
       "openclaw-control-ui-owner-upgrade-second-browser-",
     );
@@ -305,7 +305,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
     const { BOOTSTRAP_HANDOFF_OPERATOR_SCOPES } =
       await import("../shared/device-bootstrap-profile.js");
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-control-ui-missing-purpose-",
@@ -350,7 +350,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     testState.gatewayControlUi = { allowedOrigins: ["https://localhost"] };
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-control-ui-node-profile-",

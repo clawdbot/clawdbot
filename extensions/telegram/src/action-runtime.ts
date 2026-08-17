@@ -402,7 +402,7 @@ function getLastDurableTelegramActionResult(
       lastResult?.messageId ??
       receipt.primaryPlatformMessageId ??
       receipt.platformMessageIds.at(-1),
-    chatId: lastResult?.chatId,
+    chatId: lastResult?.target?.kind === "chat" ? lastResult.target.id : undefined,
   };
 }
 

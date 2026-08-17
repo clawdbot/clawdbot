@@ -83,6 +83,13 @@ function renderMetaRow(label: string, value?: string | null) {
     : nothing;
 }
 
+function renderApprovalChip(kind: "plugin" | "tool" | "agent", value?: string | null) {
+  const text = value?.trim();
+  return text
+    ? html`<span class="approval-page__chip mono" data-approval-chip=${kind}>${text}</span>`
+    : nothing;
+}
+
 function renderPresentation(presentation: ApprovalPresentation) {
   if (presentation.kind === "exec") {
     return html`
@@ -100,7 +107,6 @@ function renderPresentation(presentation: ApprovalPresentation) {
       <dl class="approval-page__meta">
         ${renderMetaRow(t("execApproval.labels.host"), presentation.host)}
         ${renderMetaRow(t("approvalPage.nodeLabel"), presentation.nodeId)}
-        ${renderMetaRow(t("execApproval.labels.agent"), presentation.agentId)}
       </dl>
     `;
   }
@@ -111,19 +117,6 @@ function renderPresentation(presentation: ApprovalPresentation) {
     ${presentation.kind === "plugin" && presentation.detail
       ? html`<pre class="approval-page__preview mono" dir="ltr">${presentation.detail}</pre>`
       : nothing}
-    <dl class="approval-page__meta">
-      ${
-        // severity/pluginId/toolName exist only on the plugin presentation.
-        // exec is rendered in its own branch above and carries no toolName
-        // (ExecApprovalPresentationSchema is closed); system-agent has none.
-        presentation.kind === "plugin"
-          ? html`${renderMetaRow(t("execApproval.labels.severity"), presentation.severity)}
-            ${renderMetaRow(t("execApproval.labels.plugin"), presentation.pluginId)}
-            ${renderMetaRow(t("approvalPage.toolLabel"), presentation.toolName)}`
-          : nothing
-      }
-      ${renderMetaRow(t("execApproval.labels.agent"), presentation.agentId)}
-    </dl>
   `;
 }
 function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
@@ -627,6 +620,13 @@ export class ApprovalPage extends OpenClawLightDomElement {
       </div>
       <div class="approval-page__heading">
         <h1 id="approval-page-title" tabindex=${pending ? nothing : -1}>${title}</h1>
+        <div class="approval-page__chips">
+          ${presentation.kind === "plugin"
+            ? html`${renderApprovalChip("plugin", presentation.pluginId)}
+              ${renderApprovalChip("tool", presentation.toolName)}`
+            : nothing}
+          ${renderApprovalChip("agent", presentation.agentId)}
+        </div>
         <p>${statusDescription}</p>
       </div>
       ${renderPresentation(presentation)}
@@ -685,11 +685,20 @@ export class ApprovalPage extends OpenClawLightDomElement {
         : disconnected
           ? "connection-error"
           : (this.approval?.status ?? "loading");
+    const active = this.approval?.presentation;
+    const rawSeverity = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
+    // Keep this mapping aligned with the sibling exec-approval-card.ts surface.
+    const severity =
+      active?.kind === "exec" || rawSeverity === "warning" || rawSeverity === "warn"
+        ? "warning"
+        : rawSeverity === "danger" || rawSeverity === "critical" || rawSeverity === "error"
+          ? "danger"
+          : "info";
     return html`
       <main class="approval-page" data-state=${documentState}>
         <div class="approval-page__backdrop" aria-hidden="true"></div>
         <section
-          class="approval-page__card"
+          class="approval-page__card approval-page__card--severity-${severity}"
           aria-labelledby="approval-page-title"
           aria-busy=${this.loading || this.resolving ? "true" : "false"}
         >

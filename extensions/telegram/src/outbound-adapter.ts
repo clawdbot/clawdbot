@@ -45,6 +45,13 @@ type TelegramLocationFn = typeof import("./send.js").sendLocationTelegram;
 type ResolveTelegramSendFn = (deps?: OutboundSendDeps) => Promise<TelegramSendFn>;
 type LoadTelegramSendModuleFn = () => Promise<TelegramSendModule>;
 
+function toTelegramOutboundResult<T extends { chatId?: string }>(result: T) {
+  const { chatId, ...delivery } = result;
+  return chatId === undefined
+    ? delivery
+    : { ...delivery, target: { kind: "chat" as const, id: chatId } };
+}
+
 async function resolveDefaultTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSendFn> {
   return (
     resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
@@ -111,7 +118,9 @@ async function resolveTelegramSendContext(params: {
       gatewayClientScopes: params.gatewayClientScopes,
       onDeliveryResult: params.onDeliveryResult
         ? async (result) => {
-            await params.onDeliveryResult?.(attachChannelToResult("telegram", result));
+            await params.onDeliveryResult?.(
+              attachChannelToResult("telegram", toTelegramOutboundResult(result)),
+            );
           }
         : undefined,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
@@ -511,7 +520,10 @@ export function createTelegramOutboundAdapter(
       if (!questionId || !result || !text) {
         return;
       }
-      const chatId = result.chatId ?? normalizeTelegramOutboundTarget(target.to);
+      const chatId =
+        result.target?.kind === "chat"
+          ? result.target.id
+          : normalizeTelegramOutboundTarget(target.to);
       questionGatewayRuntime.registerChannelDelivery({
         questionId,
         deliveryId: `telegram:${target.accountId ?? "default"}:${chatId}:${result.messageId}`,
@@ -550,23 +562,27 @@ export function createTelegramOutboundAdapter(
           ...params,
           resolveSend,
         });
-        return await send(outboundTo, params.text, {
-          ...baseOpts,
-        });
+        return toTelegramOutboundResult(
+          await send(outboundTo, params.text, {
+            ...baseOpts,
+          }),
+        );
       },
       sendMedia: async (params) => {
         const { outboundTo, send, baseOpts } = await resolveTelegramOutboundSendContext({
           ...params,
           resolveSend,
         });
-        return await send(outboundTo, params.text, {
-          ...baseOpts,
-          mediaUrl: params.mediaUrl,
-          ...(params.mediaAccess !== undefined ? { mediaAccess: params.mediaAccess } : {}),
-          mediaLocalRoots: params.mediaLocalRoots,
-          mediaReadFile: params.mediaReadFile,
-          forceDocument: params.forceDocument ?? false,
-        });
+        return toTelegramOutboundResult(
+          await send(outboundTo, params.text, {
+            ...baseOpts,
+            mediaUrl: params.mediaUrl,
+            ...(params.mediaAccess !== undefined ? { mediaAccess: params.mediaAccess } : {}),
+            mediaLocalRoots: params.mediaLocalRoots,
+            mediaReadFile: params.mediaReadFile,
+            forceDocument: params.forceDocument ?? false,
+          }),
+        );
       },
     }),
     sendPayload: async (params) => {
@@ -589,7 +605,7 @@ export function createTelegramOutboundAdapter(
           forceDocument: params.forceDocument ?? false,
         },
       });
-      return attachChannelToResult("telegram", result);
+      return attachChannelToResult("telegram", toTelegramOutboundResult(result));
     },
     sendPoll: async ({
       cfg,

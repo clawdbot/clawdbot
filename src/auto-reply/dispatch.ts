@@ -142,9 +142,9 @@ function bindReplyPayloadRunState(
   const onAgentRunStart = replyOptions?.onAgentRunStart;
   return {
     ...replyOptions,
-    onAgentRunStart: (runId) => {
+    onAgentRunStart: (runId, executionIdentityToken) => {
       runState.runId = runId;
-      onAgentRunStart?.(runId);
+      onAgentRunStart?.(runId, executionIdentityToken);
     },
   };
 }

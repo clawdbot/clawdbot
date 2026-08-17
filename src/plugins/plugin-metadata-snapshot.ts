@@ -398,6 +398,10 @@ export function resolvePluginMetadataSnapshot(
       );
       // Gateway metadata is lifecycle-stable. A workspace with no plugin root can reuse the
       // published graph without polling every bundled/global artifact on its first turn.
+      // Only the run owner that resolved workspace plugin-root presence may claim it: this
+      // projection derives configFingerprint from the published graph instead of a real load,
+      // so synthesizing the fact here would make startup-migration identity depend on whether
+      // a lifecycle snapshot happened to be published at that moment.
       if (
         lifecycleSnapshot &&
         targetWorkspace &&

@@ -81,7 +81,7 @@ export type DoctorContributionHealthCheck =
       readonly kind?: "core";
       readonly source?: string;
     })
-  | (Omit<RunnableHealthCheck, "id" | "kind" | "source"> & {
+  | (Omit<RunnableHealthCheck, "id" | "kind" | "source" | "sourceContract"> & {
       readonly id?: string;
       readonly kind?: "core";
       readonly source?: string;

@@ -41,6 +41,13 @@ type CrabboxProfile = {
   setup?: string;
 };
 
+const CRABBOX_MACHINE_OPTIONS = [
+  { id: "standard", label: "Standard", description: "Cheap smoke checks and small repos" },
+  { id: "fast", label: "Fast", description: "General maintainer testing" },
+  { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
+  { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+] as const;
+
 type IsExecutable = (candidate: string) => boolean;
 
 function requirePositiveDuration(value: unknown, key: string): string {
@@ -137,6 +144,32 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     setup,
     ttl,
   };
+}
+
+export function listCrabboxMachineOptions(profile: WorkerProfile) {
+  const configuredClass = parseCrabboxProfile(profile).class;
+  const options = CRABBOX_MACHINE_OPTIONS.map((option) =>
+    option.id === configuredClass
+      ? {
+          id: option.id,
+          label: option.label,
+          description: option.description,
+          default: true,
+        }
+      : option,
+  );
+  if (options.some((option) => option.id === configuredClass)) {
+    return options;
+  }
+  return [
+    ...options,
+    {
+      id: configuredClass,
+      label: configuredClass,
+      description: "Configured instance type",
+      default: true,
+    },
+  ];
 }
 
 export function buildCrabboxWarmupArgs(

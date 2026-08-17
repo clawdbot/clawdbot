@@ -9,6 +9,7 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import { formatLookupMiss } from "../cli/error-format.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -98,7 +99,7 @@ type GatewayTaskCancelResult = {
 async function tryCancelGatewayOwnedTaskViaGateway(
   task: TaskRecord,
 ): Promise<GatewayTaskCancelResult | null> {
-  if (task.runtime !== "cron" && task.runtime !== "acp") {
+  if (task.runtime === "cli") {
     return null;
   }
   try {
@@ -109,16 +110,16 @@ async function tryCancelGatewayOwnedTaskViaGateway(
       timeoutMs: 5_000,
     });
   } catch (error) {
-    if (task.runtime === "acp") {
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        found: true,
-        cancelled: false,
-        reason: `ACP task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
-        task,
-      };
+    if (task.runtime === "cron") {
+      return null;
     }
-    return null;
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      found: true,
+      cancelled: false,
+      reason: `${task.runtime.toUpperCase()} task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
+      task,
+    };
   }
 }
 
@@ -323,7 +324,12 @@ export async function tasksShowCommand(
 ) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
-    runtime.error(formatTaskLookupMiss(opts.lookup));
+    const message = formatTaskLookupMiss(opts.lookup);
+    if (opts.json) {
+      writeRuntimeJson(runtime, formatCliJsonFailure(message));
+    } else {
+      runtime.error(message);
+    }
     runtime.exit(1);
     return;
   }

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createChannelProgressDraftCompositor,
-  createChannelProgressReceiptTracker,
+  createChannelProgressWorkCounter,
   PROGRESS_STATUS_PREAMBLE_FRESH_MS,
 } from "./progress-draft-compositor.js";
 
@@ -23,24 +23,21 @@ function createTestProgressDraftCompositor(
 const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 
 describe("createChannelProgressDraftCompositor", () => {
-  it("tracks compact per-turn progress receipts", () => {
+  it("counts only work tool calls and resets per turn", () => {
     let now = 1_000;
-    const receipt = createChannelProgressReceiptTracker({ now: () => now });
+    const work = createChannelProgressWorkCounter({ now: () => now });
 
-    receipt.noteReasoning();
-    receipt.noteToolCall("exec");
-    receipt.noteCommentary("note-1", "First note");
-    receipt.noteCommentary("note-1", "Updated note");
-    receipt.noteReasoning();
+    work.noteToolCall("exec");
+    work.noteToolCall("update_plan");
     now = 43_000;
 
-    expect(receipt.toolCalls).toBe(1);
-    expect(receipt.elapsedSeconds).toBe(42);
-    expect(receipt.buildSummaryLine()).toBe("🧠 2 thoughts · 💬 1 note · 🛠️ 1 tool call · ⏱️ 42s");
+    expect(work.toolCalls).toBe(1);
+    expect(work.elapsedSeconds).toBe(42);
 
-    receipt.reset();
+    work.reset();
     now = 43_500;
-    expect(receipt.buildSummaryLine()).toBe("⏱️ 1s");
+    expect(work.toolCalls).toBe(0);
+    expect(work.elapsedSeconds).toBe(1);
   });
 
   it("starts immediately for plans, replaces snapshots, and clears them on reset", async () => {

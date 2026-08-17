@@ -57,6 +57,11 @@ runtime allowlist disables native Code Mode and leaves the turn without an
 execution environment, OpenClaw keeps its policy-filtered `exec` and `process`
 tools available instead for direct, unsandboxed execution.
 
+When `tools.exec.host: "node"` or `/exec host=node` makes the node the session
+default, OpenClaw hides the Codex-native shell and exposes `node_exec` and
+`node_process` as the shell path. This keeps the configured execution host from
+silently falling back to the app-server or Gateway machine.
+
 This Codex-native feature is separate from
 [OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
 for generic OpenClaw runs with a different `exec` input shape. For the
@@ -255,6 +260,11 @@ Do not set `compaction.model` or `compaction.provider` on Codex-backed
 agents. Codex compacts through its native app-server thread state, so
 OpenClaw ignores those local summarizer overrides at runtime, and
 `openclaw doctor --fix` removes them when the agent uses Codex.
+
+An authored `models.providers.*.models[].contextTokens` cap is forwarded to
+Codex thread start and resume as `model_context_window`. Codex clamps the value
+to the model's native maximum and derives automatic compaction from the capped
+window. When the model entry has no authored cap, OpenClaw sends no override.
 
 Lossless remains supported as a context engine for assembly, ingestion, and
 maintenance around Codex turns, configured through

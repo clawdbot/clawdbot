@@ -33,10 +33,16 @@ export function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
 
-function renderConnectingSplash() {
+function renderConnectingSplash(status?: string) {
   return html`
-    <main class="connect-splash" role="status" aria-live="polite" aria-label=${t("common.loading")}>
+    <main
+      class="connect-splash"
+      role="status"
+      aria-live="polite"
+      aria-label=${status ?? t("common.loading")}
+    >
       <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
+      ${status ? html`<span class="connect-splash__status">${status}</span>` : nothing}
     </main>
   `;
 }
@@ -151,6 +157,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  protected override firstUpdated(): void {
+    if (this.runtime) {
+      globalThis.dispatchEvent(new Event("openclaw-control-ui-rendered"));
+    }
+  }
+
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
     const sourceChanged = gateway !== this.loginGatewaySource;
     if (sourceChanged) {
@@ -195,6 +207,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     const gatewaySnapshot = context.gateway.snapshot;
     const gatewayConnected = gatewaySnapshot.phase === "connected";
+    const gatewayStartupStatus =
+      gatewaySnapshot.phase === "starting" ? t("common.gatewayStarting") : undefined;
     const gatewayUrlConfirmation = this.pendingGatewayUrl
       ? html`
           <openclaw-gateway-url-confirmation
@@ -231,8 +245,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .themeMode=${resolveTerminalThemeMode()}
           fullscreen
         ></openclaw-terminal-panel>
+        ${!gatewayConnected && gatewaySnapshot.lastError === null
+          ? renderConnectingSplash(gatewayStartupStatus)
+          : nothing}
         ${!isOptionalElementDefined(TERMINAL_PANEL_ELEMENT) && terminalAvailable
-          ? renderConnectingSplash()
+          ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
         ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
@@ -261,10 +278,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
           }}
         ></openclaw-desktop-panel>
         ${!gatewayConnected && gatewaySnapshot.lastError === null
-          ? renderConnectingSplash()
+          ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
         ${!isOptionalElementDefined(DESKTOP_PANEL_ELEMENT) && desktopAvailable
-          ? renderConnectingSplash()
+          ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
         ${!desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="desktop-view-unavailable">${t("desktop.unavailable")}</div>`
@@ -277,18 +294,19 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // loginGatePinned protects manual submissions.
     const initialConnectPending =
       runtime.documentMode === null &&
-      gatewaySnapshot.phase === "connecting" &&
-      !this.loginGatePinned &&
-      gatewaySnapshot.lastError === null;
+      gatewaySnapshot.lastError === null &&
+      (gatewaySnapshot.phase === "starting" ||
+        (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>
-          ${renderConnectingSplash()} ${gatewayUrlConfirmation}
+          ${renderConnectingSplash(gatewayStartupStatus)} ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
       `;
     }
-    const showLoginGate =
-      !gatewayConnected && (this.loginGatePinned || gatewaySnapshot.phase !== "reconnecting");
+    const shellOwnsRecovery =
+      gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
+    const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
     if (showLoginGate) {
       return html`
         <openclaw-tooltip-provider>

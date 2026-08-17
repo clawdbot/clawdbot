@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import type { WorkerDesktopApp, WorkerProfile } from "../../plugins/capability-provider.types.js";
+import type {
+  WorkerDesktopApp,
+  WorkerMachineOption,
+  WorkerProfile,
+} from "../../plugins/capability-provider.types.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
@@ -56,7 +60,12 @@ export type WorkerDesktopLaunchResult = {
 export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
-  create(profileId: string, idempotencyKey: string): Promise<WorkerEnvironmentServiceRecord>;
+  listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
+  create(
+    profileId: string,
+    idempotencyKey: string,
+    machineClass?: string,
+  ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   destroyUnattached(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   observeDesktop(request: {
@@ -78,6 +87,7 @@ export type WorkerPlacementDispatchRequest = {
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
   deviceId?: string;
+  machineClass?: string;
   inheritedProfile?: {
     providerId: string;
     profileSnapshot: WorkerProfile;

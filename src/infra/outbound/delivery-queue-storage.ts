@@ -55,7 +55,6 @@ export type {
   LegacyQueuedDelivery,
   LegacyQueuedDeliveryPreparation,
   QueuedDelivery,
-  QueuedDeliveryPayload,
   QueuedReplyPayloadSendingHook,
   QueuedRenderedMessageBatchPlan,
 } from "./delivery-queue-types.js";

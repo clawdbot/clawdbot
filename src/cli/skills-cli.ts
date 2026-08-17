@@ -69,6 +69,7 @@ import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -875,7 +876,7 @@ export function registerSkillsCli(program: Command) {
         let exitCode: number | undefined;
         const reportError =
           hasJsonOutput(opts) || opts.card !== true
-            ? (message: string) => defaultRuntime.writeJson({ error: message })
+            ? (message: string) => defaultRuntime.writeJson(formatCliJsonFailure(message))
             : defaultRuntime.error;
         try {
           const workspace = resolveClawHubTargetWorkspace(command, opts, reportError);

@@ -236,12 +236,14 @@ describe("runServiceRestart token drift", () => {
 
   it("fails restart with the container hint when no service is installed", async () => {
     service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue(null);
+    const hasInstalledDefinition = vi.fn(async () => false);
     vi.stubEnv("OPENCLAW_CONTAINER_HINT", "openclaw-demo-container");
 
     await expect(
       runServiceRestart({
         serviceNoun: "Gateway",
-        service,
+        service: { ...service, hasInstalledDefinition } as GatewayService,
         renderStartHints: () => [
           "Restart the container or the service that manages it for openclaw-demo-container.",
           "openclaw gateway install",
@@ -268,6 +270,41 @@ describe("runServiceRestart token drift", () => {
     expect(payload.hintItems).toContainEqual(
       expect.objectContaining({ kind: "container-restart" }),
     );
+    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
+  });
+
+  it("restarts a disabled installed service through its native manager", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    const hasInstalledDefinition = vi.fn(async () => true);
+    const onNotLoaded = vi.fn(async () => null);
+    const renderStartHints = vi.fn(() => ["openclaw gateway install"]);
+    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.onMutation?.({ mode: "systemctl-restart" });
+      return { outcome: "completed" };
+    });
+
+    await expect(
+      runServiceRestart({
+        ...createServiceRunArgs(),
+        service: { ...service, hasInstalledDefinition } as GatewayService,
+        renderStartHints,
+        onNotLoaded,
+      }),
+    ).resolves.toBe(true);
+
+    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expect(renderStartHints).not.toHaveBeenCalled();
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "restart",
+      source: "cli",
+      mode: "systemctl-restart",
+    });
+    expect(readJsonLog<{ ok?: boolean; result?: string; hints?: string[] }>()).toMatchObject({
+      ok: true,
+      result: "restarted",
+    });
   });
 
   it("runs the service mutation guard before restarting a loaded service", async () => {
@@ -331,6 +368,7 @@ describe("runServiceRestart token drift", () => {
 
   it("does not run the service mutation guard before not-loaded recovery", async () => {
     service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue(null);
     const beforeServiceMutation = vi.fn();
 
     await runServiceRestart({
@@ -534,6 +572,7 @@ describe("runServiceRestart token drift", () => {
   it("runs restart health checks after an unmanaged restart signal", async () => {
     const postRestartCheck = vi.fn(async () => {});
     service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue(null);
 
     await runServiceRestart({
       serviceNoun: "Gateway",
@@ -549,7 +588,6 @@ describe("runServiceRestart token drift", () => {
 
     expect(postRestartCheck).toHaveBeenCalledTimes(1);
     expect(service.restart).not.toHaveBeenCalled();
-    expect(service.readCommand).not.toHaveBeenCalled();
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("restarted");
     expect(payload.message).toContain("unmanaged process");
@@ -558,6 +596,7 @@ describe("runServiceRestart token drift", () => {
   it("emits loaded restart state when launchd repair handles a not-loaded restart", async () => {
     const postRestartCheck = vi.fn(async () => {});
     service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue(null);
 
     await runServiceRestart({
       serviceNoun: "Gateway",

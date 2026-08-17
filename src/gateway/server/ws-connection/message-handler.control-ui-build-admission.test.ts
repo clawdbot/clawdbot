@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  ConnectErrorDetailCodes,
+  readControlUiBuildMismatchId,
+} from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
@@ -184,6 +187,14 @@ describe("Control UI build admission over WebSocket", () => {
       attachGatewayWsMessageHandler({
         socket,
         upgradeReq: request as IncomingMessage,
+        ingressAttribution: {
+          kind: "direct-local",
+          clientIp: "127.0.0.1",
+          rateLimit: {
+            subject: { key: "127.0.0.1" },
+            resetOnSuccess: true,
+          },
+        },
         connId: "legacy-build-connection",
         remoteAddr: "127.0.0.1",
         localAddr: "127.0.0.1",
@@ -290,9 +301,18 @@ describe("Control UI build admission over WebSocket", () => {
           code: ErrorCodes.UNAVAILABLE,
           message: "protocol mismatch: Control UI updated; reload this page to continue",
           retryable: false,
-          details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+          details: {
+            code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+            gatewayBuildId: "gateway-build",
+            reloadRequired: true,
+          },
         },
       });
+      expect(
+        readControlUiBuildMismatchId(
+          (rejection.error as { details?: unknown } | undefined)?.details,
+        ),
+      ).toBe("gateway-build");
       ws.send(
         JSON.stringify({
           type: "req",

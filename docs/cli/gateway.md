@@ -66,9 +66,6 @@ openclaw gateway run   # equivalent, explicit form
 <ParamField path="--tailscale <mode>" type="string">
   Tailscale exposure: `off`, `serve`, `funnel`.
 </ParamField>
-<ParamField path="--tailscale-reset-on-exit" type="boolean">
-  Reset Tailscale serve/funnel config on shutdown.
-</ParamField>
 <ParamField path="--allow-unconfigured" type="boolean">
   Start without enforcing `gateway.mode=local`. Ad-hoc/dev bootstrap only; does not persist or repair config.
 </ParamField>

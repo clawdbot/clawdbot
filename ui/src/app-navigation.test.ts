@@ -110,6 +110,7 @@ describe("navigationIconForRoute", () => {
       plugins: "puzzle",
       "skill-workshop": "wrench",
       devices: "monitorSmartphone",
+      "cloud-workers": "server",
       profile: "circleUser",
       communications: "send",
       appearance: "palette",
@@ -233,6 +234,7 @@ describe("titleForRoute", () => {
       plugins: "Plugins",
       "skill-workshop": "Skill Workshop",
       devices: "Devices",
+      "cloud-workers": "Cloud workers",
       profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
@@ -284,6 +286,7 @@ describe("subtitleForRoute", () => {
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       devices: "Paired devices, pairing approvals, and exec bindings.",
+      "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
       communications: "Messages and text-to-speech settings.",
       appearance: "Theme, UI, and setup wizard settings.",
@@ -322,6 +325,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
     expect(pathForRoute("labs")).toBe("/settings/labs");
+    expect(pathForRoute("cloud-workers")).toBe("/settings/cloud-workers");
   });
 
   it("prepends base path", () => {
@@ -543,6 +547,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "communications",
       "talk",
       "devices",
+      "cloud-workers",
       "agents",
       "labs",
       "model-providers",

@@ -115,19 +115,19 @@ async function resolveServiceLoadedOrFail(params: {
   fail: ReturnType<typeof createDaemonActionContext>["fail"];
   acceptInstalledDefinition?: boolean;
 }): Promise<boolean | null> {
-  // Returning null keeps failure emission centralized in the caller's action context.
+  // Keep native scope discovery in the adapter and failure emission in the action context.
+  const hasInstalledDefinition = async () =>
+    params.service.hasInstalledDefinition
+      ? await params.service.hasInstalledDefinition({ env: process.env }).catch(() => false)
+      : Boolean(await params.service.readCommand(process.env).catch(() => null));
   try {
-    return await params.service.isLoaded({ env: process.env });
+    const loaded = await params.service.isLoaded({ env: process.env });
+    return (
+      loaded || (Boolean(params.acceptInstalledDefinition) && (await hasInstalledDefinition()))
+    );
   } catch (err) {
-    if (params.acceptInstalledDefinition) {
-      // The adapter owns platform-specific install discovery; systemd spans
-      // user, system, marker-owned, and dueling definitions.
-      const installed = params.service.hasInstalledDefinition
-        ? await params.service.hasInstalledDefinition({ env: process.env }).catch(() => false)
-        : Boolean(await params.service.readCommand(process.env).catch(() => null));
-      if (installed) {
-        return true;
-      }
+    if (params.acceptInstalledDefinition && (await hasInstalledDefinition())) {
+      return true;
     }
     params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return null;

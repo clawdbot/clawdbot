@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     mainKey: "main",
     alias: "main",
     requesterInternalKey: undefined as string | undefined,
+    mainSessionKey: undefined as string | undefined,
     restrictToSpawned: false,
   })),
   getSessionStateVersions: vi.fn(
@@ -38,7 +39,6 @@ vi.mock("./in-process-gateway.js", () => ({
 vi.mock("../../sessions/session-state-events.js", () => ({
   getSessionStateVersions: (refs: Array<{ sessionKey: string; agentId: string }>) =>
     mocks.getSessionStateVersions(refs),
-  listAmbientGroupWatchTargets: () => new Set<string>(),
 }));
 
 vi.mock("./sessions-helpers.js", async (importActual) => {
@@ -100,6 +100,7 @@ describe("sessions-list-tool", () => {
       mainKey: "main",
       alias: "main",
       requesterInternalKey: undefined,
+      mainSessionKey: undefined,
       restrictToSpawned: false,
     });
     mocks.getSessionStateVersions.mockReturnValue({});
@@ -175,6 +176,60 @@ describe("sessions-list-tool", () => {
         node: ["agent:main:node-device"],
       },
     });
+  });
+
+  it("lists unspawned same-agent sessions from the canonical main session under tree visibility", async () => {
+    mocks.resolveEffectiveSessionToolsVisibility.mockReturnValue("tree");
+    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
+      mainKey: "main",
+      alias: "main",
+      requesterInternalKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      restrictToSpawned: false,
+    });
+    mocks.gatewayCall.mockResolvedValue({
+      sessions: [
+        sessionRow("agent:main:main", "main"),
+        sessionRow("agent:main:slack:channel:team-room", "channel"),
+      ],
+    });
+
+    const result = await createSessionsListTool({
+      agentSessionKey: "agent:main:main",
+      config: { ...VALID_CONFIG, tools: { sessions: { visibility: "tree" } } },
+    }).execute("main-tree", {});
+
+    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
+      "agent:main:main",
+      "agent:main:slack:channel:team-room",
+    ]);
+  });
+
+  it("keeps a sandboxed main session clamped to spawned rows", async () => {
+    mocks.resolveEffectiveSessionToolsVisibility.mockReturnValue("tree");
+    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
+      mainKey: "main",
+      alias: "main",
+      requesterInternalKey: "agent:main:main",
+      mainSessionKey: undefined,
+      restrictToSpawned: true,
+    });
+    mocks.gatewayCall.mockImplementation(async (request: unknown) => {
+      expect(request).toEqual(
+        expect.objectContaining({
+          params: expect.objectContaining({ spawnedBy: "agent:main:main" }),
+        }),
+      );
+      return { sessions: [sessionRow("agent:main:slack:channel:unspawned", "channel")] };
+    });
+
+    const result = await createSessionsListTool({
+      agentSessionKey: "agent:main:main",
+      sandboxed: true,
+      config: { ...VALID_CONFIG, tools: { sessions: { visibility: "all" } } },
+    }).execute("sandbox-main", {});
+
+    expect(getSessionsListDetails(result).sessions).toEqual([]);
   });
 
   it.each([
@@ -569,6 +624,7 @@ describe("sessions-list-tool", () => {
       mainKey: "main",
       alias: "global",
       requesterInternalKey: "global",
+      mainSessionKey: undefined,
       restrictToSpawned: false,
     });
     mocks.gatewayCall
@@ -613,6 +669,7 @@ describe("sessions-list-tool", () => {
       mainKey: "main",
       alias: "global",
       requesterInternalKey: "agent:research:main",
+      mainSessionKey: "global",
       restrictToSpawned: false,
     });
     mocks.gatewayCall.mockResolvedValue({

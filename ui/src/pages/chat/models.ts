@@ -92,13 +92,6 @@ export async function loadModels(
   return inFlight;
 }
 
-export function applyModelCatalogResult(models: unknown): ModelCatalogEntry[] | null {
-  if (!Array.isArray(models)) {
-    return null;
-  }
-  return models as ModelCatalogEntry[];
-}
-
 async function requestModels(
   client: GatewayBrowserClient,
   fallback: ModelCatalogEntry[] | undefined,

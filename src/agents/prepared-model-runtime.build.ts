@@ -34,6 +34,7 @@ import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { projectPreparedPluginGeneration } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -355,7 +356,13 @@ async function buildSnapshotBatch(
     configuredProjectionMs += prepared.buildStats.configuredProjectionMs;
     for (const agentFacts of prepared.agentFacts) {
       preparedInputs.set(agentFacts.input, agentFacts);
-      pluginGenerations.set(agentFacts.input, prepared.pluginGeneration);
+      pluginGenerations.set(
+        agentFacts.input,
+        projectPreparedPluginGeneration({
+          input: agentFacts.input,
+          pluginGeneration: prepared.pluginGeneration,
+        }),
+      );
     }
   }
   const workspaceFactsMs = performance.now() - workspaceFactsStartedAt;

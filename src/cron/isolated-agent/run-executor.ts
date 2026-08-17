@@ -15,6 +15,7 @@ import {
 } from "../../agents/harness/context-engine-turn-attempt.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
@@ -569,6 +570,10 @@ function createCronPromptExecutor(params: {
                 prompt: promptText,
                 finalizePromptForResolvedTools,
                 modelProvider: providerOverride,
+                modelHasVision: modelSupportsInput(
+                  findModelInCatalog(thinkingCatalog ?? [], providerOverride, modelOverride),
+                  "image",
+                ),
                 provider: executionProvider,
                 model: modelOverride,
                 thinkLevel: candidateThinkLevel,

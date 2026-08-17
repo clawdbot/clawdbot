@@ -361,7 +361,7 @@ describe("worker turn launcher local placement", () => {
       get: vi.fn(() => attachedEnvironment()),
       startTunnel: vi.fn(async () => tunnel),
     };
-    const recoverPendingWorkspaceResult = vi.fn(async () => {
+    const reconcileActivePlacement = vi.fn(async () => {
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "failed" || placement.turnClaim !== null) {
         throw new Error("expected terminal placement before teardown recovery");
@@ -371,7 +371,7 @@ describe("worker turn launcher local placement", () => {
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
       placements,
-      recoverPendingWorkspaceResult,
+      reconcileActivePlacement,
     });
 
     await expect(
@@ -389,7 +389,7 @@ describe("worker turn launcher local placement", () => {
       "Cloud worker finished, but its workspace result could not be reconciled: workspace manifest memo exceeds its entry limit",
     );
 
-    expect(recoverPendingWorkspaceResult).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
     expect(placements.get(SESSION_ID)).toMatchObject({
       state: "failed",
       turnClaim: null,

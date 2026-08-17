@@ -34,6 +34,57 @@ describeControlUiE2e("Control UI chat file links", () => {
     await server?.close();
   });
 
+  it("shows the Review panel before a clicked file finishes loading", async () => {
+    const context = await browser.newContext({
+      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+    try {
+      const file = {
+        root: "/workspace",
+        sessionKey: "main",
+        file: {
+          content: "export const loaded = true;\n",
+          kind: "read",
+          missing: false,
+          name: "slow.ts",
+          path: "src/slow.ts",
+          workspacePath: "src/slow.ts",
+        },
+      };
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.files.get"],
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Review `src/slow.ts`." }],
+            timestamp: 1,
+          },
+        ],
+        methodResponses: { "sessions.files.get": file },
+      });
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.locator('a.markdown-file-link[data-file-path="src/slow.ts"]').click();
+      await gateway.waitForRequest("sessions.files.get");
+
+      await page.locator(".side-panel").waitFor({ state: "visible" });
+      expect(await page.locator(".sidebar-file-view").count()).toBe(0);
+      await page.screenshot({ path: path.join(artifactDir, "latency-panel-before-file.png") });
+
+      await gateway.resolveDeferred("sessions.files.get");
+      await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
+      await expect
+        .poll(() => page.locator(".cm-content").textContent())
+        .toContain("export const loaded = true;");
+      await page.screenshot({ path: path.join(artifactDir, "latency-file-loaded.png") });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("opens the selected file from chat and the workspace root", async () => {
     const context = await browser.newContext({
       recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },

@@ -516,17 +516,18 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         // in chat-send-admission.ts: unreferenced staged media is discarded.
         void discardPreparedChatSendAttachments(attachments.offloadedRefs);
       }
-      // Cosmetic title work starts only after the accepted turn finishes. Starting it
-      // before dispatch can make a cold utility runtime starve the user's real turn.
-      scheduleChatDashboardSessionTitle({
-        admittedSessionId,
-        agentId,
-        cfg,
-        context,
-        request,
-        sessionKey,
-        sessionLoadOptions: session.sessionLoadOptions,
-        storePath: session.storePath,
-      });
     });
+  // Title work starts at turn admission, concurrently with the launched run. It must never run
+  // serially before dispatch (a cold utility runtime can starve the turn) or wait for completion
+  // (long or interrupted first turns would silently remain untitled, and restart loses the chain).
+  scheduleChatDashboardSessionTitle({
+    admittedSessionId,
+    agentId,
+    cfg,
+    context,
+    request,
+    sessionKey,
+    sessionLoadOptions: session.sessionLoadOptions,
+    storePath: session.storePath,
+  });
 }
