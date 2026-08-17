@@ -143,7 +143,7 @@ describe("connect cli", () => {
     const clientSecret = ["cf", "client", "secret"].join("-");
     vi.stubEnv("CF_ACCESS_CLIENT_ID", clientId);
     vi.stubEnv("CF_ACCESS_CLIENT_SECRET", clientSecret);
-    let observedHeaders: typeof import("node:http").IncomingHttpHeaders | undefined;
+    let observedHeaders: Record<string, string | string[] | undefined> | undefined;
     const server = createServer((request, response) => {
       observedHeaders = request.headers;
       const accepted =

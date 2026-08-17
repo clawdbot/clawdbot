@@ -9,8 +9,8 @@ import {
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { materializeSecretInput } from "../secrets/resolve-secret-input-string.js";
 
-export const CF_ACCESS_CLIENT_ID_ENV = "CF_ACCESS_CLIENT_ID";
-export const CF_ACCESS_CLIENT_SECRET_ENV = "CF_ACCESS_CLIENT_SECRET";
+const CF_ACCESS_CLIENT_ID_ENV = "CF_ACCESS_CLIENT_ID";
+const CF_ACCESS_CLIENT_SECRET_ENV = "CF_ACCESS_CLIENT_SECRET";
 
 export type NodeHostCloudflareAccessConfig = {
   clientId: SecretInput;
