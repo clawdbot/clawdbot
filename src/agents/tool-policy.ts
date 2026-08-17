@@ -5,7 +5,7 @@
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
   expandToolGroups,
@@ -231,7 +231,9 @@ export function expandPolicyWithPluginGroups(
 
 function buildDeclaredMcpToolPrefixes(serverNames?: Iterable<string>): Set<string> {
   const prefixes = new Set<string>();
-  for (const safeName of assignSafeServerNames(serverNames ?? []).values()) {
+  const usedNames = new Set<string>();
+  for (const serverName of serverNames ?? []) {
+    const safeName = sanitizeServerName(serverName, usedNames);
     const prefix = normalizeToolPolicyName(safeName + TOOL_NAME_SEPARATOR);
     if (prefix) {
       prefixes.add(prefix);

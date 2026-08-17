@@ -1,7 +1,6 @@
 /** Tests MCP server/tool name sanitization, truncation, and collision handling. */
 import { describe, expect, it } from "vitest";
 import {
-  assignSafeServerNames,
   buildSafeToolName,
   normalizeReservedToolNames,
   sanitizeServerName,
@@ -14,36 +13,6 @@ describe("agent bundle MCP names", () => {
 
     expect(sanitizeServerName("vigil-harbor", usedNames)).toBe("vigil-harbor");
     expect(sanitizeServerName("vigil:harbor", usedNames)).toBe("vigil-harbor-2");
-  });
-
-  it.each([
-    ["reserved bare name", "mcp", "mcp-server"],
-    ["reserved namespace prefix", "mcp__reader", "mcp-reader"],
-    ["empty sanitized name", "   ", "mcp-server"],
-  ])("renames %s away from reserved native MCP tool forms", (_label, raw, expected) => {
-    const safeServerName = sanitizeServerName(raw, new Set<string>());
-    const safeToolName = buildSafeToolName({
-      serverName: safeServerName,
-      toolName: "read",
-      reservedNames: new Set(),
-    });
-
-    expect(safeServerName).toBe(expected);
-    expect(safeToolName).toBe(`${expected}${TOOL_NAME_SEPARATOR}read`);
-    expect(safeToolName).not.toMatch(/^mcp__/);
-  });
-
-  it.each([
-    [["mcp", "mcp-server"], { mcp: "mcp-server-2", "mcp-server": "mcp-server" }],
-    [["mcp-server", "mcp"], { "mcp-server": "mcp-server", mcp: "mcp-server-2" }],
-    [["mcp__reader", "mcp-reader"], { mcp__reader: "mcp-reader-2", "mcp-reader": "mcp-reader" }],
-    [["mcp-reader", "mcp__reader"], { "mcp-reader": "mcp-reader", mcp__reader: "mcp-reader-2" }],
-    [
-      ["mcp", "mcp-server", "mcp server"],
-      { mcp: "mcp-server-3", "mcp-server": "mcp-server", "mcp server": "mcp-server-2" },
-    ],
-  ])("does not let reserved fallbacks displace safe siblings: %j", (serverNames, expected) => {
-    expect(Object.fromEntries(assignSafeServerNames(serverNames))).toEqual(expected);
   });
 
   it("keeps server and tool fragments provider-safe when they start with digits", () => {

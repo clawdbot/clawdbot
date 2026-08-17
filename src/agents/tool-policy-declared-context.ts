@@ -9,7 +9,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { hasManifestToolAvailability } from "../plugins/manifest-tool-availability.js";
 import { isPluginMetadataSnapshotCompatible } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { DeclaredToolAllowlistContext } from "./tool-policy.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
@@ -74,16 +74,13 @@ function collectConfiguredMcpServerNames(params: {
 }): string[] {
   const servers = normalizeConfiguredMcpServers(params.config?.mcp?.servers);
   const denylist = normalizeToolDenylist(params.toolDenylist);
-  const enabledServers = Object.entries(servers).filter(
-    ([name, value]) => isRecord(value) && value.enabled !== false && name.trim(),
-  );
-  const safeServerNamesByServer = assignSafeServerNames(enabledServers.map(([name]) => name));
+  const usedServerNames = new Set<string>();
   const names: string[] = [];
-  for (const [name] of enabledServers) {
-    const safeServerName = safeServerNamesByServer.get(name);
-    if (!safeServerName) {
+  for (const [name, value] of Object.entries(servers)) {
+    if (!isRecord(value) || value.enabled === false || !name.trim()) {
       continue;
     }
+    const safeServerName = sanitizeServerName(name, usedServerNames);
     if (
       denylistBlocksMcpServer({
         safeServerName,

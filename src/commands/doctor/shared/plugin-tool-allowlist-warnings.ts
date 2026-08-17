@@ -4,10 +4,7 @@ import {
   sortUniqueStrings,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import {
-  assignSafeServerNames,
-  TOOL_NAME_SEPARATOR,
-} from "../../../agents/agent-bundle-mcp-names.js";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
 import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
@@ -312,15 +309,18 @@ function collectActiveSandboxToolPolicies(
 }
 
 function buildMcpProbeToolNames(serverNames: readonly string[]): string[] {
-  return Array.from(
-    assignSafeServerNames(serverNames).values(),
-    (safeServerName) => `${safeServerName}${TOOL_NAME_SEPARATOR}probe`,
+  const usedNames = new Set<string>();
+  return serverNames.map(
+    (serverName) => `${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}probe`,
   );
 }
 
 function buildMcpToolNamePrefixes(serverNames: readonly string[]): string[] {
-  return Array.from(assignSafeServerNames(serverNames).values())
-    .map((safeServerName) => normalizeToolPolicyName(`${safeServerName}${TOOL_NAME_SEPARATOR}`))
+  const usedNames = new Set<string>();
+  return serverNames
+    .map((serverName) =>
+      normalizeToolPolicyName(`${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}`),
+    )
     .filter(Boolean);
 }
 
