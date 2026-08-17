@@ -635,7 +635,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, created.error);
       return;
     }
-    registerCreatedSessionCategory(p.category, context);
+    registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
     if (created.resetExisting) {
       await captureCreatedSessionDiffBaseline({
         key: created.key,

@@ -203,7 +203,7 @@ test("sessions.create assigns and registers its requested group", async () => {
     "sessions.create",
     {
       agentId: "main",
-      category: "Client work",
+      category: "  Client work  ",
     },
     {
       context: {
