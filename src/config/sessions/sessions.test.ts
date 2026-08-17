@@ -173,13 +173,30 @@ it("drops malformed assistant transcript repair records", () => {
 });
 
 describe("session path safety", () => {
+  it("preserves path-safe Unicode session IDs", () => {
+    const sessionId = "volume-main-会議-000000";
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+
+    expect(validateSessionId(sessionId)).toBe(sessionId);
+    expect(normalizePersistedSessionEntryShape({ sessionId, updatedAt: 42 })).toMatchObject({
+      sessionId,
+      updatedAt: 42,
+    });
+    expect(resolveSessionTranscriptPathInDir(sessionId, sessionsDir)).toBe(
+      path.resolve(sessionsDir, `${sessionId}.jsonl`),
+    );
+  });
+
   it("rejects unsafe session IDs", () => {
     const unsafeSessionIds = [
       "../etc/passwd",
       "a/b",
       "a\\b",
       "/abs",
+      "session:legacy",
+      "session-🙂",
       "sess.checkpoint.11111111-1111-4111-8111-111111111111",
+      `session-${"会".repeat(82)}`,
     ];
     for (const sessionId of unsafeSessionIds) {
       expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);

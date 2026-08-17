@@ -58,12 +58,13 @@ export function resolveSessionFilePathOptions(params: {
   return undefined;
 }
 
-const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+const SAFE_SESSION_ID_RE = /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,127}$/u;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
   if (
     !SAFE_SESSION_ID_RE.test(trimmed) ||
+    Buffer.byteLength(`${trimmed}.jsonl`, "utf8") > 255 ||
     isCompactionCheckpointTranscriptFileName(`${trimmed}.jsonl`)
   ) {
     throw new Error(`Invalid session ID: ${sessionId}`);

@@ -18,7 +18,7 @@ function isSafeSessionId(value: unknown): value is string {
   if (trimmed.includes("/") || trimmed.includes("\\") || trimmed === "." || trimmed === "..") {
     return false;
   }
-  return /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/.test(trimmed);
+  return /^[\p{L}\p{N}][\p{L}\p{N}._:@-]*$/u.test(trimmed);
 }
 
 function normalizeTranscriptSessionId(value: string): string | undefined {
