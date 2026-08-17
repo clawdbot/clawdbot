@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { registerOnePasswordSecretRefCommands, testing } from "./secret-ref-cli.js";
@@ -11,6 +12,8 @@ type OnePasswordPlan = {
   providerUpserts: Record<string, unknown>;
   targets: Array<Record<string, unknown>>;
 };
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function captureStdout() {
   let output = "";
@@ -305,9 +308,7 @@ describe("1Password CLI status", () => {
   it.skipIf(process.platform === "win32")(
     "explains why a discovered op executable is untrusted",
     async () => {
-      const tempDir = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-op-untrusted-")),
-      );
+      const tempDir = await fs.realpath(tempDirs.make("openclaw-op-untrusted-", os.tmpdir()));
       const executable = path.join(tempDir, "op");
       const output = captureStdout();
       try {
@@ -322,8 +323,24 @@ describe("1Password CLI status", () => {
         );
       } finally {
         await fs.chmod(tempDir, 0o700);
-        await fs.rm(tempDir, { recursive: true, force: true });
       }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not expose unexpected executable-resolution errors",
+    async () => {
+      const output = captureStdout();
+      const overlongDirectory = `/${"a".repeat(4096)}`;
+
+      await createProgram({}, { env: { PATH: overlongDirectory } }).parseAsync(
+        ["onepassword", "secretref", "status"],
+        { from: "user" },
+      );
+
+      expect(output()).toContain("op status: untrusted\n");
+      expect(output()).not.toContain("op error:");
+      expect(output()).not.toContain("ENAMETOOLONG");
     },
   );
 
