@@ -130,17 +130,21 @@ internal fun compactSessionChoices(
 ): List<ChatSessionEntry> {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   val current = currentSessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
-  val pinnedRank =
-    listOf(mainKey, current)
-      .filter { it.isNotBlank() }
-      .distinct()
-      .withIndex()
-      .associate { it.value to it.index }
-  val unpinnedRank = pinnedRank.size
-
   return choices
     .withIndex()
-    .sortedWith(compareBy({ pinnedRank[it.value.key] ?: unpinnedRank }, { it.index }))
+    .sortedWith(
+      compareBy(
+        {
+          when {
+            it.value.key == mainKey -> 0
+            it.value.key == current -> 1
+            it.value.pinned == true -> 2
+            else -> 3
+          }
+        },
+        { it.index },
+      )
+    )
     .take(maxOptions)
     .map { it.value }
 }

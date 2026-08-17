@@ -77,6 +77,32 @@ class SessionFiltersTest {
   }
 
   @Test
+  fun compactChoicesPrioritizePinnedSessionsWithinTheCompactLimit() {
+    val now = 1_700_000_000_000L
+    val stale = now - 26 * 60 * 60 * 1000L
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "recent-1", updatedAtMs = now - 1),
+        ChatSessionEntry(key = "recent-2", updatedAtMs = now - 2),
+        ChatSessionEntry(key = "recent-3", updatedAtMs = now - 3),
+        ChatSessionEntry(key = "recent-4", updatedAtMs = now - 4),
+        ChatSessionEntry(key = "pinned-old", updatedAtMs = stale, pinned = true),
+        ChatSessionEntry(key = "main", updatedAtMs = now - 5),
+      )
+
+    val result =
+      resolveCompactSessionChoices(
+        currentSessionKey = "main",
+        sessions = sessions,
+        mainSessionKey = "main",
+        nowMs = now,
+        maxOptions = 5,
+      ).map { it.key }
+
+    assertEquals(listOf("main", "pinned-old", "recent-1", "recent-2", "recent-3"), result)
+  }
+
+  @Test
   fun sessionChoicesFilterAgentDeviceAndInternalSessions() {
     val now = 1_700_000_000_000L
     val recent = now - 10 * 60 * 1000L
