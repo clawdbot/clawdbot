@@ -624,6 +624,12 @@ When sender identity is available, agent hook contexts also include:
   `before_agent_run` event. Absent when the host did not resolve ownership;
   absence means unknown, never "not owner", so authorization checks must
   require `=== true` rather than treating a missing field as `false`.
+
+The whole identity block above is populated by the built-in CLI and embedded
+agent runtimes. A harness plugin that assembles its own hook context decides
+what it carries, so treat every field as optional rather than assuming a
+runtime supplies it.
+
 - `ctx.channelContext.sender.id` - the same sender ID as `ctx.senderId`, under
   a channel-owned object plugins can extend with channel-specific fields.
 - `ctx.channelContext.chat.id` - the same conversation ID as `ctx.chatId`,

@@ -190,10 +190,7 @@ export type {
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
-export {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../plugins/hook-agent-context.js";
+export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.js";
