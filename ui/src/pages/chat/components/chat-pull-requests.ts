@@ -240,8 +240,11 @@ function renderBranchRow(
     <article class="chat-pr" data-state="branch">
       <span class="chat-pr__link chat-pr__link--static">
         <span class="chat-pr__icon" aria-hidden="true">${icons.gitBranch}</span>
-        <span class="chat-pr__repo">${branch.repo}</span>
-        <span class="chat-pr__branch">${branch.branch}</span>
+        <span class="chat-pr__number" aria-hidden="true"></span>
+        <span class="chat-pr__identity">
+          <span class="chat-pr__repo">${branch.repo}</span>
+          <span class="chat-pr__branch">${branch.branch}</span>
+        </span>
       </span>
       <span class="chat-pr__meta">
         ${renderDiffStats(branch, onOpenSessionDiff)}
@@ -300,8 +303,10 @@ export function renderChatPullRequests(props: {
                 ${merged ? icons.gitMerge : icons.gitPullRequest}
               </span>
               <span class="chat-pr__number">#${pullRequest.number}</span>
-              <span class="chat-pr__repo">${pullRequest.repo}</span>
-              <span class="chat-pr__branch">${pullRequest.branch}</span>
+              <span class="chat-pr__identity">
+                <span class="chat-pr__repo">${pullRequest.repo}</span>
+                <span class="chat-pr__branch">${pullRequest.branch}</span>
+              </span>
             </a>
             <span class="chat-pr__meta">
               ${renderDiffStats(pullRequest)} ${renderChecks(pullRequest)}

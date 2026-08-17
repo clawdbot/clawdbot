@@ -2338,7 +2338,8 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -2355,9 +2356,9 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr__link {
-  display: flex;
-  flex: 1;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 18px minmax(4ch, auto) minmax(0, 1fr);
+  align-items: baseline;
   gap: 8px;
   min-width: 0;
   color: var(--text);
@@ -2370,7 +2371,9 @@ button.chat-reply-preview--message:disabled {
 
 .chat-pr__icon {
   display: grid;
-  flex: 0 0 auto;
+  align-self: center;
+  width: 18px;
+  height: 18px;
   place-items: center;
   color: var(--ok);
 }
@@ -2412,13 +2415,21 @@ button.chat-reply-preview--message:disabled {
 }
 
 .chat-pr__number {
-  flex: 0 0 auto;
+  min-width: 0;
   font-weight: 650;
+}
+
+.chat-pr__identity {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
 .chat-pr__repo {
   flex: 0 0 auto;
-  color: var(--muted);
+  color: var(--text);
+  font-weight: 500;
 }
 
 .chat-pr__branch {
@@ -2601,12 +2612,14 @@ button.chat-pr__diff {
 }
 
 .chat-pr__create {
-  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--text);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
@@ -2614,7 +2627,15 @@ button.chat-pr__diff {
 }
 
 .chat-pr__create:hover {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-pr__create:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .chat-pr__dismiss {
@@ -2653,8 +2674,7 @@ button.chat-pr__diff {
 }
 
 @media (max-width: 640px) {
-  .chat-pr__branch,
-  .chat-pr__repo {
+  .chat-pr__identity {
     display: none;
   }
 }
