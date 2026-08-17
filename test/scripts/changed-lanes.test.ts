@@ -2281,11 +2281,12 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it("routes the shared ratchet base owner to both ratchets", () => {
+  it("routes the shared shrink-ratchet owner to all three ratchets", () => {
     const commands = createChangedCheckPlan(
-      detectChangedLanes(["scripts/lib/ratchet-base.mts"]),
+      detectChangedLanes(["scripts/lib/shrink-ratchet.mts"]),
     ).commands.map((command) => command.args);
 
+    expect(commands).toContainEqual(["check:env-var-count", "--base", "origin/main"]);
     expect(commands).toContainEqual(["check:max-lines-ratchet", "--base", "origin/main"]);
     expect(commands).toContainEqual(["check:assertion-safety", "--base", "origin/main"]);
   });

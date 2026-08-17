@@ -5,13 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectCurrentSuppressions,
-  diffBaseline,
-  findBaselineExpansion,
   hasAllRuleDisable,
   hasMaxLinesDisable,
   isGovernedSourcePath,
   main,
-  parseBaseline,
 } from "../../scripts/check-max-lines-ratchet.mts";
 
 const tempDirs: string[] = [];
@@ -91,15 +88,6 @@ describe("check-max-lines-ratchet", () => {
     expect(isGovernedSourcePath("ui/src/i18n/locales/en.ts")).toBe(false);
     expect(isGovernedSourcePath("src/wizard/i18n/locales/en.ts")).toBe(false);
     expect(isGovernedSourcePath("src/schema.generated.ts")).toBe(false);
-  });
-
-  it("reports new suppressions, stale debt, and baseline growth", () => {
-    const baseline = parseBaseline("# debt\nsrc/a.ts\nsrc/b.ts\n");
-    expect(diffBaseline(["src/b.ts", "src/c.ts"], baseline)).toEqual({
-      added: ["src/c.ts"],
-      stale: ["src/a.ts"],
-    });
-    expect(findBaselineExpansion(baseline, new Set(["src/a.ts"]))).toEqual(["src/b.ts"]);
   });
 
   it("rejects baseline growth even when the new suppression is listed", () => {

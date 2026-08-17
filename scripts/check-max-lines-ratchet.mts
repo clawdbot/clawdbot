@@ -4,7 +4,17 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { main as checkEnvVarCount } from "./check-env-var-count.mts";
-import { resolveRatchetBase } from "./lib/ratchet-base.mts";
+import {
+  compareRatchetSets,
+  listRatchetRenames,
+  loadRatchetReference,
+  loadRatchetSnapshot,
+  loadRatchetSources,
+  parseRatchetPaths,
+  reportRatchetFailures,
+  reportRatchetSuccess,
+  resolveRatchetBase,
+} from "./lib/shrink-ratchet.mts";
 
 const BASELINE_PATH = "config/max-lines-baseline.txt";
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
@@ -91,27 +101,6 @@ export function hasAllRuleDisable(source: string, filePath = "source.ts") {
   return collectLintDisableDirectives(source, filePath).some((rules) => rules.length === 0);
 }
 
-export function parseBaseline(source: string) {
-  return new Set(
-    source
-      .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#")),
-  );
-}
-
-export function diffBaseline(current: Iterable<string>, baseline: ReadonlySet<string>) {
-  const currentSet = new Set(current);
-  return {
-    added: [...currentSet].filter((entry) => !baseline.has(entry)).toSorted(compareStrings),
-    stale: [...baseline].filter((entry) => !currentSet.has(entry)).toSorted(compareStrings),
-  };
-}
-
-export function findBaselineExpansion(current: Iterable<string>, base: ReadonlySet<string>) {
-  return [...current].filter((entry) => !base.has(entry)).toSorted(compareStrings);
-}
-
 function baselineWithVerifiedRenames(
   root: string,
   baseRef: string,
@@ -119,48 +108,14 @@ function baselineWithVerifiedRenames(
   baseline: ReadonlySet<string>,
   baseBaseline: ReadonlySet<string>,
 ) {
-  const args = ["diff", "--name-status", "-z", "--find-renames"];
-  if (staged) {
-    args.push("--cached");
-  }
-  args.push(baseRef, "--", ...SOURCE_ROOTS);
-  const fields = execFileSync("git", args, { cwd: root, maxBuffer: GIT_MAX_BUFFER })
-    .toString("utf8")
-    .split("\0");
   const allowed = new Set(baseBaseline);
-  for (let index = 0; index < fields.length;) {
-    const status = fields[index++];
-    if (!status) {
-      break;
-    }
-    const oldPath = fields[index++];
-    if (status.startsWith("R") || status.startsWith("C")) {
-      const newPath = fields[index++];
-      if (
-        status.startsWith("R") &&
-        oldPath &&
-        newPath &&
-        baseBaseline.has(oldPath) &&
-        !baseline.has(oldPath) &&
-        baseline.has(newPath)
-      ) {
-        allowed.delete(oldPath);
-        allowed.add(newPath);
-      }
+  for (const { from, to } of listRatchetRenames(root, baseRef, staged, SOURCE_ROOTS)) {
+    if (baseBaseline.has(from) && !baseline.has(from) && baseline.has(to)) {
+      allowed.delete(from);
+      allowed.add(to);
     }
   }
   return allowed;
-}
-
-function readSnapshotFile(root: string, filePath: string, staged: boolean) {
-  if (staged) {
-    return execFileSync("git", ["show", ":" + filePath], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  }
-  return fs.readFileSync(path.join(root, filePath), "utf8");
 }
 
 function listStagedSuppressionCandidates(root: string) {
@@ -191,39 +146,6 @@ function listStagedSuppressionCandidates(root: string) {
   return result.stdout.toString("utf8").split("\0").filter(Boolean);
 }
 
-function readStagedSources(root: string, filePaths: string[]) {
-  if (filePaths.length === 0) {
-    return new Map<string, string>();
-  }
-  const output = execFileSync("git", ["cat-file", "--batch", "-z"], {
-    cwd: root,
-    input: filePaths.map((filePath) => ":" + filePath).join("\0") + "\0",
-    maxBuffer: GIT_MAX_BUFFER,
-  });
-  const sources = new Map<string, string>();
-  let offset = 0;
-  // -z keeps request paths NUL-framed on older Git; response headers remain newline-framed.
-  for (const filePath of filePaths) {
-    const headerEnd = output.indexOf(10, offset);
-    if (headerEnd < 0) {
-      throw new Error("Invalid git cat-file response for " + filePath);
-    }
-    const header = output.subarray(offset, headerEnd).toString("utf8").split(" ");
-    const size = Number(header[2]);
-    if (!Number.isSafeInteger(size)) {
-      throw new Error("Could not read staged source " + filePath);
-    }
-    const sourceStart = headerEnd + 1;
-    const sourceEnd = sourceStart + size;
-    if (output[sourceEnd] !== 10) {
-      throw new Error("Invalid git cat-file framing for " + filePath);
-    }
-    sources.set(filePath, output.subarray(sourceStart, sourceEnd).toString("utf8"));
-    offset = sourceEnd + 1;
-  }
-  return sources;
-}
-
 export function collectCurrentSuppressionState(
   root = process.cwd(),
   options: { staged?: boolean } = {},
@@ -243,7 +165,7 @@ export function collectCurrentSuppressionState(
     .filter(isGovernedSourcePath)
     .filter((filePath) => staged || fs.existsSync(path.join(root, filePath)));
   const sources = staged
-    ? [...readStagedSources(root, governedPaths)]
+    ? [...loadRatchetSources(root, governedPaths)]
     : governedPaths.map((filePath): [string, string] => [
         filePath,
         fs.readFileSync(path.join(root, filePath), "utf8"),
@@ -265,28 +187,6 @@ export function collectCurrentSuppressions(
   options: { staged?: boolean } = {},
 ) {
   return collectCurrentSuppressionState(root, options).explicit;
-}
-
-function readBaselineAtRef(root: string, ref: string) {
-  execFileSync("git", ["rev-parse", "--verify", ref + "^{commit}"], {
-    cwd: root,
-    stdio: "ignore",
-  });
-  const entry = execFileSync("git", ["ls-tree", "--name-only", ref, "--", BASELINE_PATH], {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
-  if (entry !== BASELINE_PATH) {
-    return null;
-  }
-  return parseBaseline(
-    execFileSync("git", ["show", ref + ":" + BASELINE_PATH], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }),
-  );
 }
 
 function writeBaseline(root: string, entries: string[]) {
@@ -320,13 +220,6 @@ function envVarCountArgs(argv: string[]) {
   return [...(args.staged ? ["--staged"] : []), ...(args.base ? ["--base", args.base] : [])];
 }
 
-function printEntries(title: string, entries: string[]) {
-  console.error(title);
-  for (const entry of entries) {
-    console.error("  " + entry);
-  }
-}
-
 export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
   try {
     const args = parseArgs(argv);
@@ -336,33 +229,40 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
 
     let baselineSource;
     try {
-      baselineSource = readSnapshotFile(root, BASELINE_PATH, args.staged);
+      baselineSource = loadRatchetSnapshot(root, BASELINE_PATH, args.staged, parseRatchetPaths);
     } catch {
       throw new Error("Missing " + BASELINE_PATH + (args.staged ? " in the index" : ""));
     }
-    const baseline = parseBaseline(baselineSource);
+    const baseline = baselineSource;
     const { allRules, explicit: current } = collectCurrentSuppressionState(root, {
       staged: args.staged,
     });
-    const { added, stale } = diffBaseline(current, baseline);
+    const { added, removed: stale } = compareRatchetSets(current, baseline, compareStrings);
     const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
-    const baseBaseline = baseRef ? readBaselineAtRef(root, baseRef) : null;
+    const baseBaseline = baseRef
+      ? loadRatchetReference(root, baseRef, BASELINE_PATH, parseRatchetPaths)
+      : null;
     const allowedBaseline =
       baseRef && baseBaseline
         ? baselineWithVerifiedRenames(root, baseRef, args.staged, baseline, baseBaseline)
         : baseBaseline;
-    const expanded = allowedBaseline ? findBaselineExpansion(baseline, allowedBaseline) : [];
+    const expanded = allowedBaseline
+      ? compareRatchetSets(baseline, allowedBaseline, compareStrings).added
+      : [];
 
-    if (added.length > 0) {
-      printEntries("New max-lines suppressions are forbidden; split these files:", added);
-    }
-    if (expanded.length > 0) {
-      printEntries("The max-lines baseline may only shrink; remove these entries:", expanded);
-    }
-    if (allRules.length > 0) {
-      printEntries("All-rule lint disables are forbidden; name only the required rules:", allRules);
-    }
-    if (added.length > 0 || expanded.length > 0 || allRules.length > 0) {
+    if (
+      reportRatchetFailures([
+        { entries: added, title: "New max-lines suppressions are forbidden; split these files:" },
+        {
+          entries: expanded,
+          title: "The max-lines baseline may only shrink; remove these entries:",
+        },
+        {
+          entries: allRules,
+          title: "All-rule lint disables are forbidden; name only the required rules:",
+        },
+      ])
+    ) {
       return 1;
     }
 
@@ -371,15 +271,25 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
         .filter((entry) => current.includes(entry))
         .toSorted(compareStrings);
       writeBaseline(root, kept);
-      console.log("Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".");
+      reportRatchetSuccess(
+        "Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".",
+      );
       return 0;
     }
-    if (stale.length > 0) {
-      printEntries("Remove stale max-lines baseline entries (or run with --prune):", stale);
+    if (
+      reportRatchetFailures([
+        {
+          entries: stale,
+          title: "Remove stale max-lines baseline entries (or run with --prune):",
+        },
+      ])
+    ) {
       return 1;
     }
 
-    console.log("max-lines ratchet OK: " + current.length + " grandfathered suppressions.");
+    reportRatchetSuccess(
+      "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
+    );
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

@@ -6,7 +6,6 @@ import {
   collectEnvVarNames,
   isCountedSourcePath,
   main,
-  parseBudget,
 } from "../../scripts/check-env-var-count.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -34,12 +33,6 @@ describe("check-env-var-count", () => {
     expect(collectEnvVarNames(root)).toEqual(["OPENCLAW_ALPHA", "OPENCLAW_BETA"]);
     fs.rmSync(path.join(root, "src/runtime.ts"));
     expect(collectEnvVarNames(root)).toEqual([]);
-  });
-
-  it("parses exactly one integer budget", () => {
-    expect(parseBudget("# count\n42\n")).toBe(42);
-    expect(() => parseBudget("42\n43\n")).toThrow();
-    expect(() => parseBudget("many\n")).toThrow();
   });
 
   it("reads staged source from the index", () => {
