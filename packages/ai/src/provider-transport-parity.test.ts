@@ -81,6 +81,14 @@ const openAiModel = {
   maxTokens: 4096,
 } satisfies Model<"openai-completions">;
 
+const openRouterModel = {
+  ...openAiModel,
+  id: "openrouter/minimax/minimax-m2.7",
+  name: "MiniMax M2.7",
+  provider: "openrouter",
+  baseUrl: "https://openrouter.ai/api/v1",
+} satisfies Model<"openai-completions">;
+
 const context = {
   systemPrompt: "Be exact.",
   messages: [{ role: "user", content: "Find the answer.", timestamp: 1 }],
@@ -212,6 +220,17 @@ const openAiStructuredReasoningChunks = [
   makeOpenAiChunk({}, "stop"),
 ] satisfies OpenAIChunk[];
 
+const openAiOrderedVisibleReasoningDetailsChunks = [
+  makeOpenAiChunk({
+    reasoning_details: [
+      { type: "response.output_text", text: "Visible first." },
+      { type: "reasoning.text", text: " Hidden second." },
+      { type: "response.text", text: " Visible third." },
+    ],
+  }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
 const openAiTrailingReasoningChunks = [
   makeOpenAiChunk({ reasoning_content: "First thought." }),
   makeOpenAiChunk({ content: "Answer." }),
@@ -305,9 +324,11 @@ async function runOpenAi(
   outcome: ParityFixture["outcome"],
   chunks: readonly OpenAIChunk[] = openAiChunks,
   emitReasoning = true,
+  modelOverride?: Model<"openai-completions">,
 ): Promise<ParityOutput> {
   resetOpenAiMock(outcome, chunks);
-  const model = emitReasoning ? openAiModel : { ...openAiModel, reasoning: false };
+  const baseModel = modelOverride ?? openAiModel;
+  const model = emitReasoning ? baseModel : { ...baseModel, reasoning: false };
   const [{ streamOpenAICompletions }, { createOpenAICompletionsTransportStreamFn }] =
     await Promise.all([
       import("./providers/openai-completions.js"),
@@ -616,6 +637,28 @@ describe("provider and transport observable parity fixtures", () => {
           thinking: "Trailing thought.",
           thinkingSignature: "reasoning_content",
         },
+      ]);
+    }
+  });
+
+  it("preserves ordered visible OpenRouter reasoning details across both producers", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(
+        implementation,
+        "success",
+        openAiOrderedVisibleReasoningDetailsChunks,
+        true,
+        openRouterModel,
+      );
+
+      expect(result.terminal.content).toEqual([
+        { type: "text", text: "Visible first." },
+        {
+          type: "thinking",
+          thinking: " Hidden second.",
+          thinkingSignature: "reasoning_details",
+        },
+        { type: "text", text: " Visible third." },
       ]);
     }
   });

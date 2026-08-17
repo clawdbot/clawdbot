@@ -258,6 +258,13 @@ export const streamOpenAICompletions: StreamFunction<
           });
         }
       };
+      const finishTextBlock = () => {
+        if (!textBlock) {
+          return;
+        }
+        finishBlock(textBlock);
+        textBlock = null;
+      };
       const ensureTextBlock = () => {
         if (!textBlock) {
           textBlock = { type: "text", text: "" };
@@ -328,6 +335,7 @@ export const streamOpenAICompletions: StreamFunction<
             if (!shouldEmitReasoning) {
               continue;
             }
+            finishTextBlock();
             const signature = reasoningDelta.signature;
             const thinkingSignature =
               model.provider === "opencode-go" && signature === "reasoning"
@@ -408,8 +416,7 @@ export const streamOpenAICompletions: StreamFunction<
         if (textBlock.text.trim()) {
           pendingInterruptedTextBlock = textBlock;
         }
-        finishBlock(textBlock);
-        textBlock = null;
+        finishTextBlock();
       };
       const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
         if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
