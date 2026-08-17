@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronJobPrecheck } from "./types-shared.js";
 
+/** Cap host precheck wall time (matches job-precheck runner). */
+const MAX_TIMEOUT_MS = 5 * 60_000;
+
 /** Lightweight structural validation / normalization of a precheck object. */
 export function normalizeCronJobPrecheck(value: unknown): CronJobPrecheck | undefined {
   if (value === null || value === undefined) {

@@ -315,9 +315,9 @@ export async function authorizeCronJobPrecheckCommand(params: {
   const hasConfigLayers = toolsExecLayer !== undefined || agentToolsExecLayer !== undefined;
   // Canonical system.run default is allowlist when exec security is unspecified
   // (node-host/invoke.ts). Do not widen unconfigured prechecks to full.
+  const defaultSecurity: ExecSecurity = "allowlist";
   const basePolicy = {
-    // SAFETY: requested is ExecSecurity|undefined; fallback is the canonical allowlist default.
-    security: (requested ?? "allowlist") as ExecSecurity, // SAFETY: ExecSecurity union fallback
+    security: requested ?? defaultSecurity,
     ask: "off" as const,
   };
   const layered = hasConfigLayers

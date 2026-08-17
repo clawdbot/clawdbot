@@ -266,8 +266,11 @@ describe("runCronJobPrecheck", () => {
       expect(spawned.cmd).toBe("/bin/sh");
       expect(spawned.args[0]).toBe("-c");
     } finally {
-      if (prevShell === undefined) delete process.env.SHELL;
-      else process.env.SHELL = prevShell;
+      if (prevShell === undefined) {
+        delete process.env.SHELL;
+      } else {
+        process.env.SHELL = prevShell;
+      }
     }
   });
 
@@ -326,7 +329,9 @@ describe("runCronJobPrecheck", () => {
     if (result.decision === "error") {
       expect(result.reason).toMatch(/precheck-timeout/);
     }
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise<void>((r) => {
+      setTimeout(r, 400);
+    });
     if (fs.existsSync(marker)) {
       const pid = Number(fs.readFileSync(marker, "utf8").trim());
       try {

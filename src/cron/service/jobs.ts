@@ -126,22 +126,6 @@ function normalizeDeclarativeLabel(
   return normalized;
 }
 
-type JobValidationContext =
-  | { kind: "create"; cronConfig?: CronConfig; defaultAgentId?: string; nowMs: number }
-  | {
-      kind: "patch";
-      patch: CronJobPatch;
-      defaultAgentId?: string;
-      nowMs?: number;
-      cronConfig?: CronConfig;
-    }
-  | {
-      kind: "declarative";
-      input: CronJobCreate;
-      defaultAgentId?: string;
-      nowMs: number;
-      cronConfig?: CronConfig;
-    };
 
 function validateFullJob(
   job: CronStoredJob,
