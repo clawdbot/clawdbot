@@ -10,10 +10,8 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
-import {
-  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateSanitizedExternalContent } from "openclaw/plugin-sdk/security-runtime";
+import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserSnapshot,
@@ -39,11 +37,13 @@ const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
 } satisfies Record<BrowserExternalJsonKind, string>;
 
 function truncateBrowserToolText(value: string, marker: string, maxChars: number) {
-  if (value.length <= maxChars) {
-    return { text: value, truncated: false };
+  const bounded = truncateSanitizedExternalContent(value, maxChars);
+  if (!bounded.truncated) {
+    return bounded;
   }
+  const marked = truncateSanitizedExternalContent(value, Math.max(0, maxChars - marker.length));
   return {
-    text: `${truncateUtf16Safe(value, Math.max(0, maxChars - marker.length))}${marker}`,
+    text: `${marked.text}${marker}`,
     truncated: true,
   };
 }

@@ -22,11 +22,12 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { readRegularFile, wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import {
-  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/text-utility-runtime";
+  readRegularFile,
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+} from "openclaw/plugin-sdk/security-runtime";
+import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "openclaw/plugin-sdk/text-utility-runtime";
 import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
@@ -89,13 +90,15 @@ function serializeCanvasEvalResult(result: unknown, maxChars: number): string {
           typeof value === "string" ? neutralizeCanvasMediaDirectives(value) : value,
         );
   const serialized = json ?? neutralizeCanvasMediaDirectives(String(result));
-  if (serialized.length <= maxChars) {
-    return serialized;
+  const bounded = truncateSanitizedExternalContent(serialized, maxChars);
+  if (!bounded.truncated) {
+    return bounded.text;
   }
-  return `${truncateUtf16Safe(
+  const marked = truncateSanitizedExternalContent(
     serialized,
     Math.max(0, maxChars - CANVAS_EVAL_TRUNCATION_MARKER.length),
-  )}${CANVAS_EVAL_TRUNCATION_MARKER}`;
+  );
+  return `${marked.text}${CANVAS_EVAL_TRUNCATION_MARKER}`;
 }
 
 function wrapCanvasEvalResult(result: unknown): string {
