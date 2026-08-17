@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -18,6 +19,7 @@ import {
   globalMocks,
   hookMocks,
   mocks,
+  placementContextMocks,
   sessionBindingMocks,
   sessionStoreMocks,
   ttsMocks,
@@ -1685,50 +1687,76 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("restores admitted archived channel work before reply-operation admission", async () => {
-    setNoAbort();
-    const sessionId = "archived-channel-session";
-    sessionStoreMocks.currentEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      archivedAt: Date.now() - 1_000,
-      archivedBy: { type: "human", id: "profile-operator" },
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "restored reply" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:restored-test",
-      ChatType: "channel",
-      From: "discord:user:12345",
-      To: "discord:channel:restored-test",
-      AccountId: "default",
-      SessionKey: "agent:main:discord:channel:restored-test",
-      Body: "start work",
-      CommandBody: "start work",
-      RawBody: "start work",
-      CommandSource: undefined,
-      InboundAccessAuthorized: true,
-      InboundEventKind: "user_request",
-      InputProvenance: { kind: "external_user", sourceChannel: "discord" },
-    });
+  it.each([
+    { name: "no placement", activePlacement: false },
+    { name: "active placement", activePlacement: true },
+  ])(
+    "restores admitted archived channel work before reply-operation admission: $name",
+    async ({ activePlacement }) => {
+      setNoAbort();
+      const sessionId = "archived-channel-session";
+      const sessionKey = "agent:main:discord:channel:restored-test";
+      const archivedAt = Date.now() - 1_000;
+      sessionStoreMocks.currentEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        archivedAt,
+        archivedBy: { type: "human", id: "profile-operator" },
+      };
+      if (activePlacement) {
+        placementContextMocks.getMany.mockReturnValue(
+          new Map([[sessionId, { state: "active" } as WorkerSessionPlacementRecord]]),
+        );
+      }
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "restored reply" }) satisfies ReplyPayload);
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:restored-test",
+        ChatType: "channel",
+        From: "discord:user:12345",
+        To: "discord:channel:restored-test",
+        AccountId: "default",
+        SessionKey: sessionKey,
+        Body: "start work",
+        CommandBody: "start work",
+        RawBody: "start work",
+        CommandSource: undefined,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "discord" },
+      });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
+      const dispatch = dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      });
 
-    expect(result.queuedFinal).toBe(true);
-    expect(sessionStoreMocks.currentEntry?.sessionId).toBe(sessionId);
-    expect(sessionStoreMocks.currentEntry?.archivedAt).toBeUndefined();
-    expect(sessionStoreMocks.currentEntry?.archivedBy).toBeUndefined();
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "restored reply" });
-  });
+      if (activePlacement) {
+        await expect(dispatch).rejects.toThrow(/is archived/i);
+        expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+        expect(sessionStoreMocks.currentEntry?.archivedBy).toEqual({
+          type: "human",
+          id: "profile-operator",
+        });
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        return;
+      }
+
+      const result = await dispatch;
+      expect(result.queuedFinal).toBe(true);
+      expect(sessionStoreMocks.currentEntry?.sessionId).toBe(sessionId);
+      expect(sessionStoreMocks.currentEntry?.archivedAt).toBeUndefined();
+      expect(sessionStoreMocks.currentEntry?.archivedBy).toBeUndefined();
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "restored reply" });
+    },
+  );
 
   it("skips plugin-bound claim hook under deny and falls through to suppressed agent dispatch", async () => {
     // Plugin-bound inbound handlers can emit outbound replies we cannot

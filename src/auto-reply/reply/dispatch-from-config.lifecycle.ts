@@ -3,6 +3,10 @@ import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-r
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  resolveSessionWorkerPlacementArchiveRestoreError,
+  type SessionWorkerPlacementContext,
+} from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
@@ -56,15 +60,36 @@ async function restoreArchivedDispatchSession(params: {
   ) {
     return entry;
   }
+  let placementContext: SessionWorkerPlacementContext;
+  try {
+    placementContext = (
+      await import("../../gateway/session-worker-placement-context.js")
+    ).resolveSessionWorkerPlacementContext();
+  } catch {
+    return entry;
+  }
   const snapshotSessionId = entry.sessionId;
   const snapshotArchivedAt = entry.archivedAt;
-  // Admission must see the current owner: a rebound or re-archived row stays untouched and fails closed.
+  // Admission must see the current owner: a rebound, re-archive, or unsafe placement stays untouched.
   return (
     (await updateSessionEntry({ sessionKey, storePath }, (currentEntry) => {
       if (
         currentEntry.sessionId !== snapshotSessionId ||
         currentEntry.archivedAt !== snapshotArchivedAt
       ) {
+        return null;
+      }
+      try {
+        if (
+          resolveSessionWorkerPlacementArchiveRestoreError({
+            context: placementContext,
+            key: sessionKey,
+            sessionId: currentEntry.sessionId,
+          })
+        ) {
+          return null;
+        }
+      } catch {
         return null;
       }
       return { archivedAt: undefined, archivedBy: undefined };

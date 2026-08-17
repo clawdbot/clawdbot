@@ -77,6 +77,22 @@ export function isWorkerPlacementSafeForArchive(
   return placement.state === "local" || placement.state === "reclaimed";
 }
 
+export function resolveSessionWorkerPlacementArchiveRestoreError(params: {
+  context: SessionWorkerPlacementContext;
+  key: string;
+  sessionId: string | undefined;
+}): string | undefined {
+  const placement = params.sessionId
+    ? params.context.workerSessionPlacementService
+        ?.getMany([params.sessionId])
+        .get(params.sessionId)
+    : undefined;
+  if (!placement || isWorkerPlacementSafeForArchive(params.context, placement)) {
+    return undefined;
+  }
+  return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+}
+
 function retirementGuard(placement: RetirablePlacement): SessionWorkerPlacementMutationGuard {
   return {
     status: "retirement-required",

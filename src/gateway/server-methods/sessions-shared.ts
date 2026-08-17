@@ -25,7 +25,7 @@ import {
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
-import { isWorkerPlacementSafeForArchive } from "../worker-environments/session-placement-lifecycle.js";
+import { resolveSessionWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 export {
   resolveSessionWorkerPlacementMutationError,
@@ -52,20 +52,27 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   sessionKey: string;
   validateModelRuntime: boolean;
 }): string | undefined {
-  const placement = params.entry?.sessionId
-    ? params.context.workerSessionPlacementService
-        ?.getMany([params.entry.sessionId])
-        .get(params.entry.sessionId)
-    : undefined;
-  if (!placement || placement.state === "local") {
-    return undefined;
-  }
   if (params.patch.archived === false) {
-    if (!isWorkerPlacementSafeForArchive(params.context, placement)) {
-      return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+    const restoreError = resolveSessionWorkerPlacementArchiveRestoreError({
+      context: params.context,
+      key: params.key,
+      sessionId: params.entry?.sessionId,
+    });
+    if (restoreError) {
+      return restoreError;
     }
   }
-  if (!params.validateModelRuntime || params.patch.model === undefined || !params.entry) {
+  if (
+    !params.validateModelRuntime ||
+    params.patch.model === undefined ||
+    !params.entry?.sessionId
+  ) {
+    return undefined;
+  }
+  const placement = params.context.workerSessionPlacementService
+    ?.getMany([params.entry.sessionId])
+    .get(params.entry.sessionId);
+  if (!placement || placement.state === "local") {
     return undefined;
   }
   const runtime = resolveWorkerPlacementSessionRuntime({

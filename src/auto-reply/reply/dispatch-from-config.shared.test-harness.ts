@@ -2,6 +2,8 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
+import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
   PluginHookBeforeDispatchResult,
@@ -194,6 +196,19 @@ const sessionStoreMocks = vi.hoisted(() => ({
     },
   ),
 }));
+const placementContextMocks = vi.hoisted(() => {
+  const getMany = vi.fn<
+    (sessionIds: readonly string[]) => Map<string, WorkerSessionPlacementRecord>
+  >(() => new Map());
+  const context = {
+    workerSessionPlacementService: { getMany },
+  } satisfies SessionWorkerPlacementContext;
+  return {
+    context,
+    getMany,
+    resolveSessionWorkerPlacementContext: vi.fn(() => context),
+  };
+});
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
   getAcpSessionManager: vi.fn(),
 }));
@@ -413,6 +428,7 @@ export {
   internalHookMocks,
   messageAuditMocks,
   mocks,
+  placementContextMocks,
   replyMediaPathMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -523,6 +539,9 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
       sessionStoreMocks.updateSessionEntry(...args),
   };
 });
+vi.mock("../../gateway/session-worker-placement-context.js", () => ({
+  resolveSessionWorkerPlacementContext: placementContextMocks.resolveSessionWorkerPlacementContext,
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   initializeGlobalHookRunner: vi.fn(),
