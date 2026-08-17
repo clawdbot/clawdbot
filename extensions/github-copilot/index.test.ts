@@ -345,12 +345,19 @@ describe("github-copilot plugin", () => {
       },
     ];
 
-    expect(provider.buildReplayPolicy?.({ modelId: "claude-haiku-4.5" } as never)).toEqual({
+    expect(
+      provider.buildReplayPolicy?.({
+        modelId: "claude-haiku-4.5",
+        modelApi: "anthropic-messages",
+      } as never),
+    ).toMatchObject({
       dropThinkingBlocks: true,
+      validateAnthropicTurns: true,
     });
     expect(
       provider.sanitizeReplayHistory?.({
         modelId: "claude-haiku-4.5",
+        modelApi: "anthropic-messages",
         messages,
       } as never),
     ).toEqual([
@@ -362,6 +369,7 @@ describe("github-copilot plugin", () => {
     expect(
       provider.sanitizeReplayHistory?.({
         modelId: "gpt-5.4",
+        modelApi: "openai-responses",
         messages,
       } as never),
     ).toBe(messages);

@@ -702,7 +702,7 @@ export default definePluginEntry({
       refreshOAuth: async (credential) => refreshGithubCopilotOAuth(credential),
       buildAuthDoctorHint: buildGithubCopilotAuthDoctorHint,
       wrapStreamFn: wrapCopilotProviderStream,
-      buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
+      buildReplayPolicy: buildGithubCopilotReplayPolicy,
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,
       resolveThinkingProfile: ({ modelId, compat }) => {
         const extendedLevels = resolveCopilotExtendedThinkingLevels(modelId, compat);
