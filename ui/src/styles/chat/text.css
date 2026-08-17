@@ -211,7 +211,7 @@
 
 :is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item))::before {
   position: absolute;
-  inset-inline-end: calc(100% + var(--chat-markdown-marker-gap));
+  inset-inline-start: calc(-1 * var(--chat-markdown-indent));
   content: "•";
   inset-block-start: 0;
   inline-size: calc(var(--chat-markdown-indent) - var(--chat-markdown-marker-gap));
