@@ -442,7 +442,7 @@ describe("cron service timer seam coverage", () => {
     expect(runScriptJob).not.toHaveBeenCalled();
   });
 
-  it("blocks a host-shell precheck when cron.triggers.enabled is not true", async () => {
+  it("blocks a host-shell precheck when cron.triggers.enabled is false", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-25T12:00:00.000Z");
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
@@ -592,6 +592,57 @@ describe("cron service timer seam coverage", () => {
     expect(persisted?.state.lastStatus).toBe("skipped");
     expect(persisted?.state.lastError ?? "").toContain("precheck-no-work");
     expect(persisted?.state.consecutiveSkipped ?? 0).toBeGreaterThanOrEqual(1);
+  });
+
+  it("runs host-shell precheck when cron.triggers is omitted (documented default-on)", async () => {
+    // ClawSweeper P1: validation/docs default triggers on; runtime must use !== false.
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-08-17T18:00:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const spy = vi
+      .spyOn(jobPrecheck, "runCronJobPrecheck")
+      .mockImplementation(async (_spec, opts) => {
+        expect(opts?.authz?.triggersEnabled).toBe(true);
+        return {
+          decision: "skip",
+          reason: "precheck-no-work",
+          exitCode: 2,
+          stdout: "",
+          stderr: "",
+        } as Awaited<ReturnType<typeof jobPrecheck.runCronJobPrecheck>>;
+      });
+    try {
+      const job: CronJob = {
+        ...createDueIsolatedAgentJob({ now }),
+        id: "precheck-default-triggers-omitted",
+        precheck: { kind: "exec", command: "exit 2" },
+      };
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        // Omit cron.triggers entirely — must not policy-deny.
+        cronConfig: {},
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      await onTimer(state);
+
+      const stored = await loadCronStore(storePath);
+      const persisted = stored.jobs.find(
+        (entry) => entry.id === "precheck-default-triggers-omitted",
+      );
+      expect(spy).toHaveBeenCalled();
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(persisted?.state.lastStatus).toBe("skipped");
+      expect(persisted?.state.lastError ?? "").toContain("precheck-no-work");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("persists precheck-policy-denied through onTimer without an agent turn", async () => {

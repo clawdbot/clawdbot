@@ -69,7 +69,16 @@ export function rollupCronRunCost(entries: readonly CronRunLogEntry[]): CronRunC
     const input = entry.usage?.input_tokens ?? 0;
     const output = entry.usage?.output_tokens ?? 0;
     const total = entry.usage?.total_tokens ?? input + output;
-    if (total > 0 || input > 0 || output > 0) {
+    // Count any model attempt that left provider/model/usage telemetry, including
+    // zero-token runs (so precheck savings stats stay accurate).
+    if (
+      entry.model ||
+      entry.provider ||
+      entry.usage != null ||
+      total > 0 ||
+      input > 0 ||
+      output > 0
+    ) {
       rollup.modelRuns += 1;
     }
     rollup.inputTokens += input;

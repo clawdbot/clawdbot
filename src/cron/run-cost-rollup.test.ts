@@ -49,6 +49,21 @@ describe("rollupCronRunCost", () => {
     expect(r.totalTokens).toBe(15);
     expect(r.modelRuns).toBe(1);
   });
+
+  it("counts zero-token model attempts from telemetry presence", () => {
+    const r = rollupCronRunCost([
+      entry({
+        status: "ok",
+        model: "gpt-test",
+        provider: "openai",
+        usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      }),
+      entry({ status: "ok", usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } }),
+      entry({ status: "ok" }),
+    ]);
+    expect(r.modelRuns).toBe(2);
+    expect(r.totalTokens).toBe(0);
+  });
 });
 
 describe("mergeCronRunCostRollups", () => {

@@ -132,7 +132,7 @@ export async function executeJobCore(
     const precheckResult = await runCronJobPrecheck(job.precheck, {
       abortSignal,
       authz: {
-        triggersEnabled: state.deps.cronConfig?.triggers?.enabled === true,
+        triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
         agentId: job.agentId,
         toolsExec,
         agentToolsExec,
