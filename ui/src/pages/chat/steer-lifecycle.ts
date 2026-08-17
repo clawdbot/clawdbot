@@ -40,7 +40,13 @@ import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./h
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
-import { ackSteeredChip, buildInflightSteerChip, isAckedSteeredChip } from "./steered-chip.ts";
+import {
+  ackSteeredChip,
+  buildInflightSteerChip,
+  isAckedSteeredChip,
+  isSteeredQueueItem,
+} from "./steered-chip.ts";
+import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 type SteerLifecycleHost = ChatState &
@@ -190,6 +196,17 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
   if (!runId) {
     return;
   }
+  if (item.kind === "steered") {
+    // A started target may exist only as an optimistic queue row. Preserve it
+    // before the landed steer or stable history can invert the user turns.
+    const targetRunId = item.steerTargetRunId?.trim() || item.pendingRunId;
+    const target = state.chatQueue.find(
+      (candidate) => candidate.kind !== "steered" && candidate.sendRunId === targetRunId,
+    );
+    if (target) {
+      preserveQueuedUserTurn(state, target);
+    }
+  }
   const content = buildUserChatMessageContentBlocks(
     item.text,
     durableDeliveredAttachments(item.attachments),
@@ -205,6 +222,7 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
   };
   if (visibleSessionMatches(state, sessionKey, item.agentId)) {
     if (!chatMessagesContainQueuedSend(state.chatMessages, item, true)) {
+      const previousMessageCount = state.chatMessages.length;
       const scope = readChatSessionProjectionScope(state, {
         sessionKey,
         agentId: item.agentId,
@@ -216,6 +234,13 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
         { type: "sendPending", runId, message: userMessage },
         { scope },
       );
+      if (
+        state.chatMessages.length > previousMessageCount &&
+        isSteeredQueueItem(item) &&
+        state.chatRunId
+      ) {
+        rolloverChatStream(state, { runId: state.chatRunId, boundaryRunId: runId });
+      }
     }
     return;
   }
@@ -232,57 +257,29 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
 export function retireSteeredChipsForTerminalRun(
   state: SteerLifecycleHost,
   runId: string | undefined,
-): number | undefined {
+): void {
   if (!runId) {
-    return undefined;
+    return;
   }
-  let firstPersistedSteerIndex: number | undefined;
   for (const item of state.chatQueue) {
     if (isAckedSteeredChip(item) && item.pendingRunId === runId) {
-      const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
-      if (
-        persistedIndex >= 0 &&
-        (firstPersistedSteerIndex === undefined || persistedIndex < firstPersistedSteerIndex)
-      ) {
-        firstPersistedSteerIndex = persistedIndex;
-      }
       preserveQueuedUserTurn(state, item);
     }
   }
   clearPendingQueueItemsForRun(state, runId);
-  return firstPersistedSteerIndex;
 }
 
 export function retireSteeredChipsForRequestRun(
   state: SteerLifecycleHost,
   runId: string | undefined,
-): number | undefined {
+): void {
   if (!runId) {
-    return undefined;
+    return;
   }
   const landed = state.chatQueue.filter(
     (item) => isAckedSteeredChip(item) && item.sendRunId === runId,
   );
-  let firstPersistedSteerIndex: number | undefined;
   for (const item of landed) {
-    // A started active turn can still exist only as an optimistic queue row.
-    // Promote that target before its landed steer so stable transcript history
-    // cannot render the newer steer ahead of the original prompt. Older persisted
-    // chips used pendingRunId as both identities, so retain it as the migration fallback.
-    const targetRunId = item.steerTargetRunId?.trim() || item.pendingRunId;
-    const target = state.chatQueue.find(
-      (candidate) => candidate.id !== item.id && candidate.sendRunId === targetRunId,
-    );
-    if (target) {
-      preserveQueuedUserTurn(state, target);
-    }
-    const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
-    if (
-      persistedIndex >= 0 &&
-      (firstPersistedSteerIndex === undefined || persistedIndex < firstPersistedSteerIndex)
-    ) {
-      firstPersistedSteerIndex = persistedIndex;
-    }
     preserveQueuedUserTurn(state, item);
   }
   if (landed.length > 0) {
@@ -296,7 +293,6 @@ export function retireSteeredChipsForRequestRun(
       releaseChatAttachmentPayloads(excludeComposerAttachments(state, item.attachments));
     }
   }
-  return firstPersistedSteerIndex;
 }
 
 export function retirePersistedSteeredChips(state: SteerLifecycleHost): void {

@@ -2,6 +2,7 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
+  resolveInboundReplyDispatchCounts,
   readAgentRunTerminalOutcome,
   type InboundReplyRecordOptions,
   hasVisibleInboundReplyDispatch,
@@ -449,8 +450,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
   let dispatchError: unknown;
   let agentRunFailed = false;
-  let queuedFinal = false;
-  let counts: Partial<Record<ReplyDispatchKind, number>> = {};
+  let settledDispatchResult: Parameters<typeof hasVisibleInboundReplyDispatch>[0];
   try {
     const turnResult = await dispatchChannelInboundTurn({
       cfg,
@@ -522,7 +522,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             }
           : undefined,
         onReasoningEnd: async () => {
-          progress.progressReceipt.closeReasoning();
           await progress.onDraftBoundary?.();
           return false;
         },
@@ -544,7 +543,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             await statusReactions.setTool(payload.name);
           }
           if (payload.phase === "start") {
-            progress.progressReceipt.noteToolCall(payload.name);
+            progress.progressWorkCounter.noteToolCall(payload.name);
           }
           return await progress.progressDraft.pushToolEvent(payload);
         },
@@ -566,9 +565,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   itemId: payload.itemId,
                 },
               );
-              if (accepted) {
-                progress.progressReceipt.noteCommentary(payload.itemId, payload.progressText);
-              }
               return accepted || headlineVisible;
             }
             return headlineVisible;
@@ -594,8 +590,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     });
     if (turnResult.dispatched) {
       const result = turnResult.dispatchResult;
-      queuedFinal = result.queuedFinal;
-      counts = result.counts;
+      settledDispatchResult = result;
       const agentRunOutcome = readAgentRunTerminalOutcome(result);
       agentRunFailed = agentRunOutcome === "failed";
       if (
@@ -665,16 +660,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  counts = delivery.reconcileCounts(counts);
-  queuedFinal = queuedFinal && (counts.final ?? 0) > 0;
-
-  const anyReplyDelivered = hasVisibleInboundReplyDispatch(
-    { queuedFinal, counts },
-    {
-      observedReplyDelivery: delivery.observedReplyDelivery,
-      fallbackDelivered: streamFallbackDelivered,
-    },
-  );
+  const anyReplyDelivered = hasVisibleInboundReplyDispatch(settledDispatchResult, {
+    observedReplyDelivery: delivery.observedReplyDelivery,
+    fallbackDelivered: streamFallbackDelivered,
+  });
 
   if (pendingFailureNotice && anyReplyDelivered) {
     recordSlackThreadFailureNotice(pendingFailureNotice);
@@ -723,7 +712,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (shouldLogVerbose()) {
-    const finalCount = counts.final;
+    const finalCount = resolveInboundReplyDispatchCounts(settledDispatchResult).final;
     logVerbose(
       `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
     );

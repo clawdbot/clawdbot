@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
+import { main as checkEnvVarCount } from "./check-env-var-count.mts";
 import { resolveRatchetBase } from "./lib/ratchet-base.mts";
 
 const BASELINE_PATH = "config/max-lines-baseline.txt";
@@ -314,6 +315,11 @@ function parseArgs(argv: string[]) {
   return args;
 }
 
+function envVarCountArgs(argv: string[]) {
+  const args = parseArgs(argv);
+  return [...(args.staged ? ["--staged"] : []), ...(args.base ? ["--base", args.base] : [])];
+}
+
 function printEntries(title: string, entries: string[]) {
   console.error(title);
   for (const entry of entries) {
@@ -381,6 +387,22 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
   }
 }
 
+function runBaselineRatchets(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
+  const maxLinesStatus = main(root, argv);
+  if (maxLinesStatus !== 0) {
+    return maxLinesStatus;
+  }
+  try {
+    // CI invokes this entry with its frozen fork-point ref. Carry the same snapshot
+    // into the env budget so every baseline ratchet judges one tested tree.
+    checkEnvVarCount(envVarCountArgs(argv), root);
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = main();
+  process.exitCode = runBaselineRatchets();
 }

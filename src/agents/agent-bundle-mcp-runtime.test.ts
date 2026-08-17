@@ -5787,12 +5787,6 @@ process.on("SIGINT", shutdown);`,
         } else {
           expect(secondCatalog.servers.slow).toBeDefined();
         }
-        await waitForFileText(
-          slowLogPath,
-          "slow first initialize",
-          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
-        );
-
         await expect(runtime.callTool("trigger", "poke", {})).resolves.toMatchObject({
           content: [{ type: "text", text: "poked" }],
           isError: false,

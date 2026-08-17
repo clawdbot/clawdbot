@@ -49,6 +49,7 @@
     "@types/markdown-it": "14.1.2",
     "@vitest/browser": "4.1.10",
     "@vitest/browser-playwright": "4.1.10",
+    "fake-indexeddb": "6.2.5",
     "jsdom": "29.1.1",
     "openclaw": "workspace:*",
     "playwright": "1.62.1",

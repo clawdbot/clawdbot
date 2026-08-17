@@ -1,4 +1,7 @@
-import { readControlUiBuildMismatchId } from "@openclaw/gateway-client/browser";
+import {
+  isRetryableGatewayStartupUnavailableError,
+  readControlUiBuildMismatchId,
+} from "@openclaw/gateway-client/browser";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-contract.js";
 // Control UI module owns the application gateway store: the reactive
 // snapshot around GatewayBrowserClient consumed by the app shell.
@@ -17,6 +20,7 @@ import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import type {
   ApplicationGateway,
   ApplicationGatewayConnectOptions,
@@ -282,6 +286,15 @@ export function createApplicationGateway(
         ? { bootstrapProfile: undefined }
         : {}),
     };
+    const credentialsChanged =
+      nextConnection.gatewayUrl !== connection.gatewayUrl ||
+      nextConnection.token !== connection.token ||
+      nextConnection.password !== connection.password ||
+      nextConnection.bootstrapToken !== connection.bootstrapToken ||
+      nextConnection.bootstrapProfile !== connection.bootstrapProfile;
+    if (credentialsChanged) {
+      void clearStoredChatSnapshots();
+    }
     const hasRequestedSessionKey = requestedSessionKey !== undefined;
     const nextSessionKey = hasRequestedSessionKey
       ? requestedSessionKey.trim()
@@ -437,6 +450,14 @@ export function createApplicationGateway(
         if (mismatchedBuildId) {
           void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
         }
+        const startupPending =
+          mismatchedBuildId === null &&
+          !everConnected &&
+          willRetry &&
+          isRetryableGatewayStartupUnavailableError(error);
+        if (startupPending && snapshot.phase === "starting") {
+          return;
+        }
         const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
         setSnapshot({
           ...snapshot,
@@ -444,20 +465,24 @@ export function createApplicationGateway(
           phase:
             mismatchedBuildId !== null
               ? "reload-required"
-              : everConnected
-                ? willRetry
-                  ? "reconnecting"
-                  : "offline"
-                : willRetry
-                  ? "connecting"
-                  : "stopped",
+              : startupPending
+                ? "starting"
+                : everConnected
+                  ? willRetry
+                    ? "reconnecting"
+                    : "offline"
+                  : willRetry
+                    ? "connecting"
+                    : "stopped",
           hello: null,
           canvasPluginSurfaceUrl: null,
           selfUser: null,
-          lastError: error?.message
-            ? formatUiError(error.message)
-            : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
-          lastErrorCode,
+          lastError: startupPending
+            ? null
+            : error?.message
+              ? formatUiError(error.message)
+              : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
+          lastErrorCode: startupPending ? null : lastErrorCode,
         });
       },
       onGap: ({ expected, received }) => {

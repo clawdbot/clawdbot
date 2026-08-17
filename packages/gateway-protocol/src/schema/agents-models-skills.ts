@@ -64,10 +64,19 @@ export const ModelChoiceSchema = closedObject({
 /** Semantic owner of an agent roster entry. */
 export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("system")]);
 
+const AgentCreatedViaSchema = Type.Union([
+  Type.Literal("operator"),
+  Type.Literal("agent"),
+  Type.Literal("claw"),
+]);
+
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
   id: NonEmptyString,
   kind: Type.Optional(AgentKindSchema),
+  createdVia: Type.Optional(AgentCreatedViaSchema),
+  creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   name: Type.Optional(NonEmptyString),
   identity: Type.Optional(
     closedObject({
@@ -171,6 +180,7 @@ export const AgentsDeleteResultSchema = closedObject({
       }),
     ),
   ),
+  purgeFailed: Type.Optional(Type.Literal(true)),
 });
 
 /** File metadata and optional content for agent-local editable files. */

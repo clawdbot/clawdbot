@@ -51,7 +51,7 @@ export type SidebarLifecycleState = HTMLElement & {
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   offline: boolean;
-  outboxCountForSession: (sessionKey: string) => number;
+  outboxAttentionCountForSession: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
@@ -270,6 +270,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     }),
   );
   const setCreatorFilter = vi.fn(() => Promise.resolve());
+  const setInvolvingMeFilter = vi.fn(() => Promise.resolve());
   const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
     Promise.resolve({ key, agentId: options?.agentId ?? null }),
   );
@@ -291,6 +292,25 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     return true;
   });
   let scopedSessions: SessionCapability | null = null;
+  const assignOwner = vi.fn<SessionCapability["assignOwner"]>(async (key, owner, options) => {
+    const assigned = scopedSessions ? await scopedSessions.assignOwner(key, owner, options) : null;
+    if (!assigned || !state.result) {
+      return assigned;
+    }
+    state = {
+      ...state,
+      result: {
+        ...state.result,
+        sessions: state.result.sessions.map((row) =>
+          row.key === key ? { ...row, owner: assigned } : row,
+        ),
+      },
+    };
+    for (const listener of listeners) {
+      listener(state);
+    }
+    return assigned;
+  });
   const sessions = {
     get state() {
       return state;
@@ -324,6 +344,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsDelete,
     create,
     patch,
+    assignOwner,
     patchMany,
     delete: deleteSession,
     deleteMany,
@@ -353,6 +374,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     },
     reconcile,
     setCreatorFilter,
+    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
@@ -432,6 +454,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     list,
     reconcile,
     setCreatorFilter,
+    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,

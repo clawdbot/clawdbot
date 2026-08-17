@@ -13,7 +13,10 @@ import {
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { DeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
-import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../../../src/infra/node-commands.js";
+import {
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+  NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+} from "../../../../src/infra/node-commands.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
@@ -22,6 +25,7 @@ import {
 } from "../../../../src/infra/node-runner-inventory.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
 import { NodeWorkerBundleInstaller } from "../../../../src/node-host/node-worker-bundle-installer.js";
+import { parseNodeWorkerLaunchInput } from "../../../../src/node-host/node-worker-supervisor-contract.js";
 import { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../../../src/node-host/node-worker-workspace.js";
 import { VERSION } from "../../../../src/version.js";
@@ -283,6 +287,7 @@ export type PairedNodeWorkerHost = {
   disconnect(): Promise<void>;
   publishInventory(): Promise<void>;
   waitForInvokes(): Promise<void>;
+  waitForWorkersIdle(): Promise<void>;
   installedBundleDirectory(bundleHash: string): Promise<string>;
   stop(): Promise<void>;
 };
@@ -309,6 +314,7 @@ export async function createPairedNodeWorkerHost(
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
+  const launchIds = new Set<string>();
   const identity = loadOrCreateDeviceIdentity({
     path: path.join(options.root, `${label}-identity.sqlite`),
   });
@@ -334,7 +340,6 @@ export async function createPairedNodeWorkerHost(
     },
   });
 
-  let host!: PairedNodeWorkerHost;
   const onEvent = (event: WireGatewayEvent) => {
     if (closing || event.event !== "node.invoke.request" || !client) {
       return;
@@ -343,6 +348,9 @@ export async function createPairedNodeWorkerHost(
     const frame = event.payload as NodeInvokeRequestPayload;
     commands.push(frame.command);
     frames.push(frame);
+    if (frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND) {
+      launchIds.add(parseNodeWorkerLaunchInput(frame.paramsJSON).launchId);
+    }
     options.onInvoke?.(frame);
     const task = handleInvoke(frame, receiver, { current: async () => [] }, undefined, {
       workerBundleInstaller: bundleInstaller,
@@ -388,11 +396,11 @@ export async function createPairedNodeWorkerHost(
   };
   const drainInvokeTasks = async () => {
     while (invokeTasks.size > 0) {
-      await Promise.allSettled([...invokeTasks]);
+      await Promise.allSettled(invokeTasks);
     }
   };
 
-  host = {
+  const host: PairedNodeWorkerHost = {
     identity,
     commands,
     frames,
@@ -417,6 +425,21 @@ export async function createPairedNodeWorkerHost(
     },
     async waitForInvokes() {
       await drainInvokeTasks();
+    },
+    async waitForWorkersIdle() {
+      await vi.waitFor(
+        async () => {
+          const receipts = await Promise.all(
+            [...launchIds].map(async (launchId) => await supervisor.status(launchId)),
+          );
+          expect(
+            receipts.every(
+              (receipt) => receipt !== undefined && !["pending", "running"].includes(receipt.state),
+            ),
+          ).toBe(true);
+        },
+        { timeout: 30_000, interval: 100 },
+      );
     },
     async installedBundleDirectory(bundleHash) {
       const namespaces = await fs.readdir(nodeHostRoot, { withFileTypes: true });

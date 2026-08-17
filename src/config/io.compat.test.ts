@@ -249,11 +249,13 @@ describe("config io paths", () => {
       load();
       expect(logger.warn).toHaveBeenCalledTimes(3);
 
+      // A null root is invalid config (throws) and, like the invalid-port
+      // step above, preserves the logged-warning fingerprint.
       await fs.writeFile(configPath, "null");
-      load();
+      expect(load).toThrow();
       await writeRemovedPlugin("google-gemini-cli-auth");
       load();
-      expect(logger.warn).toHaveBeenCalledTimes(4);
+      expect(logger.warn).toHaveBeenCalledTimes(3);
     });
   });
 

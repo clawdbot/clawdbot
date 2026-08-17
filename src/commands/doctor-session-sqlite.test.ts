@@ -3157,7 +3157,7 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
-  it("imports valid transcript rows when only the final JSONL line is crash-truncated", async () => {
+  it("reports a malformed non-newline-terminated final JSONL record", async () => {
     const store = createLegacyStore();
     fs.writeFileSync(
       store.transcriptPath,
@@ -3174,9 +3174,10 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.totals).toMatchObject({
       importedEntries: 1,
       importedTranscriptEvents: 1,
-      issues: 0,
+      issues: 1,
       sqliteEntries: 1,
     });
+    expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
     expect(
       loadTranscriptEventsSync({
         agentId: "main",

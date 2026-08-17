@@ -64,7 +64,7 @@ vi.mock("./tools/image-generate-tool.js", () => ({
 }));
 
 vi.mock("./tools/image-tool.js", () => ({
-  createImageTool: () => mocks.stubTool("image"),
+  createImageTool: () => mocks.stubTool("view_image"),
 }));
 
 vi.mock("./tools/message-tool-execution.js", () => ({

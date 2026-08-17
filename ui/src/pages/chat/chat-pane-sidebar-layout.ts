@@ -1,8 +1,10 @@
 import { html, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type {
+  SidebarPanelDefinition,
   SidebarPanelTemplates,
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
@@ -95,6 +97,7 @@ export function renderSidebarRegion(params: {
   availableSlots: SidebarSlotId[];
   layout: SidebarLayout;
   narrow: boolean;
+  panelDefinitions?: SidebarPanelDefinition[];
   panelActions: SidebarPanelTemplates;
   panelTemplates: SidebarPanelTemplates;
   primary: TemplateResult;
@@ -123,6 +126,7 @@ export function renderSidebarRegion(params: {
   >
     <openclaw-chat-sidebar-region
       .layout=${params.layout}
+      .panelDefinitions=${params.panelDefinitions ?? sidebarPanelDefinitions()}
       .panelTemplates=${params.panelTemplates}
       .panelActions=${params.panelActions}
       .availableSlots=${params.availableSlots}

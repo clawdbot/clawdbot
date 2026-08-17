@@ -59,7 +59,7 @@ function renderPullRequestIndicator(
     role="img"
     aria-label=${label}
     title=${showTitle ? label : nothing}
-    >${icons.gitBranch}</span
+    >${pullRequestState === "open" ? icons.gitPullRequest : icons.gitMerge}</span
   >`;
 }
 
@@ -70,22 +70,14 @@ function renderSessionTrailingState(
   const sessionState = renderSessionState(session, false);
   const concurrentUnreadState = session.hasActiveRun ? renderSessionUnreadState(session) : nothing;
   if (
-    !session.forkSource &&
     pullRequestState === "none" &&
     sessionState === nothing &&
     concurrentUnreadState === nothing
   ) {
     return nothing;
   }
-  const forkLabel = t("sessionsView.forkedSession");
-  return html`
-    ${session.forkSource
-      ? html`<span class="session-row-fork-indicator" role="img" aria-label=${forkLabel}
-          >${icons.gitFork}</span
-        >`
-      : nothing}
-    ${renderPullRequestIndicator(pullRequestState, false)} ${sessionState} ${concurrentUnreadState}
-  `;
+  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}
+  ${concurrentUnreadState}`;
 }
 
 function renderPersistentSessionIcon(icon: string) {
@@ -113,8 +105,10 @@ export function renderSessionLeadingState(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
   ownerActor: SessionCreatedActor | null | undefined,
-  attribution: "created" | "archived",
+  attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
+  participants?: readonly SessionCreatedActor[],
+  participantCount?: number,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
@@ -195,7 +189,14 @@ export function renderSessionLeadingState(
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: renderSessionOwnerChip(ownerActor, "row", attribution, ownerViewing),
+        content: renderSessionOwnerChip(
+          ownerActor,
+          "row",
+          attribution,
+          ownerViewing,
+          participants,
+          participantCount,
+        ),
         running: false,
         circular: true,
       }),

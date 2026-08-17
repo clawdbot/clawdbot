@@ -11,6 +11,91 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("patches the session permission mode and reflects sessions.changed", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const session = {
+      key: "agent:main:session-a",
+      kind: "direct",
+      label: "Session A",
+      permissionMode: "guarded",
+      sessionRoot: "/workspace/projects/openclaw",
+      updatedAt: 2,
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([session]),
+      },
+      sessionKey: session.key,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const trigger = pane.locator('[data-chat-permission-select="true"]');
+      await trigger.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+
+      const firstListCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.deferNext("sessions.list");
+      await trigger.click();
+      await pane.locator('[data-chat-permission-option="workspace"]').click();
+      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(patchRequest.params)).toMatchObject({
+        key: session.key,
+        permissionMode: "workspace",
+      });
+      await waitForRequests(gateway, "sessions.list", firstListCount + 1);
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...session,
+        permissionMode: "workspace",
+        reason: "patch",
+        sessionKey: session.key,
+        updatedAt: 3,
+      });
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+      expect(await trigger.textContent()).toContain("Workspace");
+      await gateway.resolveDeferred(
+        "sessions.list",
+        chatSessionListResponse([{ ...session, permissionMode: "workspace", updatedAt: 3 }]),
+      );
+
+      const secondListCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.deferNext("sessions.list");
+      await trigger.click();
+      await pane.locator('[data-chat-permission-option="default"]').click();
+      const patchRequests = await waitForRequests(gateway, "sessions.patch", 2);
+      expect(requireRecord(patchRequests[1]?.params)).toMatchObject({
+        key: session.key,
+        permissionMode: null,
+      });
+      await waitForRequests(gateway, "sessions.list", secondListCount + 1);
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...session,
+        permissionMode: null,
+        reason: "patch",
+        sessionKey: session.key,
+        updatedAt: 4,
+      });
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
+      expect(await trigger.textContent()).toContain("Default");
+      await gateway.resolveDeferred(
+        "sessions.list",
+        chatSessionListResponse([{ ...session, permissionMode: undefined, updatedAt: 4 }]),
+      );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps picker menus in the viewport while preferring the space above", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

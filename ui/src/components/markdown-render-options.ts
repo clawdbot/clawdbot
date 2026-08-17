@@ -7,6 +7,7 @@ export type MarkdownRenderOptions = {
   fileLinks?: boolean;
   interactiveImages?: boolean;
   mode?: MarkdownRenderMode;
+  sessionLinks?: boolean;
 };
 
 export type MarkdownRenderEnv = Required<MarkdownRenderOptions>;
@@ -20,5 +21,6 @@ export function normalizeMarkdownRenderOptions(
     fileLinks: options.fileLinks ?? false,
     interactiveImages: options.interactiveImages ?? false,
     mode: options.mode ?? "message",
+    sessionLinks: options.sessionLinks ?? false,
   };
 }

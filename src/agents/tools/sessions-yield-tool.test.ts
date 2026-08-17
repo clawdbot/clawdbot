@@ -6,6 +6,7 @@ import { createSessionsYieldTool } from "./sessions-yield-tool.js";
 type SessionsYieldDetails = {
   status?: string;
   message?: string;
+  acknowledgment?: string;
   error?: string;
 };
 
@@ -28,7 +29,7 @@ describe("sessions_yield tool", () => {
     expect(details.status).toBe("yielded");
     expect(details.message).toBe("Turn yielded.");
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Turn yielded.");
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined);
   });
 
   it("passes the custom message through the yield callback", async () => {
@@ -41,7 +42,27 @@ describe("sessions_yield tool", () => {
     expect(details.status).toBe("yielded");
     expect(details.message).toBe("Waiting for fact-checker");
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker");
+    expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker", undefined);
+  });
+
+  it("keeps private context separate from the user-facing acknowledgment", async () => {
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({ sessionId: "test-session", onYield });
+    const result = await tool.execute("call-1", {
+      message: "Resume after the fact-checker replies",
+      acknowledgment: "Research started; results will follow.",
+    });
+    const details = result.details as SessionsYieldDetails;
+
+    expect(details).toMatchObject({
+      status: "yielded",
+      message: "Resume after the fact-checker replies",
+      acknowledgment: "Research started; results will follow.",
+    });
+    expect(onYield).toHaveBeenCalledWith(
+      "Resume after the fact-checker replies",
+      "Research started; results will follow.",
+    );
   });
 
   it("persists yield intent before aborting the requester run", async () => {

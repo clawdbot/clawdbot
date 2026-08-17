@@ -169,7 +169,7 @@ function createApprovalRuntime(params: {
       // routing. The RPC storage-unavailable respond path does not apply to
       // this runtime-internal caller.
       const decisionPromise = manager.register(record, timeoutMs);
-      const requestEvent = buildRequestedApprovalEvent(record);
+      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
       const forwardRequest = params.context.forwardPluginApprovalRequest;
       const iosPushRequest = params.context.pluginApprovalIosPushDelivery?.handleRequested?.bind(
         params.context.pluginApprovalIosPushDelivery,

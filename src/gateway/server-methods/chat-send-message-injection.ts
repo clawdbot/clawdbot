@@ -89,7 +89,9 @@ export function createChatSendMessageInjectionStarter(params: {
   session: Pick<PreparedChatSendSession, "cfg" | "entry">;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
-  userTurnTranscriptRecorder: ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"];
+  userTurnTranscriptRecorder: NonNullable<
+    ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
+  >;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { cfg, entry } = params.session;
@@ -105,7 +107,7 @@ export function createChatSendMessageInjectionStarter(params: {
       inlineMode: p.queueMode,
     });
     const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
-    return beginReplyMessageInjectionTarget(
+    const attempt = beginReplyMessageInjectionTarget(
       params.target,
       p.replyToId
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
@@ -123,6 +125,7 @@ export function createChatSendMessageInjectionStarter(params: {
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
     );
+    return attempt;
   };
 }
 

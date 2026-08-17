@@ -69,6 +69,8 @@ type ChatPaneHeaderProps = {
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
+  placementMoving?: boolean;
+  placementMoveDisabledReason?: string;
   placementReclaimDisabledReason?: string;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
@@ -80,6 +82,7 @@ type ChatPaneHeaderProps = {
   onMenuOpenChange: (open: boolean) => void;
   onMenuAction: (action: ChatPaneHeaderAction) => void;
   onOpenParentSession: (sessionKey: string) => void;
+  onPlacementMove?: () => void;
   onPlacementReclaim?: () => void;
   onBranchSelect: (leafEntryId: string) => void;
   onOpenSplitView?: () => void;
@@ -443,11 +446,26 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
       ${renderSessionOwnerChip(
-        props.showOwnerChip ? props.session?.createdActor : undefined,
+        props.showOwnerChip
+          ? (props.session?.owner?.actor ?? props.session?.createdActor)
+          : undefined,
         "header",
-        "created",
+        props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
         props.ownerViewing,
       )}
+      ${props.showOwnerChip && props.session?.participants?.length
+        ? html`<openclaw-viewer-facepile
+            class="chat-pane__participants"
+            .staticUsers=${props.session.participants.map((participant) => ({
+              id: participant.id ?? "",
+              name: participant.label,
+              avatarUrl: participant.avatarUrl,
+              watchedSessions: [],
+            }))}
+            .maxVisible=${4}
+            variant="session"
+          ></openclaw-viewer-facepile>`
+        : nothing}
       ${renderChatPanePlacement(props)} ${props.presence ?? nothing} ${props.faceControl ?? nothing}
       ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1

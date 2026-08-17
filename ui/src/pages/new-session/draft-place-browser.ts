@@ -220,6 +220,17 @@ export class DraftPlaceBrowser {
     return this.hidingPopoverValue === kind;
   }
 
+  popoverCallbacks(kind: DraftPickerKind) {
+    return {
+      popoverOpen: this.popoverOpen(kind),
+      popoverHiding: this.popoverHiding(kind),
+      onGuardTransition: (event: MouseEvent) => this.guardPopoverTransition(event, kind),
+      onPopoverShow: () => this.onPopoverShow(kind),
+      onPopoverHide: () => this.onPopoverHide(kind),
+      onPopoverAfterHide: () => this.onPopoverAfterHide(kind),
+    };
+  }
+
   get browserPathDraft(): string {
     return this.browserPathDraftValue;
   }

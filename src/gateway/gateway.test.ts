@@ -319,7 +319,7 @@ describe("gateway e2e", () => {
               : undefined;
         const callerTailscaleOverride: GatewayTailscaleConfig | undefined =
           authSource === "explicit-override"
-            ? { mode: "off" as const, serviceName: "svc:startup" }
+            ? { mode: "off" as const, preserveFunnel: true }
             : undefined;
         const port = await getGatewayE2ePortBlock();
         server = await startGatewayServer(port, {
@@ -347,7 +347,7 @@ describe("gateway e2e", () => {
         } else if (callerAuthOverride && callerTailscaleOverride) {
           callerAuthOverride.token = `${overrideToken}-mutated`;
           callerAuthOverride.rateLimit!.maxAttempts = 99;
-          callerTailscaleOverride.serviceName = "svc:mutated";
+          callerTailscaleOverride.preserveFunnel = false;
         }
         const nextLoggingSource = {
           ...initialConfig,
@@ -360,7 +360,7 @@ describe("gateway e2e", () => {
         expect(getRuntimeConfig().gateway?.auth?.token).toBe(expectedToken);
         if (authSource === "explicit-override") {
           expect(getRuntimeConfig().gateway?.auth?.rateLimit?.maxAttempts).toBe(7);
-          expect(getRuntimeConfig().gateway?.tailscale?.serviceName).toBe("svc:startup");
+          expect(getRuntimeConfig().gateway?.tailscale?.preserveFunnel).toBe(true);
         }
         if (authSource === "runtime-overrides") {
           expect(getRuntimeConfig().channels?.whatsapp?.dmPolicy).toBe("open");

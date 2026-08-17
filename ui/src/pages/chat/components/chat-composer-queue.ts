@@ -5,10 +5,10 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   chatQueueMovableSegments,
-  compareChatQueueOrder,
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isInflightSteer, isSteeredQueueItem } from "../steered-chip.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
@@ -31,17 +31,6 @@ type ChatQueueReorder = {
 
 const DRAG_MIME = "application/x-openclaw-queued-message";
 const DRAG_OVER_CLASS = "chat-queue__item--drop-target";
-
-export function steerableQueuedMessage(queue: readonly ChatQueueItem[]): ChatQueueItem | undefined {
-  return queue
-    .toSorted(compareChatQueueOrder)
-    .find(
-      (item) =>
-        !isSteeredQueueItem(item) &&
-        (item.sendState === undefined || item.sendState === "waiting-idle") &&
-        !item.localCommandName,
-    );
-}
 
 function sendStateLabel(item: ChatQueueItem): string | null {
   switch (item.sendState) {
@@ -112,10 +101,7 @@ function renderChatQueueItem(
   const steered = isSteeredQueueItem(item) && !failed;
   const reconnecting = item.sendState === "waiting-reconnect";
   const busy = item.sendState === "executing-command" || isInflightSteer(item);
-  const canSteer =
-    Boolean(props.canAbort && props.onQueueSteer) &&
-    !failed &&
-    steerableQueuedMessage([item]) === item;
+  const canSteer = Boolean(props.canAbort && props.onQueueSteer) && isSteerableQueuedMessage(item);
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);
   const move = props.onQueueMove;

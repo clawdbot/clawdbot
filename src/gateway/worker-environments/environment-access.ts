@@ -2,7 +2,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
-import { verifyWorkerAdmissionHandshake, type ExpectedWorkerBuild } from "./admission.js";
+import {
+  StaleWorkerBuildError,
+  verifyWorkerAdmissionHandshake,
+  type ExpectedWorkerBuild,
+} from "./admission.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
@@ -127,10 +131,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }
       if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
-        throw serviceError(
-          "invalid_state",
-          "Worker must bootstrap the current build before continuing",
-        );
+        throw new StaleWorkerBuildError();
       }
       const nodeBundle =
         record.providerId === DEVICE_WORKER_PROVIDER_ID &&

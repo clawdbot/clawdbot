@@ -90,7 +90,12 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     import("../agents.config.js"),
     loadOnboardChannels(),
   ]);
-  const postWriteHooks = onboardChannels.createChannelOnboardingPostWriteHookCollector();
+  const channelSetup = onboardChannels.createChannelSetupTransaction({
+    runtime,
+    ...(params.beforePersistentEffect
+      ? { beforePersistentEffect: params.beforePersistentEffect }
+      : {}),
+  });
   let selection: ChannelChoice[] = [];
   const accountIds: Partial<Record<ChannelChoice, string>> = {};
   const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
@@ -105,9 +110,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       ? { beforePersistentEffect: params.beforePersistentEffect }
       : {}),
     ...(params.deferDeviceLinkToClient ? { deferDeviceLinkToClient: true } : {}),
-    onPostWriteHook: (hook) => {
-      postWriteHooks.collect(hook);
-    },
+    onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
     promptAccountIds: true,
     deferStatusUntilSelection: true,
     skipStatusNote: true,
@@ -122,28 +125,21 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     },
   });
   const commitWizardConfig = async (config: OpenClawConfig) => {
-    await params.beforePersistentEffect?.();
-    const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig: config,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
-    if (committed.movedInstallRecords) {
-      await refreshPluginRegistryAfterConfigMutation({
-        config: committed.config,
-        reason: "source-changed",
-        installRecords: committed.installRecords,
-        logger: { warn: (message) => runtime.log(message) },
+    return await channelSetup.commit(config, async (configToCommit) => {
+      const committed = await commitConfigWithPendingPluginInstalls({
+        nextConfig: configToCommit,
+        ...(baseHash !== undefined ? { baseHash } : {}),
       });
-    }
-    await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
-      hooks: postWriteHooks.drain(),
-      cfg: committed.config,
-      runtime,
-      ...(params.beforePersistentEffect
-        ? { beforePersistentEffect: params.beforePersistentEffect }
-        : {}),
+      if (committed.movedInstallRecords) {
+        await refreshPluginRegistryAfterConfigMutation({
+          config: committed.config,
+          reason: "source-changed",
+          installRecords: committed.installRecords,
+          logger: { warn: (message) => runtime.log(message) },
+        });
+      }
+      return committed.config;
     });
-    return committed.config;
   };
   if (selection.length === 0) {
     if (nextConfig !== cfg) {

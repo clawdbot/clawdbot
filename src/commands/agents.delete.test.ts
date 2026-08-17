@@ -53,6 +53,13 @@ const workspaceStateMocks = vi.hoisted(() => ({
   prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
 }));
 
+const terminalMocks = vi.hoisted(() => ({
+  isTerminalInteractive: vi.fn(() => true),
+}));
+const wizardMocks = vi.hoisted(() => ({
+  createClackPrompter: vi.fn(),
+}));
+
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
@@ -79,6 +86,15 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
   )),
   deleteWorkspaceState: workspaceStateMocks.deleteWorkspaceState,
   prepareWorkspaceStateDeletion: workspaceStateMocks.prepareWorkspaceStateDeletion,
+}));
+
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
+  isTerminalInteractive: terminalMocks.isTerminalInteractive,
+}));
+
+vi.mock("../wizard/clack-prompter.js", () => ({
+  createClackPrompter: wizardMocks.createClackPrompter,
 }));
 
 import { agentsDeleteCommand } from "./agents.commands.delete.js";
@@ -211,6 +227,31 @@ describe("agents delete command", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
+    wizardMocks.createClackPrompter.mockReset();
+  });
+
+  it("requires --force when confirmation cannot use an interactive terminal", async () => {
+    await withStateDirEnv("openclaw-agents-delete-non-tty-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      };
+      await arrangeAgentsDeleteTest({ stateDir, cfg, deletedAgentId: "ops", sessions: {} });
+      terminalMocks.isTerminalInteractive.mockReturnValue(false);
+
+      await agentsDeleteCommand({ id: "ops" }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith("Non-interactive session. Re-run with --force.");
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(wizardMocks.createClackPrompter).not.toHaveBeenCalled();
+      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
+    });
   });
 
   it("refuses deleting main even when another agent is default", async () => {
@@ -376,6 +417,7 @@ describe("agents delete command", () => {
         removedBindings: 0,
         removed: [],
         failed: [{ path: workspace, reason: "trash unavailable" }],
+        purgeFailed: true,
       });
 
       await agentsDeleteCommand({ id: "ops", force: true }, runtime);
@@ -384,7 +426,31 @@ describe("agents delete command", () => {
       expect(runtime.error).toHaveBeenCalledWith(
         `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
       );
+      expect(runtime.error).toHaveBeenCalledWith(
+        'Warning: session-store purge failed for deleted agent "ops"; stale shared-store rows may remain.',
+      );
       expect(runtime.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  it("includes purge failure in delegated JSON output", async () => {
+    await withStateDirEnv("openclaw-agents-delete-gateway-purge-json-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+      };
+      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+      gatewayMocks.callGateway.mockResolvedValue({
+        ok: true,
+        agentId: "ops",
+        removedBindings: 0,
+        removed: [],
+        failed: [],
+        purgeFailed: true,
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(readJsonLogs()[0]).toMatchObject({ purgeFailed: true, transport: "gateway" });
     });
   });
 
@@ -434,6 +500,7 @@ describe("agents delete command", () => {
       expect(output?.workspaceRetained).toBe(true);
       expect(output?.workspaceRetainedReason).toBe("shared");
       expect(output?.transport).toBeUndefined();
+      expect(output).not.toHaveProperty("purgeFailed");
       expect(output?.clearedOwnerRefs).toEqual([
         "agents.defaults.heartbeat.agentId",
         "agents.defaults.systemAgent.agentId",

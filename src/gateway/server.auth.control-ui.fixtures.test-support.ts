@@ -113,6 +113,20 @@ export const startControlUiServer = async (
   });
 };
 
+export const startProxiedControlUiServer = async (token?: string) => {
+  const { mutateConfigFile } = await import("../config/config.js");
+  await mutateConfigFile({
+    mutate(config) {
+      config.gateway = {
+        ...config.gateway,
+        trustedProxies: ["127.0.0.1"],
+      };
+    },
+    afterWrite: { mode: "auto" },
+  });
+  return await startControlUiServer(token);
+};
+
 export const seedApprovedOperatorReadPairing = async (params: {
   identityPrefix: string;
   clientId: string;

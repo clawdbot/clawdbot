@@ -834,7 +834,6 @@ describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
       expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toEqual([
         "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
         "installed package allows bundled runtime facade image-generation-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/image-generation-core/runtime-api.js.",
-        "installed package allows bundled runtime facade media-understanding-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/media-understanding-core/runtime-api.js.",
       ]);
     });
   });
@@ -843,7 +842,6 @@ describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
     withInstalledPackageRoot((packageRoot) => {
       writeInstalledFile(packageRoot, "dist/facade-activation-check.runtime.js");
       writeInstalledFile(packageRoot, "dist/extensions/image-generation-core/runtime-api.js");
-      writeInstalledFile(packageRoot, "dist/extensions/media-understanding-core/runtime-api.js");
 
       expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
     });

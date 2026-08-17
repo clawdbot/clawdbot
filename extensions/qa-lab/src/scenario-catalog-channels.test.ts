@@ -27,7 +27,7 @@ describe("qa scenario catalog channel contracts", () => {
       (scenario) => scenario.execution.flowKind === "module",
     );
 
-    expect(moduleFlows).toHaveLength(145);
+    expect(moduleFlows).toHaveLength(146);
     expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
   });
 

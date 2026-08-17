@@ -39,6 +39,27 @@ afterEach(() => {
 });
 
 describe("method scope resolution", () => {
+  it("requires write scope before sessions.assignOwner visibility is considered", () => {
+    const params = {
+      key: "agent:main:shared",
+      owner: { type: "human", id: "profile-next" },
+    };
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.assignOwner", params)).toEqual([
+      "operator.write",
+    ]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.assignOwner", ["operator.read"], params),
+    ).toEqual({
+      allowed: false,
+      missingScope: "operator.write",
+    });
+    expect(
+      authorizeOperatorScopesForMethod("sessions.assignOwner", ["operator.write"], params),
+    ).toEqual({
+      allowed: true,
+    });
+  });
+
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
@@ -59,6 +80,7 @@ describe("method scope resolution", () => {
     ["sessions.create", ["operator.write"]],
     ["sessions.dispatch", ["operator.admin"]],
     ["sessions.reclaim", ["operator.admin"]],
+    ["sessions.move", ["operator.admin"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["sessions.patchMany", ["operator.write"]],

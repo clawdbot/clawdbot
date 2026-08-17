@@ -154,6 +154,7 @@ type ViewerFacepileElement = HTMLElement & {
   selfInstanceId?: string;
   sessionKey?: string;
   excludeUserId?: string;
+  staticUsers?: readonly PresenceViewer[];
   maxVisible: number;
   variant: "session" | "footer";
   buildInfo: ControlUiBuildInfo;
@@ -274,6 +275,29 @@ it("keeps session facepiles as plain non-interactive avatar clusters", async () 
   });
   expect(facepile.querySelector("button.viewer-facepile-trigger")).toBeNull();
   expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
+});
+
+it("renders ordered static participant actors without presence filtering", async () => {
+  // SAFETY: the registered custom element exposes the tested reactive properties.
+  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  facepile.variant = "session";
+  facepile.maxVisible = 2;
+  facepile.staticUsers = [
+    { id: "profile-ada", name: "Ada", watchedSessions: [] },
+    { id: "research", name: "Research", watchedSessions: [] },
+    { id: "profile-bob", name: "Bob", watchedSessions: [] },
+  ];
+  document.body.append(facepile);
+
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(
+      [...facepile.querySelectorAll("[data-viewer-id]")].map((node) =>
+        node.getAttribute("data-viewer-id"),
+      ),
+    ).toEqual(["profile-ada", "research"]);
+  });
+  expect(facepile.querySelector(".viewer-avatar--overflow")?.textContent?.trim()).toBe("+1");
 });
 
 it("excludes the session creator before choosing visible avatars and overflow", async () => {

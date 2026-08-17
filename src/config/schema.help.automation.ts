@@ -6,6 +6,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     'Sets base session grouping strategy: "per-sender" isolates by sender and "global" shares one session per channel context. Keep "per-sender" for safer multi-user behavior unless deliberate shared context is required.',
   "session.dmScope":
     'DM session scoping: "main" keeps continuity, while "per-peer", "per-channel-peer", and "per-account-channel-peer" increase isolation. Use isolated modes for shared inboxes or multi-account deployments.',
+  "session.groupScope":
+    'Group/channel session scoping: "per-group" keeps rooms isolated by default, while "main" shares the agent main session. Use "main" only for rooms whose context should join the agent\'s primary conversation.',
   "session.identityLinks":
     "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
   "session.resetTriggers":

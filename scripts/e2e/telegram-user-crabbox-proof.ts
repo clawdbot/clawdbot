@@ -1450,7 +1450,7 @@ export function writeSutConfig(params: {
           bind: "loopback",
           mode: "local",
           port: params.gatewayPort,
-          tailscale: { mode: "funnel", resetOnExit: true },
+          tailscale: { mode: "funnel" },
         }
       : { auth: { mode: "none" }, bind: "loopback", mode: "local", port: params.gatewayPort },
     ...(params.mcpAppFixture
@@ -2390,8 +2390,7 @@ async function stopTailscaleFunnelBridge(
   bridge: Pick<FunnelBridge, "proxyPath" | "tunnelPid">,
 ) {
   try {
-    // Explicit reset is the backstop when Gateway shutdown loses its async
-    // resetOnExit cleanup; the public route must not outlive this fresh lease.
+    // The proof owns this fresh Funnel lease, so it explicitly removes the route.
     await runCommand({
       args: ["funnel", "reset"],
       command: bridge.proxyPath,

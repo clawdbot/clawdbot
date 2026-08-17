@@ -80,6 +80,13 @@ export function createWorkboardOrchestrationTools(params: {
           description: Type.Optional(Type.String({ description: "Board description." })),
           icon: Type.Optional(Type.String({ description: "Short icon or label." })),
           color: Type.Optional(Type.String({ description: "Display color token." })),
+          automationJobId: Type.Optional(
+            Type.String({
+              description: "Owning automation job id.",
+              minLength: 1,
+              maxLength: 128,
+            }),
+          ),
           defaultWorkspace: Type.Optional(
             Type.Object(
               {

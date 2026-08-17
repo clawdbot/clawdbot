@@ -25,6 +25,7 @@ const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opt
 const inProcessCreationMock = vi.fn(
   async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
 );
+const recordParticipantMock = vi.fn();
 // Default false mirrors running outside a gateway process; the trusted-creation
 // regression test flips it on and restores it.
 let inProcessGatewayContextAvailable = false;
@@ -106,6 +107,9 @@ vi.mock("../../config/config.js", async () => {
 });
 vi.mock("./sessions-send-tool.a2a.js", () => ({
   runSessionsSendA2AFlow: vi.fn(),
+}));
+vi.mock("../../sessions/session-participant-recording.js", () => ({
+  recordSessionParticipantBestEffort: (...args: unknown[]) => recordParticipantMock(...args),
 }));
 
 let createSessionsListTool: typeof import("./sessions-list-tool.js").createSessionsListTool;
@@ -362,6 +366,14 @@ async function executeFireAndForgetA2AFrom(
   });
 
   expect(requireDetails(result).status).toBe("accepted");
+  expect(recordParticipantMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      actor: { type: "agent", id: "main" },
+      agentId: "other",
+      sessionKey: targetSessionKey,
+      source: "agent",
+    }),
+  );
   const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
   if (!flowParams) {
     throw new Error("expected A2A flow");
@@ -396,6 +408,7 @@ describe("sanitizeTextContent", () => {
 });
 
 beforeEach(() => {
+  recordParticipantMock.mockClear();
   facadeRuntimeMock.sessionKeyResolvers.clear();
   inProcessGatewayRequestMock.mockReset();
   inProcessGatewayRequestMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
@@ -931,7 +944,7 @@ describe("sessions_list gating", () => {
       mode: "tree",
       restricted: true,
       warning:
-        "Session visibility is restricted (effective tools.sessions.visibility=tree: current session + own spawn subtree; reads also cover any watched same-agent group sessions). Sessions outside that scope are omitted from results and count.",
+        "Session visibility is restricted (effective tools.sessions.visibility=tree: current session + own spawn subtree; the main session sees all sessions of its agent). Sessions outside that scope are omitted from results and count.",
     });
   });
 

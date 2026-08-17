@@ -32,6 +32,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
 import {
   commitConfigWithPendingPluginInstalls,
@@ -96,8 +97,19 @@ function formatSkippedOAuthProfilesMessage(
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
-  params?: { hasFlags?: boolean },
+  params?: { hasFlags?: boolean; hasAutomationFlags?: boolean },
 ) {
+  const hasFlags = params?.hasFlags === true;
+  const hasAutomationFlags = params?.hasAutomationFlags ?? hasFlags;
+  const nonInteractive = opts.nonInteractive === true || hasFlags;
+  if (!opts.nonInteractive && !hasAutomationFlags && !isTerminalInteractive()) {
+    runtime.error(
+      `Agent creation needs an interactive TTY. Use \`${formatCliCommand("openclaw agents add <id> --non-interactive --workspace <dir>")}\` for automation.`,
+    );
+    runtime.exit(1);
+    return;
+  }
+
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
     return;
@@ -107,8 +119,6 @@ export async function agentsAddCommand(
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
-  const hasFlags = params?.hasFlags === true;
-  const nonInteractive = opts.nonInteractive === true || hasFlags;
 
   if (nonInteractive) {
     if (!workspaceFlag) {

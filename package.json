@@ -29,6 +29,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "node-version.mjs",
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",
@@ -241,7 +242,6 @@
     "!dist/plugin-sdk/tts-runtime.d.ts",
     "!dist/plugin-sdk/types.d.ts",
     "!dist/plugin-sdk/video-generation.d.ts",
-    "!dist/plugin-sdk/video-generation-core.d.ts",
     "!dist/plugin-sdk/video-generation-runtime.d.ts",
     "!dist/plugin-sdk/web-content-extractor.d.ts",
     "!dist/plugin-sdk/webhook-targets.d.ts",
@@ -1143,9 +1143,6 @@
     "./plugin-sdk/video-generation-runtime": {
       "default": "./dist/plugin-sdk/video-generation-runtime.js"
     },
-    "./plugin-sdk/video-generation-core": {
-      "default": "./dist/plugin-sdk/video-generation-core.js"
-    },
     "./plugin-sdk/reply-history": {
       "types": "./dist/plugin-sdk/reply-history.d.ts",
       "default": "./dist/plugin-sdk/reply-history.js"
@@ -1482,8 +1479,8 @@
     "android:install:third-party": "node --import tsx scripts/run-android-gradle.mts :app:installThirdPartyDebug",
     "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck",
     "android:lint:android": "node --import tsx scripts/run-android-gradle.mts :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug",
-    "android:run": "node --import tsx scripts/run-android-gradle.mts :app:installPlayDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
-    "android:run:third-party": "node --import tsx scripts/run-android-gradle.mts :app:installThirdPartyDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
+    "android:run": "node --import tsx scripts/run-android-gradle.mts :app:runPlayDebug",
+    "android:run:third-party": "node --import tsx scripts/run-android-gradle.mts :app:runThirdPartyDebug",
     "android:release": "bash scripts/android-release.sh",
     "android:release:archive": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android play_store_archive'",
     "android:release:auth:check": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android auth_check'",
@@ -1538,6 +1535,7 @@
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
     "check:runtime-sidecar-loaders": "node --import tsx scripts/check-runtime-sidecar-loaders.mts",
+    "check:script-erasability": "node --disable-warning=ExperimentalWarning scripts/check-script-erasability.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import tsx scripts/check-wrapper-shadowing.mts",
@@ -1811,6 +1809,7 @@
     "test:docker:live-build": "bash scripts/test-live-build-docker.sh",
     "test:docker:live-cli-backend": "bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 bash scripts/test-live-cli-backend-docker.sh",
+    "test:docker:live-cli-backend:claude:cache": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude-subscription": "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=0 OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1 OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=0 OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=0 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude:mcp": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=1 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude:resume": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1 bash scripts/test-live-cli-backend-docker.sh",
@@ -1989,6 +1988,7 @@
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:i18n:verify": "node --import tsx scripts/control-ui-i18n-verify.ts verify",
+    "ui:proof:workboard": "node --import tsx scripts/capture-workboard-ui-proof.mts",
     "native:i18n:baseline": "node --import tsx scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import tsx scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import tsx scripts/native-app-i18n.ts sync --write",

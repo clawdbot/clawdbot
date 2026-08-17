@@ -85,6 +85,7 @@ vi.mock("../../commands/health.js", () => ({
   emitReachableGatewayAuthDiagnostic: (params: unknown) =>
     mocks.emitReachableGatewayAuthDiagnostic(params),
   formatHealthChannelLines: () => mocks.formatHealthChannelLines(),
+  readNonObservingHealthConfig: async () => ({}),
 }));
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
@@ -212,6 +213,15 @@ describe("gateway register option collisions", () => {
         expect(method).toBe("health");
         expect((opts as { token?: string } | undefined)?.token).toBe("tok_call");
         expect(params).toEqual({});
+      },
+    },
+    {
+      name: "gives setup detection enough transport grace",
+      argv: ["gateway", "call", "openclaw.setup.detect", "--json"],
+      assert: () => {
+        const [method, opts] = firstGatewayCall();
+        expect(method).toBe("openclaw.setup.detect");
+        expect((opts as { timeout?: string } | undefined)?.timeout).toBe("40000");
       },
     },
     {

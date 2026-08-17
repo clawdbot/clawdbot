@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -9,6 +10,7 @@ import {
 import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
+import { createAuditEventRecorder } from "./audit-recorder.js";
 import { pageExecutionDecisionFactsForContext } from "./execution-decision-facts.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -21,6 +23,7 @@ import {
   inspectExecutionIdentityRun,
   processExecutionIdentityAdmissionWork,
 } from "./execution-identity-context.js";
+import type { TrustedMessageAuditEvent } from "./message-audit-events.js";
 
 function defineObjectPrototypeProperties(descriptors: PropertyDescriptorMap): void {
   // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution across the real worker boundary.
@@ -76,6 +79,36 @@ function input(): AuditEventInput {
   };
 }
 
+function messageEvent(
+  action:
+    | "message.outbound.queued"
+    | "message.outbound.platform-started"
+    | "message.outbound.finished",
+): TrustedMessageAuditEvent {
+  const progress = action !== "message.outbound.finished";
+  return {
+    sourceId: `message-source:${action}`,
+    occurredAt: Date.now(),
+    kind: "message",
+    action,
+    status: progress ? "started" : "succeeded",
+    outcome:
+      action === "message.outbound.queued"
+        ? "queued"
+        : action === "message.outbound.platform-started"
+          ? "platform_started"
+          : "sent",
+    actorType: "agent",
+    actorId: "main",
+    agentId: "main",
+    runId: "message-worker-run",
+    direction: "outbound",
+    channel: "qa-channel",
+    conversationKind: "direct",
+    targetId: "raw-target",
+  } as TrustedMessageAuditEvent;
+}
+
 function decisionReceipt(): DecisionReceiptV1 {
   return {
     schemaVersion: 1,
@@ -112,6 +145,55 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("audit event worker", () => {
+  it("keeps progress absent while disabled and routes enabled progress off audit_events", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const disabledWriter = createAuditEventWriter({ stateDir });
+    const disabledRecorder = createAuditEventRecorder({
+      messageMode: "off",
+      writer: disabledWriter,
+    });
+    await disabledWriter.ready;
+    expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
+      false,
+    );
+    disabledRecorder.recordMessage(messageEvent("message.outbound.queued"));
+    await disabledWriter.stop();
+    expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
+      false,
+    );
+
+    const enabledWriter = createAuditEventWriter({ stateDir });
+    const enabledRecorder = createAuditEventRecorder({
+      messageMode: "all",
+      writer: enabledWriter,
+    });
+    enabledRecorder.recordMessage(messageEvent("message.outbound.queued"));
+    enabledRecorder.recordMessage(messageEvent("message.outbound.platform-started"));
+    enabledRecorder.recordMessage(messageEvent("message.outbound.finished"));
+    await enabledWriter.ready;
+    await enabledWriter.stop();
+
+    const { db } = openOpenClawStateDatabase(database);
+    expect(
+      (
+        db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get() as {
+          count: number;
+        }
+      ).count,
+    ).toBe(2);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS count FROM audit_events").get() as { count: number }).count,
+    ).toBe(1);
+    expect(
+      (
+        db.prepare("SELECT action FROM audit_events").get() as {
+          action: string;
+        }
+      ).action,
+    ).toBe("message.outbound.finished");
+  });
+
   it("keeps fresh storage identity-free when recovery evidence is missing", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };

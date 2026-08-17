@@ -1,5 +1,6 @@
 // Durable final-reply delivery for inbound channel turns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -39,6 +40,7 @@ export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptio
   ctxPayload: FinalizedMsgContext;
   payload: ReplyPayload;
   info: ChannelDeliveryInfo;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
 };
 
 /** Outcome of attempting durable final delivery for an inbound reply payload. */
@@ -214,6 +216,12 @@ export async function deliverInboundReplyWithMessageSendContextCore(
     to,
     accountId: params.accountId,
     payloads: [params.payload],
+    ...(params.executionIdentityToken
+      ? {
+          runId: params.executionIdentityToken.runId,
+          executionIdentityToken: params.executionIdentityToken,
+        }
+      : {}),
     threadId,
     replyToId,
     replyToMode: params.replyToMode,

@@ -227,8 +227,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 51985,
-    "roughTokens": 12997
+    "chars": 56020,
+    "roughTokens": 14005
   },
   "openClawDeveloperInstructions": {
     "chars": 4479,
@@ -239,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7216
   },
   "totalWithDynamicToolsJson": {
-    "chars": 80849,
-    "roughTokens": 20213
+    "chars": 84884,
+    "roughTokens": 21221
   },
   "userInputText": {
     "chars": 1300,
@@ -576,6 +576,7 @@ Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dyna
           "type": "boolean"
         },
         "asVoice": {
+          "description": "Send audio as a voice note; combines with voiceText.",
           "type": "boolean"
         },
         "attachments": {
@@ -678,6 +679,18 @@ Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dyna
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "voiceId": {
+          "description": "Per-send speech voice override.",
+          "type": "string"
+        },
+        "voiceProvider": {
+          "description": "Per-send speech provider override.",
+          "type": "string"
+        },
+        "voiceText": {
+          "description": "Text to synthesize; message remains visible.",
+          "type": "string"
         }
       },
       "required": ["action"],

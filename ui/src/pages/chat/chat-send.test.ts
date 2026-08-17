@@ -13,8 +13,8 @@ import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   replaceSlashCommands,
-  SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import {
   createTestGatewayClient,
@@ -41,6 +41,7 @@ import {
 } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
@@ -464,6 +465,8 @@ describe("refreshChat", () => {
         agentDefaultModel: undefined,
         modelAccess: { allowed: true, requiredScope: "operator.write" },
         effortAccess: { allowed: true, requiredScope: "operator.write" },
+        permissionAccess: { allowed: true, requiredScope: "operator.write" },
+        canSelectFull: true,
         onModelSetup: vi.fn(),
       }),
       container,
@@ -485,74 +488,6 @@ describe("refreshChat", () => {
         { ...cachedModel, id: "fresh-model", name: "Fresh Model" },
       ]),
     );
-  });
-
-  it("fills omitted startup metadata immediately and populates models and commands", async () => {
-    const startup = createDeferred<unknown>();
-    const host = makeChatHost({
-      hello: {
-        features: { methods: ["chat.metadata", "chat.startup"] },
-      } as TestChatHost["hello"],
-      requestHandlers: {
-        "chat.metadata": {},
-        "commands.list": {
-          commands: [
-            {
-              name: "startup-gap-command",
-              textAliases: ["/startup-gap-command"],
-              description: "Loaded from the startup metadata gap fill.",
-              source: "plugin",
-              scope: "text",
-              acceptsArgs: false,
-            },
-          ],
-        },
-        "chat.startup": () => startup.promise,
-        "models.list": {
-          models: [
-            {
-              available: true,
-              id: "gap-model",
-              name: "Gap Model",
-              provider: "openai",
-            },
-          ],
-        },
-      },
-    });
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      awaitHistory: true,
-      deferBranches: true,
-      startup: true,
-    });
-
-    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
-    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
-    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
-
-    startup.resolve({ messages: [] });
-    await expect(refresh).resolves.toBeUndefined();
-    await waitForFast(() =>
-      expect(host.chatModelCatalog).toEqual([
-        {
-          available: true,
-          id: "gap-model",
-          name: "Gap Model",
-          provider: "openai",
-        },
-      ]),
-    );
-    expect(SLASH_COMMANDS.some((command) => command.name === "startup-gap-command")).toBe(true);
-    expect(host.request).toHaveBeenCalledWith("models.list", {
-      agentId: "main",
-      view: "configured",
-      preparedOnly: true,
-    });
-    expect(host.request).toHaveBeenCalledWith(
-      "commands.list",
-      expect.objectContaining({ includeArgs: true, scope: "text" }),
-    );
-    expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
   });
 
   it.each([
@@ -9284,9 +9219,14 @@ describe("handleSendChat", () => {
 
   it("removes queued steer indicators when chat.send returns terminal ok", async () => {
     const original = { id: "queued-1", text: "tighten the plan", createdAt: 1 };
+    let steerRequestRunId: string | undefined;
     const host = makeChatHost({
       requestHandlers: {
-        "chat.send": { status: "ok", runId: "steer-ok" },
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "terminal steer payload");
+          steerRequestRunId = String(payload.idempotencyKey);
+          return { status: "ok", runId: "steer-ok" };
+        },
       },
       chatRunId: "run-1",
       chatDisplayedLeafEntryId: "leaf-active",
@@ -9299,7 +9239,39 @@ describe("handleSendChat", () => {
     await steerQueuedChatMessage(host, "queued-1");
 
     expect(host.chatRunId).toBe("run-1");
-    expect(host.chatStream).toBe("Working...");
+    expect(host.chatStream).toBeNull();
+    expect(host.chatStreamSegments).toEqual([
+      {
+        text: "Working...",
+        ts: expect.any(Number),
+        runId: "run-1",
+        boundaryRunId: steerRequestRunId,
+      },
+    ]);
+    expect(host.chatMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        __openclaw: { idempotencyKey: `${steerRequestRunId}:user` },
+      }),
+    ]);
+    const renderedText = buildChatItems({
+      paneId: "terminal-steer",
+      sessionKey: host.sessionKey,
+      runId: host.chatRunId,
+      messages: host.chatMessages,
+      toolMessages: host.chatToolMessages,
+      streamSegments: host.chatStreamSegments,
+      stream: host.chatStream,
+      streamStartedAt: host.chatStreamStartedAt,
+      showToolCalls: true,
+    }).flatMap((item) =>
+      item.kind === "stream"
+        ? [item.text]
+        : item.kind === "group"
+          ? item.messages.map(({ message }) => extractText(message))
+          : [],
+    );
+    expect(renderedText).toEqual(["Working...", "tighten the plan"]);
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.applySettings).toHaveBeenCalledWith(
       expect.objectContaining({ lastActiveSessionKey: "agent:main:main" }),

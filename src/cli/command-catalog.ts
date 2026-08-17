@@ -1,12 +1,12 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
-import { getCommandPositionalsWithRootOptions, hasFlag } from "./argv.js";
+import { hasFlag } from "./argv.js";
 
 export type CliCommandPluginLoadPolicy =
   | "never"
   | "always"
   | "text-only"
   | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
-type CliConfigGuardMode = "run" | "skip" | "when-suppressed";
+type CliConfigGuardMode = "run" | "skip" | "validate" | "when-suppressed";
 type CliConfigGuardPolicy =
   | CliConfigGuardMode
   | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);
@@ -65,29 +65,6 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
     }
   }
   return false;
-}
-
-const UPDATE_BOOLEAN_FLAGS = [
-  "--acknowledge-clawhub-risk",
-  "--dry-run",
-  "--json",
-  "--no-restart",
-  "--update",
-  "--yes",
-] as const;
-const UPDATE_VALUE_FLAGS = ["--channel", "--tag", "--timeout"] as const;
-
-function isRootUpdateDryRun(argv: string[], commandPath: string[]): boolean {
-  if (commandPath.length !== 1 || !hasFlag(argv, "--dry-run")) {
-    return false;
-  }
-  const usesRootShorthand = hasFlag(argv, "--update");
-  const positionals = getCommandPositionalsWithRootOptions(argv, {
-    commandPath: usesRootShorthand ? [] : ["update"],
-    booleanFlags: UPDATE_BOOLEAN_FLAGS,
-    valueFlags: UPDATE_VALUE_FLAGS,
-  });
-  return positionals?.length === 0;
 }
 
 /** Command path registry used before Commander registration has loaded all plugins. */
@@ -243,8 +220,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "gateway-status" },
   },
-  { commandPath: ["gateway", "call"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "diagnostics"], exact: true, policy: { networkProxy: "bypass" } },
+  ...["call", "restart", "suspend", "resume"].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["gateway", subcommand],
+      exact: true,
+      policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
+  {
+    commandPath: ["gateway", "diagnostics"],
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["gateway", "discover"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "health"],
@@ -256,7 +242,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   { commandPath: ["gateway", "install"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "probe"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "restart"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "stability"],
     exact: true,
@@ -411,7 +396,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["cron"], policy: { configGuard: "skip", networkProxy: "bypass" } },
   { commandPath: ["dashboard"], policy: { networkProxy: "bypass" } },
   { commandPath: ["daemon"], policy: { networkProxy: "bypass" } },
-  { commandPath: ["devices"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["devices"],
+    // Every devices subcommand either dispatches to the Gateway or uses the
+    // explicit local pairing fallback. None should observe canonical state
+    // before the Gateway-owned mutation runs.
+    policy: { configGuard: "validate", networkProxy: "bypass" },
+  },
   {
     commandPath: ["worktrees"],
     policy: { loadPlugins: "never", networkProxy: "bypass" },
@@ -501,11 +492,31 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["nodes"], policy: { networkProxy: "bypass" } },
-  // Both bodies are pure gateway RPC reads, so they skip the config guard like
-  // `channels status`. Bare `openclaw nodes` keeps it because it still resolves
-  // plugin-provided node subcommands from validated config.
   { commandPath: ["nodes", "status"], exact: true, policy: { configGuard: "skip" } },
   { commandPath: ["nodes", "list"], exact: true, policy: { configGuard: "skip" } },
+  // Built-in node commands are Gateway RPCs. Keep their CLI processes off the
+  // writable canonical state database, including commands whose RPC mutates
+  // Gateway-owned pairing state. Bare and plugin-provided node commands retain
+  // the config guard because plugin discovery still needs validated config.
+  ...[
+    "describe",
+    "pending",
+    "approve",
+    "reject",
+    "remove",
+    "rename",
+    "invoke",
+    "notify",
+    "push",
+    "camera",
+    "screen",
+    "location",
+  ].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["nodes", subcommand],
+      policy: { configGuard: "validate" },
+    }),
+  ),
   { commandPath: ["pairing"], policy: { networkProxy: "bypass" } },
   { commandPath: ["proxy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["qr"], policy: { networkProxy: "bypass" } },
@@ -528,8 +539,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["update"],
     policy: {
-      configGuard: ({ argv, commandPath }) =>
-        isRootUpdateDryRun(argv, commandPath) ? "skip" : "run",
+      configGuard: "skip",
       hideBanner: true,
     },
   },

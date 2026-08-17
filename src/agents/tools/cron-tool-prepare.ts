@@ -40,7 +40,7 @@ export function prepareCronToolArguments(args: unknown): Record<string, unknown>
   const nestedJob = hasNestedJob(next.job) ? next.job : undefined;
   if (Object.hasOwn(next, "mode")) {
     throw new Error(
-      '"mode" is only valid for action="wake"; use nested job fields for cron delivery or streams.',
+      'Remove the top-level "mode" field and retry. "mode" is only valid for action="wake".',
     );
   }
 

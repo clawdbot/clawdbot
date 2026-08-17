@@ -288,11 +288,12 @@ describe("createChannelNativeApprovalRuntime", () => {
       createdAtMs: 0,
       expiresAtMs: 60_000,
     } as const;
+    const normalizedRequest = { ...request, approvalKind: "plugin" as const };
     await runtime.handleRequested(request);
 
-    expect(resolveApprovalKind).toHaveBeenCalledWith(request);
+    expect(resolveApprovalKind).toHaveBeenCalledWith(normalizedRequest);
     expect(buildPendingContent).toHaveBeenCalledWith(
-      expect.objectContaining({ request, approvalKind: "exec" }),
+      expect.objectContaining({ request: normalizedRequest, approvalKind: "exec" }),
     );
   });
 

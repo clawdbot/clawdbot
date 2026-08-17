@@ -467,6 +467,12 @@ describe("browser plugin", () => {
       "browser tool referenced",
     );
     expect(
+      probe({
+        config: { agents: { entries: { reviewer: { tools: { allow: ["browser"] } } } } },
+        env: {},
+      }),
+    ).toBe("browser tool referenced");
+    expect(
       probe({ config: { browser: { defaultProfile: "openclaw", enabled: false } }, env: {} }),
     ).toBeNull();
   });

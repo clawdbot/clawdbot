@@ -184,6 +184,13 @@ export function registerAgentsCommands(program: Command): void {
           "nonInteractive",
           "json",
         ]);
+        const hasAutomationFlags = hasExplicitOptions(command, [
+          "workspace",
+          "model",
+          "agentDir",
+          "bind",
+          "nonInteractive",
+        ]);
         const agentsAddCommand = await loadAgentsAddCommand();
         await agentsAddCommand(
           {
@@ -196,7 +203,7 @@ export function registerAgentsCommands(program: Command): void {
             json: Boolean(opts.json),
           },
           runtime,
-          { hasFlags },
+          { hasFlags, hasAutomationFlags },
         );
       });
     });

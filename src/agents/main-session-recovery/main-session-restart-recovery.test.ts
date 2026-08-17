@@ -1434,7 +1434,7 @@ describe("main-session-restart-recovery", () => {
     ).toBe(2);
   });
 
-  it("rekeys recovery identity after a prior-lifecycle recovery was admitted", async () => {
+  it("preserves recovery identity when a prior-lifecycle delivery run rotates", async () => {
     const previousRecoveryRunId = "recovery-run-a";
     const sourceRunId = "channel-run";
     const previousExecutionIdentity = createExecutionIdentityAdmissionToken(previousRecoveryRunId, {
@@ -1487,13 +1487,7 @@ describe("main-session-restart-recovery", () => {
         });
         expect(gatewayAdmission?.consume(dispatchedRunId)).toEqual({
           accepted: true,
-          token: {
-            tokenVersion: 1,
-            contextId: previousExecutionIdentity.contextId,
-            executionId: previousExecutionIdentity.executionId,
-            runId: dispatchedRunId,
-            createdAt: previousExecutionIdentity.createdAt,
-          },
+          token: previousExecutionIdentity,
         });
         const recoveryMessage = {
           role: "user" as const,
@@ -1523,20 +1517,15 @@ describe("main-session-restart-recovery", () => {
       idempotencyKey: dispatchedRunId,
       to: "discord:dm:123",
     });
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      mainRestartRecovery: {
-        executionIdentity: {
-          tokenVersion: 1,
-          contextId: previousExecutionIdentity.contextId,
-          executionId: previousExecutionIdentity.executionId,
-          runId: dispatchedRunId,
-          createdAt: previousExecutionIdentity.createdAt,
-        },
-      },
+    const recoveredEntry = loadSessionEntry({ sessionKey, storePath });
+    expect(recoveredEntry).toMatchObject({
       restartRecoveryDeliveryContext: discordDeliveryContext,
       restartRecoveryDeliveryRunId: dispatchedRunId,
       restartRecoveryDeliverySourceRunId: sourceRunId,
     });
+    expect(recoveredEntry?.mainRestartRecovery?.executionIdentity).toEqual(
+      previousExecutionIdentity,
+    );
     const transcript = await loadTestTranscript(sessionKey, storePath);
     expect(
       transcript
@@ -4801,6 +4790,48 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("reports an interrupted native tool outcome as unknown", async () => {
+    await writeMainSessionTranscript([
+      { role: "user", content: "run the command" },
+      createAssistantToolCallMessage([
+        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+      ]),
+      {
+        role: "toolResult",
+        toolName: "bash",
+        toolCallId: "call-bash-1",
+        content: "native tool call had no matching result",
+        details: { reason: "missing_tool_result" },
+        isError: true,
+      },
+    ]);
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams().message).toContain("unknown outcome");
+    expect(gatewayParams().message).toContain("never claim completion or success");
+    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("keeps a confirmed native tool failure distinct from an unknown outcome", async () => {
+    await writeMainSessionTranscript([
+      { role: "user", content: "run the command" },
+      createAssistantToolCallMessage([
+        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "false" } },
+      ]),
+      {
+        role: "toolResult",
+        toolName: "bash",
+        toolCallId: "call-bash-1",
+        content: "command failed with exit code 1",
+        details: { reason: "nonzero_exit" },
+        isError: true,
+      },
+    ]);
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams()).not.toHaveProperty("forceRestartSafeTools");
   });
 
   it("keeps a dangling side-effecting call in an aborted tail restricted", async () => {

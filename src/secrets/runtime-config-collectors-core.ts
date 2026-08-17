@@ -207,6 +207,7 @@ function collectGatewayAssignments(params: {
   }
   const auth = isRecord(gateway.auth) ? gateway.auth : undefined;
   const remote = isRecord(gateway.remote) ? gateway.remote : undefined;
+  const controlUi = isRecord(gateway.controlUi) ? gateway.controlUi : undefined;
   const gatewaySurfaceStates = evaluateGatewayAuthSurfaceStates({
     config: params.config,
     env: params.context.env,
@@ -270,6 +271,26 @@ function collectGatewayAssignments(params: {
       inactiveReason: gatewaySurfaceStates["gateway.remote.password"].reason,
       apply: (value) => {
         remote.password = value;
+      },
+    });
+  }
+  const controlUiGitHub = controlUi && isRecord(controlUi.github) ? controlUi.github : undefined;
+  if (controlUiGitHub) {
+    collectRuntimeSecretInputAssignment({
+      value: controlUiGitHub.token,
+      path: "gateway.controlUi.github.token",
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      owner: {
+        ownerKind: "capability",
+        ownerId: "control-ui-github",
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: controlUiGitHub,
+      },
+      apply: (value) => {
+        controlUiGitHub.token = value;
       },
     });
   }
@@ -550,6 +571,7 @@ export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
+  agentId?: string;
 }): void {
   const providers = params.config.models?.providers as Record<string, ProviderLike> | undefined;
   if (providers) {

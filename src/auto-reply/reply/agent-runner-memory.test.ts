@@ -10,6 +10,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  readSessionTranscriptMessageEvents,
   readSessionTranscriptActiveStats,
   readTranscriptStatsSync,
   upsertSessionEntryCore,
@@ -23,7 +24,6 @@ import {
 } from "../../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
@@ -32,6 +32,7 @@ import {
 import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
+  createTestTemplateContext,
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
@@ -431,7 +432,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
-  it("runs a memory flush turn, rotates after compaction, and persists metadata", async () => {
+  it("runs exactly one auto-reply memory flush turn, rotates, and persists metadata", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
@@ -472,7 +473,7 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       },
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -487,6 +488,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.outcome).toBe("completed");
     expect(result.sessionEntry?.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionId).toBe("session-rotated");
+    expect(runEmbeddedAgentEntryMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(requireModelFallbackCall().userLockedAuthProfileId).toBe("anthropic:work");
     const flushCall = requireEmbeddedAgentCall();
@@ -572,7 +574,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ workspaceDir: rootDir, senderIsOwner: false }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -663,7 +665,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
         senderIsOwner: true,
       }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -721,7 +723,7 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       },
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "openai/gpt-5.6-sol",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -763,7 +765,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "ollama/qwen3.5:4b",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -816,7 +818,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionId: sessionEntry.sessionId,
         sessionKey: "main",
       }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -871,7 +873,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -924,7 +926,7 @@ describe("runMemoryFlushIfNeeded", () => {
         authProfileId: "anthropic:auto",
         authProfileIdSource: "auto",
       }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -963,7 +965,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1003,7 +1005,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1042,7 +1044,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1076,7 +1078,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1167,7 +1169,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const params = {
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off" as const,
@@ -1243,7 +1245,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1278,7 +1280,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1311,7 +1313,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1346,7 +1348,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-7",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1413,7 +1415,7 @@ describe("runMemoryFlushIfNeeded", () => {
         },
       },
       followupRun: createTestFollowupRun({ provider: "anthropic", model: "claude" }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1490,7 +1492,7 @@ describe("runMemoryFlushIfNeeded", () => {
         provider: "openai",
         model: "gpt-5.4",
       }),
-      sessionCtx: { Provider: "telegram" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
       defaultModel: "openai/gpt-5.4",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1544,7 +1546,7 @@ describe("runMemoryFlushIfNeeded", () => {
         provider: "openai",
         model: "gpt-5.4",
       }),
-      sessionCtx: { Provider: "telegram" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
       defaultModel: "openai/gpt-5.4",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1580,7 +1582,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: {},
       followupRun: createTestFollowupRun({ provider: "codex-cli" }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "codex-cli/gpt-5.5",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1609,7 +1611,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "webchat" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "webchat" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1639,7 +1641,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "webchat" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "webchat" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1672,7 +1674,7 @@ describe("runMemoryFlushIfNeeded", () => {
         provider: "anthropic",
         model: "claude-opus-4-6",
       }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -1716,7 +1718,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "agent:main:main",
         runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
       }),
-      sessionCtx: { Provider: "telegram" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -2608,7 +2610,7 @@ describe("runMemoryFlushIfNeeded", () => {
           sessionFile,
           sessionKey: "main",
         }),
-        sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+        sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
         defaultModel: "anthropic/claude-opus-4-6",
         modelContextTokens: 100_000,
         resolvedVerboseLevel: "off",
@@ -2860,6 +2862,229 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["without provider usage", undefined],
+    ["after provider usage", 20_000],
+  ])(
+    "estimates Codex tool-result mirrors through the provider projection %s after runtime cutover",
+    async (_label, providerPromptTokens) => {
+      const storePath = path.join(rootDir, "sessions.json");
+      const sessionKey = "agent:main:telegram:default:direct:12345";
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      const output = "x".repeat(8_192);
+      await writeTestSessionTranscript({
+        rootDir,
+        sessionKey,
+        events: [
+          ...(providerPromptTokens === undefined
+            ? []
+            : [
+                {
+                  type: "message" as const,
+                  message: {
+                    role: "assistant" as const,
+                    content: "Codex usage anchor",
+                    usage: {
+                      input: providerPromptTokens,
+                      output: 100,
+                      totalTokens: providerPromptTokens + 100,
+                      contextUsage: {
+                        state: "available" as const,
+                        promptTokens: providerPromptTokens,
+                        totalTokens: providerPromptTokens + 100,
+                      },
+                    },
+                  },
+                },
+              ]),
+          ...Array.from({ length: 64 }, (_, index) => {
+            const toolCallId = `call-${index}`;
+            return [
+              {
+                type: "message" as const,
+                message: {
+                  role: "assistant" as const,
+                  content: [{ type: "toolCall", id: toolCallId, name: "exec", arguments: {} }],
+                  usage: {
+                    input: 0,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: 0,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                  },
+                },
+              },
+              {
+                type: "message" as const,
+                message: {
+                  role: "toolResult" as const,
+                  toolCallId,
+                  toolName: "exec",
+                  isError: false,
+                  content: [
+                    {
+                      type: "toolResult",
+                      id: toolCallId,
+                      name: "exec",
+                      toolName: "exec",
+                      toolCallId,
+                      toolUseId: toolCallId,
+                      tool_use_id: toolCallId,
+                      text: output,
+                      content: output,
+                    },
+                  ],
+                },
+              },
+            ];
+          }).flat(),
+        ],
+      });
+      const transcriptBefore = readSessionTranscriptMessageEvents(scope);
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokensFresh: false,
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+      };
+      compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: "guard_blocked",
+      });
+
+      const entry = await runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          provider: "openai",
+          model: "gpt-5.5",
+          sessionId: "session",
+          sessionKey,
+        }),
+        defaultModel: "gpt-5.5",
+        modelContextTokens: 128_000,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      expect(entry).toBe(sessionEntry);
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      expect(readSessionTranscriptMessageEvents(scope)).toEqual(transcriptBefore);
+    },
+  );
+
+  it("accounts for provider-visible history beyond the recent read bounds", async () => {
+    await writeTestSessionTranscript({
+      rootDir,
+      events: Array.from({ length: 250 }, (_, index) => ({
+        type: "message" as const,
+        message: {
+          role: "user" as const,
+          content: index < 50 ? "x".repeat(8_192) : "small",
+        },
+      })),
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      modelContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBeGreaterThan(100_000);
+  });
+
+  it.each([
+    ["below", 20_000, false],
+    ["above", 70_000, true],
+  ])(
+    "uses a provider usage anchor older than the scan window when pressure is %s threshold",
+    async (_label, providerPromptTokens, shouldCompact) => {
+      await writeTestSessionTranscript({
+        rootDir,
+        events: [
+          ...Array.from({ length: 50 }, () => ({
+            type: "message" as const,
+            message: { role: "user" as const, content: "x".repeat(8_192) },
+          })),
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: "usage anchor",
+              usage: {
+                input: providerPromptTokens,
+                output: 100,
+                totalTokens: providerPromptTokens + 100,
+                contextUsage: {
+                  state: "available",
+                  promptTokens: providerPromptTokens,
+                  totalTokens: providerPromptTokens + 100,
+                },
+              },
+            },
+          },
+          ...Array.from({ length: 520 }, () => ({
+            type: "message" as const,
+            message: { role: "user" as const, content: "x".repeat(64) },
+          })),
+        ],
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokensFresh: false,
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+      };
+
+      await runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          provider: "openai",
+          model: "gpt-5.5",
+          sessionId: "session",
+          sessionKey: "main",
+        }),
+        defaultModel: "gpt-5.5",
+        modelContextTokens: 100_000,
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(shouldCompact ? 1 : 0);
+    },
+  );
+
   it("does not use the active run sessionFile when the session entry has no transcript path", async () => {
     const sessionFile = path.join(rootDir, "active-run-session.jsonl");
     await fs.writeFile(
@@ -2979,8 +3204,8 @@ describe("runMemoryFlushIfNeeded", () => {
         {
           type: "message",
           message: {
-            role: "tool",
-            content: `large interrupted tool output ${"x".repeat(450_000)}`,
+            role: "user",
+            content: `large follow-up ${"x".repeat(450_000)}`,
           },
         },
       ],
@@ -3036,8 +3261,8 @@ describe("runMemoryFlushIfNeeded", () => {
         {
           type: "message",
           message: {
-            role: "tool",
-            content: `moderate interrupted tool output ${"x".repeat(36_000)}`,
+            role: "user",
+            content: `moderate follow-up ${"x".repeat(36_000)}`,
           },
         },
       ],
@@ -3440,7 +3665,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const flushResult = await runMemoryFlushIfNeeded({
       cfg,
       followupRun,
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -3714,7 +3939,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
@@ -3876,7 +4101,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ extraSystemPrompt: "extra system" }),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
       modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",

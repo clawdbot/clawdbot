@@ -108,6 +108,9 @@ const CURRENT_TRAIN_METHODS = [
   "portal.list",
   "portal.open",
   "portal.close",
+  "sessions.move",
+  "sessions.assignOwner",
+  "controlUi.sessionPreview",
 ] as const;
 
 describe("core gateway method release trains", () => {

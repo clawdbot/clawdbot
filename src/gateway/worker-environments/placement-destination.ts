@@ -8,6 +8,7 @@ type WorkerPlacementDestination =
   | {
       profileId: string;
       deviceId?: undefined;
+      machineClass?: string;
       inheritedProfile?: undefined;
     }
   | {
@@ -20,12 +21,18 @@ export function resolveWorkerPlacementDestination(params: {
   cfg: Pick<OpenClawConfig, "cloudWorkers">;
   profileId?: string;
   deviceId?: string;
+  machineClass?: string;
 }): Result<WorkerPlacementDestination | undefined, string> {
   const profileId = normalizeOptionalString(params.profileId);
   if (profileId) {
-    return Object.hasOwn(params.cfg.cloudWorkers?.profiles ?? {}, profileId)
-      ? ok({ profileId })
-      : err(`cloud worker profile is not configured: ${profileId}`);
+    if (!Object.hasOwn(params.cfg.cloudWorkers?.profiles ?? {}, profileId)) {
+      return err(`cloud worker profile is not configured: ${profileId}`);
+    }
+    const machineClass = normalizeOptionalString(params.machineClass);
+    if (params.machineClass !== undefined && !machineClass) {
+      return err("cloud worker machine class must be non-empty");
+    }
+    return ok({ profileId, ...(machineClass ? { machineClass } : {}) });
   }
   const deviceId = normalizeOptionalString(params.deviceId);
   if (!deviceId) {

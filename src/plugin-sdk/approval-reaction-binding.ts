@@ -1,16 +1,22 @@
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import type { ExecApprovalReplyDecision } from "../infra/exec-approval-reply.js";
 import type { MessagePresentation } from "../interactive/payload.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
-type ApprovalKind = "exec" | "plugin";
-
 /** Validated identity and decisions shared by typed approval delivery surfaces. */
 export type ApprovalReactionDeliveryBinding = {
   approvalId: string;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
   approvalSlug?: string;
 };
+
+/** Build the private marker revalidated after channel delivery. */
+export function buildApprovalReactionDeliveredBindingMarker(
+  binding: ApprovalReactionDeliveryBinding,
+): { version: 1 } & ApprovalReactionDeliveryBinding {
+  return { version: 1, ...binding };
+}
 
 /** Read a nonempty, duplicate-free list without accepting unrecognized decisions. */
 export function readApprovalReactionDecisionList(

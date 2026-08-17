@@ -1,5 +1,6 @@
 // Imessage plugin module implements channel behavior.
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
@@ -100,7 +101,7 @@ const loadIMessageQuestionReactionsModule = createLazyRuntimeModule(
 
 async function prepareForwardedIMessageApprovalPayload(params: {
   payload: Parameters<NonNullable<ChannelOutboundAdapter["beforeDeliverPayload"]>>[0]["payload"];
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 }): Promise<void> {
   const prepared = (
     await loadIMessageApprovalReactionsModule()

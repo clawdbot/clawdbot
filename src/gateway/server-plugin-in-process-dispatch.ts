@@ -15,6 +15,7 @@ import type {
   GatewayAgentRunTaskOwner,
   GatewayRequestContext,
   GatewayRequestOptions,
+  TrustedAgentToolCaller,
 } from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import {
@@ -33,6 +34,7 @@ const loadInternalAgentTurnFacade = createLazyRuntimeModule(
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
+  agentToolCaller?: TrustedAgentToolCaller;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
@@ -86,6 +88,7 @@ function resolveInProcessGatewayDispatch(
     : undefined;
   const syntheticClient = createSyntheticPluginRuntimeClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
+    agentToolCaller: options?.agentToolCaller,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,

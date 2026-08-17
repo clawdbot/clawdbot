@@ -19,6 +19,25 @@ type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "act
 
 const PREVIOUS_RESULT_RECONCILING_MESSAGE =
   "The previous cloud turn's workspace result is still reconciling; it retries automatically — try again shortly.";
+
+export async function rejectPendingWorkerResult(params: {
+  placements: WorkerSessionPlacementStore;
+  sessionId: string;
+  signal?: AbortSignal;
+}): Promise<never> {
+  try {
+    await params.placements.waitForTurnClaimRelease(params.sessionId, {
+      timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+  } catch (error) {
+    if (params.signal?.aborted) {
+      throw error;
+    }
+    throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE, { cause: error });
+  }
+  throw new Error(PREVIOUS_RESULT_RECONCILING_MESSAGE);
+}
 const CURRENT_WORKER_BUILD_REMEDIATION =
   "redispatch the session so its worker can bootstrap the current build before retrying.";
 

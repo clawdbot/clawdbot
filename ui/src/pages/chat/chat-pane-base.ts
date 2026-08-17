@@ -38,7 +38,6 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { BoardChatDockSize } from "./board-session-surface.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
@@ -59,7 +58,8 @@ import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
-import type { ChatMessageCache } from "./session-message-cache.ts";
+import { resolveChatSnapshotKey, type ChatMessageCache } from "./session-message-cache.ts";
+import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { closeSlot, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
@@ -72,6 +72,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) paneId = "single";
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) chatMessagesBySession?: ChatMessageCache;
+  @property({ attribute: false }) sessionSnapshotStore?: SessionSnapshotStore;
   // Empty means "no route/layout opinion yet": the pane boots on the page
   // state's default session and must not canonicalize or write global session
   // bindings until the container supplies a real key (classic mode renders
@@ -156,8 +157,16 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
     this.requestUpdate(),
   );
-  protected readonly transcript = new ChatTranscriptController(this);
-  protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
+  protected readonly transcript = new ChatTranscriptController(this, {
+    read: (sessionKey, rowKey) => this.readTranscriptRowHeight(sessionKey, rowKey),
+    write: (sessionKey, rowKey, height) =>
+      this.writeTranscriptRowHeight(sessionKey, rowKey, height),
+  });
+  protected readonly taskSidebarTranscript = new ChatTranscriptController(this, {
+    read: (sessionKey, rowKey) => this.readTranscriptRowHeight(sessionKey, rowKey),
+    write: (sessionKey, rowKey, height) =>
+      this.writeTranscriptRowHeight(sessionKey, rowKey, height),
+  });
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
     this.requestUpdate();
@@ -177,6 +186,22 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // across a reconnect or pane teardown dismiss itself, matching
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
+
+  private transcriptSnapshotKey(sessionKey: string): string | null {
+    return this.state ? resolveChatSnapshotKey(this.state, { sessionKey }) : null;
+  }
+
+  private readTranscriptRowHeight(sessionKey: string, rowKey: string): number | undefined {
+    const snapshotKey = this.transcriptSnapshotKey(sessionKey);
+    return snapshotKey ? this.sessionSnapshotStore?.readRowHeight(snapshotKey, rowKey) : undefined;
+  }
+
+  private writeTranscriptRowHeight(sessionKey: string, rowKey: string, height: number): void {
+    const snapshotKey = this.transcriptSnapshotKey(sessionKey);
+    if (snapshotKey) {
+      this.sessionSnapshotStore?.recordRowHeight(snapshotKey, rowKey, height);
+    }
+  }
   @litState() protected headerEditing = false;
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;
@@ -187,6 +212,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     clientGatewayUrl: string;
     scope: ChatPaneConnectionScope;
   } | null = null;
+  @litState() protected headerPlacementMovingKey: string | null = null;
   @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
@@ -374,17 +400,14 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected historyObserverBootstrap = false;
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
-  protected historyBootstrapPagesLoaded = 0;
   protected historyIntentConsumed = false;
   protected historyIntentTimer: number | null = null;
   protected historyTouchY: number | null = null;
   protected transcriptScrollTop: number | null = null;
-  protected nativePaginationSnapshot: ChatHistoryPagination | null = null;
   // Older cursors already requested this session. A provider that cycles cursors
   // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since
   // the sentinel never scrolls out of view when nothing new renders.
   protected readonly olderCursorsSeen = new Set<string>();
-  protected readonly olderOffsetsSeen = new Set<number>();
 
   constructor() {
     super();

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { listAgentIds, tryResolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
@@ -78,13 +79,9 @@ import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
 } from "./state-migrations.exec-approvals.js";
+import { migrationFileExists, readSessionStoreJson5, safeReadDir } from "./state-migrations.fs.js";
 import {
-  existsDir,
-  migrationFileExists,
-  readSessionStoreJson5,
-  safeReadDir,
-} from "./state-migrations.fs.js";
-import {
+  inspectLegacyAgentDir,
   migrateLegacyAgentDir,
   migrateLegacySessions,
 } from "./state-migrations.legacy-sessions.js";
@@ -211,6 +208,8 @@ const autoMigrateChecked = new Set<string>();
 
 const PLUGIN_DOCTOR_MIGRATION_LOCK_TIMEOUT_MS = 250;
 const PLUGIN_DOCTOR_MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
+const DEFERRED_LEGACY_OWNER_MESSAGE =
+  "Deferred legacy agent/session migration: select an agent owner";
 
 export function resetAutoMigrateLegacyStateForTest(): void {
   autoMigrateChecked.clear();
@@ -283,8 +282,9 @@ function createPluginDoctorStateMigrationContext(
 }
 
 function tryResolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string | undefined {
-  const agentId = tryResolveLegacyCompatibilityAgentId(cfg);
-  return agentId ? normalizeAgentId(agentId) : undefined;
+  const agentId =
+    tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveSystemAgentTargetAgentId(cfg);
+  return agentId && listAgentIds(cfg).includes(agentId) ? agentId : undefined;
 }
 
 function tryResolveDoctorSessionMigrationAgentId(cfg: OpenClawConfig): string | undefined {
@@ -456,7 +456,8 @@ export async function detectLegacyStateMigrations(params: {
 
   const legacyAgentDir = path.join(stateDir, "agent");
   const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
-  const hasLegacyAgentDir = existsDir(legacyAgentDir);
+  const legacyAgentDirInspection = inspectLegacyAgentDir(legacyAgentDir);
+  const hasLegacyAgentDir = legacyAgentDirInspection.status === "payload";
   const pluginStateSidecarPath = resolveLegacyPluginStateSidecarPath(stateDir);
   const hasPluginStateSidecar = migrationFileExists(pluginStateSidecarPath);
   const hasPendingPluginStateSidecarArchive = hasPendingSqliteSidecarArchive(
@@ -647,10 +648,18 @@ export async function detectLegacyStateMigrations(params: {
     Boolean(sessionMigrationAgentId) &&
     (hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles);
   const agentDirHasLegacy = Boolean(migrationAgentId) && hasLegacyAgentDir;
-  const deferred =
-    (!sessionMigrationAgentId &&
-      (hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles)) ||
-    (!migrationAgentId && hasLegacyAgentDir);
+  const deferredSessions =
+    !sessionMigrationAgentId &&
+    (hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles);
+  const deferredAgentDir = !migrationAgentId && hasLegacyAgentDir;
+  const deferredWarnings =
+    deferredSessions || (deferredAgentDir && params.doctorOnlyStateMigrations === true)
+      ? [DEFERRED_LEGACY_OWNER_MESSAGE]
+      : [];
+  const deferredNotices =
+    deferredAgentDir && params.doctorOnlyStateMigrations !== true
+      ? [DEFERRED_LEGACY_OWNER_MESSAGE]
+      : [];
   const preview: string[] = [];
   if (sessionsHaveLegacy && hasLegacySessions) {
     preview.push(`- Sessions: ${sessionsLegacyDir} → ${sessionsTargetDir}`);
@@ -863,9 +872,10 @@ export async function detectLegacyStateMigrations(params: {
     warnings: [
       ...pluginPlanWarnings,
       ...legacySessionSurfaces.failures,
-      ...(deferred ? ["Deferred legacy agent/session migration: select an agent owner"] : []),
+      ...(legacyAgentDirInspection.status === "failed" ? [legacyAgentDirInspection.warning] : []),
+      ...deferredWarnings,
     ],
-    notices: [],
+    notices: deferredNotices,
     preview,
   };
 }

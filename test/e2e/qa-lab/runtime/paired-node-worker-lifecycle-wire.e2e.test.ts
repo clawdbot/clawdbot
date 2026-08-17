@@ -25,7 +25,13 @@ const HOLD_A = "WIRE-HOLD-A";
 const HOLD_B = "WIRE-HOLD-B";
 
 type TurnResult = { runId?: string; status?: string; summary?: string };
-type Placement = { environmentId?: string; state?: string; workerBundleHash?: string };
+type Placement = {
+  activeOwnerEpoch?: number;
+  environmentId?: string;
+  generation?: number;
+  state?: string;
+  workerBundleHash?: string;
+};
 type EnvironmentRead = {
   id: string;
   type: string;
@@ -174,6 +180,8 @@ describe("paired node worker lifecycle wire", () => {
       let gateway: WireGateway | undefined;
       let operator: GatewayClient | undefined;
       let workerNode: PairedNodeWorkerHost | undefined;
+      let testFailure: { error: unknown } | undefined;
+      let cleanupFailures: unknown[];
       try {
         gateway = await startPairedNodeWorkerGateway({ providerBaseUrl: provider.baseUrl });
         operator = await connectWireClient({ gateway, role: "operator", identity: null });
@@ -201,6 +209,41 @@ describe("paired node worker lifecycle wire", () => {
         // Local and node-placed sessions share the Gateway without sharing failure state.
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-NODE-BASELINE" });
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-BASELINE" });
+
+        // Stop-and-continue moves reconcile the source before returning local, never pass through
+        // reclaimed, and the same session can dispatch back to its paired node afterward.
+        const sourcePlacement = await describePlacement(gateway, retainedKey);
+        expect(sourcePlacement).toMatchObject({
+          state: "active",
+          environmentId: retainedPlacement.environmentId,
+          generation: expect.any(Number),
+          activeOwnerEpoch: expect.any(Number),
+        });
+        if (
+          typeof sourcePlacement.generation !== "number" ||
+          typeof sourcePlacement.environmentId !== "string" ||
+          typeof sourcePlacement.activeOwnerEpoch !== "number"
+        ) {
+          throw new Error("active placement did not expose exact move source facts");
+        }
+        const movedLocal = (await gateway.call(
+          "sessions.move",
+          {
+            key: retainedKey,
+            expected: {
+              generation: sourcePlacement.generation,
+              environmentId: sourcePlacement.environmentId,
+              ownerEpoch: sourcePlacement.activeOwnerEpoch,
+            },
+            target: { kind: "gateway" },
+          },
+          { timeoutMs: PROOF_TIMEOUT_MS },
+        )) as { placement?: Placement };
+        expect(movedLocal.placement).toMatchObject({ state: "local" });
+        expect(await describePlacement(gateway, retainedKey)).toMatchObject({ state: "local" });
+        await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-LOCAL" });
+        await dispatchNodeSession({ gateway, key: retainedKey, nodeId });
+        await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-BACK" });
 
         // Bundle maintenance reports only the public status/version projection and repairs loss.
         await expectPublicBundleStatus({ operator, nodeId, status: "installed" });
@@ -241,6 +284,7 @@ describe("paired node worker lifecycle wire", () => {
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-OFFLINE" });
         await workerNode.connect();
         await expectSuccessfulTurn({ operator, key: repairedKey, marker: "WIRE-OFFLINE-RETRY" });
+        await workerNode.waitForWorkersIdle();
 
         // Two nonterminal real worker children consume both physical slots. The third turn
         // records a bounded capacity failure at the public RPC/history/placement boundaries.
@@ -327,6 +371,8 @@ describe("paired node worker lifecycle wire", () => {
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-REMOVAL" });
         await workerNode.waitForInvokes();
         expect(workerNode.invokeErrors).toEqual([]);
+      } catch (error) {
+        testFailure = { error };
       } finally {
         provider.releaseAll();
         const cleanup = await Promise.allSettled([
@@ -336,15 +382,16 @@ describe("paired node worker lifecycle wire", () => {
           provider.stop(),
           closeWireServer(published.server),
         ]);
-        const failures = cleanup.flatMap((result) =>
+        cleanupFailures = cleanup.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "paired node worker lifecycle cleanup failed");
-        }
+      }
+      const failures = [...(testFailure ? [testFailure.error] : []), ...cleanupFailures];
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "paired node worker lifecycle test failed");
       }
     },
   );

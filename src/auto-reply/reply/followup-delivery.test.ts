@@ -448,6 +448,56 @@ function createAccounting(
 }
 
 describe("resolveFollowupDeliveryDecision", () => {
+  it("delivers a yield acknowledgment after accepting a child spawn", () => {
+    const execution = createSettledExecution();
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.meta = {
+        durationMs: 0,
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      };
+      execution.outcome.result.acceptedSessionSpawns = [
+        { runId: "child", childSessionKey: "agent:main:child" },
+      ];
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn: createTurn(),
+        execution,
+        accounting: createAccounting(),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "Research started; results will follow." }],
+    });
+  });
+
+  it("delivers a yield acknowledgment in configured group message-tool-only mode", () => {
+    const turn = createTurn();
+    turn.queued.originatingChatType = "group";
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    const execution = createSettledExecution();
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.meta = {
+        durationMs: 0,
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      };
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution,
+        accounting: createAccounting(),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "Research started; results will follow." }],
+    });
+  });
+
   it("keeps ambient room-event finals silent", () => {
     const turn = createTurn({
       queued: {

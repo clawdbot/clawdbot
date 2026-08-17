@@ -716,6 +716,10 @@ describe("prepareSimpleCompletionModelForAgent", () => {
   it("materializes a derived utility model on the Platform route for API-key auth", async () => {
     const cfg = {
       agents: {
+        entries: {
+          main: {},
+          other: {},
+        },
         defaults: {
           model: "openai/gpt-5.5",
           models: {
@@ -756,6 +760,11 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     expect(
       (callArg(hoisted.getApiKeyForModelMock, 1) as { model?: { api?: string } }).model?.api,
     ).toBe("openai-responses");
+    // Route materialization re-resolves the model on a multi-agent config; both
+    // calls must keep the authorized agentId or the second falls back to
+    // resolveDefaultAgentId, which throws on a multi-agent config.
+    expect(modelResolver.mock.calls[0]?.[4]).toMatchObject({ agentId: "main" });
+    expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
   });
 
   it("keeps the Codex route for OAuth auth", async () => {

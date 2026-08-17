@@ -31,6 +31,7 @@ import "../test-helpers/app-sidebar-cases/session-mutations.ts";
 import "../test-helpers/app-sidebar-cases/sidebar-scroll.ts";
 import "../test-helpers/app-sidebar-cases/sessions.ts";
 import "../test-helpers/app-sidebar-cases/session-ownership.ts";
+import "../test-helpers/app-sidebar-cases/session-ownership-filtering.ts";
 import "../test-helpers/app-sidebar-cases/session-list-sections.ts";
 import "../test-helpers/app-sidebar-cases/sidebar-zone.ts";
 import "../test-helpers/app-sidebar-cases/transient-menus.ts";

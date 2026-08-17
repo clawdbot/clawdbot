@@ -509,16 +509,15 @@ async function runLoop(
       }
     }
 
-    const followUpMessages = (await config.getFollowUpMessages?.()) || [];
-    if (followUpMessages.length > 0) {
-      // Follow-up messages arrive after a turn would otherwise end; route them through the
-      // same pending-message path so event ordering matches steering messages.
-      pendingMessages = followUpMessages;
-      continue;
+    pendingMessages = (await config.getFollowUpMessages?.()) || [];
+    if (pendingMessages.length === 0) {
+      // Recheck after the awaited follow-up drain so agent_end cannot strand an accepted steer.
+      const finalSteering = getSteeringAtCheckpoint(config);
+      pendingMessages = Array.isArray(finalSteering) ? finalSteering : await finalSteering;
     }
-
-    // No more messages, exit
-    break;
+    if (pendingMessages.length === 0) {
+      break;
+    }
   }
 
   await emit({ type: "agent_end", messages: newMessages });

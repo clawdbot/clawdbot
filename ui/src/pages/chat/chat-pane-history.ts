@@ -28,7 +28,6 @@ import {
 } from "./chat-history.ts";
 import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
-  CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT,
   CHAT_HISTORY_INTENT_EDGE_PX,
   CHAT_HISTORY_INTENT_IDLE_MS,
   CHAT_HISTORY_TOUCH_INTENT_PX,
@@ -56,12 +55,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     if (parseCatalogSessionKey(state.sessionKey)) {
       return Boolean(this.catalogCursor && !this.catalogLoading);
     }
-    const pagination = state.chatHistoryPagination ?? { hasMore: false };
-    if (pagination !== this.nativePaginationSnapshot) {
-      this.nativePaginationSnapshot = pagination;
-      this.olderOffsetsSeen.clear();
-    }
-    return pagination.hasMore && !state.chatLoading;
+    return state.chatHistoryPagination.hasMore && !state.chatLoading;
   }
 
   protected resetOlderMessagesViewport(): void {
@@ -71,7 +65,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     this.loadingOlder = false;
     this.historyObserverArmed = false;
     this.historyAutoLoadBlocked = false;
-    this.historyBootstrapPagesLoaded = 0;
     this.historyIntentConsumed = false;
     this.historyTouchY = null;
     if (this.historyIntentTimer !== null) {
@@ -80,8 +73,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     this.transcriptScrollTop = null;
     this.olderCursorsSeen.clear();
-    this.olderOffsetsSeen.clear();
-    this.nativePaginationSnapshot = null;
     this.clearHistoryObserver();
   }
 
@@ -121,10 +112,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     this.transcriptScrollTop ??= root.scrollTop;
     const threadIsScrollable = root.scrollHeight > root.clientHeight;
-    const bootstrap =
-      !this.historyObserverArmed &&
-      !threadIsScrollable &&
-      this.historyBootstrapPagesLoaded < CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT;
+    const bootstrap = !this.historyObserverArmed && !threadIsScrollable;
     if (this.historyAutoLoadBlocked) {
       this.clearHistoryObserver();
       return;
@@ -150,9 +138,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
           this.historyObserverArmed = false;
-          if (bootstrap) {
-            this.historyBootstrapPagesLoaded += 1;
-          }
           void this.loadOlderMessages();
         }
       },
@@ -328,18 +313,15 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     let prepended = false;
     try {
       if (catalogKey) {
-        const previousCount = this.catalogMessages.length;
-        const progressed = await this.loadCatalogSession(catalogKey, true);
-        prepended = progressed || this.catalogMessages.length > previousCount;
+        prepended = await this.loadCatalogSession(catalogKey, true);
       } else {
         const pagination = state.chatHistoryPagination;
-        if (!pagination?.hasMore) {
+        if (!pagination.hasMore) {
           return false;
         }
         const requestedOffset = pagination.nextOffset;
         const expectedSessionId =
           typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
-        this.olderOffsetsSeen.add(requestedOffset);
         const result = await loadOlderChatHistoryPage(state, requestedOffset);
         if (!result || generation !== this.olderLoadGeneration) {
           return false;
@@ -358,10 +340,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           return true;
         }
         const nextPagination = resolveChatHistoryPagination(result);
-        const exhausted =
-          !nextPagination.hasMore ||
-          nextPagination.nextOffset <= requestedOffset ||
-          this.olderOffsetsSeen.has(nextPagination.nextOffset);
+        const exhausted = !nextPagination.hasMore || nextPagination.nextOffset <= requestedOffset;
         const messages = Array.isArray(result.messages) ? result.messages : [];
         const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
         const grew = nextMessages.length > state.chatMessages.length;
@@ -375,7 +354,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             }
           : nextPagination;
         state.chatHistoryPagination = appliedPagination;
-        this.nativePaginationSnapshot = appliedPagination;
         state.lastError = null;
         scheduleChatScroll(state, false);
         prepended = grew || !exhausted;
@@ -383,6 +361,10 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     } catch (error) {
       if (generation === this.olderLoadGeneration) {
         state.lastError = formatUiError(error);
+        // Loading-row removal can emit a layout scroll. Align the tracker so it
+        // cannot masquerade as renewed user intent and consume the manual retry.
+        this.transcriptScrollTop =
+          this.querySelector<HTMLElement>(".chat-thread")?.scrollTop ?? null;
       }
     } finally {
       if (generation === this.olderLoadGeneration) {

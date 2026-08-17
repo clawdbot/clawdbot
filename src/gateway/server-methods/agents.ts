@@ -898,10 +898,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const modelCatalog = await readPreparedServerMethodModelCatalog(context);
-    const result = listAgentsForGateway(cfg, modelCatalog, {
-      includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
-    });
-    respond(true, result, undefined);
+    respond(
+      true,
+      listAgentsForGateway(cfg, modelCatalog, {
+        includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
+      }),
+      undefined,
+    );
   },
   "agents.create": async ({ params, respond }) => {
     if (!validateAgentsCreateParams(params)) {
@@ -1264,7 +1267,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         // A journaled path is trash-eligible only while registry ownership still points at the
         // deleted agent; recovery must not consume a path claimed by a surviving agent.
         const agentDirRegistryPath = normalizeAgentDirRegistryPath(deleteResult.agentDir);
-        await purgeAgentSessionStoreEntries(lockedConfig, agentId);
+        const purgeFailed = await purgeAgentSessionStoreEntries(lockedConfig, agentId);
 
         const removed: AgentDeleteRemovedPath[] = [];
         const failed: AgentDeleteFailedPath[] = [];
@@ -1509,6 +1512,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           removedBindings: deleteResult.removedBindings,
           removed,
           failed,
+          ...(purgeFailed ? { purgeFailed: true as const } : {}),
         };
       });
       respond(true, result, undefined);

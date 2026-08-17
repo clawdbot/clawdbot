@@ -661,6 +661,156 @@ suite.define(() => {
     await page.close();
   });
 
+  it("auto-pages an underfilled native transcript until it becomes scrollable", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+    }
+    const viewport = { width: 1280, height: 900 };
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport,
+      ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const historyMessage = (seq: number, role: "assistant" | "user", text: string) => ({
+      __openclaw: { seq },
+      content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
+      role,
+      timestamp: 1_800_000_000_000 + seq,
+    });
+    const recent = [
+      historyMessage(21, "user", "Recent question"),
+      historyMessage(22, "assistant", "Recent answer"),
+    ];
+    // Consecutive assistant records collapse into one rendered group, so this
+    // page advances the raw offset without filling the real transcript viewport.
+    const firstOlderPage = Array.from({ length: 4 }, (_, index) =>
+      historyMessage(index + 17, "assistant", `Short older answer ${index + 17}`),
+    );
+    const secondOlderPage = Array.from({ length: 16 }, (_, index) => {
+      const seq = index + 1;
+      const role = seq % 2 === 0 ? "assistant" : "user";
+      return historyMessage(
+        seq,
+        role,
+        `Scrollable older ${role} message ${seq}\n${"Transcript detail line\n".repeat(3)}`,
+      );
+    });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.history"],
+      featureMethods: ["chat.metadata", "chat.startup"],
+      methodResponses: {
+        "chat.startup": {
+          messages: recent,
+          hasMore: true,
+          nextOffset: 2,
+          totalMessages: 30,
+          sessionId: "native-underfill-pagination",
+          thinkingLevel: null,
+        },
+        "chat.history": {
+          cases: [
+            {
+              match: { offset: 2 },
+              response: {
+                messages: firstOlderPage,
+                hasMore: true,
+                nextOffset: 6,
+                totalMessages: 30,
+                sessionId: "native-underfill-pagination",
+                thinkingLevel: null,
+              },
+            },
+            {
+              match: { offset: 6 },
+              response: {
+                messages: secondOlderPage,
+                hasMore: true,
+                nextOffset: 22,
+                totalMessages: 30,
+                sessionId: "native-underfill-pagination",
+                thinkingLevel: null,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const thread = pane.locator(".chat-thread");
+      await page.getByText("Recent answer", { exact: true }).waitFor();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("chat.history")).map(
+            (request) => (request.params as { offset?: number } | undefined)?.offset,
+          ),
+        )
+        .toEqual([2]);
+      await pane.locator(".chat-history-loading").waitFor();
+      expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
+        true,
+      );
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "00-native-history-initial-underfill-loading.png"),
+          fullPage: true,
+        });
+      }
+
+      await gateway.deferNext("chat.history", { offset: 6 });
+      await gateway.resolveDeferred("chat.history");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("chat.history")).map(
+            (request) => (request.params as { offset?: number } | undefined)?.offset,
+          ),
+        )
+        .toEqual([2, 6]);
+      await pane.locator(".chat-history-loading").waitFor();
+      expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
+        true,
+      );
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "01-native-history-continued-auto-load.png"),
+          fullPage: true,
+        });
+      }
+
+      await gateway.resolveDeferred("chat.history");
+      await expect
+        .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
+        .toBe(true);
+      await expect.poll(() => pane.locator(".chat-history-loading").count()).toBe(0);
+      expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: path.join(artifactDir, "02-native-history-final-scrollable.png"),
+          fullPage: true,
+        });
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 300);
+      });
+      expect(
+        (await gateway.getRequests("chat.history")).map(
+          (request) => (request.params as { offset?: number } | undefined)?.offset,
+        ),
+      ).toEqual([2, 6]);
+    } finally {
+      await suite.closeBrowserContext(context);
+      if (artifactDir && proofVideo) {
+        await proofVideo.saveAs(path.join(artifactDir, "native-history-auto-pagination.webm"));
+      }
+    }
+  });
+
   it("shows loaded native history before fetching and revealing an earlier page", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();

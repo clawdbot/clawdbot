@@ -183,7 +183,7 @@ describe("GatewayClient", () => {
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
     expectNoGatewayClientAgent({
       url: "wss://gateway.example.com",
-      tlsFingerprint: "SHA256:AA:BB",
+      tlsFingerprint: "ab".repeat(32),
     });
   });
 

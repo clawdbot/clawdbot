@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { collectConfigAssignments as collectRuntimeConfigAssignments } from "../secrets/runtime-config-collectors.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -166,6 +167,9 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   function setSingleSecretTargetDeps(params: {
     path: string;
     pathSegments: readonly string[];
+    collectConfigAssignments?: NonNullable<
+      Parameters<typeof commandSecretGatewayTesting.setDepsForTest>[0]["collectConfigAssignments"]
+    >;
     resolveManifestContractOwnerPluginId?: NonNullable<
       Parameters<
         typeof commandSecretGatewayTesting.setDepsForTest
@@ -207,9 +211,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                 ],
         } as never;
       },
-      collectConfigAssignments: ({ context }) => {
-        context.assignments.push({ path: params.path } as never);
-      },
+      collectConfigAssignments:
+        params.collectConfigAssignments ??
+        (({ context }) => {
+          context.assignments.push({ path: params.path } as never);
+        }),
       discoverConfigSecretTargetsByIds: (config) =>
         [
           {
@@ -329,6 +335,66 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       targetIds: ["talk.providers.*.apiKey"],
     });
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("sk-live");
+  });
+
+  it("uses the explicit agent owner during channels resolve secret preflight", async () => {
+    const channelPath = "channels.telegram.botToken";
+    const channelPathSegments = ["channels", "telegram", "botToken"];
+    const config = {
+      agents: {
+        entries: {
+          ops: { sandbox: { backend: "docker" } },
+          research: { sandbox: { backend: "docker" } },
+        },
+        defaults: {
+          sandbox: {
+            backend: "ssh",
+            ssh: {
+              identityData: {
+                source: "env",
+                provider: "default",
+                id: "STALE_SANDBOX_IDENTITY",
+              },
+            },
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const restoreDeps = setSingleSecretTargetDeps({
+      path: channelPath,
+      pathSegments: channelPathSegments,
+      collectConfigAssignments: (params) => collectRuntimeConfigAssignments(params),
+    });
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: channelPath,
+          pathSegments: channelPathSegments,
+          value: "resolved-telegram-token",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    try {
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "channels resolve",
+        targetIds: new Set([channelPath]),
+        agentId: "ops",
+        mode: "read_only_operational",
+      });
+
+      expect(result.resolvedConfig.channels?.telegram?.botToken).toBe("resolved-telegram-token");
+      expect(callGateway.mock.calls[0]?.[0].params).not.toHaveProperty("agentId");
+    } finally {
+      restoreDeps();
+    }
   });
 
   it("enforces unresolved checks only for allowed paths when provided", async () => {

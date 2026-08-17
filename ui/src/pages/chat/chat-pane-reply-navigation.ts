@@ -146,7 +146,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         if (!this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
           return;
         }
-        if (!state.chatHistoryPagination?.hasMore) {
+        if (!state.chatHistoryPagination.hasMore) {
           if (this.replyNavigationIsCurrent(navigation, state, sessionKey, sessionId)) {
             state.lastError = t("chat.messages.originalUnavailable");
             state.requestUpdate?.();
@@ -158,7 +158,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
           return;
         }
         if (!loaded) {
-          if (!state.chatHistoryPagination?.hasMore && !state.lastError) {
+          if (!state.chatHistoryPagination.hasMore && !state.lastError) {
             state.lastError = t("chat.messages.originalUnavailable");
             state.requestUpdate?.();
           }

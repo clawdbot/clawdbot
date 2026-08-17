@@ -29,6 +29,7 @@ import { createBackgroundTasksProps } from "./components/chat-background-tasks.t
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
+import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 export type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
@@ -36,6 +37,7 @@ export type TestChatPane = HTMLElement & {
   presented: boolean;
   presentationId: string;
   chatMessagesBySession?: ChatMessageCache;
+  sessionSnapshotStore?: SessionSnapshotStore;
   chatState: { attach: (state: ChatPageHost) => void };
   context: ApplicationContext;
   state: ChatPageHost;
@@ -96,6 +98,8 @@ export type TestChatPane = HTMLElement & {
   paneId: string;
   sessionKey: string;
   updateComplete: Promise<boolean>;
+  requestUpdate: () => void;
+  performUpdate: () => void;
   deferSessionHydrationUntilTranscript: (
     sessionKey: string,
     transcriptLoad: Promise<unknown>,
@@ -117,7 +121,6 @@ export type TestChatPane = HTMLElement & {
   loadingOlder: boolean;
   catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
-  olderOffsetsSeen: Set<number>;
   headerEditing: boolean;
   headerRenameValue: string;
   beginHeaderRename: (row: GatewaySessionRow) => void;
@@ -136,7 +139,9 @@ export type TestChatPane = HTMLElement & {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) => Promise<void>;
+  headerPlacementMovingKey: string | null;
   headerPlacementReclaimingKey: string | null;
+  moveHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
@@ -149,6 +154,27 @@ export type TestChatPane = HTMLElement & {
     workspaceGit: boolean,
   ) => TemplateResult;
 };
+
+type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
+  request?: (method: string, params?: unknown) => unknown;
+};
+
+export function createGatewayBrowserClientFixture(
+  overrides: GatewayBrowserClientFixtureOverrides = {},
+): GatewayBrowserClient {
+  return overrides as typeof overrides & GatewayBrowserClient;
+}
+
+type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch" | "state"> & {
+  patch?: (...args: Parameters<NonNullable<SessionCapability["patch"]>>) => unknown;
+  state?: Partial<SessionCapability["state"]>;
+};
+
+export function createSessionCapabilityFixture(
+  overrides: SessionCapabilityFixtureOverrides = {},
+): SessionCapability {
+  return overrides as typeof overrides & SessionCapability;
+}
 
 export function createSessionContext(
   client: GatewayBrowserClient,

@@ -105,7 +105,11 @@ describe("createGatewayInstanceRuntime", () => {
       internalDeliverySuppressText: true,
       pluginRuntimeOwnerId: "memory-core",
       delegatedToolPolicyHandoffId: "handoff-1",
-      sessionCreation: { via: "spawn", actor: { type: "agent", id: "agent:main:main" } },
+      sessionCreation: {
+        via: "spawn",
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: "agent:main:main",
+      },
     });
 
     const principal = captureAgentTurnPrincipal(client);

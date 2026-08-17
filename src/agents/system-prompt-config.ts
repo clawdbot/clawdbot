@@ -49,8 +49,9 @@ function buildModelAliasLines(cfg?: OpenClawConfig) {
 function resolveAgentSystemPromptConfig(params: {
   config?: OpenClawConfig;
   agentId?: string;
+  sourceReplyDeliveryMode?: AgentSystemPromptRenderParams["sourceReplyDeliveryMode"];
 }): ResolvedAgentSystemPromptConfig {
-  const { config, agentId } = params;
+  const { config, agentId, sourceReplyDeliveryMode } = params;
   const ownerDisplay = resolveOwnerDisplaySetting(config);
   const agentSubagents =
     config && agentId ? resolveAgentConfig(config, agentId)?.subagents : undefined;
@@ -61,7 +62,11 @@ function resolveAgentSystemPromptConfig(params: {
       agentSubagents?.delegationMode ??
       config?.agents?.defaults?.subagents?.delegationMode ??
       "suggest",
-    ttsHint: config ? buildTtsSystemPromptHint(config, agentId) : undefined,
+    ttsHint: config
+      ? buildTtsSystemPromptHint(config, agentId, {
+          messageToolOnly: sourceReplyDeliveryMode === "message_tool_only",
+        })
+      : undefined,
     modelAliasLines: buildModelAliasLines(config),
     memoryCitationsMode: config?.memory?.citations,
     fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
@@ -71,7 +76,13 @@ function resolveAgentSystemPromptConfig(params: {
 /** Builds the agent system prompt after applying config-derived prompt fields. */
 export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPromptParams) {
   const { config, agentId, ...renderParams } = params;
-  const configParams = config ? resolveAgentSystemPromptConfig({ config, agentId }) : {};
+  const configParams = config
+    ? resolveAgentSystemPromptConfig({
+        config,
+        agentId,
+        sourceReplyDeliveryMode: renderParams.sourceReplyDeliveryMode,
+      })
+    : {};
   return buildAgentSystemPrompt({
     ...renderParams,
     ...configParams,
