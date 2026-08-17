@@ -78,9 +78,12 @@ async function resolveSlackAppMentionChannelType(params: {
   }
   // app_mention omits channel_type, and Slack ID prefixes are not a type contract.
   // Only an authoritative event/cache/API type may choose this event's owner.
-  const resolved = await params.ctx
-    .resolveChannelName(params.mention.channel, params.eventScope)
-    .catch(() => ({ type: undefined }));
+  const resolved = await Promise.resolve(
+    params.ctx.resolveChannelName(params.mention.channel, params.eventScope),
+  ).catch(() => undefined);
+  if (!resolved) {
+    return undefined;
+  }
   return resolved.type
     ? normalizeSlackChannelType(resolved.type, params.mention.channel)
     : undefined;

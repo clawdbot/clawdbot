@@ -879,6 +879,34 @@ describe("registerSlackMessageEvents", () => {
     expect(inboundLogLines()).toEqual([]);
   });
 
+  it("fails closed when typeless app_mention channel resolution returns undefined", async () => {
+    const { ctx, handler, handleSlackMessage } = createHandlers("app_mention", {
+      dmPolicy: "open",
+    });
+    const resolveChannelName = vi.fn(() => undefined);
+    ctx.resolveChannelName = resolveChannelName as unknown as typeof ctx.resolveChannelName;
+    const turnAdoptionLifecycle = {
+      admission: "exclusive",
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+    };
+
+    await expect(
+      requireMessageHandler(handler)({
+        event: { ...makeAppMentionEvent({ channel: "C123" }), channel_type: undefined },
+        body: {},
+        context: { [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: turnAdoptionLifecycle },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(resolveChannelName).toHaveBeenCalledOnce();
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(noteConversationMessageMock).not.toHaveBeenCalled();
+    expect(inboundLogLines()).toEqual([]);
+  });
+
   it("routes app_mention events from channels to the message handler", async () => {
     const { handleSlackMessage } = await invokeRegisteredHandler({
       eventName: "app_mention",
