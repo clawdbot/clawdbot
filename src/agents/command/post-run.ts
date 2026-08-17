@@ -329,7 +329,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           await loadCliCompactionRuntime()
         ).runCliTurnCompactionLifecycle({
           cfg,
-          sessionId: effectiveSessionId,
+          sessionId: sessionEntry?.sessionId ?? effectiveSessionId,
           sessionKey: sessionKey ?? effectiveSessionId,
           sessionEntry,
           sessionStore,

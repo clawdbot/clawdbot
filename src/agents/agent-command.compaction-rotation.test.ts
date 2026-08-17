@@ -24,6 +24,7 @@ type ProviderModelNormalizationParams = { provider: string; context: { modelId: 
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
 type RunAgentAttempt = typeof runAgentAttempt;
 type CliCompactionParams = {
+  sessionId: string;
   sessionEntry?: SessionEntry;
   sessionKey: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -559,6 +560,37 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
       expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 180_000 }) }),
+    );
+  });
+
+  it("compacts the session successor returned by CLI memory flush", async () => {
+    const sessionId = "cli-memory-flush-predecessor";
+    const successorSessionId = "cli-memory-flush-successor";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    state.runAgentAttemptMock.mockResolvedValueOnce(
+      makeResult({ sessionId, text: "answer before maintenance rotation", runner: "cli" }),
+    );
+    state.runMemoryFlushIfNeededMock.mockImplementationOnce(
+      async (params: { sessionEntry?: SessionEntry }) => ({
+        sessionEntry: params.sessionEntry
+          ? { ...params.sessionEntry, sessionId: successorSessionId }
+          : undefined,
+        outcome: "completed" as const,
+      }),
+    );
+
+    await agentCommand({
+      message: "rotate during memory maintenance",
+      sessionId,
+      sessionKey,
+      cwd: state.workspaceDir,
+    });
+
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: successorSessionId,
+        sessionEntry: expect.objectContaining({ sessionId: successorSessionId }),
+      }),
     );
   });
 
