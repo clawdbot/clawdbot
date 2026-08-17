@@ -141,9 +141,18 @@ function normalizeGlobs(patterns: string[] | undefined): string[] {
 }
 
 /** True when `pattern` carries glob magic per minimatch's own definition —
- * a bare literal path is not a glob and matches only its own string. */
+ * a bare literal path is not a glob and matches only its own string.
+ *
+ * `magicalBraces: true` is required so brace-only patterns such as
+ * `/vault/{alpha,beta}` count as magic. minimatch's default `hasMagic()`
+ * returns false for them, which would let `findBareAncestorAllowEntry`
+ * treat them as bare literals and suggest `/vault/{alpha,beta}/**` — a
+ * pattern that brace-expands to `/vault/alpha/**` + `/vault/beta/**`,
+ * silently broadening the grant beyond the operator's intent. The
+ * matchesAny / matchesAnyDeny paths below preserve brace semantics via
+ * minimatch's default expansion, so this keeps magic detection aligned. */
 function hasGlobMagic(pattern: string): boolean {
-  return new Minimatch(pattern).hasMagic();
+  return new Minimatch(pattern, { magicalBraces: true }).hasMagic();
 }
 
 /** Collapse trailing separators and normalize backslashes for prefix/glob

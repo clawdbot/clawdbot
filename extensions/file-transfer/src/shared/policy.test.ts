@@ -756,4 +756,22 @@ describe("evaluateFilePolicy — bare directory allow entries", () => {
     expect(r.ok ? "" : r.reason).toContain("/opt/warn-test/Desktop/**");
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it("does not misclassify a brace-only allow entry as a bare literal", () => {
+    // Regression: minimatch's default hasMagic() returns false for brace-only
+    // patterns such as `/vault/{alpha,beta}` unless magicalBraces is enabled.
+    // A hint here would suggest `/vault/{alpha,beta}/**`, which brace-expands
+    // to `/vault/alpha/**` + `/vault/beta/**` — broader than the operator
+    // intended. The entry must be recognized as glob magic and skipped.
+    withConfig({
+      n1: { allowReadPaths: ["/vault/{alpha,beta}"] },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/vault/{alpha,beta}/foo",
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
+    expect(r.ok ? "" : r.reason).not.toContain("/vault/{alpha,beta}/**");
+  });
 });
