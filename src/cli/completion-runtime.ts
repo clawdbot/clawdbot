@@ -276,6 +276,43 @@ function updateCompletionProfile(
   return { next, changed: next !== content, hadExisting };
 }
 
+function removeCompletionProfile(
+  content: string,
+  binName: string,
+  cachePaths: readonly string[],
+): string {
+  const lines = content.match(/[^\r\n]*(?:\r\n|\n|\r|$)/gu)?.filter(Boolean) ?? [];
+  const filtered: string[] = [];
+  let changed = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    const text = line.replace(/(?:\r\n|\n|\r)$/u, "");
+    if (isCompletionProfileHeader(text)) {
+      changed = true;
+      const following = lines[i + 1] ?? "";
+      const followingText = following.replace(/(?:\r\n|\n|\r)$/u, "");
+      if (
+        cachePaths.some(
+          (cachePath) =>
+            isCompletionProfileLine(followingText, binName, cachePath) ||
+            isPreviousCompletionSourceLine(followingText, cachePath),
+        )
+      ) {
+        i += 1;
+      }
+      continue;
+    }
+    if (cachePaths.some((cachePath) => isCompletionProfileLine(text, binName, cachePath))) {
+      changed = true;
+      continue;
+    }
+    filtered.push(line);
+  }
+
+  return changed ? filtered.join("") : content;
+}
+
 async function resolveCompletionProfileWritePath(profilePath: string): Promise<string> {
   const profileDir = path.dirname(profilePath);
   // Shell startup follows a symlink before `..`; create and canonicalize that lexical parent first.
@@ -360,6 +397,102 @@ export function resolveCompletionProfilePath(
     "powershell",
     "Microsoft.PowerShell_profile.ps1",
   );
+}
+
+function resolveCompletionProfileCandidates(shell: CompletionShell): string[] {
+  const home = process.env.HOME || os.homedir();
+  const pathApi = process.platform === "win32" ? path.win32 : path.posix;
+  if (shell === "bash") {
+    return [
+      appendCompletionProfilePath(home, pathApi, ".bashrc"),
+      appendCompletionProfilePath(home, pathApi, ".bash_profile"),
+    ];
+  }
+  if (shell === "powershell" && process.platform === "win32") {
+    const profileHome = process.env.USERPROFILE || home;
+    return ["PowerShell", "WindowsPowerShell"].map((profileDirectory) =>
+      appendCompletionProfilePath(
+        profileHome,
+        pathApi,
+        "Documents",
+        profileDirectory,
+        "Microsoft.PowerShell_profile.ps1",
+      ),
+    );
+  }
+  return [resolveCompletionProfilePath(shell)];
+}
+
+async function writeCompletionProfile(profilePath: string, content: string): Promise<void> {
+  await publishOutputFileAtomically({
+    filePath: await resolveCompletionProfileWritePath(profilePath),
+    tempPrefix: ".openclaw-completion-profile",
+    durable: true,
+    writeTemp: async (tempPath) => {
+      await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx" });
+    },
+  });
+}
+
+/** Removes OpenClaw-owned completion entries from supported shell profiles. */
+export async function removeCompletionInstall(
+  options: {
+    dryRun?: boolean;
+    binName?: string;
+    onProfileError?: (profilePath: string, error: unknown) => void;
+  } = {},
+): Promise<string[]> {
+  const binName = options.binName ?? "openclaw";
+  const changedPaths: string[] = [];
+  const profilesByReferent = new Map<
+    string,
+    { cachePaths: Set<string>; content: string; profilePath: string }
+  >();
+
+  // Plan every existing referent before writing: dotfile managers may alias several shell
+  // profiles to one file, and each shell's ownership predicate must see the original bytes.
+  for (const shell of COMPLETION_SHELLS) {
+    const cachePath = resolveCompletionCachePath(shell, binName);
+    for (const profilePath of resolveCompletionProfileCandidates(shell)) {
+      try {
+        const content = await fs.readFile(profilePath, "utf-8");
+        const referentPath = await fs.realpath(profilePath);
+        const existing = profilesByReferent.get(referentPath);
+        if (existing) {
+          existing.cachePaths.add(cachePath);
+          continue;
+        }
+        profilesByReferent.set(referentPath, {
+          cachePaths: new Set([cachePath]),
+          content,
+          profilePath,
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          continue;
+        }
+        options.onProfileError?.(profilePath, error);
+      }
+    }
+  }
+
+  for (const [referentPath, profile] of profilesByReferent) {
+    const next = removeCompletionProfile(profile.content, binName, [...profile.cachePaths]);
+    if (next === profile.content) {
+      continue;
+    }
+    if (!options.dryRun) {
+      try {
+        await writeCompletionProfile(referentPath, next);
+      } catch (error) {
+        options.onProfileError?.(profile.profilePath, error);
+        continue;
+      }
+    }
+    changedPaths.push(profile.profilePath);
+  }
+
+  return changedPaths;
 }
 
 /** Formats the resolved startup profile relative to HOME when that preserves its actual location. */
@@ -476,14 +609,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       console.log(`${action} completion in ${profilePath}...`);
     }
 
-    await publishOutputFileAtomically({
-      filePath: await resolveCompletionProfileWritePath(profilePath),
-      tempPrefix: ".openclaw-completion-profile",
-      durable: true,
-      writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, update.next, { encoding: "utf-8", flag: "wx" });
-      },
-    });
+    await writeCompletionProfile(profilePath, update.next);
     if (!yes) {
       console.log(
         `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`,

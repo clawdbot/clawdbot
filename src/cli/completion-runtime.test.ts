@@ -10,6 +10,7 @@ import {
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
+  removeCompletionInstall,
   resolveCompletionCachePath,
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
@@ -460,6 +461,172 @@ describe("completion-runtime", () => {
       await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
     });
   });
+
+  it("removes owned completion entries from every supported shell profile", async () => {
+    await withBashCompletionHome(async ({ homeDir }) => {
+      const zshProfile = resolveCompletionProfilePath("zsh");
+      const bashrc = path.join(homeDir, ".bashrc");
+      const bashProfile = path.join(homeDir, ".bash_profile");
+      const powershellProfile = resolveCompletionProfilePath("powershell");
+      const fishProfile = resolveCompletionProfilePath("fish");
+      const bashCachePath = resolveCompletionCachePath("bash", "openclaw");
+      const fishCachePath = resolveCompletionCachePath("fish", "openclaw");
+
+      await fs.mkdir(path.dirname(powershellProfile), { recursive: true });
+      await fs.mkdir(path.dirname(fishProfile), { recursive: true });
+      await fs.writeFile(
+        zshProfile,
+        "export ZSH_KEEP=1\nsource <(openclaw completion --shell zsh)\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        bashrc,
+        `export BASHRC_KEEP=1\n# OpenClaw Completion\n[ -f "${bashCachePath}" ] && source "${bashCachePath}"\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        bashProfile,
+        '# OpenClaw Completion\nsource "/old-state/completions/openclaw.bash"\n' +
+          "export BASH_PROFILE_KEEP=1\n# OpenClaw Completion\nexport ORPHAN_FOLLOWER=keep\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        powershellProfile,
+        "$env:POWERSHELL_KEEP = '1'\nopenclaw completion --shell powershell | Out-String | Invoke-Expression\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        fishProfile,
+        `set -gx FISH_KEEP 1\n# OpenClaw Completion\ntest -f "${fishCachePath}"; and source "${fishCachePath}"\n`,
+        "utf-8",
+      );
+
+      await expect(removeCompletionInstall()).resolves.toEqual([
+        zshProfile,
+        bashrc,
+        bashProfile,
+        powershellProfile,
+        fishProfile,
+      ]);
+      await expect(fs.readFile(zshProfile, "utf-8")).resolves.toBe("export ZSH_KEEP=1\n");
+      await expect(fs.readFile(bashrc, "utf-8")).resolves.toBe("export BASHRC_KEEP=1\n");
+      await expect(fs.readFile(bashProfile, "utf-8")).resolves.toBe(
+        "export BASH_PROFILE_KEEP=1\nexport ORPHAN_FOLLOWER=keep\n",
+      );
+      await expect(fs.readFile(powershellProfile, "utf-8")).resolves.toBe(
+        "$env:POWERSHELL_KEEP = '1'\n",
+      );
+      await expect(fs.readFile(fishProfile, "utf-8")).resolves.toBe("set -gx FISH_KEEP 1\n");
+    });
+  });
+
+  it("keeps dry-run, idempotent, and no-op profile bytes stable", async () => {
+    await withBashCompletionHome(async ({ homeDir }) => {
+      const bashrc = path.join(homeDir, ".bashrc");
+      const bashProfile = path.join(homeDir, ".bash_profile");
+      const cachePath = resolveCompletionCachePath("bash", "openclaw");
+      const installed =
+        `export KEEP=1\r\n# OpenClaw Completion\r\n[ -f "${cachePath}" ] && source "${cachePath}"\r\n` +
+        `alias mention='${cachePath}'`;
+      const preserved = `export KEEP=1\r\nalias mention='${cachePath}'`;
+      const unrelated =
+        "source <(openclaw completion --shell bash); export USER_MANAGED=1\n" +
+        'source "/opt/tools/completions/openclaw.bash"\n' +
+        'echo "/old-state/completions/openclaw.bash"\n';
+      await fs.writeFile(bashrc, installed, "utf-8");
+      await fs.writeFile(bashProfile, unrelated, "utf-8");
+
+      await expect(removeCompletionInstall({ dryRun: true })).resolves.toEqual([bashrc]);
+      await expect(fs.readFile(bashrc, "utf-8")).resolves.toBe(installed);
+      await expect(fs.readFile(bashProfile, "utf-8")).resolves.toBe(unrelated);
+
+      await expect(removeCompletionInstall()).resolves.toEqual([bashrc]);
+      await expect(fs.readFile(bashrc, "utf-8")).resolves.toBe(preserved);
+      await expect(removeCompletionInstall()).resolves.toEqual([]);
+      await expect(fs.readFile(bashrc, "utf-8")).resolves.toBe(preserved);
+      await expect(fs.readFile(bashProfile, "utf-8")).resolves.toBe(unrelated);
+    });
+  });
+
+  it("continues after an unreadable profile and removes later owned entries", async () => {
+    await withBashCompletionHome(async ({ homeDir }) => {
+      const zshProfile = resolveCompletionProfilePath("zsh");
+      const bashProfile = path.join(homeDir, ".bash_profile");
+      const bashCachePath = resolveCompletionCachePath("bash", "openclaw");
+      const readError = Object.assign(new Error("profile unreadable"), { code: "EACCES" });
+      const onProfileError = vi.fn();
+      await fs.writeFile(zshProfile, "export ZSH_KEEP=1\n", "utf-8");
+      await fs.writeFile(
+        bashProfile,
+        `# OpenClaw Completion\n[ -f "${bashCachePath}" ] && source "${bashCachePath}"\n`,
+        "utf-8",
+      );
+
+      const readFile = vi.spyOn(fs, "readFile").mockRejectedValueOnce(readError);
+      await expect(removeCompletionInstall({ onProfileError })).resolves.toEqual([bashProfile]);
+      readFile.mockRestore();
+
+      expect(onProfileError).toHaveBeenCalledWith(zshProfile, readError);
+      await expect(fs.readFile(zshProfile, "utf-8")).resolves.toBe("export ZSH_KEEP=1\n");
+      await expect(fs.readFile(bashProfile, "utf-8")).resolves.toBe("");
+    });
+  });
+
+  it("continues after a profile write failure and removes later owned entries", async () => {
+    await withBashCompletionHome(async ({ homeDir }) => {
+      const zshProfile = resolveCompletionProfilePath("zsh");
+      const bashProfile = path.join(homeDir, ".bash_profile");
+      const zshCachePath = resolveCompletionCachePath("zsh", "openclaw");
+      const bashCachePath = resolveCompletionCachePath("bash", "openclaw");
+      const writeError = new Error("profile is not writable");
+      const onProfileError = vi.fn();
+      const zshContent = `# OpenClaw Completion\n[ -f "${zshCachePath}" ] && source "${zshCachePath}"\n`;
+      await fs.writeFile(zshProfile, zshContent, "utf-8");
+      await fs.writeFile(
+        bashProfile,
+        `# OpenClaw Completion\n[ -f "${bashCachePath}" ] && source "${bashCachePath}"\n`,
+        "utf-8",
+      );
+      outputFileMocks.publishOutputFileAtomically.mockRejectedValueOnce(writeError);
+
+      await expect(removeCompletionInstall({ onProfileError })).resolves.toEqual([bashProfile]);
+
+      expect(onProfileError).toHaveBeenCalledWith(zshProfile, writeError);
+      await expect(fs.readFile(zshProfile, "utf-8")).resolves.toBe(zshContent);
+      await expect(fs.readFile(bashProfile, "utf-8")).resolves.toBe("");
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "removes aliased shell registrations once with dry-run parity",
+    async () => {
+      await withBashCompletionHome(async ({ homeDir }) => {
+        const sharedProfile = path.join(homeDir, "shared-shell-profile");
+        const zshProfile = path.join(homeDir, ".zshrc");
+        const bashrc = path.join(homeDir, ".bashrc");
+        const bashProfile = path.join(homeDir, ".bash_profile");
+        const original =
+          "export KEEP=1\n# OpenClaw Completion\n" +
+          'source "/old-state/completions/openclaw.bash"\n';
+        await fs.writeFile(sharedProfile, original, "utf-8");
+        for (const profilePath of [zshProfile, bashrc, bashProfile]) {
+          await fs.symlink(sharedProfile, profilePath);
+        }
+
+        const writesBefore = outputFileMocks.publishOutputFileAtomically.mock.calls.length;
+        const dryRunPaths = await removeCompletionInstall({ dryRun: true });
+        await expect(fs.readFile(sharedProfile, "utf-8")).resolves.toBe(original);
+
+        const removedPaths = await removeCompletionInstall();
+
+        expect(dryRunPaths).toEqual([zshProfile]);
+        expect(removedPaths).toEqual(dryRunPaths);
+        expect(outputFileMocks.publishOutputFileAtomically).toHaveBeenCalledTimes(writesBefore + 1);
+        await expect(fs.readFile(sharedProfile, "utf-8")).resolves.toBe("export KEEP=1\n");
+        await expect(removeCompletionInstall()).resolves.toEqual([]);
+      });
+    },
+  );
 
   it.each(COMPLETION_SHELLS)(
     "replaces the old generated %s source after the state directory changes",
