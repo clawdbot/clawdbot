@@ -68,6 +68,35 @@ describe("worker environment service", () => {
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1);
   });
 
+  it("destroys a persisted SSH lease after its provider becomes worker-turn-only", async () => {
+    const environmentId = "worker-stale-ssh-transport";
+    support.seedBootstrapping(environmentId);
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const destroy = vi.fn(async () => {});
+    const workerService = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
+        inspect,
+        destroy,
+      }),
+    );
+
+    await workerService.reconcileOnce();
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: `lease:${environmentId}`,
+      profile: { region: "test" },
+    });
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: "worker-turn providers must return a node lease",
+    });
+  });
+
   it("reconciles one exact environment without sweeping its siblings", async () => {
     support.seedReady("worker-target");
     support.seedReady("worker-sibling");

@@ -86,18 +86,24 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
   return { status };
 }
 
-export function resolveWorkerLeaseModeError(
+export function resolveWorkerTransportModeError(
   provider: WorkerProvider,
-  lease: WorkerLease,
+  transportMode: WorkerExecutionMode,
 ): WorkerProviderError | undefined {
   const modes = provider.supportedExecutionModes;
   const executionMode: WorkerExecutionMode | undefined = modes?.length === 1 ? modes[0] : undefined;
-  const leaseMode: WorkerExecutionMode = lease.node ? "worker-turn" : "remote-exec";
-  return !executionMode || executionMode === leaseMode
+  return !executionMode || executionMode === transportMode
     ? undefined
     : new WorkerProviderError(
         `${executionMode} providers must return a ${executionMode === "worker-turn" ? "node" : "SSH"} lease`,
       );
+}
+
+export function resolveWorkerLeaseModeError(
+  provider: WorkerProvider,
+  lease: WorkerLease,
+): WorkerProviderError | undefined {
+  return resolveWorkerTransportModeError(provider, lease.node ? "worker-turn" : "remote-exec");
 }
 
 export function requireWorkerLease(value: unknown): WorkerLease {
