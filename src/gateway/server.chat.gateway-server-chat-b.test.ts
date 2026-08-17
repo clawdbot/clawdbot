@@ -4833,6 +4833,115 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat startup and history share a non-blocking large Claude snapshot", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const secondWs = await harness.openWs();
+      const homeEnvSnapshot = captureEnv(["HOME"]);
+      try {
+        await connectOk(secondWs);
+        const sessionDir = await createSessionDir();
+        const sessionId = "sess-claude-cli-large-snapshot";
+        const cliSessionId = "7b8b202c-f6bb-4046-9475-d2f15fd07533";
+        const homeDir = path.join(sessionDir, "home");
+        const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+        const secret = "sk-abcdef1234567890-large-snapshot";
+        const ignoredLine = JSON.stringify({
+          type: "queue-operation",
+          operation: "enqueue",
+          sessionId: cliSessionId,
+          content: "q".repeat(2_048),
+        });
+        const ignoredBlock = `${ignoredLine}\n`.repeat(
+          Math.ceil((34 * 1024 * 1024) / (Buffer.byteLength(ignoredLine, "utf8") + 1)),
+        );
+        const jsonl = `${ignoredBlock}${[
+          JSON.stringify({
+            type: "user",
+            uuid: "large-snapshot-user",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content: "large snapshot question" },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "large-snapshot-assistant",
+            timestamp: "2026-03-26T16:29:55.500Z",
+            message: {
+              role: "assistant",
+              model: "claude-sonnet-4-6",
+              content: [{ type: "text", text: `large snapshot answer ${secret}` }],
+            },
+          }),
+        ].join("\n")}`;
+        expect(Buffer.byteLength(jsonl, "utf8")).toBeGreaterThan(32 * 1024 * 1024);
+        expect(Buffer.byteLength(jsonl, "utf8")).toBeLessThan(36 * 1024 * 1024);
+        await fs.mkdir(claudeProjectsDir, { recursive: true });
+        await fs.writeFile(path.join(claudeProjectsDir, `${cliSessionId}.jsonl`), jsonl, "utf8");
+        setTestEnvValue("HOME", homeDir);
+        await writeStoredMainSession(
+          makeClaudeCliSessionEntry(sessionDir, sessionId, cliSessionId),
+        );
+        await writeMainSessionTranscript(
+          [
+            createTextTranscriptEvent("user", "local sqlite row", {
+              timestamp: Date.parse("2026-03-26T16:29:53.000Z"),
+            }),
+          ],
+          sessionId,
+        );
+
+        let heartbeatTicks = 0;
+        const heartbeat = setInterval(() => {
+          heartbeatTicks += 1;
+        }, 5);
+        const [startup, history] = await Promise.all([
+          rpcReq<{
+            messages?: Array<{ __openclaw?: Record<string, unknown> }>;
+            completeSnapshot?: boolean;
+            hasMore?: boolean;
+            nextOffset?: number;
+            totalMessages?: number;
+          }>(ws, "chat.startup", makeMainSessionParams()),
+          rpcReq<{
+            messages?: Array<{ __openclaw?: Record<string, unknown> }>;
+            completeSnapshot?: boolean;
+            hasMore?: boolean;
+            nextOffset?: number;
+            totalMessages?: number;
+          }>(secondWs, "chat.history", makeMainSessionParams()),
+        ]).finally(() => clearInterval(heartbeat));
+
+        expect(startup.ok).toBe(true);
+        expect(history.ok).toBe(true);
+        expect(heartbeatTicks).toBeGreaterThan(5);
+        expect(startup.payload?.messages).toEqual(history.payload?.messages);
+        const messages = startup.payload?.messages ?? [];
+        expect(messages).toHaveLength(3);
+        expect(JSON.stringify(messages)).not.toContain(secret);
+        for (const externalId of ["large-snapshot-user", "large-snapshot-assistant"]) {
+          expect(messages).toContainEqual(
+            expect.objectContaining({
+              __openclaw: expect.objectContaining({
+                cliSessionId,
+                externalId,
+                importedFrom: "claude-cli",
+              }),
+            }),
+          );
+        }
+        for (const response of [startup, history]) {
+          expect(response.payload?.completeSnapshot).toBe(true);
+          expect(response.payload?.hasMore).toBe(false);
+          expect(response.payload?.nextOffset).toBeUndefined();
+          expect(response.payload?.totalMessages).toBe(3);
+        }
+      } finally {
+        secondWs.close();
+        homeEnvSnapshot.restore();
+      }
+    });
+  });
+
   test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);

@@ -2772,7 +2772,7 @@ src/config/sessions/session-accessor.sqlite-delta.ts	3
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry-cache.ts	3
 src/config/sessions/session-accessor.sqlite-entry.ts	1
-src/config/sessions/session-accessor.sqlite-history-events.ts	3
+src/config/sessions/session-accessor.sqlite-history-events.ts	2
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
@@ -2920,7 +2920,7 @@ src/gateway/chat-display-projection.sanitize.ts	16
 src/gateway/chat-sanitize.ts	3
 src/gateway/chat-tool-titles.ts	2
 src/gateway/cli-session-history.claude-activity.ts	1
-src/gateway/cli-session-history.claude.ts	16
+src/gateway/cli-session-history.claude.ts	15
 src/gateway/cli-session-history.merge.ts	6
 src/gateway/config-reload-plan.ts	5
 src/gateway/control-ui-plugin-auth-cookie.ts	1

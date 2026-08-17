@@ -9,6 +9,7 @@ import {
   augmentChatHistoryWithCanvasBlocks,
 } from "../chat-display-projection.js";
 import {
+  readChatHistoryCliSessionImportSnapshot,
   resolveChatHistoryWithCliSessionImports,
   resolveClaudeCliBindingSessionId,
 } from "../cli-session-history.js";
@@ -488,19 +489,27 @@ export async function readChatHistoryPage(params: {
   // The ignore flag must gate this resolver too: the tail-window merge can report
   // imported=true while the full merge below dedupes everything to imported=false,
   // and an ungated re-resolve here would recurse through this branch forever.
+  const importedMessages = params.ignoreCliSessionImports
+    ? []
+    : await readChatHistoryCliSessionImportSnapshot({
+        entry,
+        provider,
+        localMessages: localMessagesWithBoundaryFilter,
+      });
   const cliHistory = params.ignoreCliSessionImports
-    ? { messages: localMessagesWithBoundaryFilter, imported: false as const }
+    ? { messages: localMessagesWithBoundaryFilter, imported: false }
     : resolveChatHistoryWithCliSessionImports({
         entry,
         provider,
         localMessages: localMessagesWithBoundaryFilter,
+        preparedImportedMessages: importedMessages,
       });
   if ((offset !== undefined || messageId) && !cliHistory.imported) {
     return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
   }
   if (cliHistory.imported) {
-    // The import reader already scans the complete external JSONL. Only after it
-    // succeeds do the matching full local read needed to build a pageable merge.
+    // Reuse this request's redacted external snapshot after the full local read;
+    // re-reading here would duplicate a large import and defeat cross-client singleflight.
     const completeLocalMessages = dropPreSessionStartAnnouncePairs(
       await readSessionMessagesAsync(readScope, {
         mode: "full",
@@ -513,6 +522,7 @@ export async function readChatHistoryPage(params: {
       entry,
       provider,
       localMessages: completeLocalMessages,
+      preparedImportedMessages: importedMessages,
     });
     if (!completeCliHistory.imported) {
       return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });

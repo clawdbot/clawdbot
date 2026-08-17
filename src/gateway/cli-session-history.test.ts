@@ -1,9 +1,10 @@
 // CLI session history tests protect imported Claude CLI transcript lookup,
 // fallback seeding, reseed receipts, and merge ordering with local chat history.
+import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
@@ -12,6 +13,7 @@ import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
   augmentChatHistoryWithCliSessionImports,
   readClaudeCliFallbackSeed,
+  readChatHistoryCliSessionImportSnapshot,
   resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
@@ -243,6 +245,74 @@ describe("cli session history", () => {
           tool_use_id: "toolu_123",
         },
       ]);
+    });
+  });
+
+  it("refreshes changed Claude snapshots and singleflights concurrent reads", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const params = {
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: { "claude-cli": { sessionId } },
+        },
+        provider: "claude-cli",
+        localMessages: [],
+        homeDir,
+      };
+      const read = async () =>
+        resolveChatHistoryWithCliSessionImports({
+          ...params,
+          preparedImportedMessages: await readChatHistoryCliSessionImportSnapshot(params),
+        });
+      const streamSpy = vi.spyOn(rawFs, "createReadStream");
+      const initial = await (async () => {
+        try {
+          const [first, second] = await Promise.all([
+            readChatHistoryCliSessionImportSnapshot(params),
+            readChatHistoryCliSessionImportSnapshot(params),
+          ]);
+          expect(second).toEqual(first);
+          expect(streamSpy).toHaveBeenCalledTimes(1);
+          return resolveChatHistoryWithCliSessionImports({
+            ...params,
+            preparedImportedMessages: first,
+          });
+        } finally {
+          streamSpy.mockRestore();
+        }
+      })();
+      expect(initial.messages).toHaveLength(3);
+
+      await fs.appendFile(
+        filePath,
+        `\n${createClaudeTextHistoryLines([
+          { role: "user", uuid: "appended-user", content: "appended" },
+        ])}`,
+        "utf8",
+      );
+      const appended = await read();
+      expect(appended.messages).toHaveLength(4);
+      expect(appended.messages.map((message) => readRecord(message)["__openclaw"])).toContainEqual(
+        expect.objectContaining({ externalId: "appended-user" }),
+      );
+
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          { role: "assistant", uuid: "replacement-assistant", content: "replacement" },
+        ]),
+        "utf8",
+      );
+      const replaced = await read();
+      expect(replaced.messages).toHaveLength(1);
+      expectFields(readRecord(replaced.messages[0])["__openclaw"], {
+        externalId: "replacement-assistant",
+      });
+
+      await fs.rm(filePath);
+      const deleted = await read();
+      expect(deleted).toEqual({ messages: [], imported: false });
     });
   });
 
@@ -888,6 +958,24 @@ describe("cli session history", () => {
       });
 
       expect(messages).toBe(localMessages);
+      const streamSpy = vi.spyOn(rawFs, "createReadStream");
+      try {
+        await expect(
+          readChatHistoryCliSessionImportSnapshot({
+            entry: {
+              sessionId: "openclaw-session",
+              updatedAt: Date.now(),
+              cliSessionBindings: { "claude-cli": { sessionId } },
+            },
+            provider: "openai",
+            localMessages,
+            homeDir,
+          }),
+        ).resolves.toEqual([]);
+        expect(streamSpy).not.toHaveBeenCalled();
+      } finally {
+        streamSpy.mockRestore();
+      }
     });
   });
 
