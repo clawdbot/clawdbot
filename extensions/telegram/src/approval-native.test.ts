@@ -218,6 +218,104 @@ describe("telegram native approval adapter", () => {
     });
   });
 
+  it("reconciles an omitted turn-source thread to the persisted topic session for plugin approvals", async () => {
+    // Plugin approvals can carry the originating group but omit its thread metadata. The live
+    // turn-source target then lacks the forum topic the persisted session still owns, so the
+    // origin resolver must reconcile the coarse turn-source route to the topic-scoped session
+    // target instead of rejecting it and falling back to the approver DM.
+    const storePath = createTempStorePath();
+    await writeSessionEntry({
+      storePath,
+      sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+      entry: {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "-1003841603622",
+            accountId: "default",
+            threadId: 928,
+          },
+        }),
+      },
+    });
+
+    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      cfg: {
+        ...buildConfig(),
+        session: { store: storePath },
+      },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        id: "plugin:req-omit-thread",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:-1003841603622",
+          turnSourceAccountId: "default",
+          sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "-1003841603622",
+      threadId: 928,
+    });
+  });
+
+  it("stays fail-closed when the turn-source thread explicitly conflicts with the persisted topic", async () => {
+    // An explicit thread mismatch (live topic 111 vs persisted topic 928) is a real disagreement,
+    // not an omitted dimension: the reconciler must keep returning null so delivery falls back to
+    // the approver DM rather than routing the prompt to the wrong topic.
+    const storePath = createTempStorePath();
+    await writeSessionEntry({
+      storePath,
+      sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+      entry: {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "-1003841603622",
+            accountId: "default",
+            threadId: 928,
+          },
+        }),
+      },
+    });
+
+    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      cfg: {
+        ...buildConfig(),
+        session: { store: storePath },
+      },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        id: "plugin:req-conflict-thread",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:-1003841603622:topic:111",
+          turnSourceAccountId: "default",
+          sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toBeNull();
+  });
+
   it("marks DM-only telegram approvals to notify the origin chat after delivery", () => {
     const capabilities = telegramApprovalCapability.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),

@@ -40,6 +40,9 @@ type ApprovalRequestOriginTargetResolver<TTarget> = {
   resolveTurnSourceTarget: (request: ApprovalRequestLike) => TTarget | null;
   resolveSessionTarget: (sessionTarget: ExecApprovalSessionTarget) => TTarget | null;
   targetsMatch: (a: TTarget, b: TTarget) => boolean;
+  // Reconciles a coarse turn-source route (omitting an optional dimension such as a forum thread)
+  // to the persisted session target when strict targetsMatch fails; returning null stays fail-closed.
+  reconcileTargets?: (turnSourceTarget: TTarget, sessionTarget: TTarget) => TTarget | null;
   resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
 };
 
@@ -209,8 +212,9 @@ export function resolveApprovalRequestOriginTarget<TTarget>(
       : null;
 
   if (turnSourceTarget && sessionTarget && !params.targetsMatch(turnSourceTarget, sessionTarget)) {
-    // Avoid routing to an origin when live turn metadata disagrees with persisted session state.
-    return null;
+    // Omitted optional route dimensions (thread, account) mean "no opinion", not disagreement;
+    // reconcile a coarse turn-source route to the persisted session target before failing closed.
+    return params.reconcileTargets?.(turnSourceTarget, sessionTarget) ?? null;
   }
 
   return (

@@ -23,7 +23,10 @@ import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ChannelApprovalCapability, ChannelOutboundPayloadHint } from "./channel-contract.js";
-import { channelRouteTargetsMatchExact } from "./channel-route.js";
+import {
+  channelRouteTargetsMatchExact,
+  channelRouteTargetsShareConversation,
+} from "./channel-route.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
@@ -221,6 +224,12 @@ type BaseOriginResolverParams<TTarget> = {
   normalizeTarget?: NativeApprovalTargetNormalizer<TTarget>;
   /** Normalizes only matcher inputs when delivery target shape must stay native. */
   normalizeTargetForMatch?: NativeApprovalTargetNormalizer<TTarget>;
+  /**
+   * Reconciles a turn-source target with a session target that don't strictly match but are
+   * compatible coarse routes (e.g. a turn source omitting a forum thread the session carries).
+   * Returns the reconciled delivery target, or null to stay fail-closed.
+   */
+  reconcileTargets?: (turnSourceTarget: TTarget, sessionTarget: TTarget) => TTarget | null;
   /** Optional fallback target when neither turn-source nor session target resolves. */
   resolveFallbackTarget?: (request: ApprovalRequest) => TTarget | null;
 };
@@ -433,6 +442,48 @@ function nativeApprovalTargetMatcher(channel: string): (left: unknown, right: un
     isNativeApprovalTarget(left) &&
     isNativeApprovalTarget(right) &&
     nativeApprovalTargetsMatch({ channel, left, right });
+}
+
+/**
+ * Reconciler for native approval targets whose strict match failed. An omitted thread/account
+ * means "no opinion", not disagreement: a turn source omitting the forum thread is a parent
+ * route of the topic-scoped session, so delivery takes the thread-bearing target instead of
+ * falling back to an approver DM. Explicit conflicts (different room, or both threads/accounts
+ * present and differing) stay fail-closed.
+ */
+function nativeApprovalTargetReconciler(
+  channel: string,
+): (
+  turnSource: NativeApprovalTarget,
+  session: NativeApprovalTarget,
+) => NativeApprovalTarget | null {
+  return (turnSource, session) => {
+    if (
+      !channelRouteTargetsShareConversation({
+        left: {
+          channel,
+          to: turnSource.to,
+          accountId: turnSource.accountId,
+          threadId: turnSource.threadId,
+        },
+        right: {
+          channel,
+          to: session.to,
+          accountId: session.accountId,
+          threadId: session.threadId,
+        },
+      })
+    ) {
+      return null;
+    }
+    // Carry the thread from whichever target owns it; merge a present account from either side.
+    const threadBearer = turnSource.threadId != null ? turnSource : session;
+    return {
+      to: threadBearer.to,
+      accountId: turnSource.accountId ?? session.accountId,
+      threadId: turnSource.threadId ?? session.threadId,
+    };
+  };
 }
 
 /** Infer approval family from the request shape unless the caller already knows it. */
@@ -962,6 +1013,12 @@ function createOriginTargetResolver<TTarget>(
           normalizedLeft && normalizedRight && params.targetsMatch(normalizedLeft, normalizedRight),
         );
       },
+      // Reconcile runs only when strict targetsMatch already failed, so it receives the same
+      // output-normalized targets the helper holds and must return one for delivery.
+      reconcileTargets: params.reconcileTargets
+        ? (turnSourceTarget, sessionTarget) =>
+            normalizeTarget(params.reconcileTargets!(turnSourceTarget, sessionTarget))
+        : undefined,
       resolveFallbackTarget: params.resolveFallbackTarget
         ? (request) => normalizeTarget(params.resolveFallbackTarget?.(request) ?? null)
         : undefined,
@@ -992,6 +1049,7 @@ export function createChannelNativeOriginTargetResolver<TTarget>(
   return createOriginTargetResolver({
     ...params,
     targetsMatch: nativeApprovalTargetMatcher(params.channel),
+    reconcileTargets: params.reconcileTargets ?? nativeApprovalTargetReconciler(params.channel),
   });
 }
 
