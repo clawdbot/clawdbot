@@ -5725,8 +5725,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toContain("--only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1");
   });
 
-  it("runs both baseline ratchets against the exact tested tree", () => {
+  it("runs all baseline ratchets against the exact tested tree", () => {
     const workflow = readCiWorkflow();
+    const maxLinesRatchet = readFileSync("scripts/check-max-lines-ratchet.mts", "utf8");
     const checksFastJob = workflow.jobs["checks-fast-core"];
     const checksFastSteps = checksFastJob.steps;
     const checkout = checksFastSteps.find((step: WorkflowStep) => step.name === "Checkout");
@@ -5827,6 +5828,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-ratchet-base");
     expect(checksFastRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');
     expect(checksFastRun.run).toContain('pnpm check:assertion-safety --base "$base_ref"');
+    expect(maxLinesRatchet).toContain(
+      'import { main as checkEnvVarCount } from "./check-env-var-count.mts";',
+    );
+    expect(maxLinesRatchet).toContain("checkEnvVarCount(envVarCountArgs(argv), root);");
     expect(checksFastRun.run).toContain(
       'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
     );
