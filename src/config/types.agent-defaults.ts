@@ -205,8 +205,6 @@ export type AgentDefaultsConfig = {
   startupContext?: AgentStartupContextConfig;
   /** Focused context-budget overrides for high-volume injected/read surfaces. */
   contextLimits?: AgentContextLimitsConfig;
-  /** Optional context window cap (used for runtime estimates + status %). */
-  contextTokens?: number;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */

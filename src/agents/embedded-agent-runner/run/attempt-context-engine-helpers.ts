@@ -1,3 +1,4 @@
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 /**
  * Bridges attempt bootstrap/history data to context-engine prompt-cache helpers.
  */
@@ -217,4 +218,3 @@ export function buildLoopPromptCacheInfo(params: {
     }),
   });
 }
-import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

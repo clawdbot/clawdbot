@@ -37,8 +37,12 @@ import {
   listSessionTranscriptCorpusEntriesForAgentSync,
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
-import type { MemorySessionSyncTarget } from "./types.js";
-import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
+import type {
+  MemorySessionSyncTarget,
+  MemoryEntryProvenance,
+  MemoryOriginClass,
+  MemorySessionKind,
+} from "./types.js";
 
 export {
   listSessionTranscriptCorpusEntriesForAgent,

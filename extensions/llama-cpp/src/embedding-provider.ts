@@ -18,6 +18,7 @@ import {
   resolveLlamaCppModelSource,
 } from "./defaults.js";
 import { selectLlamaServerAsset } from "./llama-server-install.js";
+import { resolveManagedLlamaCppProviderConfig } from "./managed-provider-config.js";
 import {
   ensureLlamaCppModel,
   inspectLlamaServerRuntime,
@@ -98,13 +99,7 @@ function resolveModelIdentity(
 }
 
 function resolveConfiguredProvider(options: EmbeddingProviderCreateOptions): ModelProviderConfig {
-  const provider = options.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  if (!provider?.localService || !provider.baseUrl) {
-    throw new Error(
-      "Local embeddings need the managed llama.cpp server config. Run `openclaw configure`, choose llama.cpp once, then retry `openclaw memory status --deep`.",
-    );
-  }
-  return provider;
+  return resolveManagedLlamaCppProviderConfig(options.config);
 }
 
 function resolveProviderPort(provider: ModelProviderConfig): number {

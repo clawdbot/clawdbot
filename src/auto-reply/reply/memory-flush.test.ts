@@ -224,8 +224,17 @@ describe("Anthropic server compaction host threshold", () => {
           anthropic: {
             api: "anthropic-messages",
             baseUrl: "https://api.anthropic.com/v1",
-            contextWindow: contextWindowTokens,
-            models: [],
+            models: [
+              {
+                id: modelId,
+                name: modelId,
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: contextWindowTokens,
+                maxTokens: 8_192,
+              },
+            ],
           },
         },
       },

@@ -682,11 +682,16 @@ describe("OpenClaw rescue message", () => {
 
       expect(deps.createAgent).toHaveBeenCalledTimes(1);
       const [agentParams] = requireFirstMockCall(deps.createAgent, "agents add") as unknown as [
-        { name: string; workspace: string },
+        {
+          name: string;
+          workspace: string;
+          provenance: { createdVia: string; creatorAgentId: string };
+        },
       ];
       expect(agentParams).toEqual({
         name: "work",
         workspace: "/tmp/work",
+        provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
       });
       const audit = readLastAuditEntry() as {
         operation?: string;

@@ -6,6 +6,7 @@ import {
 } from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
+import { configureMessageActionDecisionSink } from "../audit/message-action-decision.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
 import {
   configureChannelAdmissionDecisionSink,
@@ -102,6 +103,9 @@ export function startGatewayEventSubscriptions(params: {
     isExecutionIdentityCollectionEnabled(runtimeConfig),
   );
   const clearChannelAdmissionDecisionSink = configureChannelAdmissionDecisionSink(
+    auditRecorder.recordExecutionDecision,
+  );
+  const clearMessageActionDecisionSink = configureMessageActionDecisionSink(
     auditRecorder.recordExecutionDecision,
   );
   const sessionObserver = createSessionObserver({
@@ -367,6 +371,7 @@ export function startGatewayEventSubscriptions(params: {
     clearExecutionIdentityAdmissionSink();
     clearChannelAdmissionEvidenceCollection();
     clearChannelAdmissionDecisionSink();
+    clearMessageActionDecisionSink();
     await agentEventHandlerLoader
       .peek()
       ?.then((handler) => handler.dispose())

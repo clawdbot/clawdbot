@@ -53,6 +53,13 @@ type PromptBuildToolPolicyBaseline = {
   catalogEntries: readonly ToolSearchCatalogEntry[];
 };
 
+function readNamedToolPluginMeta(tool: NamedTool): { pluginId: string } | undefined {
+  if (!("execute" in tool) || typeof tool.execute !== "function") {
+    return undefined;
+  }
+  return getPluginToolMeta(tool as AnyAgentTool);
+}
+
 export function applyResolvedToolPromptFinalizer(params: {
   prompt: string;
   activeToolNames: readonly string[];
@@ -72,8 +79,7 @@ export function applyResolvedToolPromptFinalizer(params: {
 function filterTools<T extends NamedTool>(
   tools: readonly T[],
   toolsAllow: string[],
-  toolMeta: (tool: T) => { pluginId: string } | undefined = (tool) =>
-    getPluginToolMeta(tool as unknown as AnyAgentTool),
+  toolMeta: (tool: T) => { pluginId: string } | undefined = readNamedToolPluginMeta,
 ): T[] {
   return applyEmbeddedAttemptToolsAllow([...tools], toolsAllow, {
     toolMeta,

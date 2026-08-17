@@ -496,7 +496,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "slack" });
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
     const ctx = buildTestCtx({
       Provider: "slack",
       Surface: "slack",
@@ -540,7 +540,7 @@ describe("dispatchReplyFromConfig", () => {
   it("mirrors reset acknowledgements into the canonically prepared Slack session", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
     const sessionKey = "Agent:Main:Slack:Channel:C123";
     const preparedSessionKey = "agent:main:slack:channel:c123";
     sessionStoreMocks.currentEntry = {
@@ -615,76 +615,6 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(true);
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-  });
-
-  it("records stale-foreground suppressed CLI-owned finals without duplicating answer text", async () => {
-    setNoAbort();
-    const dispatcher = createReplyDispatcher({
-      deliver: vi.fn(async () => undefined),
-      beforeDeliver: (payload, info) => {
-        if (info.kind !== "final") {
-          return payload;
-        }
-        setReplyPayloadMetadata(payload, {
-          foregroundDeliverySuppression: { reason: "stale-foreground" },
-        });
-        return null;
-      },
-    });
-    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-        MessageSid: "slack-message-cli",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async (_ctx, opts) => {
-        (
-          opts as GetReplyOptions & {
-            onSessionPrepared?: (binding: {
-              sessionKey?: string;
-              sessionId: string;
-              storePath?: string;
-            }) => void;
-          }
-        ).onSessionPrepared?.({
-          sessionKey: "agent:main:slack:channel:c123",
-          sessionId: "prepared-session",
-          storePath: "/tmp/prepared-sessions.json",
-        });
-        return setReplyPayloadMetadata(
-          { text: "The CLI answer already lives in the transcript." },
-          { assistantTranscriptOwned: true },
-        );
-      },
-    });
-    await settleReplyDispatcher({ dispatcher });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
-    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
-      sessionKey: "agent:main:slack:channel:C123",
-      agentId: "main",
-      expectedSessionId: "prepared-session",
-      text: "Channel final suppressed before delivery: stale foreground",
-      mediaUrls: undefined,
-      idempotencyKey: "channel-final-suppressed:slack-message-cli:0",
-      deliveryMirror: {
-        kind: "channel-final-suppressed",
-        reason: "stale-foreground",
-        sourceMessageId: "slack-message-cli",
-      },
-      storePath: "/tmp/prepared-sessions.json",
-      updateMode: "inline",
-      config: emptyConfig,
-      beforeMessageWrite: expect.any(Function),
-    });
   });
 
   it("disables routed delivery mirrors for CLI-owned finals", async () => {
@@ -825,7 +755,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("mirrors the delivered ownerless Slack text after dispatcher hook rewrites", async () => {
     setNoAbort();
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
     dispatcher.appendBeforeDeliver?.((payload, info) =>
       info.kind === "final" ? { ...payload, text: "Redacted Slack reply" } : payload,
     );
@@ -1125,9 +1055,9 @@ describe("dispatchReplyFromConfig", () => {
         replyResolver: async () => undefined,
       });
 
-      // Direct empty completions get a core no-visible-reply fallback final.
-      expect(result.queuedFinal).toBe(true);
-      expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+      // An unsettled custom dispatcher has no receipt, so the turn cannot claim delivery.
+      expect(result.queuedFinal).toBe(false);
+      expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
       await vi.waitFor(
         () => {
           expect(

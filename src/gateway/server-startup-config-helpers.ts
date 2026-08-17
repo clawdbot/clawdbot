@@ -8,7 +8,7 @@ import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
 } from "../config/io.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
@@ -56,7 +56,7 @@ export function assertValidGatewayStartupConfigSnapshot(
   }
   const issues =
     snapshot.issues.length > 0
-      ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+      ? renderConfigValidationIssueLines(snapshot, "").join("\n")
       : "Unknown validation issue.";
   const recoveryHint =
     options.includeDoctorHint && isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)

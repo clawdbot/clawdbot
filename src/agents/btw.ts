@@ -1029,6 +1029,7 @@ export async function runBtwSideQuestion(
         provider: runtimeModel.provider,
         model: runtimeModel.id,
         runtimeModel,
+        preparedModelRuntime,
         preparedRuntimeAuth: {
           plan: runtimeAuthPlan,
           authProfileStore: scopeAuthProfileStoreToPreparedPlan(

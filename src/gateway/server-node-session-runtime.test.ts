@@ -115,6 +115,7 @@ describe("gateway node session runtime", () => {
         connId: "conn-original",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: { enabled: false },
         },
       }),
     ).toEqual({ changed: true });

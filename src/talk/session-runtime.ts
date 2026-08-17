@@ -57,6 +57,8 @@ export type RealtimeVoiceBridgeSession = {
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
+  /** Host-selected agent scope for provider auth and agent-owned bridge state. */
+  agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
@@ -164,6 +166,7 @@ export function createRealtimeVoiceBridgeSession(
   };
   const bridge = params.provider.createBridge({
     cfg: params.cfg,
+    agentId: params.agentId,
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
     instructions: params.instructions,

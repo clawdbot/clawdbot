@@ -46,6 +46,10 @@ const CUA_COMMON_ACTION_NAMES = [
   "browser_download",
   "browser_pointer",
   "escalate_scope",
+  "get_recording_state",
+  "start_recording",
+  "stop_recording",
+  "replay_trajectory",
   "invoke_menu",
 ] as const;
 

@@ -60,8 +60,10 @@ export const ConfigSchemaLookupParamsSchema = closedObject({
   path: ConfigSchemaLookupPathString,
 });
 
-/** Empty request payload for checking update/restart status. */
-export const UpdateStatusParamsSchema = closedObject({});
+/** Request payload for cached status or an explicit checkout refresh. */
+export const UpdateStatusParamsSchema = closedObject({
+  refreshCheckout: Type.Optional(Type.Boolean()),
+});
 
 const UpdateCommitSchema = closedObject({
   sha: NonEmptyString,

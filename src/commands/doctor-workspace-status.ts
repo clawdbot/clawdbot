@@ -17,8 +17,9 @@ import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
 } from "../plugins/status.js";
-import { listTasksForFlowId } from "../tasks/runtime-internal.js";
-import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
+import { loadTaskFlowRegistryStateFromSqliteReadOnly } from "../tasks/task-flow-registry.store.sqlite.js";
+import { loadTaskRegistryStateFromSqliteReadOnly } from "../tasks/task-registry.store.sqlite.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 
 type NoteWorkspaceStatusOptions = {
   pluginVersionDrift?: PluginVersionDriftReport;
@@ -33,13 +34,28 @@ type TaskFlowRecoveryFinding = {
 };
 
 function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
-  return listTaskFlowRecords().flatMap((flow) => {
-    const tasks = listTasksForFlowId(flow.flowId);
+  const flows = [...loadTaskFlowRegistryStateFromSqliteReadOnly().flows.values()].toSorted(
+    (left, right) => right.createdAt - left.createdAt,
+  );
+  const tasksByFlowId = new Map<string, TaskRecord[]>();
+  for (const task of loadTaskRegistryStateFromSqliteReadOnly().tasks.values()) {
+    const flowId = task.parentFlowId?.trim();
+    if (flowId) {
+      const linkedTasks = tasksByFlowId.get(flowId);
+      if (linkedTasks) {
+        linkedTasks.push(task);
+      } else {
+        tasksByFlowId.set(flowId, [task]);
+      }
+    }
+  }
+  return flows.flatMap((flow) => {
+    const linkedTasks = tasksByFlowId.get(flow.flowId) ?? [];
     const findings: TaskFlowRecoveryFinding[] = [];
     if (
       flow.syncMode === "managed" &&
       flow.status === "running" &&
-      tasks.length === 0 &&
+      linkedTasks.length === 0 &&
       flow.waitJson === undefined
     ) {
       findings.push({
@@ -51,7 +67,7 @@ function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
       flow.endedAt == null &&
       flow.status === "blocked" &&
       flow.blockedTaskId &&
-      !tasks.some((task) => task.taskId === flow.blockedTaskId)
+      !linkedTasks.some((task) => task.taskId === flow.blockedTaskId)
     ) {
       findings.push({
         flowId: flow.flowId,

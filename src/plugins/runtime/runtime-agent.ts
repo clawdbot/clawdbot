@@ -312,6 +312,7 @@ async function createSessionEntry(
         let created: { key: string; agentId: string; entry: SessionEntry };
         if (matchingEntry) {
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
+          const expectedSessionRoot = params.sessionRoot?.trim() || undefined;
           const expectedExecNode = params.execNode?.trim() || undefined;
           const expectedExecCwd = params.execCwd?.trim() || undefined;
           const matchingAcpMeta = acpInitial
@@ -337,6 +338,8 @@ async function createSessionEntry(
               (isDeepStrictEqual(matchingEntry.acpSessionBinding, persistedAcpBinding) &&
                 (matchingAcpMeta === undefined || acpMetaMatches(matchingAcpMeta)))) &&
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
+            matchingEntry.sessionRoot === expectedSessionRoot &&
+            matchingEntry.permissionMode === params.permissionMode &&
             matchingEntry.execNode === expectedExecNode &&
             matchingEntry.execCwd === expectedExecCwd &&
             isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
@@ -365,6 +368,10 @@ async function createSessionEntry(
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
+            ...(params.sessionRoot !== undefined ? { sessionRoot: params.sessionRoot } : {}),
+            ...(params.permissionMode !== undefined
+              ? { permissionMode: params.permissionMode }
+              : {}),
             ...(params.execNode !== undefined ? { execNode: params.execNode } : {}),
             ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),
             initialEntry: {
@@ -616,16 +623,11 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
     ensureAgentWorkspace,
-  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session"> &
-    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;
+  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "session"> &
+    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "session">>;
 
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
     createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runPluginEmbeddedAgent),
-  );
-  defineCachedValue(
-    agentRuntime,
-    "runEmbeddedPiAgent",
-    () => (agentRuntime as PluginRuntime["agent"]).runEmbeddedAgent,
   );
   defineCachedValue(agentRuntime, "session", () => ({
     resolveStorePath: resolveSessionStorePathCore,

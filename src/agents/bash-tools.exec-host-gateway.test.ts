@@ -944,7 +944,8 @@ describe("processGatewayAllowlist", () => {
   it("reviews and executes the same PATH-resolved executable", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auto-review-path-"));
     const shadowGit = path.join(tempDir, "git");
-    fs.writeFileSync(shadowGit, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.copyFileSync(process.execPath, shadowGit);
+    fs.chmodSync(shadowGit, 0o755);
     try {
       const command = "git status";
       const canonicalShadowGit = fs.realpathSync(shadowGit);
@@ -963,7 +964,8 @@ describe("processGatewayAllowlist", () => {
       expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
         expect.objectContaining({ resolvedPath: canonicalShadowGit }),
       );
-      expect(result).toEqual({ execCommandOverride: `${canonicalShadowGit} status` });
+      expect(result).toMatchObject({ execCommandOverride: `${canonicalShadowGit} status` });
+      await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -984,7 +986,7 @@ describe("processGatewayAllowlist", () => {
     expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 
-  it("keeps unrenderable heredoc commands on the human approval path", async () => {
+  it("fails closed before approval when a heredoc command cannot be operand-bound", async () => {
     const command = "python3 - <<'PY'\nprint('ok')\nPY";
     const authorizationPlan = await planShellAuthorization({
       command,
@@ -1015,8 +1017,12 @@ describe("processGatewayAllowlist", () => {
     });
 
     expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
-    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result.deniedResult?.content[0]).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("approval cannot safely bind this command"),
+      }),
+    );
   });
 
   it("does not activate allowlist fallback for a full-policy heredoc without an approval", async () => {
@@ -1586,7 +1592,7 @@ describe("processGatewayAllowlist", () => {
     expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 
-  it("requests human approval when auto-review cannot resolve the executable", async () => {
+  it("fails closed before approval when the executable cannot be resolved", async () => {
     const command = "openclaw-definitely-missing-executable --version";
     const { resolvedPath } = await configurePlanBackedCommand({ command });
     expect(resolvedPath).toBeUndefined();
@@ -1598,8 +1604,10 @@ describe("processGatewayAllowlist", () => {
     });
 
     expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
-    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result.deniedResult?.content[0]).toEqual(
+      expect.objectContaining({ text: expect.stringContaining("requires a resolved executable") }),
+    );
   });
 
   it("does not use fallback-full when auto-review cannot parse the command", async () => {
@@ -1637,15 +1645,11 @@ describe("processGatewayAllowlist", () => {
     });
 
     expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
-    expect(enforceStrictInlineEvalApprovalBoundaryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requiresAutoReviewHumanApproval: true,
-      }),
-    );
+    expect(enforceStrictInlineEvalApprovalBoundaryMock).not.toHaveBeenCalled();
     expect(result.deniedResult?.details.status).toBe("failed");
     expect(result.deniedResult?.content[0]).toEqual(
       expect.objectContaining({
-        text: "Exec denied (gateway id=req-1, approval-timeout): echo 'unterminated",
+        text: expect.stringContaining("approval cannot safely bind this command"),
       }),
     );
   });
@@ -1916,12 +1920,12 @@ EOF`,
   });
 
   it("allows durable exact-command trust to bypass the synchronous allowlist miss", async () => {
-    const command = "node --version";
+    const command = "/bin/echo durable";
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: false,
       allowlistSatisfied: false,
-      segments: [{ resolution: null, argv: ["node", "--version"] }],
+      segments: [{ resolution: null, argv: ["/bin/echo", "durable"] }],
       segmentAllowlistEntries: [],
       segmentSatisfiedBy: [],
     });
@@ -2405,6 +2409,85 @@ EOF`,
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
     });
+  });
+
+  it.each([
+    { name: "denies drift", mutate: true },
+    { name: "runs unchanged bytes", mutate: false },
+  ])("re-prompts durable detached gateway script approvals: $name", async ({ mutate }) => {
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-script-binding-"));
+    const script = path.join(workdir, "script.sh");
+    const command = "sh script.sh";
+    try {
+      fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
+      evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+        allowlistMatches: [],
+        analysisOk: true,
+        allowlistSatisfied: false,
+        segments: [{ resolution: null, argv: ["sh", "script.sh"] }],
+        segmentAllowlistEntries: [],
+        segmentSatisfiedBy: [],
+      });
+      hasDurableExecApprovalMock.mockReturnValue(true);
+      hasExactCommandDurableExecApprovalMock.mockReturnValue(true);
+      resolveExecHostApprovalContextMock.mockReturnValue({
+        approvals: {
+          allowlist: [{ pattern: exactCommandMarker(command), source: "allow-always" }],
+          file: { version: 1, agents: {} },
+        },
+        hostSecurity: "allowlist",
+        hostAsk: "off",
+        askFallback: "deny",
+      });
+      createExecApprovalDecisionStateMock.mockReturnValue({
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+      });
+      resolveApprovalDecisionOrUndefinedMock.mockImplementation(async () => {
+        if (mutate) {
+          fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
+        }
+        return "allow-once";
+      });
+      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+      runExecProcessMock.mockResolvedValue({
+        session: { id: "sess-script-binding" },
+        promise: Promise.resolve({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          aggregated: "approved",
+        }),
+      });
+
+      const result = await runGatewayAllowlist({
+        command,
+        workdir,
+        turnSourceChannel: "feishu",
+      });
+
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+      expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+        ask: "off",
+        allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+      });
+      await vi.waitFor(() => {
+        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
+      });
+      if (mutate) {
+        expect(requireSentFollowupText(0)).toContain(
+          "approval script operand changed before execution",
+        );
+        expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
+        expect(runExecProcessMock).not.toHaveBeenCalled();
+      } else {
+        expect(commitExecAuthorizationMock).toHaveBeenCalledOnce();
+        expect(runExecProcessMock).toHaveBeenCalledOnce();
+      }
+    } finally {
+      fs.rmSync(workdir, { recursive: true, force: true });
+    }
   });
 
   it("denies a detached approved process when restart drain wins admission", async () => {

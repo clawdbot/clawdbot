@@ -142,7 +142,11 @@ function clearRestartSignalFence(): boolean {
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   resolveSuspendOpenWaiters();
-  logAdmissionReopened("restart-signal fence");
+  if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase === "accepting") {
+    logAdmissionReopened("restart-signal fence");
+  } else {
+    admissionLog.info("restart-signal fence cleared; suspension remains closed");
+  }
   return true;
 }
 
@@ -264,6 +268,22 @@ export function tryBeginGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLeas
     GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
     GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
     GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
+  ) {
+    return null;
+  }
+  return createGatewayRootWorkAdmission();
+}
+
+/**
+ * Admits only the exact predecessor-bound restart selected by the RPC router.
+ * The held root preserves signal-to-drain ordering without reopening suspension.
+ */
+export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
+  if (
+    GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
+    GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
+    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "prepared" ||
+    GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size > 0
   ) {
     return null;
   }

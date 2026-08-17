@@ -131,6 +131,7 @@ export type SessionsProps = {
     key: string,
     patch: {
       label?: string | null;
+      icon?: string | null;
       category?: string | null;
       archived?: boolean;
       pinned?: boolean;
@@ -1455,7 +1456,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         props.onToggleDetails(row.key);
       }}
       @keydown=${(e: KeyboardEvent) => {
-        if (openMenuFromEvent(e)) {
+        openMenuFromEvent(e);
+        if (e.defaultPrevented) {
           return;
         }
         if (isRowControlTarget(e.target)) {

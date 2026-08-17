@@ -11,7 +11,10 @@ import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { heartbeatTaskDeclarationKey, isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import { cronSchedulingInputsEqual } from "../cron/schedule-identity.js";
-import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
+import {
+  readHeartbeatMonitorScratch,
+  readHeartbeatMonitorScratchReadOnly,
+} from "../cron/scratch-store.js";
 import { computeJobNextRunAtMs, hasScheduledNextRunAtMs } from "../cron/service/jobs-scheduling.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
@@ -94,9 +97,9 @@ export async function collectHeartbeatTaskMigrationFindings(
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const findings: HealthFinding[] = [];
   for (const agent of resolveHeartbeatAgents(cfg)) {
-    let monitor: ReturnType<typeof readHeartbeatMonitorScratch>;
+    let monitor: ReturnType<typeof readHeartbeatMonitorScratchReadOnly>;
     try {
-      monitor = readHeartbeatMonitorScratch(storePath, agent.agentId, { env });
+      monitor = readHeartbeatMonitorScratchReadOnly(storePath, agent.agentId, { env });
     } catch (error) {
       findings.push(
         migrationFinding({

@@ -8,6 +8,7 @@ import type {
   ClawHubRiskAcknowledgementRequest,
   ClawHubTrustErrorCode,
 } from "../../infra/clawhub-install-trust.js";
+import { CLAWHUB_SKILLS_SH_REF_PREFIX } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
@@ -88,7 +89,7 @@ async function resolveRequestedUpdateSlug(params: {
 }): Promise<string> {
   const requested = params.requestedSlug.trim();
   const requestedRef =
-    requested.startsWith("@") || requested.startsWith("skills-sh:")
+    requested.startsWith("@") || requested.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)
       ? parseRequestedClawHubSkillRef(requested)
       : { slug: normalizeTrackedSkillSlug(requested) };
   const trackedSlug = requestedRef.slug;

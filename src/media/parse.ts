@@ -30,6 +30,7 @@ type ParsedMediaOutputSegment =
 
 /** Controls which non-MEDIA syntaxes may be lifted into media attachments. */
 type SplitMediaFromOutputOptions = {
+  extractAudioDirectives?: boolean;
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
 };
@@ -715,7 +716,10 @@ export function splitMediaFromOutput(
   }
 
   const visibleText = keptLines.join("\n").replace(/^(?:[ \t]*\n)+/, "");
-  const audioTagResult = parseAudioTag(visibleText);
+  const audioTagResult =
+    options.extractAudioDirectives === false
+      ? { text: visibleText, audioAsVoice: false }
+      : parseAudioTag(visibleText);
   const cleanedText = audioTagResult.text.trimEnd();
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
 

@@ -258,7 +258,7 @@ function resolveDescription({ manifest, packageJson }: PluginSourceEntry) {
     documentExtractors: "Adds document extraction for local attachments.",
     imageGenerationProviders: "Adds image generation provider support.",
     mediaUnderstandingProviders: "Adds media understanding provider support.",
-    memoryEmbeddingProviders: "Adds memory embedding provider support.",
+    embeddingProviders: "Adds embedding provider support, including memory search.",
     migrationProviders: "Adds migration import support.",
     musicGenerationProviders: "Adds music generation provider support.",
     realtimeTranscriptionProviders: "Adds realtime transcription provider support.",

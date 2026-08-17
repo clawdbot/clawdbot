@@ -9,7 +9,31 @@ import OSLog
 import Security
 import SwiftUI
 
+/// Routes private maintenance commands before SwiftUI constructs or activates the application.
 @main
+enum OpenClawProcessMain {
+    static func main() {
+        if let status = OpenClawProcessEntrypoint.run(arguments: CommandLine.arguments, launchApplication: {
+            OpenClawApp.main()
+        }) {
+            Darwin.exit(status)
+        }
+    }
+}
+
+enum OpenClawProcessEntrypoint {
+    static func run(arguments: [String], launchApplication: () -> Void) -> Int32? {
+        if let status = ElevationExclusiveRename.runIfRequested(arguments: arguments) {
+            return status
+        }
+        if let status = ElevationFilesystemSync.runIfRequested(arguments: arguments) {
+            return status
+        }
+        launchApplication()
+        return nil
+    }
+}
+
 struct OpenClawApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.openWindow) private var openWindow

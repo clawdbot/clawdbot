@@ -1,21 +1,12 @@
 // Command queue serializes and limits process execution for shared command lanes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
-import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
-import {
-  GatewayDrainingError,
-  isGatewaySubordinateWorkAdmissionClosed,
-  isGatewayWorkAdmissionClosed,
-  markGatewayRestartDraining,
-  resetGatewayWorkAdmission,
-  runWithGatewayRootWorkReadmission,
-} from "./gateway-work-admission.js";
-export { GatewayDrainingError } from "./gateway-work-admission.js";
 import {
   canAdmitInGroup,
   type CommandLaneBlockReason,
@@ -37,7 +28,17 @@ import {
   normalizeLane,
   type QueueEntry,
 } from "./command-queue.state.js";
+import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  runWithGatewayRootWorkReadmission,
+} from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
+export { GatewayDrainingError } from "./gateway-work-admission.js";
 export type { CommandLaneTaskMarker } from "./command-queue.state.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -465,7 +466,8 @@ function drainLane(lane: string) {
             const isProbeLane = isQuietProbeLane(lane);
             if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
-                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${formatErrorMessage(err)}"`,
+                { errorName: readErrorName(err) || undefined },
               );
             } else if (!isProbeLane) {
               diag.debug(

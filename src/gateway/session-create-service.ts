@@ -27,7 +27,7 @@ import {
   forkSessionFromParentWithDecision,
   MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
 } from "../auto-reply/reply/session-fork.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -35,6 +35,8 @@ import {
   listSessionEntriesReadOnly,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
+import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
+import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
   type SessionCreatedActor,
@@ -72,6 +74,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import {
+  type GatewaySessionTitleModelSelection,
   type PreparedGatewaySessionLifecycle,
   type PrepareGatewaySessionLifecycle,
   rollbackGatewaySessionPreparation,
@@ -94,6 +97,46 @@ type TrustedCatalogSessionTarget = {
 const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
+
+export function resolveSessionCreateModelSelection(
+  cfg: OpenClawConfig,
+  agentId: string,
+  input: string | { model: string; agentRuntime?: string } | undefined,
+  parentEntry?: SessionEntry,
+): GatewaySessionTitleModelSelection | null {
+  const model = normalizeOptionalString(typeof input === "string" ? input : input?.model);
+  if (!model) {
+    const inherited = inheritSessionSelection(parentEntry);
+    return {
+      providerOverride: inherited.providerOverride,
+      modelOverride: inherited.modelOverride,
+      agentRuntimeOverride: inherited.agentRuntimeOverride,
+      authProfileOverride: inherited.authProfileOverride,
+    };
+  }
+  const defaults = resolveDefaultModelForAgent({ cfg, agentId });
+  // Reuse patch policy with the config-owned catalog projection. Persisted creation
+  // remains the sole live-catalog availability validator.
+  const resolved = resolveSessionPatchModelSelection({
+    cfg,
+    catalog: [],
+    raw: model,
+    defaultProvider: defaults.provider,
+    defaultModel: defaults.model,
+  });
+  if (!resolved.ok) {
+    return null;
+  }
+  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(
+    typeof input === "string" ? undefined : input?.agentRuntime,
+  );
+  return {
+    providerOverride: resolved.provider,
+    modelOverride: resolved.model,
+    ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
+    ...(resolved.profile ? { authProfileOverride: resolved.profile } : {}),
+  };
+}
 
 async function existingModelSelectionWouldChange(params: {
   agentId: string;
@@ -228,8 +271,7 @@ export async function createGatewaySession(params: {
   key?: string;
   agentId?: string;
   label?: string;
-  /** Trusted model-generated title, persisted with a newly created dashboard session. */
-  generatedDisplayName?: string;
+  category?: string;
   model?: string;
   thinkingLevel?: string;
   /** Registry identity recorded only when this request creates a logical session node. */
@@ -253,6 +295,8 @@ export async function createGatewaySession(params: {
     deny: string[];
   };
   spawnedCwd?: string;
+  sessionRoot?: string;
+  permissionMode?: SessionEntry["permissionMode"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
@@ -286,13 +330,14 @@ export async function createGatewaySession(params: {
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
   authorizedPluginId?: string;
+  /** Arms local checkout attribution in the authoritative create/reset commit. */
+  armSessionDiffBaselineCapture?: boolean;
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: () => void;
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
-  const generatedDisplayName = normalizeOptionalString(params.generatedDisplayName);
   const projectId = normalizeOptionalString(params.projectId);
   const explicitAgentId = normalizeOptionalString(params.agentId);
   const explicitKeyAgentId = parseAgentSessionKey(requestedKey)?.agentId;
@@ -666,6 +711,8 @@ export async function createGatewaySession(params: {
         commandSource: params.commandSource,
         ...(params.creation ? { creation: params.creation } : {}),
         ...(spawnedCwd ? { spawnedCwd } : {}),
+        ...(params.sessionRoot ? { sessionRoot: params.sessionRoot } : {}),
+        ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
         ...(params.prepareLifecycle ? { prepareLifecycle: params.prepareLifecycle } : {}),
         ...(params.onLifecycleCleanupError
           ? { onLifecycleCleanupError: params.onLifecycleCleanupError }
@@ -674,6 +721,7 @@ export async function createGatewaySession(params: {
         ...(execCwd ? { execCwd } : {}),
         ...(params.clearExecBinding ? { clearExecBinding: true } : {}),
         ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
+        ...(params.armSessionDiffBaselineCapture ? { armSessionDiffBaselineCapture: true } : {}),
         ...(params.commitGuard ? { assertAuthorizedInstance: params.commitGuard } : {}),
       });
       if (!resetResult.ok) {
@@ -689,7 +737,7 @@ export async function createGatewaySession(params: {
         ok: true,
         key: resetResult.key,
         agentId: resetResult.agentId,
-        entry: resetResult.entry,
+        entry: projectPublicSessionEntry(resetResult.entry),
         resolved: resetResult.resolved,
         resetExisting: true,
       };
@@ -812,12 +860,19 @@ export async function createGatewaySession(params: {
     const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
     }).entry;
+    const titleModelSelection = resolveSessionCreateModelSelection(
+      params.cfg,
+      target.agentId,
+      params.catalogTarget ?? params.model,
+      currentParentSessionEntry,
+    );
     const preparationResult = params.prepareLifecycle
       ? await params.prepareLifecycle({
           agentId: target.agentId,
           entry: currentTargetEntry,
           key: target.canonicalKey,
           storePath: target.storePath,
+          titleModelSelection,
         })
       : undefined;
     if (preparationResult && !preparationResult.ok) {
@@ -968,6 +1023,7 @@ export async function createGatewaySession(params: {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
+            category: normalizeOptionalString(params.category),
             model: catalogModel ?? requestedModel,
             thinkingLevel: requestedThinkingLevel,
           },
@@ -980,6 +1036,9 @@ export async function createGatewaySession(params: {
         sessionEntries[target.canonicalKey] = patched.entry;
         const spawnedCwd = normalizeOptionalString(
           preparedLifecycle?.spawnedCwd ?? params.spawnedCwd,
+        );
+        const sessionRoot = normalizeOptionalString(
+          preparedLifecycle?.sessionRoot ?? params.sessionRoot,
         );
         const execNode = normalizeOptionalString(params.execNode);
         const execCwd = normalizeOptionalString(params.execCwd);
@@ -1012,7 +1071,7 @@ export async function createGatewaySession(params: {
         const catalogResolvedModel = params.catalogTarget
           ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
           : undefined;
-        const initializedEntry: SessionEntry = {
+        const initializedEntry: InternalSessionEntry = {
           ...patched.entry,
           // New rows must expose the same canonical delivery shape to callbacks
           // that the SQLite writer persists, or guarded finalization sees its own write as drift.
@@ -1025,7 +1084,6 @@ export async function createGatewaySession(params: {
           ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
           ...(projectId && createdNewEntry ? { projectId } : {}),
-          ...(generatedDisplayName && createdNewEntry ? { displayName: generatedDisplayName } : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
@@ -1040,8 +1098,15 @@ export async function createGatewaySession(params: {
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
           // restricted to spawned subagent and ACP lineage.
           ...(spawnedCwd ? { spawnedCwd } : {}),
+          ...(sessionRoot ? { sessionRoot } : {}),
+          ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
+          ...(createdNewEntry && params.armSessionDiffBaselineCapture && !execNode
+            ? {
+                sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
+              }
+            : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
           ...(createdNewEntry && params.authorizedPluginId && !params.catalogTarget
             ? { pluginOwnerId: params.authorizedPluginId }
@@ -1187,7 +1252,7 @@ export async function createGatewaySession(params: {
     createdContext = {
       key: target.canonicalKey,
       agentId: target.agentId,
-      entry: created.entry,
+      entry: projectPublicSessionEntry(created.entry),
       storePath: target.storePath,
     };
     lifecyclePreparationCommitted = true;
@@ -1237,7 +1302,7 @@ export async function createGatewaySession(params: {
       ok: true,
       key: target.canonicalKey,
       agentId: target.agentId,
-      entry: created.entry,
+      entry: projectPublicSessionEntry(created.entry),
       resolved: {
         modelProvider: selectedModel.provider,
         model: selectedModel.model,

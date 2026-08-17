@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type Static, type TSchema, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type {
@@ -55,13 +56,6 @@ export const COMPUTER_USE_V1_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(0
 
 export const COMPUTER_ACT_V1_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 
-export const COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES = [
-  "get_recording_state",
-  "start_recording",
-  "stop_recording",
-  "replay_trajectory",
-] as const satisfies readonly ComputerUseV2ActionName[];
-
 export const COMPUTER_CONTRACT_MISMATCH = "COMPUTER_CONTRACT_MISMATCH";
 export const COMPUTER_STALE_OBSERVATION = "COMPUTER_STALE_OBSERVATION";
 
@@ -74,6 +68,10 @@ const ESCALATION_REASONS = [
   "no_window_target",
   "other",
 ] as const;
+const COMPUTER_RESOURCE_HANDLE_PATTERN =
+  "^openclaw:computer-resource:v1:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+const COMPUTER_EXECUTION_ID_PATTERN =
+  "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
 
 const optionalScreenFields = {
   screenIndex: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -94,6 +92,7 @@ function actionObject<const Properties extends object>(
   return Type.Object(
     {
       action: Type.Enum(actions, { type: "string" }),
+      executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
       ...properties,
     },
     { additionalProperties: false },
@@ -275,14 +274,16 @@ export const ComputerActParamsSchema = Type.Union([
     pageRef: Type.String({ minLength: 1 }),
     observationId: Type.String({ minLength: 1 }),
     elementRef: Type.String({ minLength: 1 }),
-    files: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32 }),
+    resourceHandles: Type.Array(Type.String({ pattern: COMPUTER_RESOURCE_HANDLE_PATTERN }), {
+      minItems: 1,
+      maxItems: 32,
+    }),
   }),
   actionObject(["browser_download"], {
     browserRef: Type.String({ minLength: 1 }),
     pageRef: Type.String({ minLength: 1 }),
     observationId: Type.String({ minLength: 1 }),
     elementRef: Type.String({ minLength: 1 }),
-    destinationRoot: Type.String({ minLength: 1 }),
   }),
   actionObject(["browser_pointer"], {
     browserRef: Type.String({ minLength: 1 }),
@@ -303,6 +304,15 @@ export const ComputerActParamsSchema = Type.Union([
   }),
   actionObject(["escalate_scope"], {
     reason: Type.Enum(ESCALATION_REASONS, { type: "string" }),
+  }),
+  actionObject(["get_recording_state", "stop_recording"], {}),
+  actionObject(["start_recording"], {
+    recordVideo: Type.Optional(Type.Boolean()),
+  }),
+  actionObject(["replay_trajectory"], {
+    resourceHandle: Type.String({ pattern: COMPUTER_RESOURCE_HANDLE_PATTERN }),
+    delayMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 10_000 })),
+    stopOnError: Type.Optional(Type.Boolean()),
   }),
 ]);
 
@@ -418,6 +428,7 @@ export const ComputerUseCapabilityDescriptorSchema = Type.Object(
 /** Canonical inner payload accepted by the `screen.snapshot` node command. */
 export const ScreenSnapshotParamsSchema = Type.Object(
   {
+    executionId: Type.Optional(Type.String({ pattern: COMPUTER_EXECUTION_ID_PATTERN })),
     screenIndex: Type.Optional(Type.Integer({ minimum: 0 })),
     maxWidth: Type.Optional(Type.Integer({ minimum: 1 })),
     quality: Type.Optional(Type.Number()),
@@ -538,7 +549,10 @@ export type ComputerUseProvider = {
     context: OpenClawPluginNodeHostCommandAvailabilityContext,
     onChange: () => void,
   ) => (() => void) | void;
-  openExecution(context: { sessionKey?: string }): Promise<ComputerUseExecution>;
+  openExecution(context: {
+    executionId: string;
+    sessionKey?: string;
+  }): Promise<ComputerUseExecution>;
 };
 
 // Structural registration surface built from leaf node-host types only: importing
@@ -553,29 +567,69 @@ export function registerComputerUseProvider(
   api: ComputerUseRegistrationApi,
   provider: ComputerUseProvider,
 ): void {
-  let executionPromise: Promise<ComputerUseExecution> | undefined;
+  let execution: { id: string; promise: Promise<ComputerUseExecution> } | undefined;
+  let closingPromise: Promise<void> = Promise.resolve();
 
-  const getExecution = (context?: OpenClawPluginNodeHostCommandContext) => {
-    if (!executionPromise) {
+  const executionEnvelopeFromParams = (paramsJSON: string | null | undefined) => {
+    let value: unknown;
+    try {
+      value = JSON.parse(paramsJSON ?? "{}");
+    } catch {
+      throw new Error("COMPUTER_INVALID_REQUEST: params must be valid JSON");
+    }
+    const executionId =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as { executionId?: unknown }).executionId
+        : undefined;
+    if (executionId === undefined) {
+      return { executionId: undefined, value };
+    }
+    if (
+      typeof executionId !== "string" ||
+      !new RegExp(COMPUTER_EXECUTION_ID_PATTERN, "u").test(executionId)
+    ) {
+      throw new Error("COMPUTER_INVALID_REQUEST: executionId is required");
+    }
+    return { executionId, value };
+  };
+  const getExecution = async (
+    paramsJSON: string | null | undefined,
+    context?: OpenClawPluginNodeHostCommandContext,
+  ) => {
+    const { executionId } = executionEnvelopeFromParams(paramsJSON);
+    if (!executionId) {
+      throw new Error("COMPUTER_INVALID_REQUEST: executionId is required");
+    }
+    await closingPromise;
+    if (execution && execution.id !== executionId) {
+      throw new Error("COMPUTER_HOST_BUSY: another provider execution owns this computer");
+    }
+    if (!execution) {
       const opened = provider.openExecution(
-        context?.sessionKey ? { sessionKey: context.sessionKey } : {},
+        context?.sessionKey ? { executionId, sessionKey: context.sessionKey } : { executionId },
       );
       // A failed open must not wedge the provider behind a cached rejection;
       // the next command call retries openExecution instead.
       opened.catch(() => {
-        if (executionPromise === opened) {
-          executionPromise = undefined;
+        if (execution?.promise === opened) {
+          execution = undefined;
         }
       });
-      executionPromise = opened;
+      execution = { id: executionId, promise: opened };
     }
-    return executionPromise;
+    return execution.promise;
   };
-  const closeExecution = async (reason: string) => {
-    const current = executionPromise;
-    executionPromise = undefined;
+  const closeExecution = async (executionId: string | undefined, reason: string) => {
+    await closingPromise;
+    const current = execution;
+    if (!current || (executionId !== undefined && current.id !== executionId)) {
+      return;
+    }
+    execution = undefined;
     if (current) {
-      await (await current).close(reason);
+      const close = current.promise.then(async (opened) => await opened.close(reason));
+      closingPromise = close.catch(() => {});
+      await close;
     }
   };
 
@@ -588,11 +642,27 @@ export function registerComputerUseProvider(
       const stopWatching = provider.watchAvailability?.(context, onChange);
       return () => {
         stopWatching?.();
-        void closeExecution("node-host-stop");
+        void closeExecution(undefined, "node-host-stop");
       };
     },
-    handle: async (paramsJSON, _io, context) =>
-      await (await getExecution(context)).snapshot(paramsJSON, context?.signal),
+    onDisconnect: async () => await closeExecution(undefined, "gateway-disconnect"),
+    handle: async (paramsJSON, _io, context) => {
+      const envelope = executionEnvelopeFromParams(paramsJSON);
+      if (envelope.executionId) {
+        return await (
+          await getExecution(paramsJSON, context)
+        ).snapshot(paramsJSON, context?.signal);
+      }
+      const executionId = randomUUID();
+      const opened = await provider.openExecution(
+        context?.sessionKey ? { executionId, sessionKey: context.sessionKey } : { executionId },
+      );
+      try {
+        return await opened.snapshot(paramsJSON, context?.signal);
+      } finally {
+        await opened.close("snapshot-complete");
+      }
+    },
   });
   api.registerNodeHostCommand({
     command: "computer.act",
@@ -600,8 +670,26 @@ export function registerComputerUseProvider(
     dangerous: true,
     computerUse: () => provider.capabilities(),
     isAvailable: () => provider.isAvailable(),
-    handle: async (paramsJSON, _io, context) =>
-      await (await getExecution(context)).act(paramsJSON, context?.signal),
+    handle: async (paramsJSON, _io, context) => {
+      const envelope = executionEnvelopeFromParams(paramsJSON);
+      if (!envelope.executionId) {
+        throw new Error("COMPUTER_INVALID_REQUEST: executionId is required");
+      }
+      if (
+        envelope.value &&
+        typeof envelope.value === "object" &&
+        !Array.isArray(envelope.value) &&
+        (envelope.value as { action?: unknown }).action === "__close_execution"
+      ) {
+        const reason = (envelope.value as { reason?: unknown }).reason;
+        await closeExecution(
+          envelope.executionId,
+          typeof reason === "string" && reason.trim() ? reason.slice(0, 64) : "completion",
+        );
+        return JSON.stringify({ ok: true });
+      }
+      return await (await getExecution(paramsJSON, context)).act(paramsJSON, context?.signal);
+    },
   });
   // The provider plugin must also register its dangerous `computer.act` invoke
   // policy with the full plugin API. Forgetting it fails closed: the Gateway

@@ -1,9 +1,3 @@
-import {
-  REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
-  REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
-} from "./workspace-manifest-remote-script.js";
-export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-accepted-remote-script.js";
-export { REMOTE_GIT_WORKSPACE_RETRY_RESET_JS } from "./workspace-mutation-remote-script.js";
 import { MAX_WORKSPACE_HASH_MEMO_BYTES, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
@@ -12,6 +6,10 @@ import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
+import {
+  REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
+  REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
+} from "./workspace-manifest-remote-script.js";
 import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import {
   DERIVED_WORKSPACE_DIRECTORY_NAMES,
@@ -19,6 +17,8 @@ import {
   DERIVED_WORKSPACE_FILE_SUFFIXES,
   isDerivedWorkspacePath,
 } from "./workspace-path-exclusions.js";
+export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-accepted-remote-script.js";
+export { REMOTE_GIT_WORKSPACE_RETRY_RESET_JS } from "./workspace-mutation-remote-script.js";
 export { REMOTE_WORKSPACE_SETUP_SCRIPT } from "./workspace-sync-setup-script.js";
 
 export const REMOTE_GIT_WORKSPACE_SETUP_SCRIPT = String.raw`set -eu
@@ -98,10 +98,18 @@ const entriesByPath = new Map();
 let inventoryPathBytes = 0;
 let eligibleBytes = 0;
 const usedHashMemo = new Map();
-const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
+const metrics = {
+  contentHashCount: 0,
+  contentHashDurationMs: 0,
+  memoHitCount: 0,
+  memoTruncatedCount: 0,
+};
 const startedAt = performance.now();
 function fail(message) {
   throw new Error(message);
+}
+function compareHashMemoIdentity(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 function readHashMemo() {
   if (!memoMode) return new Map();
@@ -373,7 +381,7 @@ async function hashFiles(entries) {
       entry.mode = Number(after.mode & 0o777n);
       entry.size = Number(after.size);
       entry.sha256 = sha256;
-      usedHashMemo.set(identity, sha256);
+      usedHashMemo.set(identity, { sha256, size: Number(after.size) });
     } finally {
       await handle.close();
     }
@@ -440,14 +448,23 @@ async function main() {
   const manifest = serializeManifest(baseCommit, entries);
   const digest = publishManifest(manifestRoot, manifest);
   const manifestRef = "sha256:" + digest;
-  const measured = { ...metrics, totalDurationMs: performance.now() - startedAt };
   if (memoMode) {
+    // Largest files preserve the most expensive hashes. Identity tie-breaking and
+    // final ordering keep the bounded cache deterministic across captures.
+    const memo = [...usedHashMemo]
+      .sort(
+        (left, right) =>
+          right[1].size - left[1].size || compareHashMemoIdentity(left[0], right[0]),
+      )
+      .slice(0, MAX_RECONCILIATION_ENTRIES)
+      .map(([identity, value]) => [identity, value.sha256])
+      .sort((left, right) => compareHashMemoIdentity(left[0], right[0]));
+    metrics.memoTruncatedCount = usedHashMemo.size - memo.length;
+    const measured = { ...metrics, totalDurationMs: performance.now() - startedAt };
     process.stdout.write(JSON.stringify({
       version: 1,
       manifestRef,
-      memo: [...usedHashMemo].sort((left, right) =>
-        left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0,
-      ),
+      memo,
       metrics: measured,
     }) + "\n");
   } else {

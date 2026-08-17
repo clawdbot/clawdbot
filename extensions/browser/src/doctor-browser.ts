@@ -18,6 +18,7 @@ import {
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
 import {
   browserExtensionStatus,
+  FOUNDATION_CHROME_WEB_STORE_URL,
   repairOwnedChromeExtensionNativeHosts,
 } from "./browser/extension-install.js";
 import { listSystemProfiles } from "./browser/system-profiles.js";
@@ -272,7 +273,8 @@ export async function noteChromeMcpBrowserReadiness(
           [
             "- The Chrome extension native bootstrap is not fully registered.",
             `- Run ${formatCliCommand("openclaw browser extension status --json")} for the redacted registration report.`,
-            `- Run ${formatCliCommand("openclaw browser extension install")} after loading the printed unpacked directory.`,
+            `- Run ${formatCliCommand("openclaw browser extension install")} before adding OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL}.`,
+            "- Load unpacked from the printed stable path only as a development fallback.",
           ].join("\n"),
           "Browser extension bootstrap",
         );

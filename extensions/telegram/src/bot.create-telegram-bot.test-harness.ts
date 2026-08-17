@@ -136,7 +136,7 @@ export function getUpsertChannelPairingRequestMock(): MockFn<
 }
 
 const skillCommandListHoisted = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn(() => []),
+  listSkillCommandsForAgents: vi.fn<TelegramBotDeps["listSkillCommandsForAgents"]>(() => []),
 }));
 const modelProviderDataHoisted = vi.hoisted(() => ({
   buildModelsProviderData: vi.fn() as MockFn<TelegramBotDeps["buildModelsProviderData"]>,

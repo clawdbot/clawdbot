@@ -105,7 +105,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           provider: "twilio", // or "telnyx" | "plivo" | "mock"
           fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
           toNumber: "+15550005678",
-          sessionScope: "per-phone", // per-phone | per-call
+          sessionScope: "per-phone", // per-phone | per-call | main
           numbers: {
             "+15550009999": {
               inboundGreeting: "Silver Fox Cards, how can I help?",
@@ -237,12 +237,19 @@ each carrier call should start with fresh context, for example reception,
 booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
-Voice Call stores generated session keys under the configured agent namespace
-(`agent:<agentId>:voice:*`). Raw explicit integration keys resolve into the
-same namespace: a canonical `agent:<configuredAgentId>:*` key keeps that
-owner and honors core `session.mainKey`/global-scope aliasing; foreign or
-malformed `agent:*` input is scoped as an opaque key under the configured
-agent; `global` and `unknown` remain global sentinels.
+Set `sessionScope: "main"` to route every call into the configured agent's main
+session. This honors the core `session.mainKey` setting and resolves to
+`global` when core `session.scope` is `"global"`. Raw call turns then share
+history with the agent's primary session, so use this only when that shared
+context is intentional.
+
+For `per-phone` and `per-call`, Voice Call stores generated session keys under
+the configured agent namespace (`agent:<agentId>:voice:*`). Raw explicit
+integration keys resolve into the same namespace: a canonical
+`agent:<configuredAgentId>:*` key keeps that owner and honors core
+`session.mainKey`/global-scope aliasing; foreign or malformed `agent:*` input
+is scoped as an opaque key under the configured agent; `global` and `unknown`
+remain global sentinels.
 
 ## Realtime voice conversations
 
@@ -267,7 +274,7 @@ Current runtime behavior:
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability fail closed for session hits while ordinary memory hits remain available.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
-- Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
+- Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, `per-call` for isolated calls, or `main` for the configured agent's main session).
 
 ### Tool policy
 

@@ -14,12 +14,18 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 const smokeEntryPath = path.join(repoRoot, "dist", "plugins", "build-smoke-entry.js");
 assert.ok(fs.existsSync(smokeEntryPath), `missing build output: ${smokeEntryPath}`);
 
-const { clearPluginCommands, getPluginCommandSpecs, loadOpenClawPlugins, matchPluginCommand } =
-  await import(pathToFileURL(smokeEntryPath).href);
+const {
+  clearPluginCommands,
+  getPluginCommandSpecs,
+  getPluginModuleLoaderStats,
+  loadOpenClawPlugins,
+  matchPluginCommand,
+} = await import(pathToFileURL(smokeEntryPath).href);
 
 assert.equal(typeof loadOpenClawPlugins, "function", "built loader export missing");
 assert.equal(typeof clearPluginCommands, "function", "clearPluginCommands missing");
 assert.equal(typeof getPluginCommandSpecs, "function", "getPluginCommandSpecs missing");
+assert.equal(typeof getPluginModuleLoaderStats, "function", "plugin loader stats missing");
 assert.equal(typeof matchPluginCommand, "function", "matchPluginCommand missing");
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-smoke-"));
@@ -105,10 +111,64 @@ stageBundledPluginRuntime({ repoRoot });
 
 const runtimeEntryPath = path.join(runtimePluginDir, "index.js");
 assert.ok(fs.existsSync(runtimeEntryPath), "runtime overlay entry missing");
+const smsRuntimeEntryPath = path.join(repoRoot, "dist-runtime", "extensions", "sms", "index.js");
+assert.ok(fs.existsSync(smsRuntimeEntryPath), "compiled SMS runtime entry missing");
+assert.ok(
+  fs.existsSync(path.join(repoRoot, "dist-runtime", "extensions", "mxc", "mxc-spawn-launcher.mjs")),
+  "compiled MXC runtime asset missing",
+);
 assert.equal(
   fs.existsSync(path.join(repoRoot, "dist-runtime", "plugins", "commands.js")),
   false,
   "dist-runtime must not stage a duplicate commands module",
+);
+
+clearPluginCommands();
+
+const smsStatsBefore = getPluginModuleLoaderStats();
+const smsRegistry = loadOpenClawPlugins({
+  cache: false,
+  preferBuiltPluginArtifacts: true,
+  workspaceDir: tempRoot,
+  env: {
+    ...process.env,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist-runtime", "extensions"),
+  },
+  config: {
+    plugins: {
+      enabled: true,
+      allow: ["sms"],
+      entries: {
+        sms: { enabled: true },
+      },
+    },
+  },
+});
+const smsRecord = smsRegistry.plugins.find((entry: { id: string }) => entry.id === "sms");
+assert.ok(smsRecord, "SMS plugin missing from registry");
+assert.equal(smsRecord.status, "loaded", smsRecord.error ?? "SMS plugin failed to load");
+const smsStatsAfter = getPluginModuleLoaderStats();
+assert.ok(
+  smsStatsAfter.nativeHits > smsStatsBefore.nativeHits,
+  "compiled SMS runtime did not use native loading",
+);
+for (const counter of [
+  "nativeMisses",
+  "sourceTransformForced",
+  "sourceTransformFallbacks",
+] as const) {
+  assert.equal(
+    smsStatsAfter[counter],
+    smsStatsBefore[counter],
+    `compiled SMS runtime changed ${counter}`,
+  );
+}
+assert.equal(
+  smsStatsAfter.topSourceTransformTargets.some(({ target }: { target: string }) =>
+    target.replaceAll("\\", "/").includes("/extensions/sms/"),
+  ),
+  false,
+  "compiled SMS runtime reached the source transformer",
 );
 
 clearPluginCommands();

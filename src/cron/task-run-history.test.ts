@@ -558,13 +558,18 @@ describe("cron task run history", () => {
       usage: undefined,
     });
     expect(parseCronRunLogEntryObject({ ...base, usage: [] })?.usage).toBeUndefined();
-    expect(parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0 } })?.usage).toEqual({
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0, future_tokens: 1 } })?.usage,
+    ).toEqual({
       input_tokens: 0,
       output_tokens: undefined,
       total_tokens: undefined,
       cache_read_tokens: undefined,
       cache_write_tokens: undefined,
     });
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { future_tokens: 1 } })?.usage,
+    ).toBeUndefined();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS })).not.toBeNull();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS + 1 })).toBeNull();
   });

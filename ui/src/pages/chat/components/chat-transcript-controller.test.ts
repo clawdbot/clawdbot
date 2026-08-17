@@ -72,6 +72,31 @@ describe("chat transcript controller", () => {
     expect(transcriptRows(container)[1]?.style.transform).toBe("translateY(100px)");
   });
 
+  it("uses persisted row measurements before remounted rows can be measured", async () => {
+    const measured = new Map<string, number>();
+    const first = createTestTranscript({
+      read: () => undefined,
+      write: (_sessionKey, rowKey, height) => measured.set(rowKey, height),
+    });
+    const props = threadProps("pane-persisted-heights", "agent:main:persisted-heights");
+    const firstContainer = document.body.appendChild(document.createElement("div"));
+    render(renderChatThread(props, first), firstContainer);
+    first.hostConnected();
+    first.hostUpdated();
+    await flushDeferredRowPrune();
+    expect(measured.size).toBeGreaterThan(0);
+
+    transcriptDomState.detachedRowHeight = 0;
+    const remounted = createTestTranscript({
+      read: (_sessionKey, rowKey) => measured.get(rowKey),
+      write: () => undefined,
+    });
+    const remountContainer = document.body.appendChild(document.createElement("div"));
+    render(renderChatThread(props, remounted), remountContainer);
+
+    expect(transcriptRows(remountContainer)[1]?.style.transform).toBe("translateY(100px)");
+  });
+
   it("pauses an unmeasurable restore until loading commits an empty transcript", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));

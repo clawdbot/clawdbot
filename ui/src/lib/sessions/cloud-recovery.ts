@@ -20,6 +20,7 @@ export type CloudSessionRecovery = {
   message: string;
   attachments?: unknown[];
   profileId: string;
+  machineClass?: string;
   agentId: string;
   gatewayUrl: string;
   recoveryScope: string;
@@ -30,6 +31,7 @@ export type CloudSessionRecovery = {
 // Keep the create -> dispatch -> first-send handoff recoverable across reloads,
 // while scoping it to this tab, Gateway, and authenticated credential.
 const CLOUD_CREATE_STRING_FIELDS = [
+  "category",
   "model",
   "thinkingLevel",
   "worktreeBaseRef",
@@ -104,6 +106,8 @@ function validateCloudSessionRecovery(
     (!isNonEmptyString(value.message) && !value.attachments?.length) ||
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !isNonEmptyString(value.profileId) ||
+    (value.machineClass !== undefined &&
+      (!isNonEmptyString(value.machineClass) || value.machineClass.length > 128)) ||
     !isNonEmptyString(value.agentId) ||
     !cloudSessionRecoveryClaimsScope(value, gatewayUrl, recoveryScope) ||
     (value.phase !== "creating" && value.phase !== "dispatching" && value.phase !== "sending") ||

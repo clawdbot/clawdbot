@@ -936,6 +936,12 @@ extension MacNodeModeCoordinator {
         guard self.nodeHostWorkerRetryTask == nil else {
             throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
         }
+        if let activeInput = self.activeNodeHostWorkerInput {
+            // Worker launch metadata is startup-scoped. Route retries reuse it instead of
+            // repeating CLI and runtime discovery until an explicit restart resets state.
+            try self.nodeHostWorkerRetryPolicy.prepareForStart(activeInput)
+            return try await nodeHostWorker.start(launch: activeInput.launch)
+        }
         let launch: MacNodeHostWorkerLaunch
         do {
             if let projectLaunch = try await CommandResolver.projectNodeHostWorkerLaunch() {

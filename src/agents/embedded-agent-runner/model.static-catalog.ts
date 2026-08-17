@@ -12,6 +12,7 @@ import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metad
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   normalizePluginDiscoveryResult,
@@ -116,13 +117,8 @@ function modelFromProviderStaticCatalog(params: {
     reasoning: model?.reasoning ?? params.model.reasoning ?? false,
     input: normalizeStaticCatalogInput(model?.input ?? params.model.input),
     cost: model?.cost ?? normalizeStaticCatalogCost(params.model.cost),
-    contextWindow:
-      model?.contextWindow ??
-      params.model.contextWindow ??
-      params.providerConfig.contextWindow ??
-      DEFAULT_CONTEXT_TOKENS,
-    contextTokens:
-      model?.contextTokens ?? params.model.contextTokens ?? params.providerConfig.contextTokens,
+    contextWindow: model?.contextWindow ?? params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: model?.contextTokens ?? params.model.contextTokens,
     maxTokens:
       model?.maxTokens ??
       params.model.maxTokens ??
@@ -150,13 +146,19 @@ type BundledStaticCatalogState = {
   plans: Map<string, ReturnType<typeof planEffectiveModelCatalogRows>>;
 };
 
-// Snapshot identity changes at the Gateway reload commit, so old provider plans
-// cannot survive into a replacement plugin generation.
-const bundledStaticCatalogStatesBySnapshot = new WeakMap<
-  PluginMetadataSnapshot,
+let bundledStaticCatalogStatesByOwner = new WeakMap<
+  object,
   WeakMap<OpenClawConfig, BundledStaticCatalogState>
 >();
 const defaultBundledStaticCatalogConfig: OpenClawConfig = {};
+
+function clearBundledStaticCatalogStates(): void {
+  bundledStaticCatalogStatesByOwner = new WeakMap();
+}
+
+// Snapshot or environment identity pins one plugin generation; install/reload
+// owners replace this map so retained resolvers cannot keep stale provider plans.
+registerPluginMetadataProcessMemoLifecycleClear(clearBundledStaticCatalogStates);
 
 function resolveBundledStaticCatalogMetadataSnapshot(
   params: BundledStaticCatalogParams,
@@ -208,14 +210,15 @@ function listBundledStaticCatalogPlugins(
   );
 }
 
-function resolveSnapshotBundledStaticCatalogState(
+function resolveBundledStaticCatalogState(
   params: BundledStaticCatalogParams,
-  metadataSnapshot: PluginMetadataSnapshot,
+  metadataSnapshot?: PluginMetadataSnapshot,
 ): BundledStaticCatalogState {
-  let states = bundledStaticCatalogStatesBySnapshot.get(metadataSnapshot);
+  const owner = metadataSnapshot ?? params.env;
+  let states = bundledStaticCatalogStatesByOwner.get(owner);
   if (!states) {
     states = new WeakMap();
-    bundledStaticCatalogStatesBySnapshot.set(metadataSnapshot, states);
+    bundledStaticCatalogStatesByOwner.set(owner, states);
   }
   const config = params.cfg ?? defaultBundledStaticCatalogConfig;
   const cached = states.get(config);
@@ -235,6 +238,7 @@ export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
   provider: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
@@ -244,12 +248,11 @@ export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
   const catalogParams = {
     cfg: params.cfg,
     env: params.env ?? process.env,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     workspaceDir: params.workspaceDir,
   };
   const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot(catalogParams);
-  const plugins = metadataSnapshot
-    ? resolveSnapshotBundledStaticCatalogState(catalogParams, metadataSnapshot).plugins
-    : listBundledStaticCatalogPlugins(catalogParams);
+  const plugins = resolveBundledStaticCatalogState(catalogParams, metadataSnapshot).plugins;
   return plugins.some((plugin) => {
     const catalog = plugin.modelCatalog;
     if (catalog?.runtimeAugment !== true) {
@@ -310,19 +313,13 @@ export function createBundledStaticCatalogModelResolver(params?: {
   const matchesStaticModelId = params?.metadataSnapshot
     ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
     : staticModelIdMatches;
-  let standaloneState: BundledStaticCatalogState | undefined;
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
     if (!provider || !lookup.modelId.trim()) {
       return undefined;
     }
     const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot(catalogParams);
-    const state = metadataSnapshot
-      ? resolveSnapshotBundledStaticCatalogState(catalogParams, metadataSnapshot)
-      : (standaloneState ??= {
-          plugins: listBundledStaticCatalogPlugins(catalogParams),
-          plans: new Map(),
-        });
+    const state = resolveBundledStaticCatalogState(catalogParams, metadataSnapshot);
     if (state.plugins.length === 0) {
       return undefined;
     }
@@ -368,6 +365,7 @@ export function resolveBundledStaticCatalogModel(
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     includeRuntimeDiscovery?: boolean;
+    metadataSnapshot?: PluginMetadataSnapshot;
   },
 ): ProviderRuntimeModel | undefined {
   return createBundledStaticCatalogModelResolver({
@@ -376,6 +374,7 @@ export function resolveBundledStaticCatalogModel(
     ...(params.includeRuntimeDiscovery !== undefined
       ? { includeRuntimeDiscovery: params.includeRuntimeDiscovery }
       : {}),
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   })(params);
 }
@@ -708,7 +707,9 @@ export function createBundledProviderStaticCatalogContextResolver(
       return undefined;
     }
     return {
-      ...(model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
+      ...(typeof model.contextWindow === "number" && model.contextWindow > 0
+        ? { contextWindow: model.contextWindow }
+        : {}),
       ...(typeof model.contextTokens === "number" && model.contextTokens > 0
         ? { contextTokens: model.contextTokens }
         : {}),
@@ -730,6 +731,7 @@ export async function resolveBundledProviderStaticCatalogModel(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ProviderRuntimeModel | undefined> {
   return createBundledProviderStaticCatalogModelResolver(params)(params);
 }

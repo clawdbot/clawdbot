@@ -1,5 +1,6 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
+import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -19,6 +20,7 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
+import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarAttention,
@@ -74,6 +76,26 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
+
+  sessionGroupDefaults(name: string) {
+    if (this.context?.sessions.groupsStatus() !== "ready") {
+      return null;
+    }
+    const group = this.context?.sessions.state.groupSettings.find((entry) => entry.name === name);
+    return group ? { cwd: group.cwd ?? "", worktree: group.worktree === true } : null;
+  }
+
+  async listSessionGroupFolders(path?: string): Promise<FsListDirResult> {
+    const scope = this.sessionData.beginSessionMutation();
+    if (!scope) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    const result = await scope.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
+    if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    return result;
+  }
 
   // Lazy: the controller pulls core token-suppression modules that must stay
   // out of the startup chunk (QA smoke startup-JS budget). It loads on the
@@ -334,8 +356,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionOrganizer.handleSessionListDrop(event);
   }
 
-  openNewSession(): void {
-    this.requestOpenNewSession(this.expandedAgentId());
+  openNewSession(target?: NewSessionTarget): void {
+    this.requestOpenNewSession(this.expandedAgentId(), target);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {

@@ -1,5 +1,6 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
@@ -40,6 +41,11 @@ export class CodexAssistantProjection {
   private responseModel: string | undefined;
   private streamedPartialAssistantItemId: string | undefined;
   private streamedPartialAssistantItemReplaceable = false;
+  // turn/completed.items is a Summary of last_agent_message only. Tool
+  // invalidation has to be recorded from the first item notification for each
+  // native or dynamic handoff, or a later coda would revive every pre-tool final.
+  private persistableAssistantBarrier = 0;
+  private readonly persistableAssistantBarrierItemIds = new Set<string>();
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -155,6 +161,7 @@ export class CodexAssistantProjection {
   }
 
   recordItemStarted(item: CodexThreadItem | undefined, itemId: string | undefined): void {
+    this.noteNativeWorkBarrier(item);
     if (
       item?.type === "agentMessage" &&
       itemId &&
@@ -181,6 +188,7 @@ export class CodexAssistantProjection {
     itemId: string | undefined,
     activeItemIds: ReadonlySet<string>,
   ): void {
+    this.noteNativeWorkBarrier(item);
     if (
       item?.type === "agentMessage" &&
       itemId &&
@@ -305,8 +313,24 @@ export class CodexAssistantProjection {
   }
 
   collectAssistantTexts(): string[] {
-    const finalText = this.resolveFinalAssistantTextItem()?.text;
-    return finalText ? [finalText] : [];
+    const afterHandoff = this.collectPersistableAssistantTexts(this.persistableAssistantBarrier);
+    const audibleAfterHandoff = afterHandoff.filter((text) => !isSilentReplyPayloadText(text));
+    if (audibleAfterHandoff.length > 0) {
+      return audibleAfterHandoff;
+    }
+    // A post-handoff silent token is the new terminal identity. Recover a
+    // pre-barrier answer only when that segment has no persistable text.
+    if (afterHandoff.length > 0) {
+      return afterHandoff.slice(-1);
+    }
+    const recoveredAudible = this.collectPersistableAssistantTexts(0).filter(
+      (text) => !isSilentReplyPayloadText(text),
+    );
+    if (recoveredAudible.length > 0) {
+      return recoveredAudible.slice(-1);
+    }
+    const recovered = this.resolveFinalAssistantTextItem()?.text;
+    return recovered ? [recovered] : [];
   }
 
   collectCommentaryMessages(): Array<{ itemId: string; message: AssistantMessage }> {
@@ -546,6 +570,49 @@ export class CodexAssistantProjection {
     return undefined;
   }
 
+  private collectPersistableAssistantTexts(minIndex: number): string[] {
+    let texts: string[] = [];
+    let replaceable = false;
+    // Walk time order. Unphased text replaces the current segment. Explicit
+    // finals accumulate unless they follow a replacement. Silent payloads
+    // never replace; they only ride along for post-handoff identity.
+    for (let index = minIndex; index < this.assistantItemOrder.length; index += 1) {
+      const itemId = this.assistantItemOrder[index];
+      if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
+        continue;
+      }
+      const text = this.assistantTextByItem.get(itemId)?.trim();
+      if (!text || this.isToolProgressEchoText(itemId, text)) {
+        continue;
+      }
+      if (isSilentReplyPayloadText(text)) {
+        texts.push(text);
+        continue;
+      }
+      const isTerminalFinal = this.assistantPhaseByItem.get(itemId) === "final_answer";
+      if (!isTerminalFinal || replaceable) {
+        texts = [text];
+        replaceable = !isTerminalFinal;
+        continue;
+      }
+      texts.push(text);
+    }
+    return texts;
+  }
+
+  private noteNativeWorkBarrier(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldAdvancePersistableAssistantBarrier(item)) {
+      return;
+    }
+    if (item.id && this.persistableAssistantBarrierItemIds.has(item.id)) {
+      return;
+    }
+    if (item.id) {
+      this.persistableAssistantBarrierItemIds.add(item.id);
+    }
+    this.persistableAssistantBarrier = this.assistantItemOrder.length;
+  }
+
   private rememberAssistantItem(itemId: string): void {
     if (!itemId || this.assistantItemOrder.includes(itemId)) {
       return;
@@ -557,4 +624,14 @@ export class CodexAssistantProjection {
   private isToolProgressEchoText(itemId: string, text: string): boolean {
     return this.rawPromotedAssistantItemIds.has(itemId) && this.matchesToolProgressEcho(text);
   }
+}
+
+function shouldAdvancePersistableAssistantBarrier(item: CodexThreadItem): boolean {
+  // Sleep is a Codex public Sleep handoff, not mutating presentation work.
+  // Record it here so a later final cannot join the pre-sleep answer.
+  return (
+    shouldClearTerminalPresentationForNativeItem(item) ||
+    item.type === "dynamicToolCall" ||
+    item.type === "sleep"
+  );
 }
