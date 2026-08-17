@@ -5879,50 +5879,26 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history strips inline directives from displayed message text", async () => {
+  test("chat.history preserves quoted inline directives verbatim", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
 
       await createSessionDir();
       await writeMainSessionStore();
 
+      const quoted = "Use `[[reply_to_current]]` and `[[tts]]` literally.";
       const lines = [
-        makeTranscriptTextEvent("Hello [[reply_to_current]] world [[audio_as_voice]]", {
-          message: { timestamp: Date.now() },
+        makeTranscriptTextEvent(quoted, {
+          message: { openclawDelivery: { replyToCurrent: true }, timestamp: Date.now() },
         }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: "A [[reply_to:abc-123]] B",
-            timestamp: Date.now() + 1,
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            text: "[[ reply_to : 456 ]] C",
-            timestamp: Date.now() + 2,
-          },
-        }),
-        createTextTranscriptEvent("assistant", "  keep padded  ", { timestamp: Date.now() + 3 }),
       ];
       await writeMainSessionTranscript(lines);
       const messages = await fetchHistoryMessages(ws);
-      expect(messages.length).toBe(4);
-
-      const serialized = JSON.stringify(messages);
-      expect(serialized.includes("[[reply_to")).toBe(false);
-      expect(serialized.includes("[[audio_as_voice]]")).toBe(false);
-
-      const first = messages[0] as { content?: Array<{ text?: string }> };
-      const second = messages[1] as { content?: string };
-      const third = messages[2] as { text?: string };
-      const fourth = messages[3] as { content?: Array<{ text?: string }> };
-
-      expect(first.content?.[0]?.text?.replace(/\s+/g, " ").trim()).toBe("Hello world");
-      expect(second.content?.replace(/\s+/g, " ").trim()).toBe("A B");
-      expect(third.text?.replace(/\s+/g, " ").trim()).toBe("C");
-      expect(fourth.content?.[0]?.text).toBe("  keep padded  ");
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        content: [{ text: quoted }],
+        openclawDelivery: { replyToCurrent: true },
+      });
     });
   });
 

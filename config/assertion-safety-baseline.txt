@@ -3128,12 +3128,12 @@ src/gateway/session-sharing.ts	2
 src/gateway/session-transcript-derived-readers.ts	2
 src/gateway/session-transcript-files.fs.ts	2
 src/gateway/session-transcript-message.ts	4
-src/gateway/session-transcript-readers.ts	8
+src/gateway/session-transcript-readers.ts	3
 src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
 src/gateway/session-utils-row.ts	1
 src/gateway/session-utils-search.ts	1
-src/gateway/session-utils.fs.ts	19
+src/gateway/session-utils.fs.ts	16
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
@@ -3960,7 +3960,6 @@ src/tui/tui-task-suggestions.ts	7
 src/tui/tui.ts	5
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	2
-src/utils/directive-tags.ts	2
 src/utils/reaction-level.ts	2
 src/utils/string-readers.ts	2
 src/utils/transcript-tools.ts	2

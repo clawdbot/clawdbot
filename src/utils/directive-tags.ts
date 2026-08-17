@@ -102,17 +102,6 @@ type StripInlineDirectiveTagsResult = {
   changed: boolean;
 };
 
-type MessageTextPart = {
-  type: "text";
-  text: string;
-} & Record<string, unknown>;
-
-type MessagePart = Record<string, unknown> | null | undefined;
-
-export type DisplayMessageWithContent = {
-  content?: unknown;
-} & Record<string, unknown>;
-
 export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
@@ -169,52 +158,6 @@ export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDi
     text: changed ? stripped.trim() : text,
     changed,
   };
-}
-
-function isMessageTextPart(part: MessagePart): part is MessageTextPart {
-  return Boolean(part) && part?.type === "text" && typeof part.text === "string";
-}
-
-/**
- * Strips inline directive tags from text content while preserving message shape.
- * Empty post-strip text stays empty-string to preserve caller semantics.
- * Returns the input message reference (including the original content array) when
- * no text part changed, and reuses unchanged text-part references in mixed content,
- * so identity-equality consumers avoid spurious churn.
- */
-export function stripInlineDirectiveTagsFromMessageForDisplay(
-  message: DisplayMessageWithContent | undefined,
-): DisplayMessageWithContent | undefined {
-  if (!message) {
-    return message;
-  }
-  if (!Array.isArray(message.content)) {
-    return message;
-  }
-  let cleaned: unknown[] | undefined;
-  for (let i = 0; i < message.content.length; i++) {
-    const part = message.content[i];
-    let next: unknown = part;
-    if (part && typeof part === "object" && isMessageTextPart(part as MessagePart)) {
-      const record = part as MessageTextPart;
-      const stripped = stripInlineDirectiveTagsForDisplay(record.text);
-      if (stripped.changed) {
-        next = { ...record, text: stripped.text };
-      }
-    }
-    if (next === part) {
-      cleaned?.push(part);
-      continue;
-    }
-    if (!cleaned) {
-      cleaned = message.content.slice(0, i);
-    }
-    cleaned.push(next);
-  }
-  if (!cleaned) {
-    return message;
-  }
-  return { ...message, content: cleaned };
 }
 
 export function parseInlineDirectives(

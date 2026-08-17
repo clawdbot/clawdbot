@@ -7,7 +7,6 @@ import {
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import {
   cleanupManagedOutgoingMediaRecords,
@@ -187,9 +186,8 @@ export function sanitizeAssistantDisplayText(
   }
   const withoutEnvelope = stripEnvelopeFromMessage(value);
   const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
-  const stripped = stripInlineDirectiveTagsForDisplay(normalized).text;
-  const visible = stripped.trim();
-  return visible ? (options?.preserveBoundaries ? stripped : visible) : undefined;
+  const visible = normalized.trim();
+  return visible ? (options?.preserveBoundaries ? normalized : visible) : undefined;
 }
 
 export function extractAssistantDisplayTextFromContent(

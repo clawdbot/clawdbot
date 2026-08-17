@@ -16,7 +16,6 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -155,9 +154,8 @@ function mergeManagedMediaIntoAssistantContent(params: {
       continue;
     }
     const split = splitMediaFromOutput(block.text);
-    const directiveTagsChanged = stripInlineDirectiveTagsForDisplay(split.text).changed;
     const visibleText = sanitizeAssistantDisplayText(split.text, {
-      preserveBoundaries: !directiveTagsChanged,
+      preserveBoundaries: true,
     });
     if (visibleText) {
       const { textSignature: _textSignature, ...rest } = block;

@@ -387,13 +387,13 @@ export const SessionsListParamsSchema = closedObject({
   /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**
-   * Read first 8KB of each session transcript to derive title from first user message.
-   * Performs a file read per session - use `limit` to bound result set on large stores.
+   * Read a bounded transcript head projection to derive a title from the first user message.
+   * Use `limit` to bound projection work on large stores.
    */
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   /**
-   * Read last 16KB of each session transcript to extract most recent message preview.
-   * Performs a file read per session - use `limit` to bound result set on large stores.
+   * Read a bounded transcript tail projection for the latest visible user or assistant text.
+   * The returned short preview excludes tool, system, reasoning, and silent rows.
    */
   includeLastMessage: Type.Optional(Type.Boolean()),
   label: Type.Optional(SessionLabelString),

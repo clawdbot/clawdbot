@@ -113,6 +113,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listCount);
       await row.getByText("The repaired sidebar now shows the final reply.").waitFor();
+      expect(await row.textContent()).not.toContain("[[");
       if (captureUiProofEnabled) {
         await page.screenshot({
           fullPage: true,

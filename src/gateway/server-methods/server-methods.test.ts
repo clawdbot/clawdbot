@@ -1318,7 +1318,7 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it.each(["[[reply_to_current]]", "NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
+  it.each(["NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
     "projects display-hidden assistant error text %j as a generic safe failure",
     (text) => {
       const result = projectRecentChatDisplayMessages([
@@ -2058,27 +2058,13 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it("merges delayed TTS supplements when directive tags are stripped for display", () => {
-    const rawVisibleText = "[[reply_to_current]]Visible answer.";
-    const projectedVisibleText = "Visible answer.";
-    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
-
-    const result = projectRecentChatDisplayMessages([
-      assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
-      ttsSupplementHistoryMessage({ textSha256 }, 2),
-    ]);
-
-    expect(result).toEqual([assistantAudioAttachmentHistoryMessage(projectedVisibleText, 1)]);
-  });
-
   it("merges delayed TTS supplements before display truncation", () => {
     const projectedVisibleText = "Visible answer ".repeat(8).trim();
-    const rawVisibleText = `[[reply_to_current]]${projectedVisibleText}`;
     const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
 
     const result = projectRecentChatDisplayMessages(
       [
-        assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
+        assistantHistoryMessage(projectedVisibleText, { timestamp: 1 }),
         ttsSupplementHistoryMessage({ textSha256 }, 2),
       ],
       { maxChars: 24 },

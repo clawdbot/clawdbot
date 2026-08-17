@@ -4,7 +4,6 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -295,9 +294,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
   const displayReply =
     extractAssistantDisplayTextFromContent(assistantContent) ??
     buildTranscriptReplyText(finalPayloads);
-  const transcriptDisplayReply = displayReply
-    ? stripInlineDirectiveTagsForDisplay(displayReply).text.trim()
-    : "";
+  const transcriptDisplayReply = displayReply?.trim() ?? "";
   const transcriptReply =
     mediaMessage?.transcriptText ||
     (managedMediaPrepareFailed
