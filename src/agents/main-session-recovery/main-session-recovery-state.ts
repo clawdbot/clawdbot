@@ -1,4 +1,3 @@
-import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
@@ -383,13 +382,7 @@ export function transitionMainSessionRecovery(
       }
       const retryExecutionIdentity =
         command.executionIdentity.state === "enabled" && state.executionIdentity
-          ? state.executionIdentity.runId === command.runId
-            ? state.executionIdentity
-            : createExecutionIdentityAdmissionToken(command.runId, {
-                contextId: state.executionIdentity.contextId,
-                executionId: state.executionIdentity.executionId,
-                now: state.executionIdentity.createdAt,
-              })
+          ? state.executionIdentity
           : undefined;
       const executionIdentityAdmission = retryExecutionIdentity
         ? ({ kind: "retry-reference", token: retryExecutionIdentity } as const)
@@ -429,8 +422,7 @@ export function transitionMainSessionRecovery(
         !entry.restartRecoveryRuns?.some(
           (run) =>
             run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
-        ) ||
-        command.token.runId !== command.runId
+        )
       ) {
         return { kind: "rejected", reason: "stale_reservation" };
       }
@@ -438,6 +430,9 @@ export function transitionMainSessionRecovery(
         return JSON.stringify(state.executionIdentity) === JSON.stringify(command.token)
           ? { kind: "no_change" }
           : { kind: "rejected", reason: "stale_reservation" };
+      }
+      if (command.token.runId !== command.runId) {
+        return { kind: "rejected", reason: "stale_reservation" };
       }
       updateRecoveryState(entry, state, { executionIdentity: command.token });
       return { kind: "applied" };

@@ -7120,6 +7120,72 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).not.toBe("Protocol note: replay unsafe after write.");
   });
 
+  it("derives three restart checkpoints from request history without server counters", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
+    const recoveryPrompt =
+      "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
+    const tools = [
+      {
+        type: "function",
+        name: "exec",
+        parameters: {
+          type: "object",
+          properties: {
+            language: { type: "string" },
+            code: { type: "string" },
+            restartSafe: { type: "boolean" },
+          },
+          required: ["code"],
+        },
+      },
+      {
+        type: "function",
+        name: "wait",
+        parameters: {
+          type: "object",
+          properties: { runId: { type: "string" } },
+          required: ["runId"],
+        },
+      },
+    ];
+    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
+
+    for (const checkpoint of [1, 2, 3]) {
+      const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      const execCall = outputToolCall(execPayload, "exec");
+      const execArgs = outputToolArgsFromItem(execCall);
+      expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
+      expect(execArgs.code).toContain("qa_restart_wait");
+      expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
+
+      const runId = `restart-checkpoint-${checkpoint}`;
+      input.push(
+        execCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(execCall, `checkpoint-exec-${checkpoint}`),
+          JSON.stringify({ status: "waiting", runId }),
+        ),
+      );
+      const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      const waitCall = outputToolCall(waitPayload, "wait");
+      expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
+      input.push(waitCall, makeUserInput(recoveryPrompt));
+    }
+
+    const finalPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+    expect(outputText(finalPayload)).toBe("unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK");
+
+    const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools,
+      input: [makeUserInput(prompt)],
+    });
+    expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec")).code).toContain(
+      "CHECKPOINT-1",
+    );
+  });
+
   it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {
     const server = await startMockServer();
     const body = (await expectAnthropicMessagesJson(server, {

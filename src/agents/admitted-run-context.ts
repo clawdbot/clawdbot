@@ -126,6 +126,7 @@ type ExecutionIdentityRecoveryAdmission = Readonly<{
 export function createExecutionIdentityRecoveryAdmission(params: {
   retryOnly: boolean;
   token?: ExecutionIdentityAdmissionToken;
+  expectedOperationalRunId?: string;
 }): ExecutionIdentityRecoveryAdmission {
   let consumed = false;
   return Object.freeze({
@@ -135,7 +136,18 @@ export function createExecutionIdentityRecoveryAdmission(params: {
         return Object.freeze({ accepted: false });
       }
       consumed = true;
-      const token = params.token?.runId === runId ? params.token : undefined;
+      if (
+        params.expectedOperationalRunId !== undefined &&
+        params.expectedOperationalRunId !== runId
+      ) {
+        return Object.freeze({ accepted: false });
+      }
+      // The trusted recovery resolver binds the current operational owner separately.
+      // Without that explicit binding, only the token's original run may redeem it.
+      const token =
+        params.expectedOperationalRunId !== undefined || params.token?.runId === runId
+          ? params.token
+          : undefined;
       return Object.freeze({ accepted: true, ...(token ? { token } : {}) });
     },
   });
