@@ -5,6 +5,7 @@ import {
   placementWorkspaceResultClaim,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
+import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   cleanupWorkerWorkspaceResultRef,
@@ -64,6 +65,18 @@ export async function forceAbandonWorkerEnvironment(params: {
   }) => Promise<string>;
   onCleanupError?: (error: unknown) => void;
   authorizeAbandonment?: () => boolean;
+  resolveWorkspaceResultConflict: (placement: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<WorkerWorkspaceResultConflict | undefined>;
+  reportWorkspaceResultConflict: (placement: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+    cleared: true;
+    stagedResultRef: string;
+  }) => Promise<void>;
 }): Promise<void> {
   const { environmentId, placements } = params;
   const assertAbandonmentAllowed = (): void => {
@@ -129,7 +142,13 @@ export async function forceAbandonWorkerEnvironment(params: {
     }
   }
   const stagedResultCleanups: Array<{
-    placement: { sessionId: string; sessionKey: string; agentId: string };
+    placement: {
+      sessionId: string;
+      sessionKey: string;
+      agentId: string;
+      workspaceResultConflict?: WorkerWorkspaceResultConflict;
+    };
+    finalRef: string;
     refs: string[];
   }> = [];
   for (const pending of pendingResults) {
@@ -146,10 +165,11 @@ export async function forceAbandonWorkerEnvironment(params: {
       const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
       stagedResultCleanups.push({
         placement,
+        finalRef,
         refs: [
-          finalRef,
-          preparedWorkerWorkspaceResultRef(finalRef),
           cleanupWorkerWorkspaceResultRef(finalRef),
+          preparedWorkerWorkspaceResultRef(finalRef),
+          finalRef,
         ],
       });
     }
@@ -206,10 +226,11 @@ export async function forceAbandonWorkerEnvironment(params: {
           const finalRef = abandoned.stagedResultRef ?? workerWorkspaceResultRef(claim.claimId);
           stagedResultCleanups.push({
             placement: abandoned.record,
+            finalRef,
             refs: [
-              finalRef,
-              preparedWorkerWorkspaceResultRef(finalRef),
               cleanupWorkerWorkspaceResultRef(finalRef),
+              preparedWorkerWorkspaceResultRef(finalRef),
+              finalRef,
             ],
           });
         }
@@ -258,6 +279,9 @@ export async function forceAbandonWorkerEnvironment(params: {
   }
   for (const cleanup of stagedResultCleanups) {
     try {
+      const conflict =
+        cleanup.placement.workspaceResultConflict ??
+        (await params.resolveWorkspaceResultConflict(cleanup.placement));
       const root = await tryResolveWorkspacePath(
         params.resolveWorkspacePath,
         cleanup.placement,
@@ -270,6 +294,19 @@ export async function forceAbandonWorkerEnvironment(params: {
         if (await hasWorkerWorkspaceResultRef({ root, stagedResultRef })) {
           await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
         }
+      }
+      if (conflict?.stagedResultRef === cleanup.finalRef) {
+        await params.reportWorkspaceResultConflict({
+          sessionId: cleanup.placement.sessionId,
+          sessionKey: cleanup.placement.sessionKey,
+          agentId: cleanup.placement.agentId,
+          cleared: true,
+          stagedResultRef: cleanup.finalRef,
+        });
+        placements.retireWorkspaceResultConflict({
+          sessionId: cleanup.placement.sessionId,
+          stagedResultRef: cleanup.finalRef,
+        });
       }
     } catch (error) {
       reportCleanupError(params.onCleanupError, error);

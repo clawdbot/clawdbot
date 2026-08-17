@@ -95,6 +95,7 @@ export function createHarness(
       placementStore.recordStagedWorkspaceResult(claim, ref),
     recordWorkspaceResultConflict: (claim, conflict) =>
       placementStore.recordWorkspaceResultConflict(claim, conflict),
+    retireWorkspaceResultConflict: (input) => placementStore.retireWorkspaceResultConflict(input),
     claimTurn: (params) => placementStore.claimTurn(params),
     claimReclaimWorkspaceResult: (params) => placementStore.claimReclaimWorkspaceResult(params),
     closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),

@@ -55,6 +55,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "validateWorkspaceResultClaim"
   | "recordStagedWorkspaceResult"
   | "recordWorkspaceResultConflict"
+  | "retireWorkspaceResultConflict"
   | "acceptWorkspaceResult"
   | "cancelWorkspaceResultAndReleaseTurn"
   | "completeWorkspaceResultAndReleaseTurn"

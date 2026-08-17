@@ -73,7 +73,7 @@ type WorkerPlacementDispatchOptions = {
   reportWorkspaceResultConflict: (
     params: { sessionId: string; sessionKey: string; agentId: string } & (
       | { paths: string[]; stagedResultRef: string; totalCount: number }
-      | { cleared: true }
+      | { cleared: true; stagedResultRef?: string }
     ),
   ) => Promise<void>;
   resolveWorkspaceResultConflict: (params: {
@@ -599,6 +599,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           placements,
           environmentId,
           resolveWorkspacePath: options.resolveWorkspacePath,
+          resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
+          reportWorkspaceResultConflict: options.reportWorkspaceResultConflict,
           onCleanupError,
           authorizeAbandonment,
         });

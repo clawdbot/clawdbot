@@ -19,7 +19,7 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
-import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import { forceAbandonWorkerEnvironment as forceAbandonWorkerEnvironmentOwner } from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
@@ -32,6 +32,46 @@ import {
 const effects = vi.hoisted(() => ({
   workerPlacementError: vi.fn(),
 }));
+
+async function createWorkspaceResultRefs(workspacePath: string, refs: readonly string[]) {
+  await fs.mkdir(workspacePath);
+  const initialized = await runCommandWithTimeout(["git", "-C", workspacePath, "init", "--quiet"], {
+    timeoutMs: 10_000,
+  });
+  expect(initialized.code).toBe(0);
+  const artifactPath = path.join(workspacePath, "artifact");
+  await fs.writeFile(artifactPath, "retained terminal result\n");
+  const hashed = await runCommandWithTimeout(
+    ["git", "-C", workspacePath, "hash-object", "-w", artifactPath],
+    { timeoutMs: 10_000 },
+  );
+  expect(hashed.code).toBe(0);
+  for (const ref of refs) {
+    const updated = await runCommandWithTimeout(
+      ["git", "-C", workspacePath, "update-ref", ref, hashed.stdout.trim()],
+      { timeoutMs: 10_000 },
+    );
+    expect(updated.code).toBe(0);
+  }
+}
+
+type ForceAbandonParams = Parameters<typeof forceAbandonWorkerEnvironmentOwner>[0];
+
+async function forceAbandonWorkerEnvironment(
+  params: Omit<
+    ForceAbandonParams,
+    "reportWorkspaceResultConflict" | "resolveWorkspaceResultConflict"
+  > &
+    Partial<
+      Pick<ForceAbandonParams, "reportWorkspaceResultConflict" | "resolveWorkspaceResultConflict">
+    >,
+) {
+  return await forceAbandonWorkerEnvironmentOwner({
+    reportWorkspaceResultConflict: async () => {},
+    resolveWorkspaceResultConflict: async () => undefined,
+    ...params,
+  });
+}
 
 vi.mock("../../logging/subsystem.js", async () => {
   const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
@@ -395,6 +435,11 @@ describe("forced worker environment abandonment", () => {
       claim,
       "refs/openclaw/worker-results/forced-missing-workspace-claim",
     );
+    store.recordWorkspaceResultConflict(claim, {
+      paths: ["artifact"],
+      stagedResultRef: "refs/openclaw/worker-results/forced-missing-workspace-claim",
+    });
+    const reportWorkspaceResultConflict = vi.fn(async () => {});
 
     await forceAbandonWorkerEnvironment({
       placements: store,
@@ -402,14 +447,69 @@ describe("forced worker environment abandonment", () => {
       resolveWorkspacePath: async () => {
         throw new Error("session-owned managed worktree is missing");
       },
+      reportWorkspaceResultConflict,
     });
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
       recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      workspaceResultConflict: {
+        paths: ["artifact"],
+        stagedResultRef: "refs/openclaw/worker-results/forced-missing-workspace-claim",
+      },
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(reportWorkspaceResultConflict).not.toHaveBeenCalled();
+  });
+
+  it("retires the conflict projection after deleting every staged result ref", async () => {
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const { environmentId } = createDispatchEnvironmentFixtures();
+    const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = store.claimTurn({
+      ...REQUEST,
+      claimId: "forced-conflict-claim",
+      runId: "forced-conflict-run",
+      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+    });
+    store.markWorkspaceResultPending(claim);
+    const finalRef = workerWorkspaceResultRef(claim.claimId);
+    const preparedRef = preparedWorkerWorkspaceResultRef(finalRef);
+    const cleanupRef = cleanupWorkerWorkspaceResultRef(finalRef);
+    store.recordStagedWorkspaceResult(claim, finalRef);
+    store.recordWorkspaceResultConflict(claim, {
+      paths: ["artifact"],
+      stagedResultRef: finalRef,
+    });
+    const workspacePath = path.join(root, "forced-conflict-workspace");
+    await createWorkspaceResultRefs(workspacePath, [finalRef, preparedRef, cleanupRef]);
+    const reportWorkspaceResultConflict = vi.fn(async () => {});
+
+    await forceAbandonWorkerEnvironment({
+      placements: store,
+      environmentId,
+      resolveWorkspacePath: async () => workspacePath,
+      reportWorkspaceResultConflict,
+    });
+
+    for (const ref of [finalRef, preparedRef, cleanupRef]) {
+      await expect(
+        hasWorkerWorkspaceResultRef({ root: workspacePath, stagedResultRef: ref }),
+      ).resolves.toBe(false);
+    }
+    expect(store.get(REQUEST.sessionId)).not.toHaveProperty("workspaceResultConflict");
+    expect(reportWorkspaceResultConflict).toHaveBeenCalledOnce();
+    expect(reportWorkspaceResultConflict).toHaveBeenCalledWith({
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+      cleared: true,
+      stagedResultRef: finalRef,
+    });
   });
 
   it("cleans a retained terminal result and journal after restart", async () => {
@@ -432,26 +532,7 @@ describe("forced worker environment abandonment", () => {
     store.recordStagedWorkspaceResult(claim, finalRef);
 
     const workspacePath = path.join(root, "retained-terminal-workspace");
-    await fs.mkdir(workspacePath);
-    const initialized = await runCommandWithTimeout(
-      ["git", "-C", workspacePath, "init", "--quiet"],
-      { timeoutMs: 10_000 },
-    );
-    expect(initialized.code).toBe(0);
-    const artifactPath = path.join(workspacePath, "artifact");
-    await fs.writeFile(artifactPath, "retained terminal result\n");
-    const hashed = await runCommandWithTimeout(
-      ["git", "-C", workspacePath, "hash-object", "-w", artifactPath],
-      { timeoutMs: 10_000 },
-    );
-    expect(hashed.code).toBe(0);
-    for (const ref of [finalRef, preparedRef, cleanupRef]) {
-      const updated = await runCommandWithTimeout(
-        ["git", "-C", workspacePath, "update-ref", ref, hashed.stdout.trim()],
-        { timeoutMs: 10_000 },
-      );
-      expect(updated.code).toBe(0);
-    }
+    await createWorkspaceResultRefs(workspacePath, [finalRef, preparedRef, cleanupRef]);
 
     const owner = {
       sessionId: active.sessionId,

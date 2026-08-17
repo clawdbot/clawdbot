@@ -6,6 +6,8 @@ export type WorkerWorkspaceResultConflict = {
 
 export const WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
 export const WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE = "cloud-workspace-conflict-cleared";
+export const WORKSPACE_CONFLICT_CLEARED_MESSAGE =
+  "The cloud workspace conflict is no longer active.";
 
 const MAX_PROJECTED_CONFLICT_PATHS = 256;
 const MAX_PROJECTED_CONFLICT_PATH_BYTES = 32 * 1024;

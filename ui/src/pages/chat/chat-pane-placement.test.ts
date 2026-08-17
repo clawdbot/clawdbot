@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EnvironmentsDestroyResult } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import "../../lib/toast.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   answerConfirmDialog,
@@ -120,12 +122,27 @@ describe("chat pane placement", () => {
   });
 
   it("force-destroys a terminal recovery after confirming permanent data loss", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
+    const destroyResult = {
+      id: "environment-1",
+      type: "worker",
+      status: "unavailable",
+      worker: {
+        providerId: "static-ssh",
+        state: "destroyed",
+        ageMs: 250,
+        attachedSessionIds: [],
+        tunnelStatus: "stopped",
+      },
+    } satisfies EnvironmentsDestroyResult;
+    const request = vi.fn(async () => destroyResult);
     const refreshReplacement = vi.fn(async () => undefined);
     const { pane } = createTestChatPane({
       client: { request } as unknown as GatewayBrowserClient,
       sessions: { refreshReplacement } as unknown as SessionCapability,
     });
+    const toast = document.createElement("openclaw-toast-host");
+    document.body.append(toast);
+    await toast.updateComplete;
     pane.context.gateway.snapshot.hello = {
       features: { methods: ["environments.destroy"] },
       auth: { role: "operator", scopes: ["operator.admin"] },
@@ -134,6 +151,7 @@ describe("chat pane placement", () => {
       key: "agent:main:terminal-recovery",
       kind: "direct",
       updatedAt: 0,
+      label: "Recovery task",
       hasActiveRun: true,
       placement: {
         state: "failed",
@@ -169,6 +187,9 @@ describe("chat pane placement", () => {
       force: true,
     });
     expect(refreshReplacement).toHaveBeenCalledWith("main");
+    expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
+      'Cloud worker for "Recovery task" is destroyed.',
+    );
   });
 
   it("does not reclaim when the operator cancels", async () => {

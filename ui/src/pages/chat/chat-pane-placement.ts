@@ -6,6 +6,7 @@ import {
   requestCloudWorkerStop,
   resolveCloudWorkerStopConfirmation,
   resolveCloudWorkerStopAction,
+  showCloudWorkerStopResult,
   type CloudWorkerStopAction,
 } from "../../components/cloud-worker-stop.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -94,11 +95,14 @@ export async function reclaimChatPanePlacement(params: {
   const agentId = parseAgentSessionKey(params.row.key)?.agentId;
   params.onReclaimingChange(params.row.key);
   try {
-    await requestCloudWorkerStop(client, action, {
+    const result = await requestCloudWorkerStop(client, action, {
       key: params.row.key,
       ...(agentId ? { agentId } : {}),
     });
     if (params.isCurrent(client, connectionGeneration)) {
+      if (result) {
+        showCloudWorkerStopResult(result, params.row.label || params.row.key);
+      }
       await params.refreshReplacement(agentId);
     }
   } catch (error) {

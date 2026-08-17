@@ -19,6 +19,7 @@ import {
   requestCloudWorkerStop,
   resolveCloudWorkerStopConfirmation,
   resolveCloudWorkerStopAction,
+  showCloudWorkerStopResult,
 } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
@@ -962,12 +963,7 @@ class SessionsPage extends OpenClawLightDomElement {
         ...(agentId ? { agentId } : {}),
       });
       if (result && this.isRequestScopeCurrent(scope)) {
-        showToast({
-          message: t("sessionsView.cloudWorkerStopResult", {
-            session: label,
-            state: result.worker?.state ?? result.status,
-          }),
-        });
+        showCloudWorkerStopResult(result, label);
       }
       if (this.isRequestScopeCurrent(scope)) {
         await this.loadSessions();

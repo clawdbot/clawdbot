@@ -15,7 +15,11 @@ import type {
   SidebarSessionMutationScope,
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
-import { requestCloudWorkerStop, resolveCloudWorkerStopConfirmation } from "./cloud-worker-stop.ts";
+import {
+  requestCloudWorkerStop,
+  resolveCloudWorkerStopConfirmation,
+  showCloudWorkerStopResult,
+} from "./cloud-worker-stop.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
@@ -533,12 +537,7 @@ export async function stopCloudWorker(
       agentId,
     });
     if (result && host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      showToast({
-        message: t("sessionsView.cloudWorkerStopResult", {
-          session: session.label,
-          state: result.worker?.state ?? result.status,
-        }),
-      });
+      showCloudWorkerStopResult(result, session.label);
     }
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;

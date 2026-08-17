@@ -4,6 +4,7 @@ import { withTranscriptWriteTransaction } from "../config/sessions/session-acces
 import {
   formatWorkspaceConflictSummary,
   projectWorkspaceResultConflict,
+  WORKSPACE_CONFLICT_CLEARED_MESSAGE,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
 } from "./worker-environments/workspace-conflicts.js";
@@ -85,7 +86,7 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
     reportWorkspaceResultConflict: async (
       conflict: { sessionId: string; sessionKey: string; agentId: string } & (
         | { paths: string[]; stagedResultRef: string; totalCount: number }
-        | { cleared: true }
+        | { cleared: true; stagedResultRef?: string }
       ),
     ) => {
       const {
@@ -120,14 +121,26 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
                 (transcriptEntry.customType === WORKSPACE_CONFLICT_TRANSCRIPT_TYPE ||
                   transcriptEntry.customType === WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE),
             );
+          const latestDetails =
+            latestConflictEntry?.type === "custom_message"
+              ? (latestConflictEntry.details as
+                  | { paths?: unknown; stagedResultRef?: unknown; totalCount?: unknown }
+                  | undefined)
+              : undefined;
           if ("cleared" in conflict) {
+            const matchesExpectedConflict =
+              conflict.stagedResultRef === undefined ||
+              (latestConflictEntry?.type === "custom_message" &&
+                latestConflictEntry.customType === WORKSPACE_CONFLICT_TRANSCRIPT_TYPE &&
+                latestDetails?.stagedResultRef === conflict.stagedResultRef);
             if (
-              latestConflictEntry?.type !== "custom_message" ||
-              latestConflictEntry.customType !== WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE
+              matchesExpectedConflict &&
+              (latestConflictEntry?.type !== "custom_message" ||
+                latestConflictEntry.customType !== WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE)
             ) {
               manager.appendCustomMessageEntry(
                 WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-                "A later cloud workspace result superseded the previous conflict.",
+                WORKSPACE_CONFLICT_CLEARED_MESSAGE,
                 false,
               );
             }
@@ -138,19 +151,13 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
             conflict.stagedResultRef,
             conflict.totalCount,
           );
-          const details =
-            latestConflictEntry?.type === "custom_message"
-              ? (latestConflictEntry.details as
-                  | { paths?: unknown; stagedResultRef?: unknown; totalCount?: unknown }
-                  | undefined)
-              : undefined;
           const alreadyReported =
             latestConflictEntry?.type === "custom_message" &&
             latestConflictEntry.customType === WORKSPACE_CONFLICT_TRANSCRIPT_TYPE &&
-            details?.stagedResultRef === projectedConflict.stagedResultRef &&
-            details.totalCount === projectedConflict.totalCount &&
-            Array.isArray(details.paths) &&
-            JSON.stringify(details.paths) === JSON.stringify(projectedConflict.paths);
+            latestDetails?.stagedResultRef === projectedConflict.stagedResultRef &&
+            latestDetails.totalCount === projectedConflict.totalCount &&
+            Array.isArray(latestDetails.paths) &&
+            JSON.stringify(latestDetails.paths) === JSON.stringify(projectedConflict.paths);
           if (!alreadyReported) {
             manager.appendCustomMessageEntry(
               WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,

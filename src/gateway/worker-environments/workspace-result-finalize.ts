@@ -16,6 +16,7 @@ import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-targ
 import {
   formatWorkspaceConflictSummary,
   projectWorkspaceResultConflict,
+  WORKSPACE_CONFLICT_CLEARED_MESSAGE,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
   type WorkerWorkspaceResultConflict,
@@ -198,7 +199,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
             if ("cleared" in report) {
               SessionManager.open(params.transcriptTarget).appendCustomMessageEntry(
                 WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-                "A later cloud workspace result superseded the previous conflict.",
+                WORKSPACE_CONFLICT_CLEARED_MESSAGE,
                 false,
               );
               return;
@@ -355,7 +356,9 @@ type WorkspaceResultFinalizationStore = Pick<
   | "recordWorkspaceResultConflict"
 >;
 
-type WorkspaceResultConflictReport = Required<WorkerWorkspaceResultConflict> | { cleared: true };
+type WorkspaceResultConflictReport =
+  | Required<WorkerWorkspaceResultConflict>
+  | { cleared: true; stagedResultRef?: string };
 
 export async function finalizeWorkspaceResultConflicts(params: {
   placements: WorkspaceResultFinalizationStore;

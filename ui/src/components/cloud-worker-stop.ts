@@ -3,6 +3,7 @@ import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { showToast } from "../lib/toast.ts";
 
 export type CloudWorkerStopAction =
   | { method: "sessions.reclaim"; requiredScope: "operator.admin" }
@@ -66,4 +67,16 @@ export async function requestCloudWorkerStop(
     { timeoutMs: 10 * 60_000 },
   );
   return null;
+}
+
+export function showCloudWorkerStopResult(
+  result: EnvironmentsDestroyResult,
+  session: string,
+): void {
+  showToast({
+    message: t("sessionsView.cloudWorkerStopResult", {
+      session,
+      state: result.worker?.state ?? result.status,
+    }),
+  });
 }

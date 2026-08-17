@@ -313,6 +313,16 @@ export function createWorkerSessionPlacementStore(
       );
     },
 
+    retireWorkspaceResultConflict(input: { sessionId: string; stagedResultRef: string }): boolean {
+      const sessionId = required(input.sessionId, "session id");
+      const stagedResultRef = required(input.stagedResultRef, "staged result ref");
+      if (workspaceResultConflicts.get(sessionId)?.stagedResultRef !== stagedResultRef) {
+        return false;
+      }
+      workspaceResultConflicts.delete(sessionId);
+      return true;
+    },
+
     startDispatch(input: WorkerSessionPlacementDispatchIdentity): WorkerSessionPlacementRecord {
       const identity = normalizeIdentity(input);
       const executionMode = normalizeWorkerPlacementExecutionMode(input.executionMode);
