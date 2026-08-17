@@ -470,10 +470,8 @@ class NodeWorkerSupervisor {
     supervisor: NodeWorkerProcessIdentity;
   }): Promise<NodeWorkerLaunchReceipt> {
     const credential = params.descriptor.admission.credential;
-    const cloudflareAccess =
-      params.descriptor.connectionEndpoint.kind === "websocket"
-        ? params.descriptor.connectionEndpoint.cloudflareAccess
-        : undefined;
+    const endpoint = params.descriptor.connectionEndpoint;
+    const cloudflareAccess = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
     const sensitiveValues = cloudflareAccess
       ? [credential, cloudflareAccess.clientId, cloudflareAccess.clientSecret]
       : [credential];
