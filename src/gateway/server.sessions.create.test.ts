@@ -2163,7 +2163,7 @@ test("sessions.create skips the worktree setup script for non-admin callers", as
   }
 });
 
-test("sessions.create reset-in-place persists the returned worktree cwd", async () => {
+test("sessions.create reset-in-place detaches the prior worktree permission boundary", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-reset-session-worktree-",
@@ -2187,7 +2187,7 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
   try {
     const created = await directSessionReq<{
       key: string;
-      entry: { spawnedCwd?: string };
+      entry: { spawnedCwd?: string; sessionRoot?: string; permissionMode?: string };
       resolved: { modelProvider?: string; model?: string };
       worktree: { id: string; path: string; branch: string };
     }>(
@@ -2210,6 +2210,8 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
     const worktree = created.payload?.worktree;
     worktreeId = worktree?.id;
     expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
+    expect(created.payload?.entry.sessionRoot).toBe(worktree?.path);
+    expect(created.payload?.entry.permissionMode).toBe("workspace");
     expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.spawnedCwd).toBe(
       worktree?.path,
     );
@@ -2241,7 +2243,7 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
     restoreRemoveIfLossless = () => removeIfLosslessSpy.mockRestore();
     const resetPromise = directSessionReq<{
       key: string;
-      entry: { spawnedCwd?: string };
+      entry: { spawnedCwd?: string; sessionRoot?: string; permissionMode?: string };
       resolved: { modelProvider?: string; model?: string };
     }>(
       "sessions.create",
@@ -2272,6 +2274,8 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
     restoreRemoveIfLossless();
     expect(reset.ok).toBe(true);
     expect(reset.payload?.entry.spawnedCwd).toBeUndefined();
+    expect(reset.payload?.entry.sessionRoot).toBeUndefined();
+    expect(reset.payload?.entry.permissionMode).toBeUndefined();
     expect(reset.payload?.resolved).toEqual({
       modelProvider: "openai",
       model: "current-model",
