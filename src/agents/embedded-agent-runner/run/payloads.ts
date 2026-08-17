@@ -169,7 +169,7 @@ export function buildEmbeddedRunPayloads(params: {
     params.lastToolError.mutatingAction === true
       ? { toolName: params.lastToolError.toolName }
       : undefined;
-  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure) {
+  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure && !params.lastToolRecovery) {
     return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
   // Internal source replies always need transcript/UI mirrors. Only a
