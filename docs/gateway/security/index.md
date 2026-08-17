@@ -638,7 +638,7 @@ Rotation checklist (token/password): generate/set a new secret (`gateway.auth.to
 
 ### Tailscale Serve identity headers
 
-When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header. This only triggers on OpenClaw's dedicated managed-Tailscale listener and requires `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`; headers on the ordinary Gateway listener do not establish Serve provenance. For this async check, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure, so concurrent bad retries from one Serve client can lock out the second attempt immediately.
+When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header. This only triggers on OpenClaw's dedicated managed-Tailscale listener and requires `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`; headers on the ordinary Gateway listener do not establish Serve provenance or tokenless auth. For this async check, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure, so concurrent bad retries from one Serve client can lock out the second attempt immediately.
 
 HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`) do not use Tailscale identity-header auth - they follow the gateway's configured HTTP auth mode.
 
@@ -646,7 +646,7 @@ Gateway HTTP bearer auth is effectively all-or-nothing operator access. Credenti
 
 Tokenless Serve auth assumes the gateway host itself is trusted - it is not protection against hostile same-host processes. If untrusted local code may run on the gateway host, disable `allowTailscale` and require explicit shared-secret auth (`token` or `password`).
 
-Do not forward these headers from your own reverse proxy. If you terminate TLS or proxy in front of the gateway, disable `allowTailscale` and use shared-secret auth or [Trusted Proxy Auth](/gateway/trusted-proxy-auth) instead.
+An externally managed Tailscale Serve or Funnel route may forward these headers to the ordinary listener only through an explicitly configured `gateway.trustedProxies` source with a valid non-loopback forwarded client address. OpenClaw treats that request as generic proxy ingress: normal gateway auth remains required, `allowTailscale` grants nothing, and no WhoIs lookup runs. See [Tailscale](/gateway/tailscale#externally-managed-serve-and-funnel) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 

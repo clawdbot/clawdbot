@@ -216,14 +216,9 @@ function resolveGatewayIngressAttribution(params: {
     });
   }
 
-  // Tailscale strips and owns these headers on its proxy path. Seeing them on an
-  // ordinary listener cannot establish managed-listener provenance.
-  if (hasTailscaleOwnedHeaders(req)) {
-    return unattributableProxy(remoteAddress);
-  }
-
   const hasProxyHeaders = hasForwardedRequestHeaders(req);
-  if (isLoopbackAddress(remoteAddress) && !hasProxyHeaders) {
+  const hasTailscaleHeaders = hasTailscaleOwnedHeaders(req);
+  if (isLoopbackAddress(remoteAddress) && !hasProxyHeaders && !hasTailscaleHeaders) {
     return attributed("direct-local", remoteAddress);
   }
   if (isTrustedProxyAddress(remoteAddress, params.trustedProxies)) {
@@ -237,7 +232,9 @@ function resolveGatewayIngressAttribution(params: {
     }
     return attributed("trusted-proxy", clientIp);
   }
-  if (hasProxyHeaders) {
+  // Tailscale-owned headers grant managed semantics only on the dedicated listener.
+  // An explicitly trusted ordinary proxy remains generic; every other source fails closed.
+  if (hasProxyHeaders || hasTailscaleHeaders) {
     return unattributableProxy(remoteAddress);
   }
   return attributed("direct-remote", remoteAddress);
