@@ -123,6 +123,21 @@ export function assertTriggerSupport(
   }
 }
 
+/** Reject host-shell precheck mutations when unattended triggers are disabled. */
+export function assertPrecheckSupport(
+  job: Pick<CronJob, "precheck">,
+  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+) {
+  if (!job.precheck?.command) {
+    return;
+  }
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
+    throw new Error(
+      "cron precheck is a host-shell command and is disabled because the operator set cron.triggers.enabled: false; remove the precheck or set cron.triggers.enabled to true",
+    );
+  }
+}
+
 export function assertPacingSupport(job: Pick<CronJob, "schedule" | "pacing">) {
   if (job.pacing === undefined) {
     return;

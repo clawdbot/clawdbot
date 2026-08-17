@@ -284,6 +284,7 @@ function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     schedule: job.schedule,
     pacing: job.pacing,
     trigger: job.trigger,
+    precheck: job.precheck,
     payload: job.payload,
     scheduledToolPolicy: job.scheduledToolPolicy,
     toolsAllowProvenance: job.toolsAllowProvenance,
