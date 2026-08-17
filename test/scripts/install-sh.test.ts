@@ -1344,6 +1344,65 @@ NODE
     expect(result.stdout).toContain("--install-method git --version main");
   });
 
+  it("links the executable package launcher when dist/entry.js is not executable", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-bin-link-"));
+    const bin = join(tmp, "bin");
+    const packageDir = join(tmp, "lib", "node_modules", "openclaw");
+    mkdirSync(join(packageDir, "dist"), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(packageDir, "dist", "entry.js"), "export {};\n");
+    writeFileSync(
+      join(packageDir, "openclaw.mjs"),
+      '#!/usr/bin/env node\nprocess.stdout.write("OpenClaw fixture\\n");\n',
+    );
+    chmodSync(join(packageDir, "openclaw.mjs"), 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `npm() { [[ "$1" == "root" ]] && printf '%s\\n' ${JSON.stringify(join(tmp, "lib", "node_modules"))}; }`,
+          `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
+          "ensure_openclaw_bin_link",
+          `${JSON.stringify(join(bin, "openclaw"))} --version`,
+        ].join("\n"),
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.stdout).toContain("OpenClaw fixture");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an installed package whose executable launcher is missing", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-missing-bin-"));
+    const bin = join(tmp, "bin");
+    const packageDir = join(tmp, "lib", "node_modules", "openclaw");
+    mkdirSync(join(packageDir, "dist"), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(packageDir, "dist", "entry.js"), "#!/usr/bin/env node\n");
+    chmodSync(join(packageDir, "dist", "entry.js"), 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `npm() { [[ "$1" == "root" ]] && printf '%s\\n' ${JSON.stringify(join(tmp, "lib", "node_modules"))}; }`,
+          `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
+          "ensure_openclaw_bin_link",
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(1);
+      expect(existsSync(join(bin, "openclaw"))).toBe(false);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it.each([
     { requested: "latest", outcome: "success", error: "", calls: 1, status: 0 },
     {

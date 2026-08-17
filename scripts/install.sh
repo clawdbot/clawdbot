@@ -2169,7 +2169,8 @@ fix_npm_permissions() {
 ensure_openclaw_bin_link() {
     local npm_root=""
     npm_root="$(npm root -g 2>/dev/null || true)"
-    if [[ -z "$npm_root" || ! -f "$npm_root/openclaw/dist/entry.js" ]]; then
+    local launcher="${npm_root}/openclaw/openclaw.mjs"
+    if [[ -z "$npm_root" || ! -x "$launcher" ]]; then
         return 1
     fi
     local npm_bin=""
@@ -2179,10 +2180,10 @@ ensure_openclaw_bin_link() {
     fi
     mkdir -p "$npm_bin"
     if [[ ! -x "${npm_bin}/openclaw" ]]; then
-        ln -sf "$npm_root/openclaw/dist/entry.js" "${npm_bin}/openclaw"
+        ln -sf "$launcher" "${npm_bin}/openclaw"
         ui_info "Created openclaw bin link at ${npm_bin}/openclaw"
     fi
-    return 0
+    "${npm_bin}/openclaw" --version >/dev/null 2>&1
 }
 
 # Check for existing OpenClaw installation
