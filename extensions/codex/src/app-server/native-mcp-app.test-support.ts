@@ -6,11 +6,11 @@ import type { CodexAppServerClient } from "./client.js";
 import "./native-mcp-app.js";
 
 type NativeMcpAppTestApi = {
-  createNativeMcpRuntime(params: {
+  createNativeMcpRuntime: (params: {
     client: CodexAppServerClient;
     threadId: string;
     attempt: EmbeddedRunAttemptParams;
-  }): SessionMcpRuntime;
+  }) => SessionMcpRuntime;
 };
 
 const api = (globalThis as Record<PropertyKey, unknown>)[

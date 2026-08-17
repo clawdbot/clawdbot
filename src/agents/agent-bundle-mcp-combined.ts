@@ -160,7 +160,7 @@ export function createCombinedSessionMcpRuntime(params: {
     });
     // Dispose can clear the slot before this load settles. Keep a separate
     // ownership token so an older load cannot clear a subsequently installed one.
-    const loadToken = Symbol();
+    const loadToken = Symbol("combined MCP catalog load");
     const trackedLoad = load.finally(() => {
       if (catalogInFlightToken === loadToken) {
         catalogInFlight = undefined;
