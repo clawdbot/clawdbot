@@ -6421,6 +6421,135 @@ describe("gateway server chat", () => {
     });
   });
 
+  test.each([
+    {
+      boundary: {
+        type: "reset",
+        id: "reset-boundary",
+        reason: "reset",
+        firstKeptEntryId: "kept-one",
+      },
+      expectedFirstSeqs: [3, 4, 12, 20],
+      expectedOlderSeqs: [1, 2],
+      marker: "Reset",
+      totalMessages: 27,
+    },
+    {
+      boundary: {
+        type: "compaction",
+        id: "compaction-boundary",
+        summary: "summary",
+        firstKeptEntryId: "old",
+      },
+      expectedFirstSeqs: [4, 5, 13, 21],
+      expectedOlderSeqs: [1, 2, 3],
+      marker: "Compaction",
+      totalMessages: 28,
+    },
+  ])(
+    "chat.history incrementally fills pages across $boundary.type boundaries",
+    async ({ boundary, expectedFirstSeqs, expectedOlderSeqs, marker, totalMessages }) => {
+      await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+        await prepareMainHistoryHarness({ ws, createSessionDir });
+        const timestamp = Date.now();
+        const events: Array<Record<string, unknown>> = [
+          {
+            type: "message",
+            ...createTextTranscriptEvent("user", "discarded old", {
+              id: "old",
+              parentId: null,
+              timestamp,
+            }),
+          },
+          {
+            type: "message",
+            ...createTextTranscriptEvent("user", "kept one", {
+              id: "kept-one",
+              parentId: "old",
+              timestamp: timestamp + 1,
+            }),
+          },
+          {
+            type: "message",
+            ...createTextTranscriptEvent("assistant", "kept two", {
+              id: "kept-two",
+              parentId: "kept-one",
+              timestamp: timestamp + 2,
+            }),
+          },
+          {
+            ...boundary,
+            parentId: "kept-two",
+            timestamp: new Date(timestamp + 3).toISOString(),
+          },
+        ];
+        let parentId = boundary.id;
+        let eventIndex = 4;
+        for (const label of ["visible one", "visible two", "visible three"]) {
+          const visibleId = `visible-${eventIndex}`;
+          events.push({
+            type: "message",
+            ...createTextTranscriptEvent("user", label, {
+              id: visibleId,
+              parentId,
+              timestamp: timestamp + eventIndex,
+            }),
+          });
+          parentId = visibleId;
+          eventIndex += 1;
+          for (let hidden = 0; hidden < 7; hidden += 1) {
+            const hiddenId = `hidden-${eventIndex}`;
+            events.push({
+              type: "message",
+              ...createTextTranscriptEvent("assistant", "NO_REPLY", {
+                id: hiddenId,
+                parentId,
+                timestamp: timestamp + eventIndex,
+              }),
+            });
+            parentId = hiddenId;
+            eventIndex += 1;
+          }
+        }
+        await writeMainSessionTranscript(events);
+
+        type HistoryPage = {
+          messages?: Array<{ __openclaw?: { seq?: number } }>;
+          nextOffset?: number;
+          hasMore?: boolean;
+          totalMessages?: number;
+        };
+        const first = await rpcReq<HistoryPage>(
+          ws,
+          "chat.history",
+          makeMainSessionParams({ limit: 4, offset: 0 }),
+        );
+        expect(first.ok).toBe(true);
+        expect(
+          first.payload?.messages?.map(readOpenClawSeq),
+          JSON.stringify(first.payload),
+        ).toEqual(expectedFirstSeqs);
+        expect(JSON.stringify(first.payload?.messages)).toContain(marker);
+        expect(JSON.stringify(first.payload?.messages)).toContain("visible three");
+        expect(first.payload).toMatchObject({
+          hasMore: true,
+          nextOffset: 25,
+          totalMessages,
+        });
+
+        const older = await rpcReq<HistoryPage>(
+          ws,
+          "chat.history",
+          makeMainSessionParams({ limit: 4, offset: first.payload?.nextOffset }),
+        );
+        expect(older.ok).toBe(true);
+        expect(older.payload?.messages?.map(readOpenClawSeq)).toEqual(expectedOlderSeqs);
+        expect(older.payload?.hasMore).toBe(false);
+        expect(older.payload?.nextOffset).toBeUndefined();
+      });
+    },
+  );
+
   test("chat.history first-page metadata pages backward without overlaps or gaps", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });

@@ -853,11 +853,12 @@ export { resolveSessionTranscriptCandidates } from "./session-transcript-files.f
 export function capArrayByJsonBytes<T>(
   items: T[],
   maxBytes: number,
+  byteLength: (item: T) => number = jsonUtf8Bytes,
 ): { items: T[]; bytes: number } {
   if (items.length === 0) {
     return { items, bytes: 2 };
   }
-  const parts = items.map((item) => jsonUtf8Bytes(item));
+  const parts = items.map(byteLength);
   let bytes = 2 + parts.reduce((a, b) => a + b, 0) + (items.length - 1);
   let start = 0;
   while (bytes > maxBytes && start < items.length - 1) {

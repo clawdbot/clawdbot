@@ -56,10 +56,12 @@ function resolveVisibleHistoryProjection(
       .select((eb) =>
         eb
           .selectFrom("session_transcript_active_events as next")
-          .select((nextEb) => nextEb.fn.min<number>("next.message_position").as("position"))
+          .select("next.message_position")
           .whereRef("next.session_id", "=", "active.session_id")
           .whereRef("next.active_position", ">", "active.active_position")
           .where("next.message_position", "is not", null)
+          .orderBy("next.active_position", "asc")
+          .limit(1)
           .as("next_message_position"),
       )
       .where("active.session_id", "=", projection.resolved.sessionId)
