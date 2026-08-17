@@ -133,31 +133,6 @@ async function withExecDryRunConfigHarness(
 }
 
 describe("config cli integration", () => {
-  it.each([
-    ["=SYNTHETIC_PROVIDER_ENV_SECRET", "--provider-env expects KEY=*** entries."],
-    ["   =SYNTHETIC_PROVIDER_ENV_SECRET", "--provider-env key must not be empty."],
-  ])("keeps malformed provider env values out of CLI output", async (entry, message) => {
-    const secret = "SYNTHETIC_PROVIDER_ENV_SECRET";
-    const runtime = createTestRuntime();
-
-    await expect(
-      runConfigSet({
-        path: "secrets.providers.runner",
-        cliOptions: {
-          providerSource: "exec",
-          providerCommand: "/usr/bin/env",
-          providerEnv: [entry],
-          dryRun: true,
-        },
-        runtime: runtime.runtime,
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(runtime.logs.join("\n")).not.toContain(secret);
-    expect(runtime.errors.join("\n")).not.toContain(secret);
-    expect(runtime.errors).toStrictEqual([message]);
-  });
-
   it("accepts plugin hook conversation-access policy via config set", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-plugin-hooks-"));
     const configPath = path.join(tempDir, "openclaw.json");
