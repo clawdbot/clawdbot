@@ -109,11 +109,14 @@ describe("plugin control-plane context", () => {
       doctorContractHash: "contract-a",
       packageBuild: { openclawVersion: "test", bundledDist: true },
     });
-    const reorderedIndex = createIndex("demo", {
+    const reorderedIndexSource = createIndex("demo", {
       doctorContractHash: "contract-a",
     });
-    const { pluginId, ...reorderedPlugin } = reorderedIndex.plugins[0]!;
-    reorderedIndex.plugins[0] = { ...reorderedPlugin, pluginId };
+    const { pluginId, ...reorderedPlugin } = reorderedIndexSource.plugins[0]!;
+    const reorderedIndex: InstalledPluginIndex = {
+      ...reorderedIndexSource,
+      plugins: [{ ...reorderedPlugin, pluginId }],
+    };
     const resolveControlPlaneFingerprint = (index: InstalledPluginIndex) =>
       resolvePluginControlPlaneFingerprint({
         config: { plugins: { allow: ["demo"] } },
