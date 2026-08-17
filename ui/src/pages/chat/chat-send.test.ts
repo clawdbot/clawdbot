@@ -13,7 +13,6 @@ import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   replaceSlashCommands,
-  SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import {
@@ -485,74 +484,6 @@ describe("refreshChat", () => {
         { ...cachedModel, id: "fresh-model", name: "Fresh Model" },
       ]),
     );
-  });
-
-  it("fills omitted startup metadata immediately and populates models and commands", async () => {
-    const startup = createDeferred<unknown>();
-    const host = makeChatHost({
-      hello: {
-        features: { methods: ["chat.metadata", "chat.startup"] },
-      } as TestChatHost["hello"],
-      requestHandlers: {
-        "chat.metadata": {},
-        "commands.list": {
-          commands: [
-            {
-              name: "startup-gap-command",
-              textAliases: ["/startup-gap-command"],
-              description: "Loaded from the startup metadata gap fill.",
-              source: "plugin",
-              scope: "text",
-              acceptsArgs: false,
-            },
-          ],
-        },
-        "chat.startup": () => startup.promise,
-        "models.list": {
-          models: [
-            {
-              available: true,
-              id: "gap-model",
-              name: "Gap Model",
-              provider: "openai",
-            },
-          ],
-        },
-      },
-    });
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      awaitHistory: true,
-      deferBranches: true,
-      startup: true,
-    });
-
-    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
-    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
-    expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
-
-    startup.resolve({ messages: [] });
-    await expect(refresh).resolves.toBeUndefined();
-    await waitForFast(() =>
-      expect(host.chatModelCatalog).toEqual([
-        {
-          available: true,
-          id: "gap-model",
-          name: "Gap Model",
-          provider: "openai",
-        },
-      ]),
-    );
-    expect(SLASH_COMMANDS.some((command) => command.name === "startup-gap-command")).toBe(true);
-    expect(host.request).toHaveBeenCalledWith("models.list", {
-      agentId: "main",
-      view: "configured",
-      preparedOnly: true,
-    });
-    expect(host.request).toHaveBeenCalledWith(
-      "commands.list",
-      expect.objectContaining({ includeArgs: true, scope: "text" }),
-    );
-    expect(host.request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
   });
 
   it.each([

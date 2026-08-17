@@ -10,7 +10,6 @@ import {
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
-import { applyRemoteSlashCommandsResult } from "./chat-commands.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -1739,127 +1738,56 @@ describe("refreshChatMetadata", () => {
     expect(state.chatModelCatalog).toBe(existingCatalog);
   });
 
-  it("loads compatibility models when the gateway does not advertise chat metadata", async () => {
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "models.list") {
-        expect(params).toEqual({ view: "configured", agentId: "main", preparedOnly: true });
-        return {
-          models: [{ id: "compat-model", name: "Compat Model", provider: "openai" }],
-        };
-      }
-      expect(method).toBe("commands.list");
-      return { commands: [] };
-    });
-    const state = createMetadataState(request, {
-      chatMetadataRequestVersion: 2,
-      chatModelCatalog: [{ id: "stale-model", name: "Stale Model", provider: "openai" }],
-      chatModelsLoading: true,
-      hello: { features: { methods: [] } },
-      sessionKey: "agent:main:main",
-    });
-
-    await refreshChatMetadata(state);
-
-    expect(state.chatMetadataRequestVersion).toBe(3);
-    expect(state.chatModelCatalog).toEqual([
-      { id: "compat-model", name: "Compat Model", provider: "openai" },
-    ]);
-    expect(state.chatModelsLoading).toBe(false);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("loads agent-scoped compatibility models for a non-default agent", async () => {
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "models.list") {
-        expect(params).toEqual({ view: "configured", agentId: "work", preparedOnly: true });
-        return {
-          models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
-        };
-      }
-      expect(method).toBe("commands.list");
-      return { commands: [] };
-    });
-    const state = createMetadataState(request, {
-      agentsList: { defaultId: "main" } as ChatPageHost["agentsList"],
-      chatModelCatalog: [{ id: "stale-model", name: "Stale Model", provider: "openai" }],
-      hello: { features: { methods: [] } },
-    });
-
-    await refreshChatMetadata(state);
-
-    expect(state.chatModelCatalog).toEqual([
-      { id: "work-model", name: "Work Model", provider: "openai" },
-    ]);
-    expect(state.chatModelsLoading).toBe(false);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not apply compatibility commands after switching agents", async () => {
-    let resolveCommands: (value: {
-      commands: Array<{
-        name: string;
-        textAliases: string[];
-        description: string;
-        source: string;
-        scope: string;
-        acceptsArgs: boolean;
-      }>;
-    }) => void = () => {};
-    const commands = new Promise<{
-      commands: Array<{
-        name: string;
-        textAliases: string[];
-        description: string;
-        source: string;
-        scope: string;
-        acceptsArgs: boolean;
-      }>;
-    }>((resolve) => {
-      resolveCommands = resolve;
-    });
+  it("keeps the seeded catalog and reports chat metadata failures without model fallback", async () => {
+    const seededCatalog = [
+      { id: "seeded-model", name: "Seeded Model", provider: "openai", available: true },
+    ];
     const request = vi.fn(async (method: string) => {
-      expect(method).toBe("commands.list");
-      return await commands;
+      if (method === "chat.metadata") {
+        throw new Error("metadata unavailable");
+      }
+      if (method === "models.list") {
+        return { models: [{ id: "substitute-model", name: "Substitute Model" }] };
+      }
+      return { commands: [] };
     });
-    applyRemoteSlashCommandsResult({
-      client: null,
-      agentId: "other",
-      result: {
+    const state = createMetadataState(request, { chatModelCatalog: seededCatalog });
+
+    await refreshChatMetadata(state);
+
+    expect(state.chatModelCatalog).toBe(seededCatalog);
+    expect(state.chatModelCatalogError).toBe("metadata unavailable");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.metadata"]);
+  });
+
+  it("keeps fallback slash commands when chat metadata omits commands", async () => {
+    replaceSlashCommands(buildFallbackSlashCommands());
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.metadata") {
+        return {
+          models: [{ id: "metadata-model", name: "Metadata Model", provider: "openai" }],
+        };
+      }
+      return {
         commands: [
           {
-            name: "other-command",
-            textAliases: ["/other-command"],
-            description: "Command for the newly selected agent.",
+            name: "remote-command",
+            textAliases: ["/remote-command"],
+            description: "Loaded through commands.list.",
             source: "plugin",
             scope: "text",
             acceptsArgs: false,
           },
         ],
-      },
+      };
     });
-    const state = createMetadataState(request, {
-      agentsList: { defaultId: "main" } as ChatPageHost["agentsList"],
-      hello: { features: { methods: [] } },
-    });
+    const state = createMetadataState(request);
 
-    const refresh = refreshChatMetadata(state);
-    state.sessionKey = "agent:other:main";
-    resolveCommands({
-      commands: [
-        {
-          name: "work-command",
-          textAliases: ["/work-command"],
-          description: "Stale command for the previous agent.",
-          source: "plugin",
-          scope: "text",
-          acceptsArgs: false,
-        },
-      ],
-    });
-    await refresh;
+    await refreshChatMetadata(state);
 
-    expect(SLASH_COMMANDS.some((command) => command.name === "other-command")).toBe(true);
-    expect(SLASH_COMMANDS.some((command) => command.name === "work-command")).toBe(false);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.metadata"]);
+    expect(SLASH_COMMANDS.some((command) => command.name === "help")).toBe(true);
+    expect(SLASH_COMMANDS.some((command) => command.name === "remote-command")).toBe(false);
   });
 });
 
