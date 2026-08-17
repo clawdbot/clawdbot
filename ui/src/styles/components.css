@@ -493,7 +493,7 @@ openclaw-session-owner-chip {
 
 .stat {
   background: var(--card);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
   border: 1px solid var(--border);
   transition:

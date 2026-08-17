@@ -342,7 +342,6 @@
   .agent-tool-card.agent-tool-card,
   .chat-thread.chat-thread,
   .chat-bubble.chat-bubble,
-  .code-block-wrapper.code-block-wrapper,
   .agent-chat__input.agent-chat__input,
   .chat-pr.chat-pr,
   .nav-item.nav-item,
@@ -353,6 +352,11 @@
   .settings-input.settings-input,
   .field.field :is(input, textarea, select) {
     border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
+
+  .code-block-wrapper.code-block-wrapper {
+    border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
