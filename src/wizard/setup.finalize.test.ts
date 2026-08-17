@@ -1335,6 +1335,26 @@ describe("finalizeSetupWizard", () => {
     expectNoteNotContains(prompter, "openclaw gateway install --force");
   });
 
+  it("localizes managed service recovery at the finalize boundary", async () => {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
+      waitForGatewayReachable.mockResolvedValue({ ok: false, detail: "readiness timed out" });
+      probeGatewayReachable.mockResolvedValue({ ok: false, detail: "readiness timed out" });
+      const prompter = createLaterPrompter();
+      const args = createAdvancedFinalizeArgs({ installDaemon: true, prompter });
+
+      await finalizeSetupWizard({ ...args, opts: { ...args.opts, skipHealth: false } });
+
+      expectNoteContains(
+        prompter,
+        "托管的 Mock Platform Service 在设置后仍无法访问",
+        "Gateway",
+      );
+      expectNoteContains(prompter, "检查服务状态和日志", "Gateway");
+      expectNoteContains(prompter, "openclaw gateway restart", "Gateway");
+      expectNoteNotContains(prompter, "openclaw gateway run");
+    });
+  });
+
   it("returns an authoritative failed outcome when gateway installation fails", async () => {
     gatewayServiceInstall.mockRejectedValueOnce(new Error("service install exploded"));
     const prompter = createLaterPrompter();

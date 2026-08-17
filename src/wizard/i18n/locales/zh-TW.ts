@@ -1110,6 +1110,10 @@ export const zh_TW = {
       healthCheckHelp: "健康檢查說明",
       installGateway: "安裝 Gateway 服務（建議）",
       laterTitle: "稍後",
+      managedGatewaySetupFailed:
+        "受管理的 {service} 設定失敗：{error}\n檢查服務狀態和日誌：{statusCommand}\n重試受管理服務安裝：{recoveryCommand}",
+      managedGatewayUnreachable:
+        "受管理的 {service} 在設定後仍無法存取。\n檢查服務狀態和日誌：{statusCommand}\n重試受管理服務：{recoveryCommand}",
       managedWebSearchSkipped: "已略過託管 web search provider。",
       noBackgroundGatewayExpected: "本次設定未安裝 Gateway 服務，因此不會有背景 Gateway。",
       noModelAuth: "提供商「{provider}」尚未設定憑證，聊天將失敗，直到新增認證。",

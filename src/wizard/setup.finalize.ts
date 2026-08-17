@@ -178,20 +178,21 @@ function buildGatewayRecoveryProjection(params: {
   }
   if (gateway.status === "ready") {
     const service = params.serviceLabel ?? t("wizard.finalize.gatewayService");
-    const detail = [
-      `The managed ${service} did not become reachable after it was ${gateway.action}.`,
-      `Inspect service state and logs: ${formatCliCommand("openclaw gateway status --deep")}`,
-      `Retry the managed service: ${formatCliCommand("openclaw gateway restart")}`,
-    ].join("\n");
+    const detail = t("wizard.finalize.managedGatewayUnreachable", {
+      service,
+      statusCommand: formatCliCommand("openclaw gateway status --deep"),
+      recoveryCommand: formatCliCommand("openclaw gateway restart"),
+    });
     return { detail, summary: `${notDetected} ${detail.replaceAll("\n", " ")}` };
   }
   if (gateway.status === "failed") {
     const service = params.serviceLabel ?? t("wizard.finalize.gatewayService");
-    const detail = [
-      `The managed ${service} setup failed: ${gateway.error}`,
-      `Inspect service state and logs: ${formatCliCommand("openclaw gateway status --deep")}`,
-      `Retry the managed service installation: ${formatCliCommand("openclaw gateway install --force")}`,
-    ].join("\n");
+    const detail = t("wizard.finalize.managedGatewaySetupFailed", {
+      service,
+      error: gateway.error,
+      statusCommand: formatCliCommand("openclaw gateway status --deep"),
+      recoveryCommand: formatCliCommand("openclaw gateway install --force"),
+    });
     return { detail, summary: `${notDetected} ${detail.replaceAll("\n", " ")}` };
   }
 
