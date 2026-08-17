@@ -22,6 +22,8 @@ scenario:
       alsoAllow: [message]
     plugins:
       entries:
+        acpx:
+          enabled: false
         memory-core:
           enabled: false
     agents:
