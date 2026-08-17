@@ -279,6 +279,9 @@ export async function startNodeHostMcpManager(
   const resolveTransport = deps.resolveTransport ?? resolveMcpTransport;
   const descriptors: NodePluginToolDescriptor[] = [];
   const lifecycleAbortController = new AbortController();
+  const lifecycleSignal = deps.signal
+    ? AbortSignal.any([deps.signal, lifecycleAbortController.signal])
+    : lifecycleAbortController.signal;
   const states = new Map<string, NodeHostMcpServerState>(
     listEnabledNodeHostMcpServers(servers).map(([serverName, config]) => [
       serverName,
@@ -336,7 +339,13 @@ export async function startNodeHostMcpManager(
   };
 
   const scheduleRetry = (state: NodeHostMcpServerState): void => {
-    if (closed || states.get(state.serverName) !== state || state.retryTimer || state.current) {
+    if (
+      closed ||
+      lifecycleSignal.aborted ||
+      states.get(state.serverName) !== state ||
+      state.retryTimer ||
+      state.current
+    ) {
       return;
     }
     const delayMs = state.retryDelayMs;
@@ -431,9 +440,9 @@ export async function startNodeHostMcpManager(
       return;
     }
     try {
-      await connectAndList(state, lifecycleAbortController.signal);
+      await connectAndList(state, lifecycleSignal);
     } catch (error) {
-      if (!closed) {
+      if (!closed && !lifecycleSignal.aborted) {
         warn(
           `node host MCP server "${state.serverName}" reconnect failed: ${formatMcpError(error)}`,
         );
@@ -451,7 +460,7 @@ export async function startNodeHostMcpManager(
         session.client,
         session.requestTimeoutMs,
         (toolName) => isMcpToolAllowed(state.config.toolFilter, toolName),
-        AbortSignal.any([lifecycleAbortController.signal, session.abortController.signal]),
+        AbortSignal.any([lifecycleSignal, session.abortController.signal]),
       );
       if (closed || state.current !== session) {
         return;
@@ -459,7 +468,7 @@ export async function startNodeHostMcpManager(
       state.listedTools = tools;
       rebuildDescriptors();
     } catch (error) {
-      if (closed || state.current !== session) {
+      if (closed || lifecycleSignal.aborted || state.current !== session) {
         return;
       }
       warn(
@@ -472,7 +481,13 @@ export async function startNodeHostMcpManager(
   };
 
   function requestRefresh(state: NodeHostMcpServerState, session: NodeHostMcpSession): void {
-    if (closed || state.current !== session || !session.connected || state.refreshQueued) {
+    if (
+      closed ||
+      lifecycleSignal.aborted ||
+      state.current !== session ||
+      !session.connected ||
+      state.refreshQueued
+    ) {
       return;
     }
     state.refreshQueued = true;
@@ -482,9 +497,6 @@ export async function startNodeHostMcpManager(
     });
   }
 
-  const startupSignal = deps.signal
-    ? AbortSignal.any([deps.signal, lifecycleAbortController.signal])
-    : lifecycleAbortController.signal;
   const tasks = Array.from(states.values(), (state) => async () => {
     if (state.config.auth === "oauth" || state.config.oauth) {
       states.delete(state.serverName);
@@ -492,9 +504,9 @@ export async function startNodeHostMcpManager(
       return;
     }
     try {
-      await connectAndList(state, startupSignal);
+      await connectAndList(state, lifecycleSignal);
     } catch (error) {
-      if (!startupSignal.aborted) {
+      if (!lifecycleSignal.aborted) {
         warn(`node host MCP server "${state.serverName}" failed: ${formatMcpError(error)}`);
       }
     }

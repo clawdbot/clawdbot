@@ -541,33 +541,41 @@ describe("node host MCP manager", () => {
   });
 
   it("closes a server when startup is aborted during paginated listing", async () => {
-    const controller = new AbortController();
-    const client = createClient({
-      list: async () =>
-        await new Promise<{ tools: Tool[] }>(() => {
-          // The startup abort owns closing the client behind this pending SDK request.
-        }),
-    });
-    const warn = vi.fn();
-    const starting = startNodeHostMcpManager(
-      { docs: { command: "docs" } },
-      {
-        createClient: () => client,
-        resolveTransport: () => transport,
-        signal: controller.signal,
-        warn,
-      },
-    );
-    await vi.waitFor(() => expect(client.listTools).toHaveBeenCalledOnce());
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const client = createClient({
+        list: async () =>
+          await new Promise<{ tools: Tool[] }>(() => {
+            // The startup abort owns closing the client behind this pending SDK request.
+          }),
+      });
+      const createClientMock = vi.fn(() => client);
+      const warn = vi.fn();
+      const starting = startNodeHostMcpManager(
+        { docs: { command: "docs" } },
+        {
+          createClient: createClientMock,
+          resolveTransport: () => transport,
+          signal: controller.signal,
+          warn,
+        },
+      );
+      await vi.waitFor(() => expect(client.listTools).toHaveBeenCalledOnce());
 
-    controller.abort();
-    const manager = await starting;
+      controller.abort();
+      const manager = await starting;
 
-    expect(client.close).toHaveBeenCalledOnce();
-    expect(manager.descriptors).toEqual([]);
-    expect(warn).not.toHaveBeenCalled();
-    await manager.close();
-    expect(client.close).toHaveBeenCalledOnce();
+      expect(client.close).toHaveBeenCalledOnce();
+      expect(manager.descriptors).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(createClientMock).toHaveBeenCalledOnce();
+      await manager.close();
+      expect(client.close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("cancels an in-flight MCP tool when its node invocation is aborted", async () => {
