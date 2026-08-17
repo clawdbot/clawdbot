@@ -158,6 +158,12 @@ export class DiscordVoiceSessions {
     const { guildId, channelId } = params;
     const voiceConfig = this.params.discordConfig.voice;
     const voiceMode = resolveDiscordVoiceMode(voiceConfig);
+    const cancelledJoinResult = (): VoiceOperationResult => ({
+      ok: false,
+      message: "Discord voice join was cancelled.",
+      guildId,
+      channelId,
+    });
 
     const existing = this.params.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
@@ -206,12 +212,7 @@ export class DiscordVoiceSessions {
       // A leave or replacement can invalidate the join while the REST lookup is pending;
       // cancellation remains authoritative over a stale lookup failure.
       if (authority && !authority.isCurrent()) {
-        return {
-          ok: false,
-          message: "Discord voice join was cancelled.",
-          guildId,
-          channelId,
-        };
+        return cancelledJoinResult();
       }
       return {
         ok: false,
@@ -221,12 +222,7 @@ export class DiscordVoiceSessions {
       };
     }
     if (authority && !authority.isCurrent()) {
-      return {
-        ok: false,
-        message: "Discord voice join was cancelled.",
-        guildId,
-        channelId,
-      };
+      return cancelledJoinResult();
     }
     if (!isVoiceChannel(channelInfo.type)) {
       return { ok: false, message: `Channel ${channelId} is not a voice channel.` };
@@ -328,12 +324,7 @@ export class DiscordVoiceSessions {
         voiceSdk,
         reason: `cancelled join guild ${guildId} channel ${channelId}`,
       });
-      return {
-        ok: false,
-        message: "Discord voice join was cancelled.",
-        guildId,
-        channelId,
-      };
+      return cancelledJoinResult();
     }
     if (this.params.destroyed()) {
       destroyVoiceConnectionSafely({
