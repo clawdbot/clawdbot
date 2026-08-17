@@ -1647,26 +1647,38 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
+    const archivedAt = Date.now() - 1_000;
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
-      archivedAt: Date.now(),
+      archivedAt,
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:archived-test",
+      ChatType: "channel",
+      From: "discord:user:12345",
       To: "discord:channel:archived-test",
       AccountId: "default",
       SessionKey: "agent:main:discord:channel:archived-test",
       Body: "start work",
+      CommandBody: "start work",
+      RawBody: "start work",
+      CommandSource: undefined,
+      InboundAccessAuthorized: true,
+      InboundEventKind: "user_request",
+      InputProvenance: { kind: "external_user", sourceChannel: "discord" },
     });
 
     await expect(
       dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
     ).rejects.toThrow(/is archived/i);
 
+    expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
     expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();

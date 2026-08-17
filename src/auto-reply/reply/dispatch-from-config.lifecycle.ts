@@ -38,15 +38,17 @@ type DispatchReplyOperationAcquisition =
 async function restoreArchivedDispatchSession(params: {
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;
+  hasPluginOwnedBinding: boolean;
   sessionKey?: string;
   storePath?: string;
 }): Promise<SessionEntry | undefined> {
-  const { ctx, entry, sessionKey, storePath } = params;
+  const { ctx, entry, hasPluginOwnedBinding, sessionKey, storePath } = params;
   if (
     !entry ||
     !sessionKey ||
     !storePath ||
     entry.archivedAt === undefined ||
+    hasPluginOwnedBinding ||
     ctx.InboundAccessAuthorized !== true ||
     ctx.InboundEventKind === "room_event" ||
     isNativeCommandTurn(ctx.CommandTurn) ||
@@ -161,13 +163,18 @@ export function createDispatchReplyOperationCoordinator(params: {
 
   const ensureDispatchReplyOperation = async (
     phase: "pre_dispatch" | "dispatch",
+    hasPluginOwnedBinding = false,
   ): Promise<DispatchReplyOperationAcquisition> => {
-    params.operationSessionStoreEntry.entry = await restoreArchivedDispatchSession({
-      ctx: params.ctx,
-      entry: params.operationSessionStoreEntry.entry,
-      sessionKey: params.dispatchOperationSessionKey,
-      storePath: params.operationSessionStoreEntry.storePath,
-    });
+    // Archive restoration belongs to pre-dispatch ownership resolution. Later calls only upgrade admission.
+    if (phase === "pre_dispatch") {
+      params.operationSessionStoreEntry.entry = await restoreArchivedDispatchSession({
+        ctx: params.ctx,
+        entry: params.operationSessionStoreEntry.entry,
+        hasPluginOwnedBinding,
+        sessionKey: params.dispatchOperationSessionKey,
+        storePath: params.operationSessionStoreEntry.storePath,
+      });
+    }
     if (phase === "dispatch") {
       // The next full reply operation revalidates the persisted session. Drop
       // the hook-only lease after its queued delivery settles so a waiting
