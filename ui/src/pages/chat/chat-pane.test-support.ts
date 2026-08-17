@@ -149,16 +149,25 @@ export type TestChatPane = HTMLElement & {
   ) => TemplateResult;
 };
 
+type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
+  request?: (method: string, params?: unknown) => unknown;
+};
+
 export function createGatewayBrowserClientFixture(
-  overrides: Partial<GatewayBrowserClient> = {},
+  overrides: GatewayBrowserClientFixtureOverrides = {},
 ): GatewayBrowserClient {
-  return overrides as GatewayBrowserClient;
+  return overrides as typeof overrides & GatewayBrowserClient;
 }
 
+type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch" | "state"> & {
+  patch?: (...args: Parameters<NonNullable<SessionCapability["patch"]>>) => unknown;
+  state?: Partial<SessionCapability["state"]>;
+};
+
 export function createSessionCapabilityFixture(
-  overrides: Partial<SessionCapability> = {},
+  overrides: SessionCapabilityFixtureOverrides = {},
 ): SessionCapability {
-  return overrides as SessionCapability;
+  return overrides as typeof overrides & SessionCapability;
 }
 
 export function createSessionContext(
