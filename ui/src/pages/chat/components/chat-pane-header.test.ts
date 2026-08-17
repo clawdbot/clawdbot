@@ -897,6 +897,7 @@ describe("chat pane workspace chip icon", () => {
       await Promise.resolve();
       expect(fetchSpy).toHaveBeenCalledOnce();
       expect(container.querySelector(".workspace-icon")).toBeNull();
+      expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
 
       await vi.advanceTimersByTimeAsync(1_000);
       await Promise.resolve();
