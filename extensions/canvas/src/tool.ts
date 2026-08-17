@@ -81,7 +81,7 @@ async function removeCanvasSnapshotFile(filePath: string): Promise<void> {
   }
 }
 
-function serializeCanvasEvalResult(result: unknown): string {
+function serializeCanvasEvalResult(result: unknown, maxChars: number): string {
   const json =
     typeof result === "string"
       ? neutralizeCanvasMediaDirectives(result)
@@ -89,13 +89,34 @@ function serializeCanvasEvalResult(result: unknown): string {
           typeof value === "string" ? neutralizeCanvasMediaDirectives(value) : value,
         );
   const serialized = json ?? neutralizeCanvasMediaDirectives(String(result));
-  if (serialized.length <= DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS) {
+  if (serialized.length <= maxChars) {
     return serialized;
   }
   return `${truncateUtf16Safe(
     serialized,
-    DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS - CANVAS_EVAL_TRUNCATION_MARKER.length,
+    Math.max(0, maxChars - CANVAS_EVAL_TRUNCATION_MARKER.length),
   )}${CANVAS_EVAL_TRUNCATION_MARKER}`;
+}
+
+function wrapCanvasEvalResult(result: unknown): string {
+  const wrap = (value: string) =>
+    wrapExternalContent(value, { source: "browser", includeWarning: false });
+  const wrapperOverhead = wrap("").length;
+  let maxInnerChars = Math.max(0, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS - wrapperOverhead);
+  let serialized = serializeCanvasEvalResult(result, maxInnerChars);
+  if (!serialized) {
+    return "";
+  }
+  let wrappedText = wrap(serialized);
+  if (wrappedText.length > DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS) {
+    maxInnerChars = Math.max(
+      0,
+      maxInnerChars - (wrappedText.length - DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS),
+    );
+    serialized = serializeCanvasEvalResult(result, maxInnerChars);
+    wrappedText = wrap(serialized);
+  }
+  return wrappedText;
 }
 
 function isPathInsideRoot(root: string, candidate: string): boolean {
@@ -220,11 +241,8 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             result?: { payload?: { result?: unknown } };
           };
           const result = raw?.payload?.result;
-          const serialized = serializeCanvasEvalResult(result);
           // Remote Canvas pages must not forge prompt boundaries or outbound attachments.
-          const text = serialized
-            ? wrapExternalContent(serialized, { source: "browser", includeWarning: false })
-            : serialized;
+          const text = wrapCanvasEvalResult(result);
           return {
             content: [{ type: "text", text }],
             details: { ok: true, node, result },

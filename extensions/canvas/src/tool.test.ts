@@ -477,7 +477,7 @@ describe("Canvas tool", () => {
     const content = result.content[0];
     const text = content && "text" in content ? content.text : "";
 
-    expect(text.length).toBeLessThan(20_000);
+    expect(text.length).toBeLessThanOrEqual(16_000);
     expect(text).toContain("[truncated — refine the Canvas eval expression]");
     expect(text).not.toContain("terminal-eval-sentinel");
   });
