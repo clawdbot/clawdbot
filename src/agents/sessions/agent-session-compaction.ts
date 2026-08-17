@@ -385,14 +385,15 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const settings = this.settingsManager.getCompactionSettings();
 
     this.emit({ type: "compaction_start", reason });
-    this.autoCompactionAbortController = new AbortController();
+    const abortController = new AbortController();
+    this.autoCompactionAbortController = abortController;
 
     try {
       const outcome = await this.runCompactionWork({
         mode: "auto",
         summaryOutputPolicy: "retry-invalid-once",
         settings,
-        signal: this.autoCompactionAbortController.signal,
+        signal: abortController.signal,
       });
       if (outcome.status === "skipped") {
         this.emit({ type: "compaction_end", reason, outcome });
@@ -429,6 +430,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       // Continue once so queued messages are delivered.
       return this.agent.hasQueuedMessages();
     } catch (error) {
+      if (abortController.signal.aborted) {
+        this.emit({ type: "compaction_end", reason, outcome: { status: "aborted" } });
+        return false;
+      }
       const errorMessage = compactionErrorMessage(error, "compaction failed");
       this.emit({
         type: "compaction_end",
@@ -443,7 +448,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       });
       return false;
     } finally {
-      this.autoCompactionAbortController = undefined;
+      if (this.autoCompactionAbortController === abortController) {
+        this.autoCompactionAbortController = undefined;
+      }
     }
   }
 
