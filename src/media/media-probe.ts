@@ -279,11 +279,10 @@ export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensi
   }
   // The retry shares one deadline with the pipe probe so a failing video can
   // never delay delivery beyond the single-probe budget.
-  const remainingMs = deadlineMs - Date.now();
-  if (remainingMs <= 0) {
+  if (Date.now() >= deadlineMs) {
     return undefined;
   }
-  return await probeVideoDimensionsFromTempFile(buffer, remainingMs);
+  return await probeVideoDimensionsFromTempFile(buffer, deadlineMs);
 }
 
 /**
@@ -296,13 +295,19 @@ export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensi
  */
 async function probeVideoDimensionsFromTempFile(
   buffer: Buffer,
-  timeoutMs: number,
+  deadlineMs: number,
 ): Promise<VideoDimensions | undefined> {
   try {
     return await withTempWorkspace(
       { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "video-probe-" },
       async (workspace) => {
         const filePath = await workspace.write("probe-input.bin", buffer);
+        // Staging a large buffer costs real time; recompute what is left of the
+        // shared deadline after the write so the probe cannot overrun it.
+        const timeoutMs = deadlineMs - Date.now();
+        if (timeoutMs <= 0) {
+          return undefined;
+        }
         const { width, height } =
           (await probeMediaSource({ kind: "filePath", filePath }, "video", { timeoutMs })) ?? {};
         return width && height ? { width, height } : undefined;

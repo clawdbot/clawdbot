@@ -12,6 +12,23 @@ vi.mock("./ffmpeg-exec.js", () => ({
   runFfprobe,
 }));
 
+// Lets timing tests simulate the wall-clock cost of staging the retry file.
+const stagingHook = vi.hoisted(() => ({ onWrite: null as null | (() => void) }));
+
+vi.mock("../infra/private-temp-workspace.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../infra/private-temp-workspace.js")>();
+  const withTempWorkspace: typeof real.withTempWorkspace = async (options, fn) =>
+    await real.withTempWorkspace(options, async (workspace) => {
+      const originalWrite = workspace.write.bind(workspace);
+      workspace.write = async (name, data) => {
+        stagingHook.onWrite?.();
+        return await originalWrite(name, data);
+      };
+      return await fn(workspace);
+    });
+  return { ...real, withTempWorkspace };
+});
+
 let testDir = "";
 let songPath = "";
 let clipPath = "";
@@ -46,6 +63,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   runFfprobe.mockReset();
+  stagingHook.onWrite = null;
 });
 
 async function probeMediaFile(filePath: string, kind: MediaProbeKind): Promise<MediaProbeResult> {
@@ -324,7 +342,7 @@ describe("probeVideoDimensions", () => {
     await expect(fs.access(path.dirname(failedPath))).rejects.toThrow();
   });
 
-  it("carries the remaining probe budget into the temp-file retry", async () => {
+  it("carries the deadline remainder after staging into the temp-file retry", async () => {
     const buffer = Buffer.from("slow pipe video");
     let now = 1_000_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -333,13 +351,37 @@ describe("probeVideoDimensions", () => {
         now += 4000;
         throw new Error("pipe:0: Invalid data found when processing input");
       });
+      stagingHook.onWrite = () => {
+        now += 2000;
+      };
       runFfprobe.mockResolvedValueOnce(
         JSON.stringify({ streams: [{ codec_type: "video", width: 640, height: 480 }] }),
       );
 
       await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 640, height: 480 });
       expect(runFfprobe).toHaveBeenCalledTimes(2);
-      expect(runFfprobe).toHaveBeenLastCalledWith(expect.any(Array), { timeoutMs: 6000 });
+      // 10s budget - 4s pipe probe - 2s staging = 4s left for the retry.
+      expect(runFfprobe).toHaveBeenLastCalledWith(expect.any(Array), { timeoutMs: 4000 });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("skips the file probe when staging exhausts the shared deadline", async () => {
+    const buffer = Buffer.from("slow staging video");
+    let now = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      runFfprobe.mockImplementationOnce(async () => {
+        now += 4000;
+        throw new Error("pipe:0: Invalid data found when processing input");
+      });
+      stagingHook.onWrite = () => {
+        now += 7000;
+      };
+
+      await expect(probeVideoDimensions(buffer)).resolves.toBeUndefined();
+      expect(runFfprobe).toHaveBeenCalledTimes(1);
     } finally {
       nowSpy.mockRestore();
     }
