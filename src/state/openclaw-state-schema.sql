@@ -2268,6 +2268,9 @@ CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
   source_owner_epoch INTEGER NOT NULL CHECK (source_owner_epoch >= 1),
   target_kind TEXT NOT NULL CHECK (target_kind IN ('gateway', 'profile', 'device')),
   target_id TEXT,
+  -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the
+  -- same shape as fresh databases; placement-move code validates its value.
+  target_machine_class TEXT,
   last_error TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,

@@ -104,7 +104,7 @@ export type WorkerPlacementDispatchRequest = {
 
 export type WorkerPlacementMoveDestination = Pick<
   WorkerPlacementDispatchRequest,
-  "profileId" | "executionMode" | "deviceId" | "inheritedProfile"
+  "profileId" | "executionMode" | "deviceId" | "machineClass" | "inheritedProfile"
 >;
 
 export type WorkerPlacementReclaimRequest = {

@@ -136,6 +136,20 @@ export default definePluginEntry({
       const enabled = overrides?.enabled ?? runtimeConfig.memory?.search?.enabled ?? true;
       return enabled ? agentId : undefined;
     };
+    const assertRetainedToolEnabled = (
+      agentId: string,
+      getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined,
+    ): void => {
+      if (!getRuntimeConfig) {
+        return;
+      }
+      const runtimeConfig = getRuntimeConfig();
+      if (!runtimeConfig || !resolveEnabledAgentId(agentId, runtimeConfig)) {
+        throw new Error(
+          "Memory is disabled for this agent. Enable memory search for this agent, then retry.",
+        );
+      }
+    };
     const resolveCliAgentId = (rawAgentId: unknown): string => {
       if (typeof rawAgentId === "string" && rawAgentId.trim()) {
         return normalizeAgentId(rawAgentId);
@@ -221,6 +235,8 @@ export default definePluginEntry({
             limit: optionalPositiveIntegerSchema({ description: "Max results (default: 5)" }),
           }),
           async execute(_toolCallId, params) {
+            // Tool definitions outlive hot config reloads; revalidate before memory I/O.
+            assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
             const rawParams = params as Record<string, unknown>;
             const query = rawParams.query as string;
             const limit = readPositiveIntegerParam(rawParams, "limit") ?? 5;
@@ -343,6 +359,7 @@ export default definePluginEntry({
             category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
           }),
           async execute(_toolCallId, params) {
+            assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
             if (isIncognitoSessionKey(ctx.sessionKey)) {
               return {
                 content: [
@@ -438,6 +455,7 @@ export default definePluginEntry({
             memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
           }),
           async execute(_toolCallId, params) {
+            assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
             const { query, memoryId } = params as { query?: string; memoryId?: string };
 
             if (memoryId) {
