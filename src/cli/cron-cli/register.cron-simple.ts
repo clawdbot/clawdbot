@@ -268,11 +268,11 @@ export function registerCronSimpleCommands(cron: Command) {
                 limit: CRON_SHOW_PAGE_SIZE,
                 offset,
               });
-              const listed = res as {
+              const listed = readGatewayShape<{
                 jobs?: CronJob[];
                 hasMore?: boolean;
                 nextOffset?: number | null;
-              };
+              }>(res);
               for (const job of listed.jobs ?? []) {
                 jobIds.push(job.id);
                 if (jobIds.length >= CRON_STATS_MAX_JOBS) {
@@ -294,10 +294,12 @@ export function registerCronSimpleCommands(cron: Command) {
 
           const perJob: Array<{ jobId: string; rollup: CronRunCostRollup }> = [];
           for (const jobId of jobIds) {
-            const page = (await callGatewayFromCli("cron.runs", opts, {
-              id: jobId,
-              limit,
-            })) as { entries?: CronRunLogEntry[] };
+            const page = readGatewayShape<{ entries?: CronRunLogEntry[] }>(
+              await callGatewayFromCli("cron.runs", opts, {
+                id: jobId,
+                limit,
+              }),
+            );
             const rollup = rollupCronRunCost(page.entries ?? []);
             if (rollup.totalRuns > 0) {
               perJob.push({ jobId, rollup });
@@ -355,7 +357,7 @@ export function registerCronSimpleCommands(cron: Command) {
             id,
             mode: opts.due ? "due" : "force",
           });
-          const result = res as CronRunCommandResult | undefined;
+          const result = readGatewayShape<CronRunCommandResult | undefined>(res);
           if (opts.wait && result?.ok && result.enqueued) {
             if (!result.runId) {
               throw new Error("cron run did not return a runId to wait for");

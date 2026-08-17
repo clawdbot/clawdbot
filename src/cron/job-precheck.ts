@@ -308,6 +308,7 @@ export async function authorizeCronJobPrecheckCommand(params: {
   // Canonical system.run default is allowlist when exec security is unspecified
   // (node-host/invoke.ts). Do not widen unconfigured prechecks to full.
   const basePolicy = {
+    // SAFETY: requested is ExecSecurity|undefined; fallback is the canonical allowlist default.
     security: (requested ?? "allowlist") as ExecSecurity,
     ask: "off" as const,
   };
@@ -624,6 +625,7 @@ export function normalizeCronJobPrecheck(value: unknown): CronJobPrecheck | unde
   if (typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
+  // SAFETY: caller already narrowed value to a non-null object (not array).
   const rec = value as Record<string, unknown>;
   const command = normalizeOptionalString(rec.command);
   if (!command) {

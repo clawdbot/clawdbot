@@ -249,7 +249,7 @@ describe("runCronJobPrecheck", () => {
     }) as unknown as typeof import("node:child_process").spawn;
     try {
       const result = await runCronJobPrecheck(
-        { command: "echo ok", onExitZero: "run", onNonZero: "skip" },
+        { command: "echo ok", contract: "exit-code", workExitCodes: [0], noWorkExitCodes: [2] },
         {
           spawnImpl,
           authz: { triggersEnabled: true, security: "full", securityOverrideOnly: true },
