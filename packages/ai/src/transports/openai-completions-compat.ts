@@ -48,10 +48,16 @@ type DetectedOpenAICompletionsCompat = {
 
 export type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders"
+  | "cacheControlFormat"
+  | "openRouterRouting"
+  | "sendSessionAffinityHeaders"
+  | "supportedReasoningEfforts"
+  | "reasoningEffortMap"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
+  supportedReasoningEfforts?: OpenAICompletionsCompat["supportedReasoningEfforts"];
+  reasoningEffortMap?: OpenAICompletionsCompat["reasoningEffortMap"];
   sessionAffinity: OpenAICompletionsSessionAffinity;
   visibleReasoningDetailTypes: string[];
   requiresNonEmptyUserOrAssistantMessage: boolean;
@@ -252,6 +258,8 @@ export function resolveOpenAICompletionsCompat(
     supportsDeveloperRole: configured?.supportsDeveloperRole ?? defaults.supportsDeveloperRole,
     supportsReasoningEffort:
       configured?.supportsReasoningEffort ?? defaults.supportsReasoningEffort,
+    supportedReasoningEfforts: configured?.supportedReasoningEfforts,
+    reasoningEffortMap: configured?.reasoningEffortMap,
     supportsUsageInStreaming:
       configured?.supportsUsageInStreaming ?? defaults.supportsUsageInStreaming,
     maxTokensField: configured?.maxTokensField ?? defaults.maxTokensField,

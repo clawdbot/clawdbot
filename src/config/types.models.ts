@@ -31,6 +31,8 @@ type SupportedOpenAICompatFields = Pick<
   | "supportsStore"
   | "supportsDeveloperRole"
   | "supportsReasoningEffort"
+  | "supportedReasoningEfforts"
+  | "reasoningEffortMap"
   | "supportsUsageInStreaming"
   | "supportsStrictMode"
   | "supportsJsonSchemaResponseFormat"
@@ -49,7 +51,12 @@ type SupportedOpenAICompatFields = Pick<
 
 type SupportedOpenAIResponsesCompatFields = Pick<
   OpenAIResponsesCompat,
-  "sendSessionIdHeader" | "supportsLongCacheRetention" | "supportsTemperature"
+  | "sendSessionIdHeader"
+  | "supportsLongCacheRetention"
+  | "supportsTemperature"
+  | "supportsReasoningEffort"
+  | "supportedReasoningEfforts"
+  | "reasoningEffortMap"
 >;
 
 type SupportedAnthropicMessagesCompatFields = Pick<

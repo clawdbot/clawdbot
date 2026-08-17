@@ -108,6 +108,8 @@ const OpenAICompletionsCompatSchema = Type.Object({
   supportsStore: Type.Optional(Type.Boolean()),
   supportsDeveloperRole: Type.Optional(Type.Boolean()),
   supportsReasoningEffort: Type.Optional(Type.Boolean()),
+  supportedReasoningEfforts: Type.Optional(Type.Array(Type.String())),
+  reasoningEffortMap: Type.Optional(Type.Record(Type.String(), Type.String())),
   supportsUsageInStreaming: Type.Optional(Type.Boolean()),
   maxTokensField: Type.Optional(
     Type.Union([Type.Literal("max_completion_tokens"), Type.Literal("max_tokens")]),
@@ -137,6 +139,9 @@ const OpenAICompletionsCompatSchema = Type.Object({
 
 const OpenAIResponsesCompatSchema = Type.Object({
   supportsTemperature: Type.Optional(Type.Boolean()),
+  supportsReasoningEffort: Type.Optional(Type.Boolean()),
+  supportedReasoningEfforts: Type.Optional(Type.Array(Type.String())),
+  reasoningEffortMap: Type.Optional(Type.Record(Type.String(), Type.String())),
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });

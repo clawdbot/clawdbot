@@ -164,10 +164,31 @@ export function applyResponsesServiceTierPricing(
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
 
+function resolveResponsesApiReasoningEffort<TApi extends Api>(
+  model: Model<TApi>,
+  reasoning: ResponsesReasoningEffort,
+): string | undefined {
+  const compat = model.api === "openai-responses" ? model.compat : undefined;
+  if (compat?.supportsReasoningEffort === false) {
+    return undefined;
+  }
+  if (model.thinkingLevelMap?.[reasoning] === null) {
+    return undefined;
+  }
+  return (
+    compat?.reasoningEffortMap?.[reasoning] ??
+    model.thinkingLevelMap?.[reasoning] ??
+    reasoning
+  );
+}
+
 export function resolveResponsesReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: SimpleStreamOptions["reasoning"] | undefined,
 ): ResponsesReasoningEffort | undefined {
+  if (reasoning && resolveResponsesApiReasoningEffort(model, reasoning) === undefined) {
+    return undefined;
+  }
   const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;
   if (!clampedReasoning || clampedReasoning === "off") {
     return undefined;
@@ -214,8 +235,11 @@ export function applyCommonResponsesParams<TApi extends Api>(
 
   if (options?.reasoningEffort || options?.reasoningSummary) {
     const effort = options?.reasoningEffort
-      ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
+      ? resolveResponsesApiReasoningEffort(model, options.reasoningEffort)
       : "medium";
+    if (effort === undefined) {
+      return;
+    }
     params.reasoning = {
       effort: effort as NonNullable<typeof params.reasoning>["effort"],
       summary: options?.reasoningSummary || "auto",

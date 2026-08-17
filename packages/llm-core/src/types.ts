@@ -481,6 +481,10 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Provider-accepted reasoning effort labels. Overrides model-family defaults when present. */
+  supportedReasoningEfforts?: string[];
+  /** Maps OpenClaw reasoning effort labels to provider-specific labels. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
   /** Which field to use for max tokens. Default: auto-detected from URL. */
@@ -528,6 +532,12 @@ export interface OpenAIResponsesCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
+  /** Whether the provider supports `reasoning_effort`. Default: auto-detected from the model. */
+  supportsReasoningEffort?: boolean;
+  /** Provider-accepted reasoning effort labels. */
+  supportedReasoningEfforts?: string[];
+  /** Maps OpenClaw reasoning effort labels to provider-specific labels. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */

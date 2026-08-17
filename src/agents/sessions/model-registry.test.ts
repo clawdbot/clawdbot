@@ -163,6 +163,35 @@ describe("ModelRegistry models.json auth", () => {
     });
   });
 
+  it("preserves compat reasoning metadata from models.json", () => {
+    const modelsPath = writeModelsJson({
+      providers: {
+        custom: {
+          baseUrl: "https://models.example/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "reasoning-model",
+              compat: {
+                supportsReasoningEffort: true,
+                supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+                reasoningEffortMap: { xhigh: "high" },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("custom", "reasoning-model")?.compat).toEqual({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+      reasoningEffortMap: { xhigh: "high" },
+    });
+  });
+
   it("uses stored auth for custom models without an inline apiKey", async () => {
     const modelsPath = writeModelsJson({
       providers: {
