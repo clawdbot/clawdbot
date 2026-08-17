@@ -351,6 +351,20 @@ describe("handleModelsCommand", () => {
   // oxfmt-ignore
   it("reuses a lifecycle-complete catalog before wildcard picker browse", async () => { modelCatalogMocks.isPreparedModelCatalogFull.mockReturnValueOnce(true); await handleModelsCommand(buildParams("/models", { agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } } }), true); expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(1); expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true); });
 
+  it("performs one cold full discovery before wildcard picker browse", async () => {
+    await handleModelsCommand(
+      buildParams("/models", {
+        agents: { defaults: { modelPolicy: { allow: ["openai/*"] } } },
+      }),
+      true,
+    );
+
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(2);
+    expect(
+      modelCatalogMocks.loadModelCatalog.mock.calls.map(([params]) => params.readOnly),
+    ).toEqual([true, false]);
+  });
+
   it("does not block default browse when read-only catalog loading is slow", async () => {
     vi.useFakeTimers();
     try {
