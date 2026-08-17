@@ -828,6 +828,67 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   );
 }
 
+/** @internal Lists bindings selectable by at least one group/channel route under runtime precedence. */
+export function listEffectiveGroupRouteBindings(cfg: OpenClawConfig) {
+  const bindings = listBindings(cfg);
+  const usedIds = new Set<string>();
+  for (const binding of bindings) {
+    usedIds.add(normalizeAccountId(binding.match.accountId));
+    for (const value of [binding.match.peer?.id, binding.match.guildId, binding.match.teamId]) {
+      const normalized = normalizeRouteBindingId(value);
+      if (normalized) {
+        usedIds.add(normalized);
+      }
+    }
+  }
+  let sentinel = "openclaw-audit-route";
+  while (usedIds.has(sentinel)) {
+    sentinel += "-next";
+  }
+
+  const markerForIndex = (index: number) => `audit-binding-${index}`;
+  const probeCfg: OpenClawConfig = {
+    ...cfg,
+    agents: { entries: {} },
+    bindings: bindings.map((binding, index) => ({ ...binding, agentId: markerForIndex(index) })),
+  };
+
+  return bindings.filter((binding, index) => {
+    const match = normalizeBindingMatch(binding.match);
+    if (
+      match.peer.state === "invalid" ||
+      ((match.peer.state === "valid" || match.peer.state === "wildcard-kind") &&
+        match.peer.kind === "direct")
+    ) {
+      return false;
+    }
+    const peer: RoutePeer =
+      match.peer.state === "valid"
+        ? { kind: match.peer.kind, id: match.peer.id }
+        : match.peer.state === "wildcard-kind"
+          ? { kind: match.peer.kind, id: sentinel }
+          : { kind: "group", id: sentinel };
+    const accountId = match.accountPattern === "*" ? sentinel : match.accountPattern;
+    const roleWitnesses = match.roles?.map((role) => [role]) ?? [[]];
+
+    // Equality/wildcard fields need one fresh value for each open domain. Role matching
+    // is positive OR, so singleton candidate roles prove existence without sampling.
+    return roleWitnesses.some(
+      (memberRoleIds) =>
+        resolveAgentRoute({
+          cfg: probeCfg,
+          channel: binding.match.channel,
+          defaultAgentId: DEFAULT_AGENT_ID,
+          accountId,
+          peer,
+          guildId: match.guildId,
+          teamId: match.teamId,
+          memberRoleIds,
+        }).agentId === markerForIndex(index),
+    );
+  });
+}
+
 /** @internal Resolves fallback precedence for an unknown direct peer. */
 export function resolveUnknownDirectMessageRoute(
   input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope" | "groupScope">,

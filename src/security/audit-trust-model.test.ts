@@ -221,6 +221,90 @@ describe("security audit trust model findings", () => {
         },
       },
       {
+        name: "does not warn for a main-scoped room binding shadowed by an earlier equivalent binding",
+        cfg: {
+          bindings: [
+            {
+              agentId: "isolated",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "group", id: "room-1" },
+              },
+              session: { groupScope: "per-group" },
+            },
+            {
+              agentId: "shared",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "channel", id: "room-1" },
+              },
+              session: { groupScope: "main" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          expect(
+            findings.some((finding) => finding.checkId === "security.trust_model.group_scope_main"),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "warns when a main-scoped room binding precedes an equivalent binding",
+        cfg: {
+          bindings: [
+            {
+              agentId: "shared",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "channel", id: "room-1" },
+              },
+              session: { groupScope: "main" },
+            },
+            {
+              agentId: "isolated",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "group", id: "room-1" },
+              },
+              session: { groupScope: "per-group" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = requireGroupScopeMainFinding(findings);
+          expect(finding.detail).toContain("discord accountId=work peer=channel:room-1");
+        },
+      },
+      {
+        name: "warns for a more-specific main-scoped room binding after a broader binding",
+        cfg: {
+          bindings: [
+            {
+              agentId: "isolated",
+              match: { channel: "discord", accountId: "work" },
+              session: { groupScope: "per-group" },
+            },
+            {
+              agentId: "shared",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "group", id: "room-1" },
+              },
+              session: { groupScope: "main" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = requireGroupScopeMainFinding(findings);
+          expect(finding.detail).toContain("discord accountId=work peer=group:room-1");
+        },
+      },
+      {
         name: "flags open dmPolicy when tools.elevated is enabled",
         cfg: {
           tools: { elevated: { enabled: true, allowFrom: { feishu: ["ou_123"] } } },

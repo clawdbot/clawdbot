@@ -14,7 +14,6 @@ import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-securit
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { describeBinding } from "../commands/agents.binding-format.js";
-import { listRouteBindings } from "../config/bindings.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
@@ -25,6 +24,7 @@ import {
   listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
+import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
@@ -1243,10 +1243,8 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 
 export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const mainGroupScopes = listRouteBindings(cfg)
-    .filter(
-      (binding) => binding.session?.groupScope === "main" && binding.match.peer?.kind !== "direct",
-    )
+  const mainGroupScopes = listEffectiveGroupRouteBindings(cfg)
+    .filter((binding) => binding.session?.groupScope === "main")
     .map(
       (binding) =>
         `- bindings[].session.groupScope="main": ${describeBinding(binding)} (agent=${binding.agentId})`,
