@@ -44,6 +44,16 @@ describe("projectSessionDisplayMessage", () => {
     expect(preview?.text).toBe(`${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS - 3)}...`);
   });
 
+  test("flattens Markdown before bounding a preview", () => {
+    const longUrl = `https://example.com/${"x".repeat(SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS)}`;
+    const preview = projectSessionDisplayMessage(
+      { role: "assistant", content: `Read the [deployment guide](${longUrl})` },
+      { flattenMarkdown: true },
+    );
+
+    expect(preview?.text).toBe("Read the deployment guide");
+  });
+
   test("preserves quoted directive examples", () => {
     const quoted = "Use `[[reply_to_current]]` literally.";
     expect(projectSessionDisplayMessage({ role: "assistant", content: quoted })?.text).toBe(quoted);

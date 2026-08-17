@@ -1,6 +1,5 @@
 // Session-list title reads: bounded transcript probes plus a watermark-validated
 // cache so list rendering never rescans transcripts that have not changed.
-import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import {
   isSessionTranscriptProjectionUnavailableError,
   readSessionTranscriptMessageEventPage,
@@ -99,9 +98,8 @@ function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]):
     entries
       .toReversed()
       .map(sqliteMessageEventWithSeq)
-      .map((message) => projectSessionDisplayMessage(message))
-      .map((message) => (message ? flattenMarkdownToPlainText(message.text) : ""))
-      .find(Boolean) ?? null
+      .map((message) => projectSessionDisplayMessage(message, { flattenMarkdown: true }))
+      .find(Boolean)?.text ?? null
   );
 }
 
