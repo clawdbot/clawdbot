@@ -2,7 +2,10 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import {
+  telegramBotInfoForTest,
+  waitForTelegramMockCalls,
+} from "./bot.create-telegram-bot.test-support.js";
 
 const saveRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -294,4 +297,43 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       setTimeoutSpy.mockRestore();
     }
   });
+
+  it("binds the album identity to the final message when updates arrive out of order", async () => {
+    setOpenChannelPostConfig();
+    saveRemoteMedia.mockImplementation(async () => ({
+      path: "/tmp/p.jpg",
+      contentType: "image/png",
+    }));
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const handler = getChannelPostHandler();
+      // The higher message_id arrives first: update arrival order need not
+      // match message_id order, so the final id must be picked after sorting.
+      await handler(
+        createChannelPostContext({
+          messageId: 9202,
+          date: 1736380801,
+          mediaGroupId: "ooo-album",
+          photoFileId: "p2",
+        }),
+      );
+      await handler(
+        createChannelPostContext({
+          messageId: 9201,
+          date: 1736380800,
+          caption: "album caption",
+          mediaGroupId: "ooo-album",
+          photoFileId: "p1",
+        }),
+      );
+      await flushChannelPostMediaGroup(setTimeoutSpy);
+      await waitForTelegramMockCalls(replySpy, 1);
+      const ctx = replySpy.mock.calls.at(0)?.[0] as Record<string, unknown>;
+      expect(ctx?.MessageSid).toBe("9202");
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
 });
+

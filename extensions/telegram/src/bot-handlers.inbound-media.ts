@@ -269,8 +269,10 @@ export function createTelegramInboundMedia({
 
   const processMediaGroup = async (entry: BufferedMediaGroupEntry) => {
     try {
-      const finalIngressMessageId = entry.messages.at(-1)?.msg.message_id;
+      // Album entries arrive in update order, which need not match message_id
+      // order — sort first, then take the final message id.
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
+      const finalIngressMessageId = entry.messages.at(-1)?.msg.message_id;
       let primary =
         entry.messages.find((item) => item.msg.caption || item.msg.text) ?? entry.messages[0];
       if (!primary) {
