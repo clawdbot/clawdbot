@@ -20,9 +20,19 @@ describe("classic onboarding process", () => {
   it("exits through wizard cancellation when Ctrl-D ends stdin at the first prompt", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-eof-"));
     homes.add(home);
+    const fixture = `
+      import { runInteractiveOnboarding } from "./src/commands/onboard-interactive-runner.ts";
+      import { defaultRuntime } from "./src/runtime.ts";
+      import { createClackPrompter } from "./src/wizard/clack-prompter.ts";
+
+      const prompter = createClackPrompter();
+      await runInteractiveOnboarding(async () => {
+        await prompter.confirm({ message: "Continue?", initialValue: false });
+      }, defaultRuntime);
+    `;
     const child = spawn(
       process.execPath,
-      ["--import", "tsx", path.resolve("test/fixtures/clack-prompter-eof.mjs")],
+      ["--import", "tsx", "--input-type=module", "--eval", fixture],
       {
         cwd: process.cwd(),
         cols: 100,
