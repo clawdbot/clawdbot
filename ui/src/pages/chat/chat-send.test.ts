@@ -32,6 +32,7 @@ import { refreshChatAvatar } from "./chat-avatar.ts";
 import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-outbox-drain.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
@@ -149,6 +150,7 @@ let loadChatHistory: typeof import("./chat-history.ts").loadChatHistory;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
 let admitQueuedMessageForSession: typeof import("./chat-queue.ts").admitQueuedMessageForSession;
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
+let setTransientQueuedMessageProjection: typeof import("./chat-queue.ts").setTransientQueuedMessageProjection;
 let removeDeliveredQueuedChatSendForRun: typeof import("./chat-queue.ts").removeDeliveredQueuedChatSendForRun;
 let removeVisibleOrScopedQueuedMessageWithoutReleasing: typeof import("./chat-queue.ts").removeVisibleOrScopedQueuedMessageWithoutReleasing;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
@@ -182,6 +184,7 @@ async function loadChatHelpers(): Promise<void> {
     clearPendingQueueItemsForRun,
     removeDeliveredQueuedChatSendForRun,
     removeQueuedMessage,
+    setTransientQueuedMessageProjection,
     markQueuedChatSendsWaitingForReconnect,
     removeVisibleOrScopedQueuedMessageWithoutReleasing,
     readChatQueueForScope,
@@ -5602,6 +5605,120 @@ describe("handleSendChat", () => {
       expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
     ]);
     expect(host.chatMessages).toStrictEqual([]);
+  });
+
+  it("keeps an acknowledged live send pending while durable history is briefly stale", async () => {
+    let historyRequests = 0;
+    let runId: string | undefined;
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => {
+          historyRequests += 1;
+          return Promise.resolve({
+            messages:
+              historyRequests > 2
+                ? [{ role: "user", __openclaw: { idempotencyKey: `${runId}:user` } }]
+                : [],
+            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+          });
+        },
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "live send payload");
+          runId = String(payload.idempotencyKey);
+          return Promise.resolve({ runId, status: "started" });
+        },
+      },
+    });
+
+    await handleSendChat(host, "history will catch up");
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({ sendState: "sending", text: "history will catch up" }),
+    ]);
+    expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue).toEqual([
+      expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
+    ]);
+
+    host.chatRunId = null;
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue[0]?.sendState).toBe("sending");
+    expect(host.lastError).toBeNull();
+    await waitForFast(() => expect(listStoredChatOutboxes(host)).toStrictEqual([]), {
+      timeout: 1_000,
+    });
+    expect(historyRequests).toBeGreaterThanOrEqual(3);
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.lastError).toBeNull();
+  });
+
+  it("marks an acknowledged live send unconfirmed after history stays missing", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "live send payload");
+          const runId = String(payload.idempotencyKey);
+          return Promise.resolve({ runId, status: "started" });
+        },
+      },
+    });
+
+    await handleSendChat(host, "history never catches up");
+    host.chatRunId = null;
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue[0]?.sendState).toBe("sending");
+    expect(host.lastError).toBeNull();
+
+    now += 5_001;
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue[0]).toMatchObject({
+      sendError: UNCONFIRMED_CHAT_SEND_ERROR,
+      sendState: "unconfirmed",
+      text: "history never catches up",
+    });
+    expect(host.lastError).toBe(UNCONFIRMED_CHAT_SEND_ERROR);
+  });
+
+  it("starts a fresh confirmation grace after the prior outbox scope is removed", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "live send payload");
+          const runId = String(payload.idempotencyKey);
+          return Promise.resolve({ runId, status: "started" });
+        },
+      },
+    });
+
+    await handleSendChat(host, "reuse this delivery version");
+    host.chatRunId = null;
+    await flushChatQueueForEvent(host);
+
+    const item = expectDefined(host.chatQueue[0], "queued live send");
+    const sessionKey = expectDefined(item.sessionKey, "queued session key");
+    expect(removeQueuedMessage(host, item.id)).toBe("removed");
+
+    now = 5_500;
+    expect(admitQueuedMessageForSession(host, sessionKey, item)).toBe(true);
+    expect(setTransientQueuedMessageProjection(host, sessionKey, item)).toBe(true);
+    await flushChatQueueForEvent(host);
+
+    now = 6_001;
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue[0]).toMatchObject({
+      id: item.id,
+      sendState: "sending",
+      text: "reuse this delivery version",
+    });
+    expect(host.lastError).toBeNull();
   });
 
   it("coalesces duplicate queued local commands while the first command is running", async () => {
