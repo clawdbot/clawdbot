@@ -183,7 +183,11 @@ export function readTranscriptSnapshotSync(
 export function replaceTranscriptEventsSync(
   scope: SessionTranscriptWriteScope,
   events: TranscriptEvent[],
-  options: { expectedSnapshot?: readonly SqliteTranscriptSnapshotRow[] } = {},
+  options: {
+    expectedSnapshot?: readonly SqliteTranscriptSnapshotRow[];
+    /** See {@link TranscriptEventAppendOptions.onCommittedSnapshot}. */
+    onCommittedSnapshot?: (rows: SqliteTranscriptSnapshotRow[]) => void;
+  } = {},
 ): boolean {
   // Every sync replacement inherits and enforces the admitted writer claim.
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
@@ -209,6 +213,12 @@ export function replaceTranscriptEventsSync(
     }
     replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
     replaced = true;
+    if (options.onCommittedSnapshot) {
+      // Read the post-rewrite snapshot before this transaction commits, so the
+      // caller's next expected snapshot cannot absorb a foreign row that lands
+      // after this commit but before a later post-commit reread would happen.
+      options.onCommittedSnapshot(readTranscriptEventRows(database, resolved.sessionId));
+    }
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !replaced) {
     throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
@@ -344,13 +354,17 @@ export function appendTranscriptEventSync(
       });
       return;
     }
-    result = ok(
-      appendTranscriptEventInTransaction(
-        database,
-        resolved,
-        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
-      ),
+    const appended = appendTranscriptEventInTransaction(
+      database,
+      resolved,
+      resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
     );
+    result = ok(appended);
+    if (appended && options.onCommittedSnapshot) {
+      // Read the snapshot before this transaction commits, so it reflects exactly this
+      // append and cannot include a foreign row that lands after our own commit.
+      options.onCommittedSnapshot(readTranscriptEventRows(database, resolved.sessionId));
+    }
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
     throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
@@ -565,6 +579,12 @@ export function appendTranscriptMessageSync<TMessage>(
       return;
     }
     result = appendTranscriptMessageInTransaction(database, resolved, options);
+    if (options.onCommittedSnapshot) {
+      // Read the snapshot before this transaction commits (whether or not this call
+      // added a new row), so it reflects exactly this commit and cannot include a
+      // foreign row that lands after our own commit.
+      options.onCommittedSnapshot(readTranscriptEventRows(database, resolved.sessionId));
+    }
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && result === undefined) {
     throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);

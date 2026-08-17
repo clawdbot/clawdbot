@@ -14,6 +14,7 @@ import type {
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
 } from "./session-accessor.lifecycle-types.js";
+import type { SqliteTranscriptSnapshotRow } from "./session-accessor.sqlite-read.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
@@ -82,6 +83,15 @@ export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
   /** Synchronous authority check run inside the append transaction. */
   beforeCommitInTransaction?: () => void;
+  /**
+   * Invoked synchronously inside the append's own write transaction, immediately
+   * after the row is written, with the transcript row snapshot as of that same
+   * commit. Sync callers use this to capture an atomically-consistent "expected
+   * snapshot" for a later `replaceTranscriptEventsSync` — reading it back after
+   * the transaction has already committed would leave a window for a foreign
+   * process's append to land in between and be silently absorbed.
+   */
+  onCommittedSnapshot?: (rows: SqliteTranscriptSnapshotRow[]) => void;
 };
 
 export type TranscriptEventAppendError =
@@ -134,6 +144,8 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   parentId?: string | null;
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   useRawWhenLinear?: boolean;
+  /** See {@link TranscriptEventAppendOptions.onCommittedSnapshot}. */
+  onCommittedSnapshot?: (rows: SqliteTranscriptSnapshotRow[]) => void;
 };
 
 export type TranscriptMessageAppendResult<TMessage> = {

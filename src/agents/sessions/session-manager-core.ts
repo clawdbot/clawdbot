@@ -116,6 +116,18 @@ export class SessionManagerCore {
       : undefined;
   }
 
+  /**
+   * Records a transcript row snapshot captured atomically inside a just-committed
+   * append transaction (via `onCommittedSnapshot`). This must be preferred over
+   * {@link refreshTranscriptSnapshot} after a synchronous append: rereading from
+   * storage after the transaction has already committed and returned leaves a gap
+   * in which a foreign process's commit would be absorbed into the "expected"
+   * snapshot without ever having been observed in memory.
+   */
+  protected recordCommittedTranscriptSnapshot(rows: SqliteTranscriptSnapshotRow[]): void {
+    this.transcriptSnapshot = rows;
+  }
+
   reloadPersistedTranscript(): void {
     if (this.persistenceTarget) {
       const runtimeCwd = this.cwd;
@@ -540,8 +552,19 @@ export class SessionManagerCore {
     try {
       replaceTranscriptEventsSync(
         this.persistenceTarget,
-        this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
-        { expectedSnapshot: this.transcriptSnapshot },
+        this.getPersistedFileEntries(
+          leafAppendParentId,
+          options?.leafAppendMode ?? this.appendMode,
+        ),
+        {
+          expectedSnapshot: this.transcriptSnapshot,
+          // Capture the post-rewrite snapshot from inside the same write transaction
+          // as the rewrite itself, rather than rereading it afterward: a post-commit
+          // reread would leave a window in which a foreign process's append lands
+          // between this commit and the reread and gets silently absorbed as if this
+          // manager had already observed it.
+          onCommittedSnapshot: (rows) => this.recordCommittedTranscriptSnapshot(rows),
+        },
       );
     } catch (error) {
       if (error instanceof SqliteTranscriptMutationConflictError) {
@@ -553,7 +576,6 @@ export class SessionManagerCore {
       }
       throw error;
     }
-    this.refreshTranscriptSnapshot();
     this.persistenceHeaderPending = false;
   }
 
