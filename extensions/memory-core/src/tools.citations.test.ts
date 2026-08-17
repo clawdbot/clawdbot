@@ -637,8 +637,9 @@ describe("memory tools", () => {
       const stalledAllResult = await stalledAllResultPromise;
       expectUnavailableMemorySearchDetails(stalledAllResult.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before it could complete.",
+        action:
+          "Retry memory_search. If timeouts continue, run openclaw memory status --deep and check for indexing or maintenance delays.",
       });
 
       const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
@@ -654,13 +655,25 @@ describe("memory tools", () => {
     }
   });
 
-  it("cooldowns primary memory when corpus=all memory search stalls", async () => {
+  it("does not cooldown primary memory when corpus=all memory search times out", async () => {
     vi.useFakeTimers();
     try {
       let searchCalls = 0;
       setMemorySearchImpl(async () => {
         searchCalls += 1;
-        return await new Promise(() => {});
+        if (searchCalls === 1) {
+          return await new Promise(() => {});
+        }
+        return [
+          {
+            path: "MEMORY.md",
+            startLine: 5,
+            endLine: 7,
+            score: 0.9,
+            snippet: "@@ -5,3 @@\nAssistant: noted",
+            source: "memory" as const,
+          },
+        ];
       });
       registerMemoryCorpusSupplement("memory-wiki", {
         search: async () => [
@@ -685,21 +698,23 @@ describe("memory tools", () => {
       const stalledAllResult = await stalledAllResultPromise;
       expectUnavailableMemorySearchDetails(stalledAllResult.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before it could complete.",
+        action:
+          "Retry memory_search. If timeouts continue, run openclaw memory status --deep and check for indexing or maintenance delays.",
       });
 
-      const wikiOnlyResult = await tool.execute("call_all_after_stalled_memory", {
+      const retryResult = await tool.execute("call_all_after_stalled_memory", {
         query: "alpha",
         corpus: "all",
       });
-      const details = wikiOnlyResult.details as {
+      const details = retryResult.details as {
         results: Array<{ corpus: string; path: string }>;
       };
       expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
         ["wiki", "entities/alpha.md"],
+        ["memory", "MEMORY.md"],
       ]);
-      expect(searchCalls).toBe(1);
+      expect(searchCalls).toBe(2);
     } finally {
       vi.useRealTimers();
     }
