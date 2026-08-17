@@ -73,6 +73,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.model.circuitBreaker.enabled":
+    "Opt in to the route circuit breaker. When a route fails repeatedly with transient provider errors it is bypassed for a short backoff window, but only while another configured route can still reach transport. Off by default.",
   "agents.defaults.utilityModel":
     "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.entries.*.utilityModel":

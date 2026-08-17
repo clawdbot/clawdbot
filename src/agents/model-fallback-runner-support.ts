@@ -63,14 +63,3 @@ export function flushDeferredSessionSuspension(state: DeferredSessionSuspensionS
   state.pending = undefined;
   void suspendSession(pending);
 }
-
-export function resolveFallbackAuthScope(params: {
-  userLockedAuthProfileId?: string;
-  profileIds?: readonly string[];
-}): string | undefined {
-  if (params.userLockedAuthProfileId) {
-    return params.userLockedAuthProfileId;
-  }
-  // resolveAuthProfileOrder places the profile selected for this model first.
-  return params.profileIds?.find((id) => id.trim())?.trim();
-}

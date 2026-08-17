@@ -221,4 +221,43 @@ describe("model fallback circuit", () => {
     );
     expect(acquireAt(overflowAt + 1).type).toBe("open");
   });
+
+  describe("overlapping last-route recovery probes", () => {
+    // Last-route probes are allowed to overlap, so two attempts can be in
+    // flight for the same route. Completions must not apply out of order.
+    function openCircuitAt(startAt: number): number {
+      recordRouteFailures(ROUTE, modelCircuitInternals.FAILURE_THRESHOLD, startAt);
+      const openedAt = startAt + modelCircuitInternals.FAILURE_THRESHOLD;
+      expect(acquireAt(openedAt).type).toBe("open");
+      return openedAt;
+    }
+
+    it("ignores a stale probe failure after a newer probe closed the circuit", () => {
+      const openedAt = openCircuitAt(1_000);
+      const stale = acquireModelCircuitLastRouteProbe({ ...ROUTE, now: openedAt + 1 });
+      const fresh = acquireModelCircuitLastRouteProbe({ ...ROUTE, now: openedAt + 2 });
+
+      // The newer probe succeeds and closes the circuit.
+      expect(recordModelCircuitSuccess(fresh)).toBe(true);
+      expect(acquireAt(openedAt + 3).type).toBe("attempt");
+
+      // The older probe now reports its failure. It must not re-open the route.
+      recordModelCircuitFailure(stale, "overloaded", openedAt + 4);
+      expect(acquireAt(openedAt + 5).type).toBe("attempt");
+    });
+
+    it("ignores a stale probe success after a newer probe reopened the circuit", () => {
+      const openedAt = openCircuitAt(1_000);
+      const stale = acquireModelCircuitLastRouteProbe({ ...ROUTE, now: openedAt + 1 });
+      const fresh = acquireModelCircuitLastRouteProbe({ ...ROUTE, now: openedAt + 2 });
+
+      // The newer probe fails, re-opening the route with backoff.
+      recordModelCircuitFailure(fresh, "overloaded", openedAt + 3);
+      expect(acquireAt(openedAt + 4).type).toBe("open");
+
+      // The older probe's success must not erase that newer decision.
+      expect(recordModelCircuitSuccess(stale)).toBe(false);
+      expect(acquireAt(openedAt + 5).type).toBe("open");
+    });
+  });
 });

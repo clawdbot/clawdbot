@@ -584,9 +584,20 @@ function captureModelFailoverDiagnostics(): {
   return { events, stop };
 }
 
-function makeDiagnosticFallbackConfig(fallbacks: string[]): OpenClawConfig {
+function makeDiagnosticFallbackConfig(
+  fallbacks: string[],
+  options?: { circuitBreaker?: boolean },
+): OpenClawConfig {
   return makeCfg({
-    agents: { defaults: { model: { primary: "openai/gpt-5.5", fallbacks } } },
+    agents: {
+      defaults: {
+        model: {
+          primary: "openai/gpt-5.5",
+          fallbacks,
+          ...(options?.circuitBreaker ? { circuitBreaker: { enabled: true } } : {}),
+        },
+      },
+    },
   });
 }
 
@@ -799,7 +810,9 @@ describe("runWithModelFallback", () => {
   });
 
   it("skips an intermittently degraded route after repeated transient failures", async () => {
-    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]);
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"], {
+      circuitBreaker: true,
+    });
     const primaryOutcomes = Array.from({ length: 10 }, (_, index) =>
       index % 2 === 0 ? "success" : "failure",
     );
@@ -851,7 +864,9 @@ describe("runWithModelFallback", () => {
   });
 
   it("attempts an open route when the only fallback cannot reach transport", async () => {
-    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]);
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"], {
+      circuitBreaker: true,
+    });
     const sessionId = "session:circuit-last-runnable-route";
     // The fallback is auth-skipped for this session, so it exists in the
     // candidate array but is rejected before any provider call.
@@ -899,12 +914,19 @@ describe("runWithModelFallback", () => {
 
     expect(recovered.result).toBe("primary-recovered");
     expect(recovered.attempts.map((attempt) => attempt.code)).not.toContain("model_circuit_open");
-    // The successful last-route probe closes the circuit again.
-    expect(modelCircuitInternals.modelCircuitStates.size).toBe(0);
+    // The successful last-route probe closes the circuit again. The entry is
+    // retained (closed, not deleted) so a superseded probe can still detect
+    // that its generation is stale; the pruner reclaims it later.
+    const closedState = modelCircuitInternals.modelCircuitStates.get(
+      modelCircuitInternals.circuitKey("openai", "gpt-5.5"),
+    );
+    expect(closedState?.openUntil).toBe(0);
   });
 
   it("still skips an open route when a runnable fallback remains", async () => {
-    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]);
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"], {
+      circuitBreaker: true,
+    });
     const sessionId = "session:circuit-runnable-fallback";
     const run = vi.fn(async (provider: string, model: string) => {
       if (provider === "openai") {

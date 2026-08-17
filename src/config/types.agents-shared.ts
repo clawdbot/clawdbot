@@ -6,6 +6,16 @@ import type {
   SandboxSshSettings,
 } from "./types.sandbox.js";
 
+/** Opt-in route circuit breaker for a model fallback chain. */
+export type ModelCircuitBreakerConfig = {
+  /**
+   * Bypass a route that keeps failing with transient provider errors, but
+   * only while another configured route can still reach transport. Off by
+   * default: it changes which routes are attempted across turns.
+   */
+  enabled?: boolean;
+};
+
 /** Agent model selector: a single provider/model ref or primary+fallback chain. */
 export type AgentModelConfig =
   | string
@@ -14,6 +24,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Opt-in route circuit breaker for this fallback chain. */
+      circuitBreaker?: ModelCircuitBreakerConfig;
     };
 
 /** Tool-specific model selector with an optional capability timeout override. */

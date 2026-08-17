@@ -32,12 +32,32 @@ type ModelCircuitState = {
   halfOpenInFlight: boolean;
   lastTouchedAt: number;
   lastReason: FailoverReason;
+  /** Bumped on every open/close transition so stale probes can be detected. */
+  generation: number;
 };
 
 export type ModelCircuitAttempt = {
   key: string;
   wasHalfOpen: boolean;
+  /** State generation observed when this attempt was acquired. */
+  generation: number;
 };
+
+/**
+ * Last-route recovery probes are allowed to overlap, so two attempts can be
+ * in flight for the same route. Each carries the generation it observed; a
+ * completion whose generation no longer matches has been superseded and must
+ * not mutate state, otherwise an older probe can delete or reopen the result
+ * a newer probe just recorded.
+ */
+function isStaleAttempt(attempt: ModelCircuitAttempt): boolean {
+  const state = modelCircuitStates.get(attempt.key);
+  return state !== undefined && state.generation !== attempt.generation;
+}
+
+function currentGeneration(key: string): number {
+  return modelCircuitStates.get(key)?.generation ?? 0;
+}
 
 type ModelCircuitGate =
   | { type: "attempt"; attempt: ModelCircuitAttempt }
@@ -153,14 +173,17 @@ export function acquireModelCircuit(params: {
   pruneCircuitStates(now);
   const state = modelCircuitStates.get(key);
   if (!state || state.openUntil <= 0) {
-    return { type: "attempt", attempt: { key, wasHalfOpen: false } };
+    return {
+      type: "attempt",
+      attempt: { key, wasHalfOpen: false, generation: currentGeneration(key) },
+    };
   }
   if (state.openUntil > now || state.halfOpenInFlight) {
     return { type: "open", error: formatOpenError(state, now), reason: state.lastReason };
   }
   state.halfOpenInFlight = true;
   state.lastTouchedAt = now;
-  return { type: "attempt", attempt: { key, wasHalfOpen: true } };
+  return { type: "attempt", attempt: { key, wasHalfOpen: true, generation: state.generation } };
 }
 
 /**
@@ -182,15 +205,18 @@ export function acquireModelCircuitLastRouteProbe(params: {
   const key = circuitKey(params.provider, params.model, params.agentDir);
   const state = modelCircuitStates.get(key);
   if (!state || state.openUntil <= now) {
-    return { key, wasHalfOpen: false };
+    return { key, wasHalfOpen: false, generation: currentGeneration(key) };
   }
   state.halfOpenInFlight = true;
   state.lastTouchedAt = now;
-  return { key, wasHalfOpen: true };
+  return { key, wasHalfOpen: true, generation: state.generation };
 }
 
 export function releaseModelCircuitAttempt(attempt: ModelCircuitAttempt | undefined): boolean {
-  const state = attempt?.wasHalfOpen ? modelCircuitStates.get(attempt.key) : undefined;
+  if (!attempt || isStaleAttempt(attempt)) {
+    return false;
+  }
+  const state = attempt.wasHalfOpen ? modelCircuitStates.get(attempt.key) : undefined;
   if (!state) {
     return false;
   }
@@ -198,11 +224,31 @@ export function releaseModelCircuitAttempt(attempt: ModelCircuitAttempt | undefi
   return true;
 }
 
-function recordModelCircuitSuccess(attempt: ModelCircuitAttempt): boolean {
-  if (!attempt.wasHalfOpen) {
+/**
+ * Closes the route in place rather than deleting it. The entry is what lets a
+ * superseded probe notice its generation is stale; deleting it would make an
+ * older completion look fresh and let it resurrect the route. Idle entries are
+ * reclaimed by the TTL/capacity pruner.
+ */
+function closeCircuit(state: ModelCircuitState, now: number): void {
+  state.failures = [];
+  state.openUntil = 0;
+  state.currentOpenMs = 0;
+  state.halfOpenInFlight = false;
+  state.lastTouchedAt = now;
+  state.generation += 1;
+}
+
+function recordModelCircuitSuccess(attempt: ModelCircuitAttempt, now = Date.now()): boolean {
+  if (!attempt.wasHalfOpen || isStaleAttempt(attempt)) {
     return false;
   }
-  return modelCircuitStates.delete(attempt.key);
+  const state = modelCircuitStates.get(attempt.key);
+  if (!state) {
+    return false;
+  }
+  closeCircuit(state, now);
+  return true;
 }
 
 function openCircuit(state: ModelCircuitState, now: number, wasHalfOpen: boolean): void {
@@ -212,6 +258,7 @@ function openCircuit(state: ModelCircuitState, now: number, wasHalfOpen: boolean
   state.openUntil = now + state.currentOpenMs;
   state.halfOpenInFlight = false;
   state.failures = [];
+  state.generation += 1;
 }
 
 function newCircuitState(now: number, reason: FailoverReason): ModelCircuitState {
@@ -222,6 +269,7 @@ function newCircuitState(now: number, reason: FailoverReason): ModelCircuitState
     halfOpenInFlight: false,
     lastTouchedAt: now,
     lastReason: reason,
+    generation: 0,
   };
 }
 
@@ -232,9 +280,10 @@ function updateFailureState(state: ModelCircuitState, reason: FailoverReason, no
   trimFailures(state, now);
 }
 
-function clearIneligibleHalfOpen(attempt: ModelCircuitAttempt): null {
-  if (attempt.wasHalfOpen) {
-    modelCircuitStates.delete(attempt.key);
+function clearIneligibleHalfOpen(attempt: ModelCircuitAttempt, now: number): null {
+  const state = attempt.wasHalfOpen ? modelCircuitStates.get(attempt.key) : undefined;
+  if (state && !isStaleAttempt(attempt)) {
+    closeCircuit(state, now);
   }
   return null;
 }
@@ -245,7 +294,7 @@ function recordModelCircuitFailure(
   now = Date.now(),
 ): { openMs: number; reason: FailoverReason } | null {
   if (!reason || !CIRCUIT_FAILURE_REASONS.has(reason)) {
-    return clearIneligibleHalfOpen(attempt);
+    return clearIneligibleHalfOpen(attempt, now);
   }
 
   if (reason === "timeout" && hostSaturationProbe(now)) {
@@ -258,6 +307,10 @@ function recordModelCircuitFailure(
     return null;
   }
 
+  if (isStaleAttempt(attempt)) {
+    // A newer probe already recorded an outcome for this route.
+    return null;
+  }
   if (!reserveStateCapacity(attempt.key, now)) {
     return null;
   }

@@ -25,7 +25,6 @@ import { isLikelyContextOverflowError } from "./failover/classify.js";
 import type { FailoverReason } from "./failover/signal.js";
 import {
   getFallbackCandidateSkipReason,
-  isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
 } from "./fallback-skip-cache.js";
 import {
@@ -54,7 +53,12 @@ import {
   shouldDiscardDeferredSessionSuspension,
   throwFallbackFailureSummary,
 } from "./model-fallback-attempt.js";
+import {
+  isCandidateSessionSkipped,
+  resolveCandidateAuthFacts,
+} from "./model-fallback-candidate-facts.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { isModelCircuitEnabled } from "./model-fallback-circuit-config.js";
 import {
   type ModelCircuitAttempt,
   recordCandidateCircuitFailure,
@@ -75,7 +79,6 @@ import { gateModelCircuitForCandidate } from "./model-fallback-route-eligibility
 import {
   type DeferredSessionSuspensionState,
   flushDeferredSessionSuspension,
-  resolveFallbackAuthScope,
   type RunWithModelFallbackParams,
 } from "./model-fallback-runner-support.js";
 import type { FallbackAttempt } from "./model-fallback.types.js";
@@ -183,11 +186,16 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
+  const modelCircuitEnabled = isModelCircuitEnabled(params.cfg);
   const circuitGateContext = {
     candidates,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    agentId: params.agentId,
     sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    userLockedAuthProfileId,
+    resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
     requestedCandidate,
     hasFallbackCandidates,
     tlsFailedProviders,
@@ -258,43 +266,20 @@ async function runWithModelFallbackInternal<T>(
         ...details,
       });
 
-    let candidateAuthProfileIds: string[] | undefined;
-    let userLockedAuthProfileEligible = false;
-    if (authRuntime && authStore) {
-      userLockedAuthProfileEligible =
-        userLockedAuthProfileId !== undefined &&
-        authRuntime.resolveAuthProfileEligibility({
-          cfg: params.cfg,
-          store: authStore,
-          provider: candidate.provider,
-          profileId: userLockedAuthProfileId,
-        }).eligible;
-      if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
-        const orderedProfileIds = authRuntime.resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store: authStore,
-          provider: candidate.provider,
-          forModel: candidate.model,
-        });
-        candidateAuthProfileIds =
-          userLockedAuthProfileEligible && userLockedAuthProfileId
-            ? [
-                userLockedAuthProfileId,
-                ...orderedProfileIds.filter((profileId) => profileId !== userLockedAuthProfileId),
-              ]
-            : orderedProfileIds;
-        authRuntime.maybeReprobeWhamBlockedProfiles({
-          store: authStore,
-          profileIds: candidateAuthProfileIds,
-          agentDir: params.agentDir,
-          forModel: candidate.model,
-        });
-      }
-    }
-    const candidateAuthScope = resolveFallbackAuthScope({
-      userLockedAuthProfileId: userLockedAuthProfileEligible ? userLockedAuthProfileId : undefined,
-      profileIds: candidateAuthProfileIds,
+    // Shared with the circuit gate so both paths agree on profile order and
+    // skip-cache scope. See model-fallback-candidate-facts.ts.
+    const candidateAuthFacts = resolveCandidateAuthFacts({
+      cfg: params.cfg,
+      authRuntime,
+      authStore,
+      candidate,
+      userLockedAuthProfileId,
+      skipsProviderAuthCooldown: candidateHarnessAuth.skipsProviderAuthCooldown,
+      reprobeBlockedProfiles: true,
+      agentDir: params.agentDir,
     });
+    const candidateAuthProfileIds = candidateAuthFacts.profileIds;
+    const candidateAuthScope = candidateAuthFacts.authScope;
 
     // Skip-known-bad cache: when a previous turn in this session failed this
     // candidate with `auth` / `auth_permanent` (e.g. missing or expired
@@ -303,10 +288,11 @@ async function runWithModelFallbackInternal<T>(
     // skipped — if the user explicitly requested it we should still surface
     // the auth error rather than silently jumping past it.
     if (!isPrimary && params.sessionId) {
-      const skipped = isFallbackCandidateSkipped({
+      const skipped = isCandidateSessionSkipped({
         sessionId: params.sessionId,
-        ...candidateRef,
+        candidate,
         authScope: candidateAuthScope,
+        isPrimary,
       });
       if (skipped) {
         const skipReason =
@@ -444,7 +430,7 @@ async function runWithModelFallbackInternal<T>(
     }
 
     let modelCircuitAttempt: ModelCircuitAttempt | undefined;
-    if (hasRemainingCandidate) {
+    if (modelCircuitEnabled && hasRemainingCandidate) {
       const circuitGate = gateModelCircuitForCandidate({ ...circuitGateContext, currentIndex: i });
       if (circuitGate.type === "skip") {
         pushAttempt(circuitGate.error, circuitGate.reason, circuitSkipMeta);
