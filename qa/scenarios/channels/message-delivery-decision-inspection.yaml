@@ -26,7 +26,8 @@ scenario:
         memory: null
       entries:
         acpx: null
-        memory-core: null
+        memory-core:
+          enabled: false
     agents:
       entries:
         qa:
