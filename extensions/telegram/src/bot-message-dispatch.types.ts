@@ -159,17 +159,12 @@ type TelegramProgressCompositor = {
   pushPatchEvent: (payload: CallbackPayload<"onPatchSummary">) => Promise<boolean>;
 };
 
-export type TelegramBufferedFinalAnswer = {
-  payload: ReplyPayload;
-  text: string;
-};
-
 export type TelegramReasoningStepState = {
   noteReasoningHint: () => void;
   noteReasoningDelivered: () => void;
   shouldBufferFinalAnswer: () => boolean;
-  bufferFinalAnswer: (value: TelegramBufferedFinalAnswer) => void;
-  takeBufferedFinalAnswer: () => TelegramBufferedFinalAnswer | undefined;
+  bufferFinalAnswer: (value: ReplyPayload) => void;
+  takeBufferedFinalAnswer: () => ReplyPayload | undefined;
   resetForNextStep: () => void;
 };
 

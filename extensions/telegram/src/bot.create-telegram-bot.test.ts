@@ -1872,7 +1872,7 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("preserves raw slash callback_query payloads as command text", async () => {
+  it("routes raw slash callback_query payloads as generic callback data", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getCallbackHandler();
     await callbackHandler(
@@ -1881,8 +1881,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-    expect(payload.Body).toContain("/fast status");
-    expect(payload.Body).not.toContain("callback_data: /fast status");
+    expect(payload.Body).toContain("callback_data: /fast status");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-slash-1");
   });
 

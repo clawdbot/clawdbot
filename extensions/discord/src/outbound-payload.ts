@@ -10,6 +10,7 @@ import {
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
 import {
@@ -30,6 +31,8 @@ type DiscordOutboundPayloadContext = Parameters<
   NonNullable<ChannelOutboundAdapter["sendPayload"]>
 >[0];
 type DiscordPayloadSendContext = Awaited<ReturnType<typeof createDiscordPayloadSendContext>>;
+
+const log = createSubsystemLogger("discord/outbound");
 
 function resolveDiscordDeliveryProgress(ctx: DiscordOutboundPayloadContext) {
   return ctx.onDeliveryResult
@@ -130,12 +133,12 @@ export async function sendDiscordOutboundPayload(params: {
         ? undefined
         : supplement?.spokenText;
       const fallbackText = visibleFallbackText ?? hiddenFallbackText;
+      if (!fallbackText && !supplement?.visibleTextAlreadyDelivered) {
+        throw err;
+      }
+      log.warn("discord voice send failed; continuing without voice", { error: err });
       if (!fallbackText) {
-        if (supplement?.visibleTextAlreadyDelivered) {
-          lastResult = createDiscordUnknownPayloadResult(sendContext.target);
-        } else {
-          throw err;
-        }
+        lastResult = createDiscordUnknownPayloadResult(sendContext.target);
       } else {
         lastResult = await sendContext.send(sendContext.target, fallbackText, {
           verbose: false,
