@@ -92,13 +92,13 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result.allowFrom).toEqual(["@alice:example.org", "@bob:example.org"]);
-    expect(result.groupAllowFrom).toEqual(["@carol:example.org"]);
+    expect(result.allowFrom).toEqual(["@Alice:Example.org", "@bob:example.org"]);
+    expect(result.groupAllowFrom).toEqual(["@Carol:Example.org"]);
     expect(result.roomsConfig).toEqual({
       "*": { enabled: true },
       "!ops:example.org": {
         enabled: true,
-        users: ["@dana:example.org", "@erin:example.org"],
+        users: ["@dana:example.org", "@Erin:Example.org"],
       },
       "!general:example.org": {
         enabled: true,
@@ -245,15 +245,15 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result.allowFrom).toEqual(["@bob:example.org"]);
+    expect(result.allowFrom).toEqual(["@Bob:Example.org"]);
     expect(result.allowFromResolvedEntries).toEqual([
-      { input: "matrix:@Bob:Example.org", id: "@bob:example.org" },
+      { input: "matrix:@Bob:Example.org", id: "@Bob:Example.org" },
     ]);
     expect(result.groupAllowFrom).toEqual(["Carol"]);
     expect(result.roomsConfig).toEqual({
       "!ops:example.org": {
         enabled: true,
-        users: ["@erin:example.org", "Frank"],
+        users: ["@Erin:Example.org", "Frank"],
       },
     });
     expect(resolveTargets).toHaveBeenCalledTimes(1);
@@ -291,7 +291,7 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result).toEqual(["@bob:example.org", "*"]);
+    expect(result).toEqual(["@Bob:Example.org", "*"]);
     expect(resolveTargets).not.toHaveBeenCalled();
   });
 
@@ -311,7 +311,7 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result).toEqual(["Alice", "@bob:example.org"]);
+    expect(result).toEqual(["Alice", "@Bob:Example.org"]);
     expect(resolveTargets).not.toHaveBeenCalled();
   });
 
@@ -329,7 +329,7 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result).toEqual(["@bob:example.org", "*", "@alice:example.org"]);
+    expect(result).toEqual(["@Bob:Example.org", "*", "@alice:example.org"]);
     expectResolveTargetCall(resolveTargets, 0, {
       accountId: "ops",
       kind: "user",
