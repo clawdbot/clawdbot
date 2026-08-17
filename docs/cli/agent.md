@@ -22,11 +22,12 @@ Related: [Agent send tool](/tools/agent-send)
 
 ```bash
 openclaw agent exec "Run the focused tests and fix failures"
+openclaw agent exec --agent ops "Run the focused tests and fix failures"
 openclaw agent exec --message-file task.md --cwd ./repo
 cat task.md | openclaw agent exec --message-file - --json
 ```
 
-By default, the command creates and later removes a temporary state directory, and it runs against your ordinary OpenClaw config, so configured providers, credentials, and `agentRuntime` harness selection apply exactly as they do elsewhere. `--cwd` defaults to the process working directory and is passed as both the agent workspace and tool working directory.
+By default, the command creates and later removes a temporary state directory, and it runs against your ordinary OpenClaw config, so configured providers, credentials, and `agentRuntime` harness selection apply exactly as they do elsewhere. Without `--agent`, `--cwd` defaults to the process working directory. With `--agent <id>`, the selected agent supplies the runtime, stored credentials, and default workspace; an explicit `--cwd` still overrides that workspace. The resolved directory is passed as both the agent workspace and tool working directory.
 
 Config is layered in three parts, entirely in memory: exec composes the run config and publishes it as this process's runtime config rather than writing a copy to disk. Exec defaults apply only where your config leaves a setting unset: workspace bootstrap files are skipped, the agent sandbox is off, the `coding` tool profile is selected, filesystem tools are restricted to `--cwd`, and exec runs under the full execution policy a headless turn needs. Anything your config sets wins over those defaults, so a configured sandbox, shell env, or tool profile is never downgraded, and exec host routing stays with the sandbox when your config enables one. The invocation itself always wins last: the run is scoped to `--cwd` and never bootstraps.
 
@@ -113,6 +114,7 @@ This is evaluation-only evidence, not a CI or release gate. Results do not chang
 
 - `[message]`: positional prompt text
 - `--message-file <path>`: read a UTF-8 prompt from a file; `-` reads stdin
+- `--agent <id>`: use a configured agent's runtime, credentials, and workspace
 - `--cwd <dir>`: set both the agent workspace and tool working directory
 - `--state-dir <dir>`: use an existing state directory without deleting it
 - `--config <path>`: run against this config file instead of the ambient config (JSON5 and `$include` supported)

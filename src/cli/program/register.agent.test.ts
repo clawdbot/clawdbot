@@ -262,6 +262,19 @@ describe("agent command registration", () => {
     );
   });
 
+  it.each([
+    ["before", ["agent", "--agent", "ops", "exec", "fix it"]],
+    ["after", ["agent", "exec", "--agent", "ops", "fix it"]],
+  ])("accepts an explicit agent %s the nested exec command", async (_position, args) => {
+    await runCli(args);
+
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({ agent: "ops" }),
+      runtime,
+    );
+  });
+
   it("runs agents add and detects explicit automation options", async () => {
     await runCli(["agents", "add", "alpha"]);
     const [alphaOptions, alphaRuntime, alphaFlags] = commandCall(agentsAddCommandMock, 0);

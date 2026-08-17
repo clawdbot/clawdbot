@@ -26,6 +26,7 @@ const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 export type AgentExecCliOptions = {
   messageFile?: string;
+  agent?: string;
   cwd?: string;
   stateDir?: string;
   config?: string;
@@ -587,7 +588,6 @@ export async function agentExecCommand(
       opts.messageFile,
       deps.stdin ?? process.stdin,
     );
-    const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
       : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-"));
@@ -624,6 +624,38 @@ export async function agentExecCommand(
         before: envBeforeConfigLoad,
         after: envAfterConfigLoad,
       });
+    const timeout = normalizeTimeoutSeconds(opts.timeout);
+    const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
+    const {
+      resolveAgentDir,
+      resolveAgentWorkspaceDir,
+      resolveAmbientOwnerAgentId,
+      resolveConfiguredAgentId,
+    } = await import("../agents/agent-scope-config.js");
+    const { normalizeAgentId } = await import("../routing/session-key.js");
+    const requestedAgentIdRaw = opts.agent?.trim();
+    if (opts.agent !== undefined && !requestedAgentIdRaw) {
+      throw new Error("--agent must not be empty.");
+    }
+    const requestedAgentId = requestedAgentIdRaw
+      ? resolveConfiguredAgentId(baseConfig, normalizeAgentId(requestedAgentIdRaw))
+      : undefined;
+    // Resolve from the inherited config, not `{}`: the default agent may declare
+    // its own `agentDir`, and that is where its stored auth profiles live. This
+    // reads `baseConfig` rather than `runConfig` because the run config
+    // deliberately strips agent directories to keep run state ephemeral, while
+    // credential ownership must still follow the operator's configuration.
+    // Computed before the environment repoints the state dir so the unconfigured
+    // case still resolves against the real one.
+    const execAgentId = resolveAmbientOwnerAgentId(baseConfig, requestedAgentId, {
+      surface: "agent exec",
+      hint: "Set agents.defaults.systemAgent.agentId.",
+    });
+    const cwd = await requireDirectory(
+      opts.cwd ??
+        (requestedAgentId ? resolveAgentWorkspaceDir(baseConfig, execAgentId) : process.cwd()),
+      requestedAgentId && !opts.cwd ? "Agent workspace" : "Working directory",
+    );
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
     // Installed plugins belong to the operator config resolved above, not to
     // the disposable state root used for this run. Capture all roots before
@@ -633,21 +665,6 @@ export async function agentExecCommand(
       ? await import("../plugins/install-root-context.js")
       : undefined;
     const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
-    const timeout = normalizeTimeoutSeconds(opts.timeout);
-    const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
-    const { resolveAgentDir, resolveAmbientOwnerAgentId } =
-      await import("../agents/agent-scope-config.js");
-    // Resolve from the inherited config, not `{}`: the default agent may declare
-    // its own `agentDir`, and that is where its stored auth profiles live. This
-    // reads `baseConfig` rather than `runConfig` because the run config
-    // deliberately strips agent directories to keep run state ephemeral, while
-    // credential ownership must still follow the operator's configuration.
-    // Computed before the environment repoints the state dir so the unconfigured
-    // case still resolves against the real one.
-    const execAgentId = resolveAmbientOwnerAgentId(baseConfig, undefined, {
-      surface: "agent exec",
-      hint: "Set agents.defaults.systemAgent.agentId.",
-    });
     // Auth, session keys, and SQLite ownership must share one resolved owner.
     // Splitting these paths can select an agent's store but emit a `main` key.
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);

@@ -4,6 +4,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
 import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
@@ -132,6 +133,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .command("exec [message]")
     .description("Run one isolated headless embedded agent turn")
     .option("--message-file <path>", "Read the UTF-8 prompt from a file; use - for stdin")
+    .option("--agent <id>", "Use a configured agent's runtime, workspace, and credentials")
     .option("--cwd <dir>", "Set both the agent workspace and tool working directory")
     .option("--state-dir <dir>", "Use an existing state directory without deleting it")
     .option(
@@ -162,6 +164,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ['openclaw agent exec "Fix the failing test"', "Run in the current directory."],
           [
+            'openclaw agent exec --agent ops "Fix the failing test"',
+            "Run with a configured agent.",
+          ],
+          [
             "openclaw agent exec --message-file task.md --cwd ./repo",
             "Read a prompt file and set the workspace.",
           ],
@@ -187,6 +193,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         | undefined;
       const execOpts = {
         ...opts,
+        agent: opts.agent ?? inheritOptionFromParent<string>(command, "agent"),
         messageFile: opts.messageFile ?? parentOpts?.messageFile,
         model: opts.model ?? parentOpts?.model,
         thinking: opts.thinking ?? parentOpts?.thinking,
