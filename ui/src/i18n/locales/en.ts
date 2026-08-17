@@ -5334,6 +5334,7 @@ export const en: TranslationMap = {
       label: "Permissions",
       help: "Choose how this session handles files, commands, and escalation reviews.",
       default: "Default",
+      defaultDescription: "Follow the agent's configured policy.",
       rootLabel: "Root",
       sessionRoot: "Session root: {root}",
       fullRequiresAdmin: "Full access requires operator.admin access.",

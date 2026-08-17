@@ -40,6 +40,8 @@ suite.define(() => {
       await trigger.waitFor({ state: "visible", timeout: 10_000 });
       expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
 
+      const firstListCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.deferNext("sessions.list");
       await trigger.click();
       await pane.locator('[data-chat-permission-option="workspace"]').click();
       const patchRequest = await gateway.waitForRequest("sessions.patch");
@@ -47,6 +49,8 @@ suite.define(() => {
         key: session.key,
         permissionMode: "workspace",
       });
+      await waitForRequests(gateway, "sessions.list", firstListCount + 1);
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
 
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
@@ -57,6 +61,36 @@ suite.define(() => {
       });
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
       expect(await trigger.textContent()).toContain("Workspace");
+      await gateway.resolveDeferred(
+        "sessions.list",
+        chatSessionListResponse([{ ...session, permissionMode: "workspace", updatedAt: 3 }]),
+      );
+
+      const secondListCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.deferNext("sessions.list");
+      await trigger.click();
+      await pane.locator('[data-chat-permission-option="default"]').click();
+      const patchRequests = await waitForRequests(gateway, "sessions.patch", 2);
+      expect(requireRecord(patchRequests[1]?.params)).toMatchObject({
+        key: session.key,
+        permissionMode: null,
+      });
+      await waitForRequests(gateway, "sessions.list", secondListCount + 1);
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...session,
+        permissionMode: null,
+        reason: "patch",
+        sessionKey: session.key,
+        updatedAt: 4,
+      });
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
+      expect(await trigger.textContent()).toContain("Default");
+      await gateway.resolveDeferred(
+        "sessions.list",
+        chatSessionListResponse([{ ...session, permissionMode: undefined, updatedAt: 4 }]),
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

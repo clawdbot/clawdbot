@@ -47,7 +47,7 @@ describe("chat pane composer controls", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
-  it("patches a keyboard-selected mode and locks full access without admin scope", async () => {
+  it("patches a keyboard-selected mode, clears to default, and locks full access", async () => {
     const container = document.createElement("div");
     const patch = vi.fn(async () => ({}));
     const state = {
@@ -87,16 +87,29 @@ describe("chat pane composer controls", () => {
     const dropdown = container.querySelector<HTMLElement>(".chat-controls__permission-picker");
     dropdown?.setAttribute("open", "");
     const full = container.querySelector<HTMLElement>('[data-chat-permission-option="full"]');
+    const defaultOption = container.querySelector<HTMLElement>(
+      '[data-chat-permission-option="default"]',
+    );
+    expect(defaultOption?.textContent).toContain("Follow the agent's configured policy");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
     expect(full?.getAttribute("aria-label")).toContain("operator.admin");
 
-    dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
+    dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
     await Promise.resolve();
     expect(patch).toHaveBeenCalledWith(
       "agent:main:permission-test",
       { permissionMode: "guarded" },
+      {},
+    );
+
+    dropdown?.setAttribute("open", "");
+    dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+    await Promise.resolve();
+    expect(patch).toHaveBeenLastCalledWith(
+      "agent:main:permission-test",
+      { permissionMode: null },
       {},
     );
   });

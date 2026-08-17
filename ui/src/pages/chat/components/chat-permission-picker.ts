@@ -4,16 +4,20 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 
 const PERMISSION_MODES = ["read-only", "guarded", "workspace", "full"] as const;
+const DEFAULT_PERMISSION_VALUE = "default";
+const PERMISSION_OPTIONS = [null, ...PERMISSION_MODES] as const;
+
+type PermissionSelection = SessionPermissionMode | null;
 
 function handlePermissionPickerKeydown(
   event: KeyboardEvent,
-  onSelect: (mode: SessionPermissionMode) => void,
+  onSelect: (mode: PermissionSelection) => void,
 ): void {
   const dropdown = event.currentTarget;
   if (
     !(dropdown instanceof HTMLElement) ||
     !dropdown.hasAttribute("open") ||
-    !/^[1-4]$/u.test(event.key)
+    !/^[1-5]$/u.test(event.key)
   ) {
     return;
   }
@@ -23,8 +27,8 @@ function handlePermissionPickerKeydown(
   if (!option || option.hasAttribute("disabled")) {
     return;
   }
-  const mode = option.dataset.chatPermissionOption;
-  if (!isPermissionMode(mode)) {
+  const mode = permissionSelection(option.dataset.chatPermissionOption);
+  if (mode === undefined) {
     return;
   }
   event.preventDefault();
@@ -42,7 +46,7 @@ function ellipsizeMiddle(value: string, maxLength = 54): string {
   return `${value.slice(0, edgeLength)}…${value.slice(-edgeLength)}`;
 }
 
-function modeLabel(mode: SessionPermissionMode | undefined): string {
+function modeLabel(mode: SessionPermissionMode | null | undefined): string {
   return mode
     ? t(`chat.permissionControls.modes.${mode}.label`)
     : t("chat.permissionControls.default");
@@ -52,19 +56,26 @@ function isPermissionMode(value: string | undefined): value is SessionPermission
   return value !== undefined && PERMISSION_MODES.some((mode) => mode === value);
 }
 
+function permissionSelection(value: string | undefined): PermissionSelection | undefined {
+  if (value === DEFAULT_PERMISSION_VALUE) {
+    return null;
+  }
+  return isPermissionMode(value) ? value : undefined;
+}
+
 export function renderChatPermissionPicker(params: {
   canSelectFull: boolean;
   disabled?: boolean;
   disabledReason?: string;
   mode?: SessionPermissionMode;
   sessionRoot?: string;
-  onSelect: (mode: SessionPermissionMode) => unknown;
+  onSelect: (mode: PermissionSelection) => unknown;
 }) {
-  const selectMode = (mode: SessionPermissionMode) => {
+  const selectMode = (mode: PermissionSelection) => {
     if (params.disabled || (mode === "full" && !params.canSelectFull)) {
       return;
     }
-    if (mode !== params.mode) {
+    if (mode !== (params.mode ?? null)) {
       void params.onSelect(mode);
     }
   };
@@ -74,8 +85,8 @@ export function renderChatPermissionPicker(params: {
       placement="top-end"
       @keydown=${(event: KeyboardEvent) => handlePermissionPickerKeydown(event, selectMode)}
       @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        const mode = event.detail.item.value;
-        if (isPermissionMode(mode)) {
+        const mode = permissionSelection(event.detail.item.value);
+        if (mode !== undefined) {
           selectMode(mode);
         }
       }}
@@ -102,16 +113,17 @@ export function renderChatPermissionPicker(params: {
           ${modeLabel(params.mode)}
         </span>
       </button>
-      ${PERMISSION_MODES.map((mode, index) => {
-        const selected = params.mode === mode;
+      ${PERMISSION_OPTIONS.map((mode, index) => {
+        const value = mode ?? DEFAULT_PERMISSION_VALUE;
+        const selected = (params.mode ?? null) === mode;
         const locked = mode === "full" && !params.canSelectFull;
         return html`
           <wa-dropdown-item
             class="chat-controls__permission-option ${selected
               ? "chat-controls__permission-option--selected"
               : ""}"
-            value=${mode}
-            data-chat-permission-option=${mode}
+            value=${value}
+            data-chat-permission-option=${value}
             data-chat-permission-shortcut=${String(index + 1)}
             role="menuitemradio"
             aria-checked=${selected ? "true" : "false"}
@@ -129,7 +141,9 @@ export function renderChatPermissionPicker(params: {
                 >
               </span>
               <span class="chat-controls__permission-option-description">
-                ${t(`chat.permissionControls.modes.${mode}.description`)}
+                ${mode
+                  ? t(`chat.permissionControls.modes.${mode}.description`)
+                  : t("chat.permissionControls.defaultDescription")}
               </span>
             </span>
             ${locked || selected
