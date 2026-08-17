@@ -27,6 +27,7 @@ MIGRATION_KIND=""
 MIGRATION_NODE_ID=""
 MIGRATION_PLIST_SHA=""
 MIGRATION_CUSTODY_PATH=""
+MIGRATION_CUSTODY_IDENTITY=""
 MIGRATION_WAS_LOADED=0
 ADOPT_RUNNING_APP=0
 ADOPTION_PID=""
@@ -238,11 +239,6 @@ cleanup() {
     for backup in "${PREMUTATION_BACKUPS[@]:-}"; do
       [[ -n "$backup" && -e "$backup" ]] && rm -f "$backup"
     done
-    if [[ -n "$MIGRATION_CUSTODY_PATH" && -f "$MIGRATION_CUSTODY_PATH" &&
-      ! -L "$MIGRATION_CUSTODY_PATH" ]]
-    then
-      rm -f "$MIGRATION_CUSTODY_PATH"
-    fi
   fi
   cleanup_work_root
   cleanup_artifact_snapshot
@@ -589,18 +585,27 @@ finish_custody_signal_deferral() {
 
 take_migration_plist_custody() {
   local source="$1" expected_sha="$2" custody_signal="" move_status=0 custody_sha=""
+  local source_identity
   # Keep cooperative termination pending until rollback can identify the moved path.
-  # A same-directory rename takes the exact current plist without unlinking a later replacement.
+  # A signed same-directory exclusive rename takes the exact current plist without
+  # overwriting a raced destination or unlinking a later replacement.
   trap 'custody_signal=INT' INT
   trap 'custody_signal=TERM' TERM
   trap 'custody_signal=HUP' HUP
-  MIGRATION_CUSTODY_PATH="$(mktemp "${source}.custody.XXXXXX")"
-  rm "$MIGRATION_CUSTODY_PATH"
-  mv "$source" "$MIGRATION_CUSTODY_PATH" || move_status=$?
+  source_identity="$(path_identity "$source")" ||
+    fail 'could not inspect the migration LaunchAgent before custody'
+  MIGRATION_CUSTODY_PATH="$(mktemp -u "${source}.custody.XXXXXX")" ||
+    fail 'could not reserve migration LaunchAgent custody'
+  [[ ! -e "$MIGRATION_CUSTODY_PATH" && ! -L "$MIGRATION_CUSTODY_PATH" ]] ||
+    fail 'migration LaunchAgent custody path is already occupied'
+  rename_app_exclusively "$source" "$MIGRATION_CUSTODY_PATH" || move_status=$?
   if [[ -f "$MIGRATION_CUSTODY_PATH" && ! -L "$MIGRATION_CUSTODY_PATH" ]]; then
-    CUTOVER_ACTIVE=1
-    CUTOVER_MIGRATION_REMOVED=1
     custody_sha="$(shasum -a 256 "$MIGRATION_CUSTODY_PATH" | awk '{print $1}')"
+    MIGRATION_CUSTODY_IDENTITY="$(path_identity "$MIGRATION_CUSTODY_PATH")" || true
+    if [[ "$MIGRATION_CUSTODY_IDENTITY" == "$source_identity" ]]; then
+      CUTOVER_ACTIVE=1
+      CUTOVER_MIGRATION_REMOVED=1
+    fi
   elif [[ ! -e "$source" && ! -L "$source" ]]; then
     # Even a reported move failure may have removed the source. Arm rollback from the
     # already-verified backup before propagating the failure.
@@ -608,12 +613,12 @@ take_migration_plist_custody() {
     CUTOVER_MIGRATION_REMOVED=1
   fi
 
-  if [[ "$move_status" != "0" || "$custody_sha" != "$expected_sha" ]]; then
+  if [[ "$move_status" != "0" || "$custody_sha" != "$expected_sha" ||
+    "$MIGRATION_CUSTODY_IDENTITY" != "$source_identity" || -e "$source" || -L "$source" ]]
+  then
     finish_custody_signal_deferral "$custody_signal"
     fail 'could not take exact custody of the migration LaunchAgent; rerun migration-plan'
   fi
-  rm "$MIGRATION_CUSTODY_PATH"
-  MIGRATION_CUSTODY_PATH=""
   finish_custody_signal_deferral "$custody_signal"
 }
 
@@ -779,31 +784,30 @@ stage_verified_app_for_install() {
     "${BASH_SOURCE[0]}"
 }
 
+prepare_current_app_rename_helper() {
+  local source_app="$APP_PATH"
+  [[ -z "$RECOVERED_FAILED_APP_PATH" ]] || source_app="$RECOVERED_FAILED_APP_PATH"
+  verify_recorded_current_app "$source_app" ||
+    fail 'current recovery app cannot authenticate the exclusive rename helper'
+  cleanup_work_root
+  WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-elevation-current.XXXXXX")"
+  ditto "$source_app" "$WORK_ROOT/OpenClaw.app"
+  verify_recorded_current_app "$WORK_ROOT/OpenClaw.app" ||
+    fail 'copied recovery app cannot authenticate the exclusive rename helper'
+  AUTHENTICATED_RENAME_HELPER="$WORK_ROOT/OpenClaw.app/Contents/MacOS/OpenClaw"
+  [[ -f "$AUTHENTICATED_RENAME_HELPER" && ! -L "$AUTHENTICATED_RENAME_HELPER" &&
+    -x "$AUTHENTICATED_RENAME_HELPER" ]] || fail 'authenticated elevation rename helper is unavailable'
+  AUTHENTICATED_RENAME_HELPER_SHA="$(shasum -a 256 "$AUTHENTICATED_RENAME_HELPER" | awk '{print $1}')"
+}
+
 rename_app_exclusively() {
-  local source="$1" destination="$2" helper=""
-  local candidate
-  # A rollback bundle may predate this private subcommand. Before commit the verified
-  # extracted helper remains independent of the installed app; committed recovery starts
-  # at APP and then preserves that candidate before restoring an older bundle.
-  for candidate in \
-    "$AUTHENTICATED_RENAME_HELPER" \
-    "$STAGED_INSTALL_APP_PATH/Contents/MacOS/OpenClaw" \
-    "$RECOVERED_FAILED_APP_PATH/Contents/MacOS/OpenClaw" \
-    "$APP_PATH/Contents/MacOS/OpenClaw"
-  do
-    if [[ -n "$candidate" && -f "$candidate" && ! -L "$candidate" && -x "$candidate" ]]; then
-      if [[ "$candidate" == "$AUTHENTICATED_RENAME_HELPER" &&
-        ( ! "$AUTHENTICATED_RENAME_HELPER_SHA" =~ ^[0-9a-f]{64}$ ||
-          "$(shasum -a 256 "$candidate" | awk '{print $1}')" != "$AUTHENTICATED_RENAME_HELPER_SHA" ) ]]
-      then
-        continue
-      fi
-      helper="$candidate"
-      break
-    fi
-  done
-  [[ -n "$helper" ]] || return 1
-  "$helper" --elevation-rename-exclusive "$source" "$destination"
+  local source="$1" destination="$2" helper_sha
+  [[ -n "$AUTHENTICATED_RENAME_HELPER" && -f "$AUTHENTICATED_RENAME_HELPER" &&
+    ! -L "$AUTHENTICATED_RENAME_HELPER" && -x "$AUTHENTICATED_RENAME_HELPER" &&
+    "$AUTHENTICATED_RENAME_HELPER_SHA" =~ ^[0-9a-f]{64}$ ]] || return 1
+  helper_sha="$(shasum -a 256 "$AUTHENTICATED_RENAME_HELPER" | awk '{print $1}')" || return 1
+  [[ "$helper_sha" == "$AUTHENTICATED_RENAME_HELPER_SHA" ]] || return 1
+  "$AUTHENTICATED_RENAME_HELPER" --elevation-rename-exclusive "$source" "$destination"
 }
 
 preserve_current_app_for_recovery() {
@@ -1897,6 +1901,9 @@ install_host() {
   CUTOVER_ACTIVE=0
   finish_custody_signal_deferral "$commit_signal"
   printf 'Elevation host installed: pid=%s source=%s\n' "$ready_pid" "$source_commit"
+  if [[ -n "$MIGRATION_CUSTODY_PATH" ]]; then
+    printf 'Preserved migrated LaunchAgent custody at %s\n' "$MIGRATION_CUSTODY_PATH"
+  fi
   # Commit only after the launchd-owned Bridge and exact Gateway node are ready. Missing TCC is
   # degraded capability, not a failed cutover; `status` remains the final readiness gate.
   tcc_summary || true
@@ -1976,6 +1983,24 @@ recover_install() {
         then
           recovery_failed=1
         fi
+      elif [[ -n "$MIGRATION_CUSTODY_PATH" && -f "$MIGRATION_CUSTODY_PATH" &&
+        ! -L "$MIGRATION_CUSTODY_PATH" &&
+        "$MIGRATION_CUSTODY_IDENTITY" =~ ^[0-9]+:[0-9]+$ ]] &&
+        path_matches_identity "$MIGRATION_CUSTODY_PATH" "$MIGRATION_CUSTODY_IDENTITY" &&
+        backup_file_matches "$MIGRATION_CUSTODY_PATH" "$ROLLBACK_MIGRATION_PLIST_SHA"
+      then
+        rename_app_exclusively "$MIGRATION_CUSTODY_PATH" "$ROLLBACK_MIGRATION_SOURCE" ||
+          recovery_failed=1
+        if [[ "$recovery_failed" == "0" ]] &&
+          path_matches_identity "$ROLLBACK_MIGRATION_SOURCE" "$MIGRATION_CUSTODY_IDENTITY" &&
+          backup_file_matches "$ROLLBACK_MIGRATION_SOURCE" "$ROLLBACK_MIGRATION_PLIST_SHA"
+        then
+          RECOVERY_RESTORED_MIGRATION_IDENTITY="$MIGRATION_CUSTODY_IDENTITY"
+          MIGRATION_CUSTODY_PATH=""
+          MIGRATION_CUSTODY_IDENTITY=""
+        else
+          recovery_failed=1
+        fi
       else
         restore_file_without_overwrite \
           "$ROLLBACK_MIGRATION_PLIST" \
@@ -2015,10 +2040,12 @@ recover_install() {
   fi
   if [[ -n "$MIGRATION_CUSTODY_PATH" ]]; then
     if [[ -f "$MIGRATION_CUSTODY_PATH" && ! -L "$MIGRATION_CUSTODY_PATH" &&
-      "$(shasum -a 256 "$MIGRATION_CUSTODY_PATH" | awk '{print $1}')" == "$ROLLBACK_MIGRATION_PLIST_SHA" ]]
+      "$MIGRATION_CUSTODY_IDENTITY" =~ ^[0-9]+:[0-9]+$ ]] &&
+      path_matches_identity "$MIGRATION_CUSTODY_PATH" "$MIGRATION_CUSTODY_IDENTITY" &&
+      backup_file_matches "$MIGRATION_CUSTODY_PATH" "$ROLLBACK_MIGRATION_PLIST_SHA"
     then
-      rm -f "$MIGRATION_CUSTODY_PATH" || recovery_failed=1
-      MIGRATION_CUSTODY_PATH=""
+      printf 'Preserved migration custody at %s\n' "$MIGRATION_CUSTODY_PATH" >&2
+      recovery_failed=1
     else
       recovery_failed=1
     fi
@@ -2322,6 +2349,9 @@ recover_host() {
     [[ -z "$ARCHIVE" && -z "$ARTIFACT_RECEIPT" && -z "$EXPECTED_ARTIFACT_RECEIPT_SHA256" ]] ||
       fail 'artifact helper inputs are valid only for legacy recovery'
     CONFIG_PATH="$(jq -r '.configPath' "$RECEIPT_PATH")"
+    RECOVERY_CURRENT_APP_CDHASH_ARM64="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
+    RECOVERY_CURRENT_APP_CDHASH_X86_64="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
+    prepare_current_app_rename_helper
   fi
   if [[ -n "$ROLLBACK_APP_PATH" ]]; then
     local backup_generation="${ROLLBACK_APP_PATH#"$APP_PATH.rollback-elevation-host-"}"
@@ -2433,10 +2463,7 @@ recover_host() {
       recovery_current_app_candidate="$RECOVERED_FAILED_APP_PATH"
     RECOVERY_CURRENT_APP_CDHASH_ARM64="$(codesign_value_for_arch "$recovery_current_app_candidate" CDHash arm64)"
     RECOVERY_CURRENT_APP_CDHASH_X86_64="$(codesign_value_for_arch "$recovery_current_app_candidate" CDHash x86_64)"
-  elif [[ "$INSTALL_RECEIPT_SCHEMA" != "legacy" ]]; then
-    RECOVERY_CURRENT_APP_CDHASH_ARM64="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
-    RECOVERY_CURRENT_APP_CDHASH_X86_64="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
-  else
+  elif [[ "$INSTALL_RECEIPT_SCHEMA" == "legacy" ]]; then
     RECOVERY_CURRENT_APP_CDHASH_ARM64=""
     RECOVERY_CURRENT_APP_CDHASH_X86_64=""
   fi

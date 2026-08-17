@@ -447,8 +447,14 @@ function createArtifactVerificationHarness() {
       '    /bin/mkdir -p "$2/Contents/MacOS"',
       "    printf '%s\\n' replacement-directory >\"$2/Contents/replacement\"",
       "  fi",
+      '  if [ "${TEST_RACE_MIGRATION_CUSTODY_DESTINATION:-0}" = "1" ] && echo "$3" | grep -q \'[.]custody[.]\'; then',
+      "    printf '%s\\n' raced-custody-owner >\"$3\"",
+      "  fi",
       '  if [ -e "$3" ] || [ -L "$3" ]; then exit 1; fi',
       '  /bin/mv "$2" "$3" || exit $?',
+      '  if [ "${TEST_SIGNAL_DURING_CUSTODY:-0}" = "1" ] && echo "$3" | grep -q \'[.]custody[.]\'; then',
+      '    kill -"$TEST_CUSTODY_SIGNAL" "$PPID"',
+      "  fi",
       '  if [ "${TEST_REPLACE_MIGRATION_SOURCE_DURING_REVERSAL_CUSTODY:-0}" = "1" ] && echo "$3" | grep -q \'[.]reversal-custody[.]\'; then',
       "    printf '%s\\n' replacement-owner >\"$2\"",
       "  fi",
@@ -574,10 +580,12 @@ function createInstallRollbackHarness(
     launchdBootstrapFails?: boolean;
     killDuringMigrationRestoreBootstrapOnce?: boolean;
     migrationRestoreBootstrapFails?: boolean;
+    raceMigrationCustodyDestination?: boolean;
     removeInstalledExecutableAfterReadiness?: boolean;
     recreateAppDuringDamagedCustody?: boolean;
     recreateSourceDuringBootout?: boolean;
     recreateSourceOnFailure?: boolean;
+    replaceAuthenticatedRenameHelperBeforeUse?: boolean;
     replaceDamagedAppDirectoryBeforeCustody?: boolean;
     replaceMigrationSourceDuringReversalCustody?: boolean;
     replaceMigrationSourceSameContentBeforeCustody?: boolean;
@@ -631,6 +639,26 @@ function createInstallRollbackHarness(
   writeFileSync(launchStateFile, "source-loaded\n", "utf8");
   writeFileSync(nodeGenerationFile, "0\n", "utf8");
   writeExecutable(path.join(binDir, "defaults"), "#!/bin/sh\nprintf '%s\\n' primary\n");
+  if (options.replaceAuthenticatedRenameHelperBeforeUse) {
+    writeExecutable(
+      path.join(binDir, "shasum"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'target="${!#}"',
+        'if [[ "$target" == */openclaw-elevation.*/OpenClaw.app/Contents/MacOS/OpenClaw ]]; then',
+        '  if [[ -e "$TEST_RENAME_HELPER_HASH_MARKER" ]]; then',
+        "    printf '%s\\n' '#!/bin/sh' 'exit 0' >\"$target\"",
+        '    chmod 755 "$target"',
+        "  else",
+        '    : >"$TEST_RENAME_HELPER_HASH_MARKER"',
+        "  fi",
+        "fi",
+        'exec /usr/bin/shasum "$@"',
+        "",
+      ].join("\n"),
+    );
+  }
   writeExecutable(path.join(binDir, "sqlite3"), "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
   writeExecutable(
     path.join(binDir, "pgrep"),
@@ -862,9 +890,11 @@ function createInstallRollbackHarness(
       TEST_NODE_GENERATION_FILE: nodeGenerationFile,
       TEST_RECOVERY_KILL_MARKER: path.join(tempRoot, "recovery-kill-marker"),
       TEST_MIGRATION_RESTORE_BOOTSTRAP_FAILS: options.migrationRestoreBootstrapFails ? "1" : "0",
+      TEST_RACE_MIGRATION_CUSTODY_DESTINATION: options.raceMigrationCustodyDestination ? "1" : "0",
       TEST_RECREATE_APP_DURING_DAMAGED_CUSTODY: options.recreateAppDuringDamagedCustody ? "1" : "0",
       TEST_RECREATE_SOURCE_DURING_BOOTOUT: options.recreateSourceDuringBootout ? "1" : "0",
       TEST_RECREATE_SOURCE_ON_FAILURE: options.recreateSourceOnFailure ? "1" : "0",
+      TEST_RENAME_HELPER_HASH_MARKER: path.join(tempRoot, "rename-helper-hash-marker"),
       TEST_REPLACE_DAMAGED_APP_DIRECTORY_BEFORE_CUSTODY:
         options.replaceDamagedAppDirectoryBeforeCustody ? "1" : "0",
       TEST_REPLACE_MIGRATION_SOURCE_DURING_REVERSAL_CUSTODY:
@@ -1475,6 +1505,80 @@ describe("mac elevation host command contract", () => {
       expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
       expect(readdirSync(path.dirname(harness.sourcePlist))).not.toContainEqual(
         expect.stringContaining(".custody."),
+      );
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "never overwrites a raced migration custody destination",
+    () => {
+      const harness = createInstallRollbackHarness({ raceMigrationCustodyDestination: true });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("could not take exact custody");
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      const custodyName = readdirSync(path.dirname(harness.sourcePlist)).find((name) =>
+        name.startsWith(`${path.basename(harness.sourcePlist)}.custody.`),
+      );
+      expect(custodyName).toBeDefined();
+      expect(readFileSync(path.join(path.dirname(harness.sourcePlist), custodyName!), "utf8")).toBe(
+        "raced-custody-owner\n",
+      );
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "rejects a replaced authenticated rename helper without fallback",
+    () => {
+      const harness = createInstallRollbackHarness({
+        replaceAuthenticatedRenameHelperBeforeUse: true,
+      });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("could not take exact custody");
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
       );
       expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
     },
