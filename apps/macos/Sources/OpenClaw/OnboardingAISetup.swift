@@ -1028,15 +1028,11 @@ extension OnboardingAISetupModel {
         before: PersistedActivationState?,
         originalServerLease: GatewayConnection.ServerLease) async -> Bool
     {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(45))
+        let deadline = ReconciliationDeadline(timeout: .seconds(45))
         var delayMs = 250
-        while clock.now < deadline {
+        while deadline.hasTimeRemaining {
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return false }
-            let leaseTimeoutMs = Self.remainingMilliseconds(
-                until: deadline,
-                clock: clock,
-                cappedAt: 3000)
+            let leaseTimeoutMs = deadline.remainingMilliseconds(cappedAt: 3000)
             guard leaseTimeoutMs > 0 else { return false }
             if let replacementLease = try? await gateway.acquireServerLease(
                 ifSameRouteAs: originalServerLease,
@@ -1048,18 +1044,12 @@ extension OnboardingAISetupModel {
                     activationOwner: activationOwner,
                     before: before,
                     serverLease: replacementLease,
-                    timeoutMs: Self.remainingMilliseconds(
-                        until: deadline,
-                        clock: clock,
-                        cappedAt: Self.setupDetectionRequestTimeoutMs))
+                    deadline: deadline)
             {
                 self.serverLease = replacementLease
                 return true
             }
-            let sleepMs = Self.remainingMilliseconds(
-                until: deadline,
-                clock: clock,
-                cappedAt: delayMs)
+            let sleepMs = deadline.remainingMilliseconds(cappedAt: delayMs)
             guard sleepMs > 0 else { return false }
             do {
                 try await Task.sleep(nanoseconds: UInt64(sleepMs) * 1_000_000)
@@ -1078,9 +1068,11 @@ extension OnboardingAISetupModel {
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
         before: PersistedActivationState?,
         serverLease: GatewayConnection.ServerLease,
-        timeoutMs: Int) async -> Bool
+        deadline: ReconciliationDeadline) async -> Bool
     {
-        guard timeoutMs > 0,
+        let detectTimeoutMs = deadline.remainingMilliseconds(
+            cappedAt: Self.setupDetectionRequestTimeoutMs)
+        guard detectTimeoutMs > 0,
               self.isCurrentAttempt(context),
               !Task.isCancelled,
               OnboardingSystemAgentResumeStore.isOwned(
@@ -1093,7 +1085,7 @@ extension OnboardingAISetupModel {
         guard let detectData = try? await gateway.request(
             method: "openclaw.setup.detect",
             params: [:],
-            timeoutMs: Double(timeoutMs),
+            timeoutMs: Double(detectTimeoutMs),
             ifCurrentServerLease: serverLease),
             await gateway.isCurrentServerLease(serverLease),
             isCurrentAttempt(context),
@@ -1104,10 +1096,13 @@ extension OnboardingAISetupModel {
                 before: before,
                 after: detection.persistedActivationState)
         else { return false }
+        let verifyTimeoutMs = deadline.remainingMilliseconds(
+            cappedAt: Self.setupDetectionRequestTimeoutMs)
+        guard verifyTimeoutMs > 0 else { return false }
         guard let verifyData = try? await gateway.request(
             method: "openclaw.setup.verify",
             params: [:],
-            timeoutMs: Double(timeoutMs),
+            timeoutMs: Double(verifyTimeoutMs),
             ifCurrentServerLease: serverLease),
             await gateway.isCurrentServerLease(serverLease),
             isCurrentAttempt(context),
