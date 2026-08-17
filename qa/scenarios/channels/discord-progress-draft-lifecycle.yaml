@@ -5,6 +5,15 @@ scenario:
   coverage:
     primary:
       - agent-runtime.streaming-replies-delivery
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        model:
+          fallbacks: []
+      entries:
+        qa:
+          model:
+            fallbacks: []
   regressionRefs:
     - openclaw/openclaw#124972
   objective: Verify Discord retires successful progress drafts without altering the final and retains failed-turn drafts as diagnostic context.
