@@ -46,6 +46,8 @@ type NodeHostRunOptions = {
   preferGatewayBootstrapToken?: boolean;
   /** Stop cleanly after the first authenticated hello (used before service install). */
   stopAfterFirstConnect?: boolean;
+  /** Host worker sessions for this process even when durable node config is disabled. */
+  forceWorkerRuns?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -284,9 +286,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     env: process.env,
     enableAgentRuns: true,
     enableWorkerRuns: true,
+    forceWorkerRuns: opts.forceWorkerRuns,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  const { token, password } = opts.preferGatewayBootstrapToken
+  const { token, password } = opts.gatewayBootstrapToken
     ? {}
     : await resolveNodeHostGatewayCredentials({
         config: cfg,

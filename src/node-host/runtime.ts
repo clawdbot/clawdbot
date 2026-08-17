@@ -252,6 +252,8 @@ export async function prepareNodeHostRuntime(params?: {
   enableAgentRuns?: boolean;
   /** The embedded app worker never advertises full worker session hosting. */
   enableWorkerRuns?: boolean;
+  /** Process-scoped worker hosting for environment-managed disposable nodes. */
+  forceWorkerRuns?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
   installedAppsSharingEnabled?: boolean;
@@ -284,7 +286,8 @@ export async function prepareNodeHostRuntime(params?: {
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
   const workerRunsEnabled =
-    params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true;
+    params?.enableWorkerRuns === true &&
+    (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [

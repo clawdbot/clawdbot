@@ -22,7 +22,7 @@ let package = Package(
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
         .package(
             url: "https://github.com/openclaw/Peekaboo.git",
-            revision: "a48c462c757acbf320b22a6c9b34852e26bcb763"),
+            revision: "6ba9ade8e76a3743e6c9a0ddd915a62fc59f4605"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.3.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),

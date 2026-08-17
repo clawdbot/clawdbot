@@ -291,6 +291,62 @@ suite.define(() => {
     expect(await companionMenu.count()).toBe(1);
     expect(await contentActions.locator(":scope > button").count()).toBe(0);
 
+    const tab = page.locator(".side-panel__header .tabstrip-tab[active]");
+    for (const direction of ["ltr", "rtl"] as const) {
+      const tabPadding = await tab.evaluate((node, dir) => {
+        const panel = node.closest(".side-panel");
+        if (!(panel instanceof HTMLElement)) {
+          throw new Error("Active side-panel tab must render inside the side panel");
+        }
+        panel.dir = dir;
+        const tabBase = node.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
+        const leadingGlyph = node.querySelector<HTMLElement>(".tabstrip-tab__icon svg");
+        const close = node.nextElementSibling;
+        const trailingGlyph = close?.querySelector<HTMLElement>("svg");
+        if (!(close instanceof HTMLElement) || !tabBase || !leadingGlyph || !trailingGlyph) {
+          throw new Error("Active side-panel tab must render both edge glyphs");
+        }
+        const tabBounds = tabBase.getBoundingClientRect();
+        const closeBounds = close.getBoundingClientRect();
+        const leadingBounds = leadingGlyph.getBoundingClientRect();
+        const trailingBounds = trailingGlyph.getBoundingClientRect();
+        const rtl = dir === "rtl";
+        const tabStyle = getComputedStyle(tabBase);
+        const closeStyle = getComputedStyle(close);
+        return {
+          leading: rtl
+            ? tabBounds.right - leadingBounds.right
+            : leadingBounds.left - tabBounds.left,
+          trailing: rtl
+            ? trailingBounds.left - closeBounds.left
+            : closeBounds.right - trailingBounds.right,
+          tabOuterRadius: Number.parseFloat(
+            rtl ? tabStyle.borderTopRightRadius : tabStyle.borderTopLeftRadius,
+          ),
+          tabJoinRadius: Number.parseFloat(
+            rtl ? tabStyle.borderTopLeftRadius : tabStyle.borderTopRightRadius,
+          ),
+          closeJoinRadius: Number.parseFloat(
+            rtl ? closeStyle.borderTopRightRadius : closeStyle.borderTopLeftRadius,
+          ),
+          closeOuterRadius: Number.parseFloat(
+            rtl ? closeStyle.borderTopLeftRadius : closeStyle.borderTopRightRadius,
+          ),
+        };
+      }, direction);
+      expect(tabPadding.trailing, `${direction} glyph insets`).toBeCloseTo(tabPadding.leading, 0);
+      expect(tabPadding.tabJoinRadius, `${direction} tab join`).toBe(0);
+      expect(tabPadding.closeJoinRadius, `${direction} close join`).toBe(0);
+      expect(tabPadding.tabOuterRadius, `${direction} tab outer`).toBeGreaterThan(0);
+      expect(tabPadding.closeOuterRadius, `${direction} close outer`).toBeGreaterThan(0);
+    }
+    await tab.evaluate((node) => {
+      const panel = node.closest(".side-panel");
+      if (panel instanceof HTMLElement) {
+        panel.removeAttribute("dir");
+      }
+    });
+
     await page.locator(".side-panel-type-menu__trigger").click();
     await page.locator(".side-panel-type-menu__item").filter({ hasText: "Discussion" }).click();
     const discussionAction = contentActions.locator(

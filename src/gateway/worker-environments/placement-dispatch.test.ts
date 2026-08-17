@@ -66,6 +66,7 @@ describe("worker placement dispatch", () => {
       { profileId: REQUEST.profileId, ...inheritedProfile },
       expect.stringMatching(/^session-dispatch:/u),
       "beast",
+      REQUEST.executionMode,
     );
   });
 
