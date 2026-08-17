@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SessionEntry } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
+import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import {
   ensureMigrationDir,
   migrationFileExists,
@@ -26,6 +29,79 @@ import {
 } from "./state-migrations.session-store.js";
 import type { PreparedLegacySessionSurfaces } from "./state-migrations.session-surfaces.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
+
+const LEGACY_AGENT_DATABASE_BASENAME = "openclaw-agent.sqlite";
+
+function legacyAgentInspectionFailure(subject: string, error: unknown) {
+  return { status: "failed", warning: `Failed inspecting ${subject}: ${String(error)}` } as const;
+}
+
+export function inspectLegacyAgentDir(
+  legacyDir: string,
+): { status: "empty" | "payload" } | { status: "failed"; warning: string } {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(legacyDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { status: "empty" };
+    }
+    return legacyAgentInspectionFailure(`legacy agent directory ${legacyDir}`, error);
+  }
+  if (entries.length === 0) {
+    return { status: "empty" };
+  }
+
+  const databasePath = path.join(legacyDir, LEGACY_AGENT_DATABASE_BASENAME);
+  const databaseFiles = new Set(
+    resolveSqliteDatabaseFilePaths(databasePath).map((pathname) => path.basename(pathname)),
+  );
+  const hasFilePayload = entries.some((entry) => !databaseFiles.has(entry.name));
+  const hasDatabaseFiles = entries.some((entry) => databaseFiles.has(entry.name));
+  if (!hasDatabaseFiles) {
+    return { status: hasFilePayload ? "payload" : "empty" };
+  }
+  if (!migrationFileExists(databasePath)) {
+    return legacyAgentInspectionFailure(
+      `legacy agent database ${databasePath}`,
+      "main database is missing or not a regular file",
+    );
+  }
+
+  let database: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+  try {
+    const opened = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    database = opened;
+    const schemaOwner = opened // sqlite-allow-raw -- Read-only legacy schema ownership inspection.
+      .prepare("SELECT 1 FROM schema_meta WHERE meta_key = 'primary' AND role = 'agent' LIMIT 1")
+      .get();
+    if (!schemaOwner) {
+      return legacyAgentInspectionFailure(
+        `legacy agent database ${databasePath}`,
+        "agent schema ownership metadata is missing",
+      );
+    }
+    const tables = opened // sqlite-allow-raw -- Read-only legacy migration payload inspection.
+      .prepare(
+        // The excluded singleton rows are seeded schema controls, not user payload.
+        `SELECT name FROM pragma_table_list
+         WHERE schema = 'main' AND type IN ('table', 'virtual')
+           AND substr(name, 1, 7) <> 'sqlite_'
+           AND name NOT IN ('schema_meta', 'session_key_contract', 'memory_index_state')`,
+      )
+      .all() as Array<{ name: string }>;
+    const hasPayload = tables.some(({ name }) =>
+      opened // sqlite-allow-raw -- pragma-owned names stay quoted inside this bounded probe.
+        .prepare(`SELECT 1 FROM ${quoteSqliteIdentifier(name)} LIMIT 1`)
+        .get(),
+    );
+    return { status: hasPayload || hasFilePayload ? "payload" : "empty" };
+  } catch (error) {
+    return legacyAgentInspectionFailure(`legacy agent database ${databasePath}`, error);
+  } finally {
+    database?.close();
+  }
+}
 
 function normalizeMergedSessionStore(
   merged: Record<string, SessionEntryLike>,

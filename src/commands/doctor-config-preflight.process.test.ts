@@ -179,6 +179,57 @@ describe("doctor invalid config process exit", () => {
 });
 
 describe.concurrent("gateway startup-migration refusal", () => {
+  it("reaches readiness with unresolved legacy agent files left for Doctor", async () => {
+    const root = await fs.promises.realpath(tempDirs.make("openclaw-unresolved-agent-ready-"));
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const legacyPath = path.join(stateDir, "agent", "settings.json");
+    const config = {
+      gateway: { mode: "local", auth: { mode: "none" } },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, blocker: {}, digest: {} },
+      },
+    } satisfies OpenClawConfig;
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    fs.writeFileSync(legacyPath, '{"legacy":true}\n');
+    const preflightUrl = new URL("./doctor-config-preflight.ts", import.meta.url).href;
+    const script = `
+      const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
+      await runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        observe: false,
+        requireStartupMigrationCheckpoint: true,
+      });
+      console.log("__READY__");
+    `;
+
+    const result = await runIsolatedModuleScript(env, script, { timeoutMs: 60_000 });
+    const output = `${result.stderr}\n${result.stdout}`;
+
+    expect(result.stdout, output).toContain("__READY__");
+    expect(output).toContain("Deferred legacy agent/session migration: select an agent owner");
+    expect(fs.readFileSync(legacyPath, "utf8")).toBe('{"legacy":true}\n');
+    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+  }, 75_000);
+
   it("exits cleanly after reporting the refusal once and releasing its lease", async () => {
     const temporaryRoot = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "openclaw-startup-migration-exit-"),
