@@ -1,6 +1,7 @@
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -265,6 +266,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
           config: cfg,
           provider: flushProvider,
           model: flushModel,
+          authProfileId: sessionEntry.authProfileOverride?.trim() || undefined,
+          authProfileIdSource: resolveSessionAuthProfileOverrideSource(sessionEntry),
           blockReplyBreak: "message_end",
           skillsSnapshot,
           thinkLevel: effectiveTurnThinkLevel,

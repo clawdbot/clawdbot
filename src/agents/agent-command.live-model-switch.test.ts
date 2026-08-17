@@ -1595,7 +1595,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
   ] as const)("stops finalization when memory maintenance sees a %s", async (mode, error) => {
     setupSingleAttemptFallback();
-    const { store } = setupStoredSession();
+    const { store } = setupStoredSession({
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+    });
     const controller = new AbortController();
     const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
       typeof makeSuccessResult
@@ -1632,6 +1635,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       | undefined;
     const flushRun = flushParams?.followupRun?.run;
     expect(flushRun).toBeDefined();
+    expect(flushRun).toMatchObject({
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
+    });
     for (const field of [
       "runtimePluginToolGrant",
       "scheduledToolPolicy",
