@@ -552,6 +552,51 @@ describe("event-driven session list refresh", () => {
     }
   });
 
+  it("defers a queued filtered refresh when the page hides during its active request", async () => {
+    vi.useFakeTimers();
+    const page = installPageLifecycle();
+    const activeRefresh = deferred<SessionsListResult>();
+    let filteredCalls = 0;
+    const request = vi.fn(async (method: string, params?: { archived?: string }) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      if (params?.archived !== "all") {
+        return sessionsResult(0);
+      }
+      filteredCalls += 1;
+      return filteredCalls === 2 ? await activeRefresh.promise : sessionsResult(filteredCalls);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const unsubscribe = sessions.subscribeList({ agentId: "main", archivedFilter: "all" }, vi.fn());
+
+    try {
+      await sessions.refreshList({ agentId: "main", archivedFilter: "all", force: true });
+      emitEvent(sessionChangedEvent("agent:main:first"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      expect(filteredCalls).toBe(2);
+
+      emitEvent(sessionChangedEvent("agent:main:queued"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      page.setVisibility("hidden");
+      activeRefresh.resolve(sessionsResult(2));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(filteredCalls).toBe(2);
+
+      page.setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(filteredCalls).toBe(3);
+    } finally {
+      activeRefresh.resolve(sessionsResult(2));
+      unsubscribe();
+      sessions.dispose();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("holds canonical and filtered event refreshes while hidden and catches up once", async () => {
     vi.useFakeTimers();
     const page = installPageLifecycle();
