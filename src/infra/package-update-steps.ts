@@ -18,6 +18,7 @@ import {
 export type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import {
   collectInstalledGlobalPackageErrors,
+  cleanupGlobalRenameDirs,
   globalInstallArgs,
   globalInstallFallbackArgs,
   listActivePnpmIsolatedGlobalPackages,
@@ -894,6 +895,14 @@ export async function runGlobalPackageUpdateSteps(params: {
         afterVersion: null,
         failedStep: pnpmPreflight.failedStep,
       };
+    }
+    const packageRoot = params.packageRoot ?? params.installTarget.packageRoot;
+    if (packageRoot) {
+      // Lifecycle policy must refuse before cleanup can remove an interrupted update backup.
+      await cleanupGlobalRenameDirs({
+        globalRoot: path.dirname(packageRoot),
+        packageName: params.packageName,
+      });
     }
     // Keep the preflight and mutation on the same pnpm executable. `pnpm bin -g`
     // already verifies its reported bin is on PATH, so no PATH rewrite is needed.

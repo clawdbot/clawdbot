@@ -7,6 +7,7 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import type { GatewayService } from "../../daemon/service.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { runPackageInstallUpdate } from "./update-command-package.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -48,6 +49,51 @@ describe("resolveGatewayInstallEntrypoint", () => {
     await expect(
       resolveGatewayInstallEntrypoint(root, async (candidate) => candidate === entryPath),
     ).resolves.toBe(entryPath);
+  });
+});
+
+describe("runPackageInstallUpdate", () => {
+  it("refuses unsupported npm before package update cleanup mutates backups", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-policy-"));
+    try {
+      const globalRoot = path.join(root, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const backupDir = path.join(globalRoot, ".openclaw-interrupted");
+      await fs.mkdir(packageRoot, { recursive: true });
+      await fs.mkdir(backupDir, { recursive: true });
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      );
+
+      const result = await runPackageInstallUpdate({
+        root: packageRoot,
+        installKind: "package",
+        tag: "latest",
+        timeoutMs: 1000,
+        startedAt: Date.now(),
+        progress: undefined,
+        jsonMode: true,
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+        installEnv: {},
+        installTarget: {
+          manager: "npm",
+          command: "npm",
+          globalRoot,
+          packageRoot,
+          npmOwner: {
+            version: "11.15.9",
+            lifecyclePolicy: "unsupported-transition",
+          },
+        },
+      });
+
+      expect(result).toMatchObject({ status: "error", reason: "npm lifecycle policy preflight" });
+      await expect(fs.access(backupDir)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
