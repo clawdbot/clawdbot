@@ -78,6 +78,8 @@ let compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmb
 let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
+let diagnosticEvents: typeof import("../../infra/diagnostic-events.js");
+let diagnosticRunActivity: typeof import("../../logging/diagnostic-run-activity.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -166,6 +168,7 @@ function mockResolvedModel(params?: {
   supportsTools?: boolean;
   input?: string[];
   contextWindow?: number;
+  requestTimeoutMs?: number;
 }) {
   resolveModelMock.mockReset();
   resolveModelMock.mockImplementation(
@@ -187,6 +190,9 @@ function mockResolvedModel(params?: {
           id: modelId,
           input: params?.input ?? [],
           ...(params?.contextWindow === undefined ? {} : { contextWindow: params.contextWindow }),
+          ...(params?.requestTimeoutMs === undefined
+            ? {}
+            : { requestTimeoutMs: params.requestTimeoutMs }),
           ...(params?.supportsTools === undefined
             ? {}
             : { compat: { supportsTools: params.supportsTools } }),
@@ -309,6 +315,10 @@ async function runCompactionHooks(params: { sessionKey: string; messageProvider?
 
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
+  [diagnosticEvents, diagnosticRunActivity] = await Promise.all([
+    import("../../infra/diagnostic-events.js"),
+    import("../../logging/diagnostic-run-activity.js"),
+  ]);
   compactEmbeddedAgentSessionDirect = (params) =>
     loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
   compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
@@ -952,6 +962,72 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       ),
     );
   });
+
+  it.each(["direct", "queued"] as const)(
+    "tracks the provider request allowance for %s compaction",
+    async (mode) => {
+      const requestTimeoutMs = 420_000;
+      const providerRequest = createDeferred<unknown>();
+      const ref = { sessionId: TEST_SESSION_ID, sessionKey: TEST_SESSION_KEY };
+      let activeSnapshot:
+        | ReturnType<typeof diagnosticRunActivity.getDiagnosticSessionActivitySnapshot>
+        | undefined;
+      mockResolvedModel({ requestTimeoutMs });
+      resolveEmbeddedAgentStreamFnMock.mockReturnValue(vi.fn(() => providerRequest.promise));
+      attemptServerEndpointCompactionMock.mockImplementationOnce(async (input: unknown) => {
+        const { context, model, streamFn } = input as {
+          context: unknown;
+          model: unknown;
+          streamFn: (model: unknown, context: unknown, options?: unknown) => unknown;
+        };
+        const result = Promise.resolve(streamFn(model, context, {}));
+        await diagnosticEvents.waitForDiagnosticEventsDrained();
+        activeSnapshot = diagnosticRunActivity.getDiagnosticSessionActivitySnapshot(ref);
+        providerRequest.resolve(undefined);
+        await result;
+        return {
+          item: { type: "compaction", encrypted_content: "opaque" },
+          usage: { input_tokens: 120, output_tokens: 50, dropped_message_count: 0 },
+        };
+      });
+
+      diagnosticEvents.resetDiagnosticEventsForTest();
+      diagnosticRunActivity.resetDiagnosticRunActivityForTest();
+      diagnosticRunActivity.startDiagnosticRunActivityTracking();
+      try {
+        if (mode === "queued") {
+          resolveContextEngineMock.mockResolvedValueOnce({
+            info: { ownsCompaction: false },
+            compact: vi.fn(
+              async () =>
+                (await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs())) as never,
+            ),
+          });
+        }
+        const result =
+          mode === "direct"
+            ? await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs())
+            : await compactEmbeddedAgentSession(
+                wrappedCompactionArgs({ agentId: "main", trigger: "manual" }),
+              );
+
+        expect(result.ok).toBe(true);
+        expect(activeSnapshot).toMatchObject({
+          activeWorkKind: "model_call",
+          hasActiveEmbeddedRun: true,
+          activeModelCallRequestTimeoutMs: requestTimeoutMs,
+        });
+        await diagnosticEvents.waitForDiagnosticEventsDrained();
+        expect(
+          diagnosticRunActivity.getDiagnosticSessionActivitySnapshot(ref).activeWorkKind,
+        ).toBeUndefined();
+      } finally {
+        diagnosticRunActivity.stopDiagnosticRunActivityTracking();
+        diagnosticRunActivity.resetDiagnosticRunActivityForTest();
+        diagnosticEvents.resetDiagnosticEventsForTest();
+      }
+    },
+  );
 
   it("routes compaction through shared stream resolution and extra params", async () => {
     const resolvedStreamFn = vi.fn();

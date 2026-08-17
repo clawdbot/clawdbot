@@ -511,8 +511,8 @@ function resolveChatHistorySessionId(result: ChatHistoryResult): string | null {
     : null;
 }
 
-function retainedRawHistoryStart(pagination: ChatHistoryPagination | undefined): number | null {
-  const totalMessages = pagination?.totalMessages;
+function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
+  const totalMessages = pagination.totalMessages;
   if (
     typeof totalMessages !== "number" ||
     !Number.isSafeInteger(totalMessages) ||
@@ -520,7 +520,7 @@ function retainedRawHistoryStart(pagination: ChatHistoryPagination | undefined):
   ) {
     return null;
   }
-  const retainedDepth = pagination?.hasMore ? pagination.nextOffset : totalMessages;
+  const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
   const start = totalMessages - retainedDepth + 1;
   return Number.isSafeInteger(start) && start > 0 ? start : null;
 }
@@ -530,7 +530,7 @@ function reconcileLoadedHistoryTail(options: {
   nextPagination: ChatHistoryPagination;
   nextSessionId: string | null;
   previousMessages: unknown[];
-  previousPagination: ChatHistoryPagination | undefined;
+  previousPagination: ChatHistoryPagination;
   previousSessionId: string | null;
 }): { messages: unknown[]; pagination: ChatHistoryPagination } | null {
   if (
@@ -540,7 +540,7 @@ function reconcileLoadedHistoryTail(options: {
   ) {
     return null;
   }
-  const previousTotal = options.previousPagination?.totalMessages;
+  const previousTotal = options.previousPagination.totalMessages;
   const nextTotal = options.nextPagination.totalMessages;
   const previousStart = retainedRawHistoryStart(options.previousPagination);
   const nextStart = retainedRawHistoryStart(options.nextPagination);
@@ -1036,7 +1036,7 @@ function replaceCachedChatMessages(state: ChatState, sessionKey: string, agentId
         ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
         : {}),
       messages: state.chatMessages,
-      pagination: state.chatHistoryPagination ?? { hasMore: false },
+      pagination: state.chatHistoryPagination,
       sessionId: state.currentSessionId ?? null,
     },
   );

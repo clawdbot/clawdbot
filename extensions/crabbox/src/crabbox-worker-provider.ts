@@ -26,6 +26,7 @@ import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.j
 import {
   buildCrabboxWarmupArgs,
   identityRefId,
+  listCrabboxMachineOptions,
   nonEmptyString,
   operationLeaseId,
   operationSlug,
@@ -496,11 +497,23 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
+    listMachineOptions: listCrabboxMachineOptions,
     resolveProvisionTimeoutMs(profile) {
       return resolveCrabboxProvisionCallTimeoutMs(parseCrabboxProfile(profile));
     },
-    async provision(profile: WorkerProfile, operationId: string): Promise<WorkerLease> {
-      const parsed = parseCrabboxProfile(profile);
+    async provision(
+      profile: WorkerProfile,
+      operationId: string,
+      options: Parameters<WorkerProvider["provision"]>[2],
+    ): Promise<WorkerLease> {
+      const configured = parseCrabboxProfile(profile);
+      const requestedClass = nonEmptyString(options?.machineClass);
+      if (options?.machineClass !== undefined && (!requestedClass || requestedClass.length > 128)) {
+        throw new WorkerProviderError(
+          "Crabbox machine class must be a non-empty string of at most 128 characters",
+        );
+      }
+      const parsed = requestedClass ? { ...configured, class: requestedClass } : configured;
       const warmupTimeoutMs = parsed.desktop
         ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
         : CRABBOX_WARMUP_TIMEOUT_MS;

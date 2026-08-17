@@ -1,3 +1,4 @@
+import type { WorkerTunnelStatus } from "@openclaw/gateway-protocol";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -7,7 +8,7 @@ import type {
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-reconcile.js";
 
-export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
+export type { WorkerTunnelStatus };
 
 export class WorkerTunnelOwnerDisconnectedError extends Error {
   constructor() {

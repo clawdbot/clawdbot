@@ -94,7 +94,10 @@ describe.runIf(process.platform === "win32")("host-local media tool file URLs", 
           image: imageUrl,
         });
         expect(imageResult.content).toEqual([
-          { type: "text", text: "Loaded 1 image for direct visual inspection." },
+          {
+            type: "text",
+            text: "Loaded 1 image into private model context for inspection; not displayed, attached, or sent to the user.",
+          },
           expect.objectContaining({ type: "image" }),
         ]);
 

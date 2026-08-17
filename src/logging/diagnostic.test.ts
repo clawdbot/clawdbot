@@ -13,10 +13,12 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  createDiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
@@ -1329,6 +1331,60 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("defers direct and repeated recovery until the latest model request allowance expires", async () => {
+    const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
+    const ref = { sessionId: "allowance-session", sessionKey: "agent:main:allowance" };
+    const runId = "allowance-run";
+    const requestTimeoutMs = 150_000;
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      },
+    );
+    logSessionStateChange({ ...ref, state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-1",
+        provider: "mock",
+        model: "slow-model",
+      },
+      owner.generation,
+      requestTimeoutMs,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.advanceTimersByTime(120_000);
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-2",
+        provider: "mock",
+        model: "slow-model",
+      },
+      owner.generation,
+      requestTimeoutMs,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The first request has exceeded the provider allowance, but the active
+    // retry has not. Recovery must honor the exact request currently in flight.
+    vi.advanceTimersByTime(30_000);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(120_000);
+
+    expectRecoveryCall(recoverStuckSession, { ...ref, queueDepth: 0, allowActiveAbort: true }, [
+      "ageMs",
+      "stateGeneration",
+    ]);
   });
 
   it("recovers stale model calls without active embedded-run ownership", async () => {

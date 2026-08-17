@@ -22,6 +22,14 @@ export type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js"
 export const STALE_WORKER_BUILD_REASON =
   "Worker build does not match the current Gateway build; redispatch the session so its worker can bootstrap the current build before retrying.";
 
+export class StaleWorkerBuildError extends Error {
+  readonly code = "invalid_state";
+
+  constructor() {
+    super(STALE_WORKER_BUILD_REASON);
+  }
+}
+
 /** True only for bundles that accept the exact admitted execution carrier. */
 export function supportsWorkerExecutionContextLaunch(
   handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,

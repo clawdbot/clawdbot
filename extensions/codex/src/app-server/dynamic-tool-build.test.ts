@@ -420,6 +420,30 @@ describe("Codex app-server dynamic tool build", () => {
     ]);
   });
 
+  it.each([
+    { nativeToolSurfaceEnabled: true, expected: ["message"] },
+    { nativeToolSurfaceEnabled: false, expected: ["image", "message"] },
+  ])(
+    "uses the active native image loader when native tools are $nativeToolSurfaceEnabled",
+    async ({ nativeToolSurfaceEnabled, expected }) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.model = createCodexTestModel("codex", ["text", "image"]);
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      setOpenClawCodingToolsFactoryForTests(() => [
+        createRuntimeDynamicTool("image"),
+        createRuntimeDynamicTool("message"),
+      ]);
+
+      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+        nativeToolSurfaceEnabled,
+      });
+
+      expect(tools.map((tool) => tool.name)).toEqual(expected);
+    },
+  );
+
   it("removes managed web_search when domain-restricted Codex hosted search is active", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

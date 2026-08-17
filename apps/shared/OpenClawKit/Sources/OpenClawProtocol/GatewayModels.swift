@@ -7520,17 +7520,20 @@ public struct SessionsDispatchParams: Codable, Sendable {
     public let agentid: String?
     public let profileid: String?
     public let deviceid: String?
+    public let machineclass: String?
 
     public init(
         key: String,
         agentid: String? = nil,
         profileid: String? = nil,
-        deviceid: String? = nil)
+        deviceid: String? = nil,
+        machineclass: String? = nil)
     {
         self.key = key
         self.agentid = agentid
         self.profileid = profileid
         self.deviceid = deviceid
+        self.machineclass = machineclass
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7538,6 +7541,7 @@ public struct SessionsDispatchParams: Codable, Sendable {
         case agentid = "agentId"
         case profileid = "profileId"
         case deviceid = "deviceId"
+        case machineclass = "machineClass"
     }
 }
 

@@ -54,6 +54,9 @@ describe("worker placement dispatch coordinator", () => {
     await expect(
       coordinated.dispatch({ ...REQUEST, profileId: "another-profile" }),
     ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
+    await expect(coordinated.dispatch({ ...REQUEST, machineClass: "beast" })).rejects.toThrow(
+      `Session ${REQUEST.sessionKey} is already dispatching another request`,
+    );
     await expect(
       coordinated.dispatch({
         ...REQUEST,

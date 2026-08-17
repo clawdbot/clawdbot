@@ -124,7 +124,7 @@ import {
   resolveCodexBindingModelProviderFallback,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
-import { filterToolsForVisionInputs } from "./vision-tools.js";
+import { filterCodexVisionTools } from "./vision-tools.js";
 import {
   resolveCodexWebSearchPlan,
   type CodexNativeWebSearchSupport,
@@ -647,7 +647,6 @@ export async function runCodexAppServerSideQuestion(
           events: nativeHookRelayEvents,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           clearOmittedEvents: true,
-          loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
         })
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
@@ -1107,9 +1106,9 @@ async function createCodexSideToolBridge(input: {
       requireExplicitMessageTarget: true,
     });
     const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
-    tools = filterToolsForVisionInputs(codexFilteredTools, {
+    tools = filterCodexVisionTools(codexFilteredTools, {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
-      hasInboundImages: false,
+      nativeImageInspectionEnabled: input.nativeToolSurfaceEnabled,
     });
   }
   const requestedWebSearchPlan = resolveCodexWebSearchPlan({

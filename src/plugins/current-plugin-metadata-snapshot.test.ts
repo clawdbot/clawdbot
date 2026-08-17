@@ -393,20 +393,34 @@ describe("current plugin metadata snapshot", () => {
     );
   });
 
-  it("trusts the config identity explicitly paired with an owner-prepared scope", () => {
+  it("invalidates a generic scope when the config identity has a different policy", () => {
+    const config = { plugins: { allow: ["source"] } };
+    const workspaceDir = "/workspace";
+    const snapshot = createSnapshot({ config, workspaceDir });
+    config.plugins.allow = ["runtime"];
+
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
+      },
+      { config },
+    );
+  });
+
+  it("trusts the config identity paired with an immutable runtime generation", () => {
     const sourceConfig = { plugins: { allow: ["source"] } };
     const runtimeConfig = { plugins: { allow: ["runtime"] } };
     const workspaceDir = "/workspace";
     const snapshot = createSnapshot({ config: sourceConfig, workspaceDir });
 
-    withPluginMetadataSnapshotScope(
-      snapshot,
+    withPluginRuntimeGenerationScope(
+      { config: runtimeConfig, metadataSnapshot: snapshot, workspaceDir },
       () => {
         expect(getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir })).toBe(
           snapshot,
         );
       },
-      { config: runtimeConfig },
     );
   });
 

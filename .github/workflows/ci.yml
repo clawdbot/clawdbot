@@ -2414,6 +2414,15 @@ jobs:
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
+      - name: Compute extension boundary input fingerprint
+        id: extension-boundary-inputs
+        if: matrix.task == 'lint'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fingerprint="$(node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
       - name: Cache extension package boundary artifacts for hosted lint
         if: matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid')
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -2423,9 +2432,9 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/config/**', 'src/plugin-sdk/**', 'src/agents/embedded-agent-runner/run/types.ts', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v2-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
           restore-keys: |
-            ${{ runner.os }}-extension-package-boundary-v1-
+            ${{ runner.os }}-extension-package-boundary-v2-
 
       # check-lint's shard runner rebuilds the same plugin-sdk boundary
       # artifacts the boundary lane snapshots (~72s cold); restore them from
@@ -2447,10 +2456,6 @@ jobs:
       - name: Restore extension boundary artifacts from sticky disk
         if: matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
-        env:
-          # Config/toolchain inputs the tree-OID gate below cannot see; must
-          # stay identical to the boundary lane's fingerprint composition.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -2458,11 +2463,10 @@ jobs:
             echo "boundary artifact snapshot not seeded yet; lint prepares cold"
             exit 0
           fi
-          # Same tree-OID gate as the boundary lane: restore only artifacts
-          # produced from identical generative sources, so stale snapshots can
-          # neither false-skip rebuilds nor leave ghost declarations.
-          current_trees="$({ git rev-parse HEAD:src/config HEAD:src/plugin-sdk HEAD:src/agents/embedded-agent-runner/run/types.ts HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
-          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+          # The same canonical fingerprint keys the hosted cache and boundary
+          # lane, so no consumer can restore a snapshot from stale SDK inputs.
+          current_fingerprint="${{ steps.extension-boundary-inputs.outputs.fingerprint }}"
+          if [ ! -f "$sticky_root/.source-fingerprint" ] || [ "$current_fingerprint" != "$(cat "$sticky_root/.source-fingerprint")" ]; then
             echo "boundary source trees changed since snapshot; lint prepares cold"
             exit 0
           fi
@@ -2853,6 +2857,15 @@ jobs:
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
+      - name: Compute extension boundary input fingerprint
+        id: extension-boundary-inputs
+        if: matrix.group == 'extension-package-boundary'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fingerprint="$(node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
       # Same-repo runs carry boundary artifacts on a Blacksmith sticky disk:
       # the GitHub cache below is evicted so quickly under the repo quota that
       # its prefix restore never hits, leaving every run to rebuild ~113s of
@@ -2882,10 +2895,6 @@ jobs:
         id: boundary-sticky-restore
         if: matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
-        env:
-          # Config/toolchain inputs the tree-OID gate below cannot see; must
-          # stay identical to the seed step and check-lint's restore gate.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -2893,15 +2902,13 @@ jobs:
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Restore only when the generative source trees AND the runner
-          # toolchain match the snapshotting run. Tree OIDs cover source
-          # content exactly; the node/pnpm versions and the config hash cover
-          # toolchain/config/scripts/lockfile changes the OIDs cannot see.
+          # Restore only when the canonical generative-input fingerprint
+          # matches the snapshotting run.
           # Restored artifacts are valid by construction: no clock-skew mtime
           # race can false-skip a rebuild, and deleted/renamed sources or a
           # toolchain bump build cold.
-          current_trees="$({ git rev-parse HEAD:src/config HEAD:src/plugin-sdk HEAD:src/agents/embedded-agent-runner/run/types.ts HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
-          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+          current_fingerprint="${{ steps.extension-boundary-inputs.outputs.fingerprint }}"
+          if [ ! -f "$sticky_root/.source-fingerprint" ] || [ "$current_fingerprint" != "$(cat "$sticky_root/.source-fingerprint")" ]; then
             echo "boundary source trees changed since snapshot; building cold"
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -2923,9 +2930,9 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/config/**', 'src/plugin-sdk/**', 'src/agents/embedded-agent-runner/run/types.ts', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v2-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
           restore-keys: |
-            ${{ runner.os }}-extension-package-boundary-v1-
+            ${{ runner.os }}-extension-package-boundary-v2-
 
       - name: Preserve extension package boundary cache hit
         if: matrix.group == 'extension-package-boundary' && steps.extension-package-boundary-cache.outputs.cache-hit == 'true'
@@ -2950,25 +2957,6 @@ jobs:
               -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
               -exec touch -t 200001010000 {} +
           fi
-          cache_inputs=(
-            tsconfig.json \
-            tsconfig.plugin-sdk.dts.json \
-            packages/plugin-sdk/tsconfig.json \
-            packages/llm-core/package.json \
-            packages/model-catalog-core/package.json \
-            scripts/check-extension-package-tsc-boundary.mts \
-            scripts/prepare-extension-package-boundary-artifacts.mts \
-            scripts/write-plugin-sdk-entry-dts.ts \
-            scripts/lib/plugin-sdk-entrypoints.json \
-            scripts/lib/plugin-sdk-entries.mts \
-            package.json \
-            pnpm-lock.yaml
-          )
-          for cache_input in "${cache_inputs[@]}"; do
-            if [ -e "$cache_input" ]; then
-              touch -t 200001010000 "$cache_input"
-            fi
-          done
 
       - name: Run additional check shard
         env:
@@ -3109,15 +3097,12 @@ jobs:
       - name: Seed extension boundary sticky disk
         if: success() && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.event_name != 'pull_request' && github.repository == 'openclaw/openclaw'
         shell: bash
-        env:
-          # Must stay identical to the restore gates above.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
           # A stale marker must not survive a mid-seed failure: drop readiness
           # first so a partial payload can never be restored as valid.
-          rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions"
+          rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/.source-fingerprint" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions"
           if [ -d dist/plugin-sdk ]; then
             rsync -aR dist/plugin-sdk "$sticky_root/"
           fi
@@ -3126,7 +3111,7 @@ jobs:
           fi
           find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
             -exec rsync -aR {} "$sticky_root/" \;
-          { git rev-parse HEAD:src/plugin-sdk HEAD:src/agents/embedded-agent-runner/run/types.ts HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; } > "$sticky_root/.source-trees"
+          echo "${{ steps.extension-boundary-inputs.outputs.fingerprint }}" > "$sticky_root/.source-fingerprint"
           touch "$sticky_root/.snapshot-ready"
 
   # Validate docs (format, lint, broken links) only when docs files changed.

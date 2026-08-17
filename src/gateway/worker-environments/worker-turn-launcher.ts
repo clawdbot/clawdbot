@@ -14,7 +14,11 @@ import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js"
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
-import { STALE_WORKER_BUILD_REASON, supportsWorkerExecutionContextLaunch } from "./admission.js";
+import {
+  STALE_WORKER_BUILD_REASON,
+  StaleWorkerBuildError,
+  supportsWorkerExecutionContextLaunch,
+} from "./admission.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
 import type {
@@ -104,12 +108,7 @@ async function executeWorkerTurn(params: {
   // Provider reconciliation records current-build teardown before placement repair. Consume
   // that fact before launch so canonical reconciliation can persist the same cause.
   if (environment?.error === STALE_WORKER_BUILD_REASON) {
-    await params.reconcileActivePlacement(placement.environmentId);
-    const reconciled = params.placements.get(placement.sessionId);
-    if (reconciled) {
-      requireActivePlacement(reconciled);
-    }
-    throw new Error(STALE_WORKER_BUILD_REASON);
+    throw new StaleWorkerBuildError();
   }
   if (
     !environment ||
@@ -518,6 +517,13 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           : await executeWorkerTurn(executionParams);
         return result;
       } catch (error) {
+        if (error instanceof StaleWorkerBuildError) {
+          await options.reconcileActivePlacement(placement.environmentId);
+          const reconciled = options.placements.get(placement.sessionId);
+          if (reconciled) {
+            requireActivePlacement(reconciled);
+          }
+        }
         const pendingWorkspaceResult = options.placements
           .listPendingWorkspaceResults()
           .find(

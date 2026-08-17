@@ -12,7 +12,7 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it("retries an ambiguous cloud create with the same session key", async () => {
+  it("retries an ambiguous cloud create with the same session key and machine class", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const message = "recover the cloud create";
@@ -36,7 +36,16 @@ suite.define(() => {
         },
         "environments.list": {
           environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
+          profiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              machines: [
+                { id: "standard", label: "Standard", default: true },
+                { id: "fast", label: "Fast" },
+              ],
+            },
+          ],
         },
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
@@ -58,6 +67,11 @@ suite.define(() => {
         .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
+      await page.locator("#new-session-where-trigger").click();
+      await page.locator('[data-value="machine:fast"]').click();
+      await expect
+        .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-machine-class"))
+        .toBe("fast");
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start session" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
@@ -67,18 +81,25 @@ suite.define(() => {
       }
       expect(firstKey).toMatch(/^agent:cloud:dashboard:/);
 
+      await gateway.setMethodResponse("environments.list", {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox" }],
+      });
       await page.reload();
       await gateway.waitForRequest("environments.list");
       await expect
         .poll(() => page.locator(".new-session-page__message").inputValue())
         .toBe(message);
+      await pollLocatorText(
+        page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
+      ).toBe("aws · fast");
       await page.getByRole("button", { name: "Start session" }).click();
       const retryCreate = await gateway.waitForRequest("sessions.create");
       expect(retryCreate.params).toMatchObject({ key: firstKey, message: "", worktree: true });
       await gateway.resolveDeferred("sessions.create", { key: firstKey });
 
       expect(await gateway.waitForRequest("sessions.dispatch")).toMatchObject({
-        params: { key: firstKey, agentId: "cloud", profileId: "aws" },
+        params: { key: firstKey, agentId: "cloud", profileId: "aws", machineClass: "fast" },
       });
       expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
         params: { key: firstKey, agentId: "cloud", message },

@@ -30,6 +30,8 @@ type CurrentPluginMetadataSnapshotOptions = {
   config?: OpenClawConfig;
   compatibleConfigs?: readonly OpenClawConfig[];
   env?: NodeJS.ProcessEnv;
+  /** Only immutable runtime generations may trust identity across policy drift. */
+  trustConfigIdentity?: boolean;
   workspaceDir?: string;
 };
 
@@ -279,9 +281,14 @@ export function withPluginMetadataSnapshotScope<T>(
     : snapshot.configFingerprint;
   const configIdentities = new WeakSet<OpenClawConfig>();
   if (options.config) {
-    // The closure owner already paired this exact config with its immutable generation.
-    // Recomputing policy compatibility here makes nested hot paths discard prepared facts.
-    configIdentities.add(options.config);
+    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config);
+    if (
+      options.trustConfigIdentity === true ||
+      policyHash === snapshot.policyHash ||
+      compatiblePolicyHashes?.includes(policyHash)
+    ) {
+      configIdentities.add(options.config);
+    }
   }
   for (const config of options.compatibleConfigs ?? []) {
     configIdentities.add(config);

@@ -73,6 +73,7 @@ const NARRATION_DEMO_SESSION_KEY = "agent:main:sidebar-narration-demo";
 const NARRATION_DEMO_RUN_ID = "mock-sidebar-narration-run";
 const OBSERVER_DEMO_SESSION_KEY = "agent:main:session-observer-demo";
 const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
+const PLAN_DEMO_RUN_ID = "mock-plan-run";
 const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -1295,7 +1296,9 @@ async function createChatPickerScenario(
       : [];
   const sessions = [
     sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
+      activeRunIds: [PLAN_DEMO_RUN_ID],
       childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
+      hasActiveRun: true,
     }),
     ...swarmChildRows,
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
@@ -1477,6 +1480,7 @@ async function createChatPickerScenario(
     // gate the chat header's panel toggles, which stayed invisible here.
     featureMethods: [
       "browser.request",
+      "chat.abort",
       "chat.metadata",
       "chat.startup",
       "question.list",
@@ -1503,6 +1507,20 @@ async function createChatPickerScenario(
     // ui/src/lib/terminal-availability.ts).
     terminalEnabled: true,
     historyMessages: buildScrollableChatHistory(baseTime),
+    inFlightRun: {
+      runId: PLAN_DEMO_RUN_ID,
+      text: "",
+      plan: {
+        explanation: "Keep the Control UI change focused",
+        steps: [
+          { step: "Inspect the transcript renderer", status: "completed" },
+          { step: "Confirm the plan event contract", status: "completed" },
+          { step: "Remove the duplicate card summary", status: "in_progress" },
+          { step: "Run focused UI tests", status: "pending" },
+          { step: "Capture browser proof", status: "pending" },
+        ],
+      },
+    },
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
     presenceUsers: [
@@ -2316,6 +2334,11 @@ async function createChatPickerScenario(
       ],
     },
     sessionArchiveFiltering: true,
+    sessionInfo: {
+      activeRunIds: [PLAN_DEMO_RUN_ID],
+      hasActiveRun: true,
+      key: "agent:main:main",
+    },
     sessionKey: "agent:main:main",
     workspace: "/Users/peter/Projects/openclaw",
     workspaceGit: true,

@@ -56,12 +56,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     if (parseCatalogSessionKey(state.sessionKey)) {
       return Boolean(this.catalogCursor && !this.catalogLoading);
     }
-    const pagination = state.chatHistoryPagination ?? { hasMore: false };
-    if (pagination !== this.nativePaginationSnapshot) {
-      this.nativePaginationSnapshot = pagination;
-      this.olderOffsetsSeen.clear();
-    }
-    return pagination.hasMore && !state.chatLoading;
+    return state.chatHistoryPagination.hasMore && !state.chatLoading;
   }
 
   protected resetOlderMessagesViewport(): void {
@@ -80,8 +75,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     this.transcriptScrollTop = null;
     this.olderCursorsSeen.clear();
-    this.olderOffsetsSeen.clear();
-    this.nativePaginationSnapshot = null;
     this.clearHistoryObserver();
   }
 
@@ -328,18 +321,15 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     let prepended = false;
     try {
       if (catalogKey) {
-        const previousCount = this.catalogMessages.length;
-        const progressed = await this.loadCatalogSession(catalogKey, true);
-        prepended = progressed || this.catalogMessages.length > previousCount;
+        prepended = await this.loadCatalogSession(catalogKey, true);
       } else {
         const pagination = state.chatHistoryPagination;
-        if (!pagination?.hasMore) {
+        if (!pagination.hasMore) {
           return false;
         }
         const requestedOffset = pagination.nextOffset;
         const expectedSessionId =
           typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
-        this.olderOffsetsSeen.add(requestedOffset);
         const result = await loadOlderChatHistoryPage(state, requestedOffset);
         if (!result || generation !== this.olderLoadGeneration) {
           return false;
@@ -358,10 +348,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           return true;
         }
         const nextPagination = resolveChatHistoryPagination(result);
-        const exhausted =
-          !nextPagination.hasMore ||
-          nextPagination.nextOffset <= requestedOffset ||
-          this.olderOffsetsSeen.has(nextPagination.nextOffset);
+        const exhausted = !nextPagination.hasMore || nextPagination.nextOffset <= requestedOffset;
         const messages = Array.isArray(result.messages) ? result.messages : [];
         const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
         const grew = nextMessages.length > state.chatMessages.length;
@@ -375,7 +362,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             }
           : nextPagination;
         state.chatHistoryPagination = appliedPagination;
-        this.nativePaginationSnapshot = appliedPagination;
         state.lastError = null;
         scheduleChatScroll(state, false);
         prepended = grew || !exhausted;
