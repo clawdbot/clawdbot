@@ -21,11 +21,12 @@ scenario:
     tools:
       alsoAllow: [message]
     plugins:
+      allow: [qa-lab, qa-channel]
+      slots:
+        memory: null
       entries:
-        acpx:
-          enabled: false
-        memory-core:
-          enabled: false
+        acpx: null
+        memory-core: null
     agents:
       entries:
         qa:
