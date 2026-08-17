@@ -370,12 +370,7 @@ describe("Responses reasoning effort", () => {
       },
     } satisfies Model<"openai-responses">;
 
-    applyCommonResponsesParams(
-      params,
-      compatModel,
-      { messages: [] },
-      { reasoningEffort: "xhigh" },
-    );
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "xhigh" });
 
     expect(params.reasoning).toMatchObject({ effort: "high", summary: "auto" });
   });
@@ -387,12 +382,7 @@ describe("Responses reasoning effort", () => {
       compat: { supportsReasoningEffort: false },
     } satisfies Model<"openai-responses">;
 
-    applyCommonResponsesParams(
-      params,
-      compatModel,
-      { messages: [] },
-      { reasoningEffort: "high" },
-    );
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "high" });
 
     expect(params).not.toHaveProperty("reasoning");
     expect(params).not.toHaveProperty("include");
@@ -410,12 +400,7 @@ describe("Responses reasoning effort", () => {
       },
     } satisfies Model<"openai-responses">;
 
-    applyCommonResponsesParams(
-      params,
-      compatModel,
-      { messages: [] },
-      { reasoningEffort: "xhigh" },
-    );
+    applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "xhigh" });
 
     expect(params).not.toHaveProperty("reasoning");
     expect(params).not.toHaveProperty("include");

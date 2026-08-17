@@ -180,9 +180,7 @@ function resolveResponsesApiReasoningEffort<TApi extends Api>(
     return undefined;
   }
   const compatMapped =
-    compat && "reasoningEffortMap" in compat
-      ? compat.reasoningEffortMap?.[reasoning]
-      : undefined;
+    compat && "reasoningEffortMap" in compat ? compat.reasoningEffortMap?.[reasoning] : undefined;
   return compatMapped ?? model.thinkingLevelMap?.[reasoning] ?? reasoning;
 }
 
