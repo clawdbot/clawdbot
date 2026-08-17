@@ -295,7 +295,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: remove obsolete transcript display helper exports.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
-      4328,
+      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
+      4330,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -376,7 +377,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: remove the obsolete transcript tool-call predicate.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
-      2572,
+      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
+      2574,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

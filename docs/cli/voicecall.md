@@ -14,7 +14,15 @@ plugin is installed and enabled.
 When the Gateway is running, operational commands (`call`, `start`,
 `continue`, `speak`, `dtmf`, `end`, `status`) route to that Gateway's
 voice-call runtime. If no Gateway is reachable, they fall back to a standalone
-CLI runtime.
+CLI runtime. `status` uses the persisted call store instead of starting that
+runtime.
+
+Fallback is limited to transport-level absence. If the Gateway responds with a
+request or authentication error, or does not answer before the timeout, the
+command exits nonzero and points to `openclaw gateway status`; it does not start
+a second webhook server. If standalone fallback cannot bind the configured
+`serve.port`, the error identifies the likely running Gateway instead of
+printing a raw `EADDRINUSE` failure.
 
 ## Subcommands
 

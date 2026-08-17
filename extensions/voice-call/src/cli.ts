@@ -5,7 +5,11 @@ import { StringDecoder } from "node:string_decoder";
 import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  callGatewayFromCli,
+  isGatewayClientRequestError,
+  isGatewayTransportError,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import {
   addTimerTimeoutGraceMs,
   clampTimerTimeoutMs,
@@ -97,14 +101,48 @@ function parseVoiceCallIntOption(
 }
 
 function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
-  const message = formatErrorMessage(err);
   return (
-    message.includes("ECONNREFUSED") ||
-    message.includes("ECONNRESET") ||
-    message.includes("EHOSTUNREACH") ||
-    message.includes("ENOTFOUND") ||
-    message.includes("gateway closed (1006") ||
-    message.includes("gateway not connected")
+    isGatewayTransportError(err) &&
+    err.kind === "closed" &&
+    (err.code === undefined || err.code === 1006)
+  );
+}
+
+function isGatewayCredentialFailure(err: unknown): err is Error {
+  return (
+    err instanceof Error &&
+    (err.name === "GatewayCredentialsRequiredError" ||
+      err.name === "GatewayExplicitAuthRequiredError" ||
+      err.name === "GatewaySecretRefUnavailableError")
+  );
+}
+
+function gatewayOperationalError(err: unknown): Error {
+  const message = formatErrorMessage(err);
+  if (isGatewayClientRequestError(err)) {
+    return new Error(
+      `Gateway responded but voicecall failed: ${message}\nThe running Gateway owns the voice-call runtime; check \`openclaw gateway status\` or restart it.`,
+    );
+  }
+  if (isGatewayCredentialFailure(err)) {
+    return new Error(
+      `Gateway requires credentials: ${message}\nConfigure gateway.auth or pair this device with \`openclaw devices approve --latest\`.`,
+    );
+  }
+  if (isGatewayTransportError(err)) {
+    const url = err.connectionDetails.url;
+    if (err.kind === "timeout") {
+      const timeout = err.timeoutMs === undefined ? "the configured timeout" : `${err.timeoutMs}ms`;
+      return new Error(
+        `Gateway at ${url} did not answer within ${timeout}: ${message}\nIt may be starting or wedged; check \`openclaw gateway status\`.`,
+      );
+    }
+    return new Error(
+      `Gateway connection at ${url} failed: ${message}\nCheck gateway.auth and \`openclaw gateway status\`, then retry.`,
+    );
+  }
+  return new Error(
+    `Gateway voicecall request failed: ${message}\nCheck \`openclaw gateway status\`, then retry.`,
   );
 }
 
@@ -129,7 +167,7 @@ async function callVoiceCallGateway(
     if (isGatewayUnavailableForLocalFallback(err)) {
       return { ok: false, error: err };
     }
-    throw err;
+    throw gatewayOperationalError(err);
   }
 }
 
@@ -369,6 +407,23 @@ async function initiateCallAndPrintId(params: {
   writeStdoutJson({ callId: result.callId });
 }
 
+async function ensureStandaloneRuntime(params: {
+  config: VoiceCallConfig;
+  ensureRuntime: () => Promise<VoiceCallRuntime>;
+}): Promise<VoiceCallRuntime> {
+  try {
+    return await params.ensureRuntime();
+  } catch (err) {
+    if (err instanceof Error && "code" in err && err.code === "EADDRINUSE") {
+      throw new Error(
+        `Voice-call webhook port ${params.config.serve.port} is already in use. A running Gateway probably already serves it; operational commands route through that Gateway. Check \`openclaw gateway status\` and retry.`,
+        { cause: err },
+      );
+    }
+    throw err;
+  }
+}
+
 function writeGatewayCallId(payload: unknown): void {
   if (isRecord(payload) && typeof payload.callId === "string") {
     writeStdoutJson({ callId: payload.callId });
@@ -405,7 +460,7 @@ async function initiateCallViaGatewayOrRuntime(params: {
     return;
   }
 
-  const rt = await params.ensureRuntime();
+  const rt = await ensureStandaloneRuntime(params);
   const to = params.to ?? rt.config.toNumber;
   if (!to) {
     throw new Error("Missing --to and no toNumber configured");
@@ -513,7 +568,7 @@ export function registerVoiceCallCli(params: {
         if (gateway.ok) {
           callId = isRecord(gateway.payload) ? gateway.payload.callId : undefined;
         } else {
-          const rt = await ensureRuntime();
+          const rt = await ensureStandaloneRuntime({ config, ensureRuntime });
           const result = await rt.manager.initiateCall(options.to, undefined, {
             message: options.message,
             mode,
@@ -628,7 +683,7 @@ export function registerVoiceCallCli(params: {
         writeStdoutJson(gateway.payload);
         return;
       }
-      const rt = await ensureRuntime();
+      const rt = await ensureStandaloneRuntime({ config, ensureRuntime });
       const result = await rt.manager.continueCall(options.callId, options.message);
       if (!result.success) {
         throw new Error(result.error || "continue failed");
@@ -650,7 +705,7 @@ export function registerVoiceCallCli(params: {
         writeStdoutJson(gateway.payload);
         return;
       }
-      const rt = await ensureRuntime();
+      const rt = await ensureStandaloneRuntime({ config, ensureRuntime });
       const result = await rt.manager.speak(options.callId, options.message);
       if (!result.success) {
         throw new Error(result.error || "speak failed");
@@ -672,7 +727,7 @@ export function registerVoiceCallCli(params: {
         writeStdoutJson(gateway.payload);
         return;
       }
-      const rt = await ensureRuntime();
+      const rt = await ensureStandaloneRuntime({ config, ensureRuntime });
       const result = await rt.manager.sendDtmf(options.callId, options.digits);
       if (!result.success) {
         throw new Error(result.error || "dtmf failed");
@@ -692,7 +747,7 @@ export function registerVoiceCallCli(params: {
         writeStdoutJson(gateway.payload);
         return;
       }
-      const rt = await ensureRuntime();
+      const rt = await ensureStandaloneRuntime({ config, ensureRuntime });
       const result = await rt.manager.endCall(options.callId);
       if (!result.success) {
         throw new Error(result.error || "end failed");

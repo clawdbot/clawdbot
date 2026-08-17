@@ -2,6 +2,7 @@
 
 export { addGatewayClientOptions, callGatewayFromCli } from "../cli/gateway-rpc.js";
 export type { GatewayRpcOpts } from "../cli/gateway-rpc.js";
+export { isGatewayClientRequestError, isGatewayTransportError } from "../gateway/call.js";
 export { isLoopbackHost } from "../gateway/net.js";
 export async function resolveAdvertisedLanHost(): Promise<string | null> {
   const runtime = await import("../infra/advertised-lan-host.js");
