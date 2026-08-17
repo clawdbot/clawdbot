@@ -21,9 +21,9 @@ Local mode (default) walks you through:
 - Gateway settings (port, bind, auth, Tailscale)
 - Channels and providers (Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and other bundled or plugin channels)
 - Web search provider (optional)
+- Skills setup
 - Daemon install (LaunchAgent, systemd user unit, or native Windows Scheduled Task with Startup-folder fallback)
 - Health check
-- Skills setup
 
 Remote mode configures this machine to connect to a Gateway elsewhere. It does
 not install or modify anything on the remote host.
@@ -98,6 +98,16 @@ not install or modify anything on the remote host.
     - Skip this step with `--skip-search`; reconfigure later with `openclaw configure --section web`.
 
   </Step>
+  <Step title="Skills">
+    - Reads available skills and checks requirements.
+    - Lets you choose node manager: npm, pnpm, or bun.
+    - Installs optional dependencies for trusted bundled skills when the required
+      installer is available.
+    - Skips unavailable Homebrew, uv, and Go installers, then groups the affected
+      skills with manual setup guidance. Run `openclaw doctor` after installing
+      the missing prerequisites.
+
+  </Step>
   <Step title="Daemon install">
     - macOS: LaunchAgent
       - Requires logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
@@ -113,16 +123,6 @@ not install or modify anything on the remote host.
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
     - `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported.
-
-  </Step>
-  <Step title="Skills">
-    - Reads available skills and checks requirements.
-    - Lets you choose node manager: npm, pnpm, or bun.
-    - Installs optional dependencies for trusted bundled skills when the required
-      installer is available.
-    - Skips unavailable Homebrew, uv, and Go installers, then groups the affected
-      skills with manual setup guidance. Run `openclaw doctor` after installing
-      the missing prerequisites.
 
   </Step>
   <Step title="Finish">
