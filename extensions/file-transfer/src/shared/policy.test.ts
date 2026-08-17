@@ -613,7 +613,7 @@ describe("persistAllowAlways", () => {
 describe("evaluateFilePolicy — bare directory allow entries", () => {
   it("denies a file inside a bare directory entry with an actionable glob hint", () => {
     withConfig({
-      n1: { allowReadPaths: ["/Users/x/Desktop"] },
+      n1: { allowReadPaths: ["/Users/x/Desktop/"] },
     });
     const r = evaluateFilePolicy({
       nodeId: "n1",
@@ -675,7 +675,7 @@ describe("evaluateFilePolicy — bare directory allow entries", () => {
 
   it("applies the hint for write allows too", () => {
     withConfig({
-      n1: { allowWritePaths: ["/Users/x/Downloads"] },
+      n1: { allowWritePaths: ["/Users/x/Downloads/"] },
     });
     const r = evaluateFilePolicy({
       nodeId: "n1",
@@ -709,7 +709,7 @@ describe("evaluateFilePolicy — bare directory allow entries", () => {
 
   it("keeps on-miss askable and surfaces the hint", () => {
     withConfig({
-      n1: { ask: "on-miss", allowReadPaths: ["/Users/x/Desktop"] },
+      n1: { ask: "on-miss", allowReadPaths: ["/Users/x/Desktop/"] },
     });
     const r = evaluateFilePolicy({
       nodeId: "n1",
@@ -745,7 +745,7 @@ describe("evaluateFilePolicy — bare directory allow entries", () => {
   it("hints on a bare-dir ancestor miss without emitting a console warning", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     withConfig({
-      n1: { allowReadPaths: ["/opt/warn-test/Desktop"] },
+      n1: { allowReadPaths: ["/opt/warn-test/Desktop/"] },
     });
     const r = evaluateFilePolicy({
       nodeId: "n1",
@@ -773,5 +773,62 @@ describe("evaluateFilePolicy — bare directory allow entries", () => {
     });
     expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
     expect(r.ok ? "" : r.reason).not.toContain("/vault/{alpha,beta}/**");
+  });
+
+  it("gives an unmarked bare-literal ancestor a one-shot conditional /** fix", () => {
+    // Regression (ClawSweeper P2 on PR #125103): a literal allow entry such
+    // as `/etc/hosts` is an exact-file grant, but a child-shaped request like
+    // `/etc/hosts/child` passes the string-prefix ancestor check. Without a
+    // directory fact (trailing slash), the policy cannot distinguish a bare
+    // directory from an exact file. The first denial must give a complete
+    // recovery in one shot: offer the `/**` fix conditional on directory
+    // intent, with an explicit guard against broadening an exact-file grant,
+    // so the operator never needs a second failed attempt to learn the fix.
+    withConfig({
+      n1: { allowReadPaths: ["/etc/hosts"] },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/etc/hosts/child",
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
+    expect(r.ok ? "" : r.reason).toContain("/etc/hosts/**");
+    expect(r.ok ? "" : r.reason).toContain("exact-file grant");
+    expect(r.ok ? "" : r.reason).toContain("/etc/hosts");
+  });
+
+  it("gives the unmarked bare-directory operator case a one-shot /** fix (issue #124992)", () => {
+    // Original operator-reported scenario: `allowReadPaths: ["/Users/x/Desktop"]`
+    // (no trailing slash, no glob) silently never matches files inside the
+    // directory. The first denial must surface the `/**` fix directly, not a
+    // two-step "add a trailing slash and retry" loop.
+    withConfig({
+      n1: { allowReadPaths: ["/Users/x/Desktop"] },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/Users/x/Desktop/photo.png",
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
+    expect(r.ok ? "" : r.reason).toContain("/Users/x/Desktop/**");
+    expect(r.ok ? "" : r.reason).toContain("exact-file grant");
+  });
+
+  it("still gives the recursive-glob hint when the entry is marked as a directory", () => {
+    // Positive control for the directory-fact gate above: the same bare
+    // literal with a trailing slash is an explicit directory marker, so the
+    // actionable `/**` recommendation is safe to emit.
+    withConfig({
+      n1: { allowReadPaths: ["/etc/hosts/"] },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/etc/hosts/child",
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED" });
+    expect(r.ok ? "" : r.reason).toContain("/etc/hosts/**");
   });
 });

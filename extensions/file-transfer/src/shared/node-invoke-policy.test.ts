@@ -917,4 +917,35 @@ describe("file-transfer node invoke policy", () => {
     expectResultFields(result, { ok: false, code: "ARCHIVE_ENTRIES_MISSING" });
     expect(invokeNode).toHaveBeenCalledTimes(2);
   });
+
+  // Production-path proof (issue #124992 / PR #125103): a bare-literal allow
+  // entry that is an ancestor of the requested path must surface the
+  // conditional /** recovery in the operator-visible file-fetch error. This
+  // exercises the real evaluateFilePolicy via createFileTransferNodeInvokePolicy
+  // (only persistAllowAlways/audit are mocked); the policy deny short-circuits
+  // before invokeNode is reached, so no paired node is required.
+  it("surfaces the conditional /** hint in the file.fetch deny message for a bare-literal ancestor", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      command: "file.fetch",
+      params: { path: "/Users/x/Desktop/photo.png", maxBytes: 1024 },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowReadPaths: ["/Users/x/Desktop"],
+          },
+        },
+      },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: false, code: "POLICY_DENIED" });
+    const message = requireRecord(result, "policy result").message;
+    expect(typeof message).toBe("string");
+    expect(message as string).toContain("/Users/x/Desktop/**");
+    expect(message as string).toContain("exact-file grant");
+    // The policy deny short-circuits before the paired node is contacted.
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
 });

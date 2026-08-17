@@ -164,13 +164,21 @@ function directoryGlobForm(pattern: string): string {
 /**
  * Return the bare-literal allow entry that is a strict ancestor prefix of a
  * denied path, if any. Such an entry looks like it should cover the path but
- * matches only its own literal string; naming the fix ("/dir/**") turns the
- * silent POLICY_DENIED into an actionable message. Exact-file grants are
- * deliberately excluded: they match only their own path and are never an
- * ancestor of a denied descendant, so no hint (and no access broadening
- * advice) is produced for them.
+ * matches only its own literal string.
+ *
+ * `isMarkedDirectory` is true only when the operator wrote a trailing slash
+ * (or backslash) on the entry — the one string-level signal of directory
+ * intent. The policy layer runs before node preflight and has no filesystem
+ * type information, so `/Users/x/Desktop` (intended as a directory) and
+ * `/etc/hosts` (intended as a single file) are indistinguishable without it.
+ * The caller uses this flag to decide whether to emit an unconditional
+ * recursive-glob recommendation (directory case) or a conditional one with
+ * an exact-file guard (ambiguous case), so a child-shaped request below an
+ * exact-file grant is never broadened by default.
  */
-function findBareAncestorAllowEntry(target: string, patterns: string[]): string | null {
+type BareAncestorMatch = { entry: string; isMarkedDirectory: boolean };
+
+function findBareAncestorAllowEntry(target: string, patterns: string[]): BareAncestorMatch | null {
   const normalizedTarget = target.replace(/\\/gu, "/");
   for (const pattern of patterns) {
     if (hasGlobMagic(pattern)) {
@@ -181,7 +189,7 @@ function findBareAncestorAllowEntry(target: string, patterns: string[]): string 
       normalizedTarget !== normalizedPattern &&
       normalizedTarget.startsWith(`${normalizedPattern}/`)
     ) {
-      return pattern;
+      return { entry: pattern, isMarkedDirectory: /[/\\]$/.test(pattern) };
     }
   }
   return null;
@@ -343,11 +351,15 @@ export function evaluateFilePolicy(input: {
 
   // 4. No allow match. Either askable on miss or hard-deny.
   const allowMissReason = `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`;
-  const bareAncestorEntry = findBareAncestorAllowEntry(input.path, allowPatterns);
+  const bareAncestor = findBareAncestorAllowEntry(input.path, allowPatterns);
+  // Unmarked literals are ambiguous (directory vs exact-file grant): offer the
+  // /** fix conditionally so a single-file grant is never broadened by default.
   const missReasonWithHint =
-    bareAncestorEntry === null
+    bareAncestor === null
       ? allowMissReason
-      : `${allowMissReason}; note: entry "${bareAncestorEntry}" has no glob suffix and matches only its literal path — use "${directoryGlobForm(bareAncestorEntry)}/**" to allow files inside the directory`;
+      : bareAncestor.isMarkedDirectory
+        ? `${allowMissReason}; note: entry "${bareAncestor.entry}" has no glob suffix and matches only its literal path — use "${directoryGlobForm(bareAncestor.entry)}/**" to allow files inside the directory`
+        : `${allowMissReason}; note: entry "${bareAncestor.entry}" is a literal path and matches only its own string; if it was intended as a directory, use "${directoryGlobForm(bareAncestor.entry)}/**" to allow files inside it (do not broaden an exact-file grant like "/etc/hosts")`;
   if (askMode === "on-miss") {
     return {
       ok: false,
