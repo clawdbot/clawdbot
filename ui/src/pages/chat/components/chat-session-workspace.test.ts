@@ -136,6 +136,36 @@ describe("session workspace artifacts", () => {
 });
 
 describe("openSessionWorkspaceFile", () => {
+  it.each([
+    { client: null, connected: true, label: "no Gateway client exists" },
+    { client: {}, connected: false, label: "the Gateway is disconnected" },
+  ])("preserves existing Review content when $label", ({ client, connected }) => {
+    const existingContent = {
+      kind: "markdown",
+      content: "Existing review",
+      rawText: "Existing review",
+    } satisfies SidebarContent;
+    let sidebarContent: SidebarContent | null = existingContent;
+    const handleOpenSidebar = vi.fn((content: SidebarContent | null) => {
+      sidebarContent = content;
+    });
+    const getFile = vi.fn();
+    const state = {
+      client,
+      connected,
+      handleOpenSidebar,
+      hello: gatewayHello([]),
+      sessionKey: "agent:main:current",
+      sessions: { getFile },
+    } as unknown as SessionWorkspaceHost;
+
+    openSessionWorkspaceFile(state, { path: "README.md" });
+
+    expect(getFile).not.toHaveBeenCalled();
+    expect(handleOpenSidebar).not.toHaveBeenCalled();
+    expect(sidebarContent).toBe(existingContent);
+  });
+
   it("opens Markdown with a canonical Gateway- and pane-scoped draft identity", async () => {
     const handleOpenSidebar = vi.fn();
     const getFile = vi.fn().mockResolvedValue({

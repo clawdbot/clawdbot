@@ -425,11 +425,11 @@ function openWorkspaceItem<T>(
   missingMessage: string,
 ) {
   const request = beginOpenRequest(state, workspace, itemId);
-  state.handleOpenSidebar(null);
   void (async () => {
     if (!state.client || !state.connected) {
       return;
     }
+    state.handleOpenSidebar(null);
     workspace.error = null;
     try {
       const result = await load(request);
