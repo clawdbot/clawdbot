@@ -22,7 +22,7 @@ describe("classic onboarding process", () => {
     homes.add(home);
     const child = spawn(
       process.execPath,
-      ["--import", "tsx", "src/entry.ts", "onboard", "--classic"],
+      ["--import", "tsx", path.resolve("test/fixtures/clack-prompter-eof.mjs")],
       {
         cwd: process.cwd(),
         cols: 100,
