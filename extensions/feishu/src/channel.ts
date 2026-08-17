@@ -1056,6 +1056,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         collectRuntimeConfigAssignments,
       },
       actions: {
+        providerOwnedReadGates: true,
         messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {

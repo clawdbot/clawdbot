@@ -388,6 +388,7 @@ async function listMattermostDirectoryPeers(params: MattermostDirectoryListParam
 }
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
+  providerOwnedReadGates: ["read"],
   describeMessageTool: describeMattermostMessageTool,
   extractToolSend: ({ args }) => extractMattermostToolSend(args),
   extractToolSendResult: ({ result, send }) => extractMattermostToolSendResult(result, send),

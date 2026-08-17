@@ -651,6 +651,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         },
       },
       actions: {
+        providerOwnedReadGates: true,
         describeMessageTool: describeMSTeamsMessageTool,
         extractToolSendResult: ({ result, send }) => extractMSTeamsToolSendResult(result, send),
         requiresTrustedRequesterSender: ({ action, toolContext }) =>
