@@ -175,6 +175,7 @@ describe("worker environment service", () => {
   it("retires a node environment whose installed Gateway bundle is stale", async () => {
     const destroy = vi.fn(async () => {});
     const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
       provisionBeforeInstallation: true,
       provision: async () => ({
         leaseId: "device-lease-stale",
