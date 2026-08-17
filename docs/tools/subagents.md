@@ -291,7 +291,9 @@ Use the optional `message` field for private context that the resumed turn
 should receive. Use `acknowledgment` for a waiting reply when an interactive
 parent turn would otherwise end silently. The acknowledgment is not sent from
 sub-agent, heartbeat, or silent turns, and it does not replace a reply or
-message already delivered during the turn.
+message already delivered during the turn. This host-owned waiting status
+bypasses message-tool-only source suppression; ordinary model replies remain
+private unless the model sends them through the message tool.
 
 On native Codex harness turns, `wait_agent` keeps the current turn active and
 is reserved for an intentional same-turn wait when the immediate next step is

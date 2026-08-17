@@ -473,8 +473,9 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
-  it("delivers a yield acknowledgment in message-tool-only mode", () => {
+  it("delivers a yield acknowledgment in configured group message-tool-only mode", () => {
     const turn = createTurn();
+    turn.queued.originatingChatType = "group";
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
     const execution = createSettledExecution();
     if (execution.outcome.kind === "settled") {
