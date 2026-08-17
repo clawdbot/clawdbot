@@ -761,7 +761,7 @@ export const en: TranslationMap = {
     projectSearchPlaceholder: "Search projects or paste a Git URL",
     githubProjects: "GitHub",
     githubTokenHint:
-      "The Control UI GitHub credential is not configured; public GitHub results only.",
+      "No Control UI GitHub credential or shared Gateway environment token is configured; public GitHub results only.",
     cloneProject: "Clone",
     cloningProject: "Cloning project…",
     registerProject: "Register as project",

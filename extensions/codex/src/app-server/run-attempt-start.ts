@@ -93,7 +93,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       startupEnvApiKeyCacheKey,
       agentDir,
       config: params.config,
-      shellEnvironment: connection.shellEnvironment,
       buildAttemptParams: buildActiveRunAttemptParams,
       sessionAgentId,
       effectiveWorkspace,

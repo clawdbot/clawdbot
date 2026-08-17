@@ -26,7 +26,6 @@ import type {
 import { resolveMemoryFlushPlan } from "../plugins/memory-state.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
@@ -62,7 +61,6 @@ import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
-import { prepareGitHubCredentialIsolation } from "./github-service-credential-isolation.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 import {
@@ -500,14 +498,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
-  const execRuntimeConfig = options?.exec?.config ?? options?.config;
-  const preparedCredentialIsolation =
-    execRuntimeConfig && agentId
-      ? prepareGitHubCredentialIsolation({
-          config: execRuntimeConfig,
-          sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
-        })
-      : undefined;
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
@@ -587,8 +577,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       mode: effectiveExecPolicy.mode,
       security: effectiveExecPolicy.security,
       ask: effectiveExecPolicy.ask,
-      config: execRuntimeConfig,
-      preparedCredentialIsolation,
+      config: options?.exec?.config ?? options?.config,
       reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
       trigger: options?.trigger,
       node: options?.exec?.node ?? execConfig.node,

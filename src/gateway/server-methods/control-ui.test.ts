@@ -121,7 +121,8 @@ describe("controlUi.githubPreview", () => {
 
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "UNAVAILABLE",
-      message: expect.stringContaining("capability:control-ui-github"),
+      message:
+        "The configured Control UI GitHub credential is unavailable. Resolve gateway.controlUi.github.token and retry.",
       retryable: false,
     });
   });

@@ -84,13 +84,6 @@ describe("secret store", () => {
         allowedHosts: ["api.example.com", "xn--bcher-kva.example"],
       }),
     ]);
-    expect(
-      readSecretStoreExecEnvironment({
-        includeSecretSentinels: true,
-        excludeNames: ["SERVICE_API_KEY"],
-        database,
-      }),
-    ).not.toHaveProperty("secretSentinels");
   });
 
   it("soft-deletes idempotently and purges after the 30-day retention", () => {

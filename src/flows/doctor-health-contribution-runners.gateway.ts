@@ -93,7 +93,7 @@ export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Prom
   const { hasConfiguredGitHubApiCredential } = await import("../gateway/control-ui-github-api.js");
   if (!hasConfiguredGitHubApiCredential(ctx.env ?? process.env, ctx.cfg)) {
     note(
-      "Configure gateway.controlUi.github.token (or set GH_TOKEN/GITHUB_TOKEN in the Gateway environment) to enable authenticated GitHub project search, including private repositories.",
+      "Prefer gateway.controlUi.github.token for Gateway-owned GitHub project access, or set GH_TOKEN/GITHUB_TOKEN in the shared Gateway process environment. Without either, search is public-only.",
       "GitHub projects",
     );
   }

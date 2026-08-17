@@ -187,7 +187,6 @@ export async function startOrResumeThread(
         hostSystemAgentActive,
         restrictedToolSurface,
         restrictedToolSurfaceInheritedMcpServerNames,
-        shellEnvironment: params.shellEnvironment,
         environmentSelection: params.environmentSelection,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,

@@ -117,18 +117,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     agentId: sessionAgentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
-  const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
-  const shellEnvironment = preparedEnvironment?.credentialScrubEnv;
-  const withPreparedProcessEnv = <T extends { start: { env?: Record<string, string> } }>(
-    appServer: T,
-  ) => {
-    return shellEnvironment
-      ? {
-          ...appServer,
-          start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
-        }
-      : appServer;
-  };
   let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -295,16 +283,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
   }
   preDynamicStartupStages.mark("effective-workspace");
-  let appServer = withPreparedProcessEnv(
-    resolveCodexAppServerForModelProvider({
-      appServer: configuredAppServer,
-      provider: reviewerPolicyContext.modelProvider,
-      model: reviewerPolicyContext.model,
-      config: params.config,
-      env: process.env,
-      agentDir,
-    }),
-  );
+  let appServer = resolveCodexAppServerForModelProvider({
+    appServer: configuredAppServer,
+    provider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    env: process.env,
+    agentDir,
+  });
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
@@ -366,16 +352,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       modelProvider: reviewerPolicyContext.modelProvider,
       model: reviewerPolicyContext.model,
     });
-    appServer = withPreparedProcessEnv(
-      resolveCodexAppServerForModelProvider({
-        appServer: configuredAppServer,
-        provider: reviewerPolicyContext.modelProvider,
-        model: reviewerPolicyContext.model,
-        config: params.config,
-        env: process.env,
-        agentDir,
-      }),
-    );
+    appServer = resolveCodexAppServerForModelProvider({
+      appServer: configuredAppServer,
+      provider: reviewerPolicyContext.modelProvider,
+      model: reviewerPolicyContext.model,
+      config: params.config,
+      env: process.env,
+      agentDir,
+    });
   }
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -425,7 +409,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     contextSessionKey,
     sandbox,
     agentDir,
-    shellEnvironment,
     bindingIdentity,
     bindingStore,
     activeContextEngine,

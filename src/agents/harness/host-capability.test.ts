@@ -107,7 +107,6 @@ function bindTool(
 }
 
 afterEach(() => {
-  vi.unstubAllEnvs();
   for (const admission of admissions.splice(0)) {
     admission.close();
   }
@@ -193,42 +192,6 @@ describe("agent harness host capability", () => {
       }),
     );
   });
-
-  it("keeps prepared environment access closure-bound", async () => {
-    const { attempt } = await admittedAttempt("run-local-env", { config: {} });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-
-    expect(host.capabilities.preparedEnvironment?.()).toEqual({
-      credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
-    });
-    host.close();
-    expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
-  });
-
-  it.each(["env", "store"] as const)(
-    "prepares the %s preview scrub for a local Codex host",
-    async (source) => {
-      const { attempt } = await admittedAttempt(`run-${source}`, {
-        config: {
-          gateway: {
-            controlUi: {
-              github: {
-                token: { source, provider: "default", id: "PREVIEW_SERVICE_TOKEN" },
-              },
-            },
-          },
-        },
-      });
-      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-      const environment = host.capabilities.preparedEnvironment?.();
-
-      expect(environment?.credentialScrubEnv).toMatchObject({
-        GH_TOKEN: "",
-        GITHUB_TOKEN: "",
-      });
-      expect(environment?.credentialScrubEnv).toHaveProperty("PREVIEW_SERVICE_TOKEN", "");
-    },
-  );
 
   it("binds hooks to the native harness cwd instead of the agent workspace", async () => {
     const { attempt } = await admittedAttempt("run-native-cwd", {

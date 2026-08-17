@@ -6,13 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as appServerPolicy from "./app-server-policy.js";
 import * as bindingConnection from "./binding-connection.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
-import {
-  createCodexRuntimePlanFixture,
-  createParams,
-  setupRunAttemptTestHooks,
-  tempDir,
-} from "./run-attempt-test-harness.js";
-import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
+import { createParams, setupRunAttemptTestHooks, tempDir } from "./run-attempt-test-harness.js";
 import {
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
@@ -22,73 +16,6 @@ import {
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
-  it("clears ambient GitHub service tokens for a native local profile", async () => {
-    const sessionFile = path.join(tempDir, "native-local-process-env.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-native-local-process-env");
-    const params = createParams(sessionFile, workspaceDir);
-    params.hostCapabilities = Object.freeze({
-      ...params.hostCapabilities,
-      preparedEnvironment: () =>
-        Object.freeze({
-          credentialScrubEnv: Object.freeze({ GH_TOKEN: "", GITHUB_TOKEN: "" }),
-        }),
-    });
-    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
-
-    expect(connection.appServer.start.env).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-    expect(connection.shellEnvironment).toEqual({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-  });
-
-  it("adds service credential scrubbing to remote execution", async () => {
-    const sessionFile = path.join(tempDir, "remote-process-env.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-remote-process-env");
-    const params = createParams(sessionFile, workspaceDir);
-    params.hostCapabilities = Object.freeze({
-      ...params.hostCapabilities,
-      preparedEnvironment: () =>
-        Object.freeze({
-          credentialScrubEnv: Object.freeze({ GH_TOKEN: "", GITHUB_TOKEN: "" }),
-        }),
-    });
-    params.sandbox = {
-      ...createSandboxContext({}),
-      placementExecutionMode: "remote-exec",
-    } as NonNullable<typeof params.sandbox> & { placementExecutionMode: "remote-exec" };
-    const runtimePlan = createCodexRuntimePlanFixture();
-    params.runtimePlan = {
-      ...runtimePlan,
-      auth: {
-        ...runtimePlan.auth,
-        providerForAuth: "openai",
-        authProfileProviderForAuth: "openai",
-        selectedAuthMode: "api-key",
-        modelRoute: {
-          provider: "openai",
-          modelId: "gpt-5.4-codex",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key",
-          requestTransportOverrides: "none",
-        },
-      },
-    };
-    params.resolvedApiKey = "prepared-test-key";
-    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
-
-    expect(connection.appServer.start.env).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-    expect(connection.shellEnvironment).toEqual({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-  });
-
   it.each([
     { name: "fresh thread", existingThread: false },
     { name: "unchanged resumed thread", existingThread: true },

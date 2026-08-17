@@ -217,6 +217,7 @@ describe("project registry", () => {
       expect(error).toMatchObject({ failure: "auth_required" });
       expect((error as Error).message).not.toContain(token);
       expect((error as Error).message).toContain("gateway.controlUi.github.token");
+      expect((error as Error).message).toContain("shared Gateway process environment");
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((closeError) => {

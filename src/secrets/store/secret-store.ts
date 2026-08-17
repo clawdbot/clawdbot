@@ -232,7 +232,6 @@ export function listSecretStoreEntries(params: {
 /** Captures one coherent team-store snapshot for an agent run's exec environment. */
 export function readSecretStoreExecEnvironment(params: {
   includeSecretSentinels: boolean;
-  excludeNames?: readonly string[];
   database?: OpenClawStateDatabaseOptions;
 }): SecretStoreExecEnvironment {
   try {
@@ -252,11 +251,7 @@ export function readSecretStoreExecEnvironment(params: {
         const env: Record<string, string> = {};
         const secretSentinels: Record<string, string> = {};
         const secretEgressBindings: SecretStoreEgressBinding[] = [];
-        const excludedNames = new Set(params.excludeNames ?? []);
         for (const row of rows) {
-          if (excludedNames.has(row.name)) {
-            continue;
-          }
           if (row.kind === "env") {
             env[row.name] = row.value;
             continue;

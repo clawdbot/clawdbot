@@ -2011,10 +2011,27 @@ describe("doctor health contributions", () => {
     } as unknown as DoctorContributionRunContext;
 
     await contribution.run(ctx);
-    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("GH_TOKEN"), "GitHub projects");
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("shared Gateway process environment"),
+      "GitHub projects",
+    );
 
     mocks.note.mockClear();
     await contribution.run({ ...ctx, env: { GH_TOKEN: "configured" } });
+    expect(mocks.note).not.toHaveBeenCalled();
+
+    await contribution.run({
+      ...ctx,
+      cfg: {
+        gateway: {
+          controlUi: {
+            github: {
+              token: { source: "store", provider: "default", id: "CONTROL_UI_GITHUB" },
+            },
+          },
+        },
+      },
+    });
     expect(mocks.note).not.toHaveBeenCalled();
   });
 

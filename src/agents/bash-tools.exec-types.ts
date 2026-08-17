@@ -21,7 +21,6 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
-import type { PreparedGitHubCredentialIsolation } from "./github-service-credential-isolation.js";
 
 /** Runtime defaults passed into exec/process tool factories. */
 export type ExecToolDefaults = {
@@ -42,8 +41,6 @@ export type ExecToolDefaults = {
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   reviewer?: ExecReviewerConfig;
   config?: OpenClawConfig;
-  /** Host-prepared service-credential scrubbing and store projection exclusions. */
-  preparedCredentialIsolation?: PreparedGitHubCredentialIsolation;
   autoReviewer?: ExecAutoReviewer;
   agentId?: string;
   backgroundMs?: number;
