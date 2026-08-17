@@ -209,7 +209,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
   });
 
-  it("records an unavailable outcome when live catalog discovery throws", async () => {
+  it("rethrows non-timeout live catalog discovery failures", async () => {
     mocks.runProviderCatalog.mockRejectedValueOnce(new Error("provider hook failed"));
     const outcomes: Array<{ provider: string; status: string }> = [];
 
@@ -222,9 +222,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         providerDiscoveryProviderIds: ["openai"],
         onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
       }),
-    ).resolves.toEqual({});
+    ).rejects.toThrow("provider hook failed");
 
-    expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+    expect(outcomes).toEqual([]);
   });
 
   it("can keep startup discovery on provider discovery entries only", async () => {

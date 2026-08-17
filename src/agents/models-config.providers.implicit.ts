@@ -513,8 +513,8 @@ async function runProviderCatalogWithTimeout(
       return await catalogRun;
     }
 
-    // Live discovery should not hang startup; timeout or hook failure means skip
-    // this provider while preserving the rest of the prepared catalog.
+    // Live discovery should not hang startup; a timeout skips this provider while
+    // preserving the rest of the prepared catalog.
     return await Promise.race([
       catalogRun,
       new Promise<never>((_, reject) => {
@@ -528,9 +528,15 @@ async function runProviderCatalogWithTimeout(
     ]);
   } catch (error) {
     const message = formatErrorMessage(error);
-    params.reportCatalogOutcome?.({ provider: params.provider.id, status: "unavailable" });
-    log.warn(`${message}; skipping provider discovery`);
-    return undefined;
+    if (message.includes("provider catalog timed out after")) {
+      params.reportCatalogOutcome?.({
+        provider: params.provider.id,
+        status: "unavailable",
+      });
+      log.warn(`${message}; skipping provider discovery`);
+      return undefined;
+    }
+    throw error;
   } finally {
     if (timer) {
       clearTimeout(timer);
