@@ -15,7 +15,10 @@ const availableStatus = {
   evidence: "github-api",
 } as const;
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 function createController(behavior: { beforeDispatch?: () => void; refreshError?: string } = {}) {
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
