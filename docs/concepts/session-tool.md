@@ -140,18 +140,19 @@ For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 
 Session tools are scoped to limit what the agent can see:
 
-| Level   | Scope                                                      |
-| ------- | ---------------------------------------------------------- |
-| `self`  | Only the current session                                   |
-| `tree`  | Current + spawned; reads include watched same-agent groups |
-| `agent` | All sessions for this agent                                |
-| `all`   | All sessions (cross-agent if configured)                   |
+| Level   | Scope                                                             |
+| ------- | ----------------------------------------------------------------- |
+| `self`  | Only the current session                                          |
+| `tree`  | Current + spawned; when called from main, all same-agent sessions |
+| `agent` | All sessions for this agent                                       |
+| `all`   | All sessions (cross-agent if configured)                          |
 
-Default is `tree`. Sandboxed sessions are clamped to `tree` regardless of config.
-With the default `session.dmScope: "main"`, group activity makes watched
-same-agent group sessions readable from the main session, and the main
-session's system prompt lists those watched sessions so the agent knows it can
-read them.
+Default is `tree`. The main-session widening applies to list, history, search,
+send, and status, but never crosses agents. `self` remains a strict lockdown,
+including for main. A sandboxed caller under the default spawned-only session
+tool clamp stays limited to its spawn subtree. Incognito sessions remain hidden
+from every cross-session tool. Ambient group watches still add activity notices
+and prompt hints; they do not grant access.
 
 ## Further reading
 
