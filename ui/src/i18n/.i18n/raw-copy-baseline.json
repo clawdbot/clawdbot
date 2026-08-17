@@ -576,13 +576,6 @@
       "text": "i"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/new-session/project-chip.ts",
-      "text": "No Control UI GitHub credential or shared Gateway environment token is configured; public GitHub results only."
-    },
-    {
       "count": 4,
       "kind": "html-text",
       "name": "text",

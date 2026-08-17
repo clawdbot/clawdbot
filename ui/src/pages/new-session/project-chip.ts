@@ -304,8 +304,7 @@ export function renderProjectChip(params: {
                           </div>
                           ${params.projectSearchCredentialMissing
                             ? html`<div class="new-session-page__menu-note">
-                                No Control UI GitHub credential or shared Gateway environment token
-                                is configured; public GitHub results only.
+                                ${t("newSession.githubTokenHint")}
                               </div>`
                             : nothing}
                           ${params.projectSearchLoading
