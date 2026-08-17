@@ -23,14 +23,10 @@ import {
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
+const loadGatewaySessionLifecycleSnapshotMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.fn();
 const normalizeLiveAssistantBufferedTextMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRow = vi.hoisted(() => vi.fn());
-
-vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
-  persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
-    persistGatewaySessionLifecycleEventMock(...args),
-}));
 
 vi.mock("../logger.js", () => ({
   logError: (...args: unknown[]) => logErrorMock(...args),
@@ -59,10 +55,6 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
   })),
 }));
 
-vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
-  loadGatewaySessionLifecycleSnapshot: vi.fn(),
-}));
-
 vi.mock("./session-utils.js", () => {
   const loadSessionEntry = vi.fn(() => ({
     cfg: {},
@@ -76,6 +68,8 @@ vi.mock("./session-utils.js", () => {
   return {
     loadSessionEntry,
     loadGatewaySessionEntryReadOnly: loadSessionEntry,
+    loadGatewaySessionLifecycleSnapshot: (...args: unknown[]) =>
+      loadGatewaySessionLifecycleSnapshotMock(...args),
   };
 });
 
@@ -94,11 +88,9 @@ import {
   createSessionEventSubscriberRegistry,
   createChatAbortMarker,
   createSessionMessageSubscriberRegistry,
-  createToolEventRecipientRegistry,
   resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
-import { loadGatewaySessionLifecycleSnapshot } from "./server-chat.load-gateway-session-row.runtime.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -130,7 +122,7 @@ describe("agent event handler", () => {
         legacyKey: undefined,
       });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
-    vi.mocked(loadGatewaySessionLifecycleSnapshot)
+    loadGatewaySessionLifecycleSnapshotMock
       .mockReset()
       .mockImplementation((sessionKey, options) => ({
         row: options
@@ -169,7 +161,7 @@ describe("agent event handler", () => {
       vi.fn<NonNullable<AgentEventHandlerOptions["clearTrackedActiveRun"]>>();
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
-    const toolEventRecipients = createToolEventRecipientRegistry();
+    const toolEventRecipients = chatRunState.toolEventRecipients;
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
 
@@ -184,7 +176,8 @@ describe("agent event handler", () => {
       toolEventRecipients,
       sessionEventSubscribers,
       sessionMessageSubscribers,
-      loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshot,
+      loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
+      persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
       clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
@@ -2385,7 +2378,7 @@ describe("agent event handler", () => {
   ])(
     "projects older lifecycle timestamps only for the owning run ($eventRunId)",
     async ({ eventRunId, expectedStartedAt }) => {
-      vi.mocked(loadGatewaySessionLifecycleSnapshot).mockReturnValue({
+      loadGatewaySessionLifecycleSnapshotMock.mockReturnValue({
         lifecycleRunId: "run-current",
         row: {
           key: "session-owned",
@@ -3251,15 +3244,46 @@ describe("agent event handler", () => {
       runId: "client-timeout",
       state: "error",
       stopReason: "timeout",
+      // The recorded classification must reach the browser as errorKind or
+      // the projection renders a generic "failed" while sessions.list says
+      // "timeout".
+      errorKind: "timeout",
       errorMessage: "agent provider timeout",
     });
     expect(payload).not.toHaveProperty("message");
   });
 
+  it("classifies a timeout end without error text via the recorded outcome", () => {
+    // Idle/run-budget timeouts end with no error field; without deriving
+    // errorKind from the terminal classification the projection falls back
+    // to text-sniffing an undefined error and renders a generic "failed".
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerChatRun(chatRunState, "provider-idle-timeout", "session-idle", "client-idle");
+
+    emitAgentEvent(
+      handler,
+      "provider-idle-timeout",
+      "lifecycle",
+      { phase: "end", aborted: true, stopReason: "timeout", timeoutPhase: "idle" },
+      { seq: 2, ts: 1_500 },
+    );
+
+    const payload = expectDefined(
+      chatBroadcastCalls(broadcast)[0],
+      "chatBroadcastCalls(broadcast)[0] test invariant",
+    )[1] as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      runId: "client-idle",
+      state: "error",
+      stopReason: "timeout",
+      errorKind: "timeout",
+    });
+  });
+
   it.each([
     {
-      name: "older timestamp",
-      marker: () => 1_000,
+      name: "older sequence",
+      marker: () => ({ abortedAtMs: 1_000, sequence: -2 }),
     },
     {
       name: "same-millisecond older sequence",
@@ -4391,7 +4415,8 @@ describe("agent event handler", () => {
       isControlUiVisible: false,
       verboseLevel: "off",
     });
-    chatRunState.getOrCreate("run-hidden-commentary-aborted").abortMarker = 1_000;
+    chatRunState.getOrCreate("run-hidden-commentary-aborted").abortMarker =
+      createChatAbortMarker(1_000);
 
     emitAgentEvent(handler, "run-hidden-commentary-aborted", "assistant", {
       text: "This aborted commentary must not be mirrored.",

@@ -171,7 +171,8 @@ describe("worker turn launcher remote handoff", () => {
           kind: "unix",
           socketPath: "/worker/gateway.sock",
         });
-        await Promise.resolve();
+        expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
+        request.onDispatchReady?.();
         expect(acknowledgeCredentialDelivery).toHaveBeenCalledOnce();
         const completed = openSessionManager();
         const leafId = completed.appendMessage(
@@ -181,10 +182,7 @@ describe("worker turn launcher remote handoff", () => {
           }),
         );
         createWorkerSessionPlacementGate(placements).updateAckCursors({
-          sessionId: SESSION_ID,
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runId: "run-worker-turn",
+          claim: request.turnClaim,
           transcriptSeq: 2,
           liveSeq: 1,
         });
@@ -406,6 +404,7 @@ describe("worker turn launcher remote handoff", () => {
       })),
       runWorkspaceCommand: vi.fn(),
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+        request.onDispatchReady?.();
         descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
           kind: "unix",
           socketPath: "/worker/gateway.sock",
@@ -418,10 +417,7 @@ describe("worker turn launcher remote handoff", () => {
           }),
         );
         createWorkerSessionPlacementGate(placements).updateAckCursors({
-          sessionId: SESSION_ID,
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runId: "run-persisted-user",
+          claim: request.turnClaim,
           transcriptSeq: 2,
           liveSeq: 1,
         });

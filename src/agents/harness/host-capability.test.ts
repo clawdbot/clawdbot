@@ -1,9 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
+  validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -23,8 +27,12 @@ import {
   type InternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import {
+  createAgentHarnessHostCapabilities,
+  retainBeforeToolCallForNativeHookRelay,
+} from "./host-capability.js";
 
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-tools.before-tool-call.js")>()),
@@ -190,6 +198,29 @@ describe("agent harness host capability", () => {
     );
   });
 
+  it("closes prepared mutable-file approval revalidators with the admitted run", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-host-binding-"));
+    try {
+      fs.writeFileSync(path.join(cwd, "script.sh"), "#!/bin/sh\necho approved\n");
+      const { attempt } = await admittedAttempt("run-file-binding", { cwd });
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const prepared = await host.capabilities.prepareMutableFileApproval?.({
+        command: "sh script.sh",
+        cwd,
+      });
+      expect(prepared?.ok).toBe(true);
+      if (!prepared?.ok) {
+        throw new Error("expected mutable file approval binding");
+      }
+
+      host.close();
+
+      await expect(prepared.revalidate()).rejects.toThrow("no longer active");
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("binds hooks to the native harness cwd instead of the agent workspace", async () => {
     const { attempt } = await admittedAttempt("run-native-cwd", {
       cwd: "/tmp/agent-workspace",
@@ -282,6 +313,54 @@ describe("agent harness host capability", () => {
     hookResult.resolve({ blocked: false, params: { command: "true" } });
 
     await expect(pending).rejects.toThrow("no longer active");
+  });
+
+  it("keeps a private native policy lease after foreground close but fences replacement", async () => {
+    const { attempt } = await admittedAttempt("run-retained-policy");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
+    const retained = retainBeforeToolCallForNativeHookRelay(host.capabilities.runBeforeToolCall);
+    mockRunBefore.mockImplementationOnce(async ({ params }) => {
+      expect(getGatewayToolCallerIdentity()).toBeUndefined();
+      return { blocked: false, params };
+    });
+    expect(delegatedAuthority).toBeDefined();
+    expect(retained).toBeDefined();
+    if (!retained) {
+      throw new Error("expected retained native policy lease");
+    }
+
+    expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+    expect(validateAgentRunDelegatedAuthority(delegatedAuthority!)).toBe(false);
+    await expect(
+      host.capabilities.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
+    ).rejects.toThrow("no longer active");
+    await expect(
+      retained.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
+    ).resolves.toMatchObject({ blocked: false });
+
+    await admittedAttempt("run-retained-policy");
+    await expect(
+      retained.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
+    ).rejects.toThrow("no longer active");
+    retained.release();
+  });
+
+  it("fences a retained native policy lease after lifecycle rotation", async () => {
+    const { attempt } = await admittedAttempt("run-retained-policy-lifecycle");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const retained = retainBeforeToolCallForNativeHookRelay(host.capabilities.runBeforeToolCall);
+    if (!retained) {
+      throw new Error("expected retained native policy lease");
+    }
+    expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+
+    rotateAgentRunRegistryLifecycleGeneration();
+
+    await expect(
+      retained.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
+    ).rejects.toThrow("no longer active");
+    retained.release();
   });
 
   it.each([

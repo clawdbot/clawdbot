@@ -31,6 +31,7 @@ type EventContext = Pick<
   | "rejectedProviderCallIds"
   | "provider"
   | "config"
+  | "coreSession"
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
@@ -104,6 +105,7 @@ function createWebhookCall(params: {
       config: effectiveConfig,
       callId,
       phone: params.direction === "outbound" ? params.to : params.from,
+      coreSession: params.ctx.coreSession,
     }),
     agentId: normalizeAgentId(effectiveConfig.agentId),
     startedAt: Date.now(),

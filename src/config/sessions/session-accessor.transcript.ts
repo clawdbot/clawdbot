@@ -4,6 +4,7 @@ import { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId 
 import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 import {
   findTranscriptEvent,
+  inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
@@ -42,6 +43,7 @@ export {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
+  inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
@@ -114,7 +116,7 @@ export async function trimSessionTranscriptForManualCompact(
     return declined;
   }
 
-  return { archived: trimmed.archivedPath, compacted: true, kept: trimmed.kept };
+  return { compacted: true, kept: trimmed.kept };
 }
 
 function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {

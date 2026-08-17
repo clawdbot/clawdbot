@@ -1,9 +1,8 @@
 /** Shared cron operation invariants used across lifecycle, CRUD, and manual runs. */
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { clearCronJobActive, markCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
-import { normalizeOptionalAgentId } from "./normalize.js";
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState } from "./runtime-store.js";
 import type { CronServiceState } from "./state.js";
@@ -19,14 +18,7 @@ export function resolveEffectiveJobAgentId(
   job: { agentId?: string | null; sessionKey?: string | null },
   defaultAgentId: string | undefined,
 ): string {
-  const agentId =
-    normalizeOptionalAgentId(job.agentId) ??
-    normalizeOptionalAgentId(parseAgentSessionKey(job.sessionKey)?.agentId) ??
-    normalizeOptionalAgentId(defaultAgentId);
-  if (!agentId) {
-    throw new Error("Cron job requires an agent id or prepared configured default.");
-  }
-  return agentId;
+  return resolveCronJobEffectiveAgentId(job, defaultAgentId);
 }
 
 export function markManualCronJobActive(

@@ -110,6 +110,12 @@ Starting a guided setup flow also runs immediately: channel setup (`connect tele
 
 Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
+Configured agents can ask OpenClaw to create another agent through their
+`openclaw` tool. The request enters the same typed create-agent operation and
+operator approval flow used by Ask OpenClaw; the approval summary names the
+requesting agent. OpenClaw remains the executor, and approved creation records
+that requesting agent as the new agent's creator.
+
 Doctor repairs are unavailable inside OpenClaw because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside OpenClaw.
 
 New agents inherit the live-verified default inference route. The agent ids `openclaw` and `crestodian` are reserved for the system agent and cannot be created as normal agents. The retired id remains blocked so an old config cannot claim it.

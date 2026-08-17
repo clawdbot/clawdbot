@@ -12,7 +12,10 @@ import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/sc
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
@@ -28,20 +31,18 @@ import type {
   SessionCreatedActor,
   SessionCreatedVia,
   SessionEntryProvenance,
+  SessionOwnerAssignment,
+  SessionParticipant,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
+import type { SessionToolOverrides } from "./session-tool-overrides.js";
+
+export type { SessionToolOverrides } from "./session-tool-overrides.js";
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
-
-export type SessionToolOverrides = {
-  mcpServers?: Record<string, boolean>;
-  mcpToolsDeny?: Record<string, string[]>;
-  skills?: Record<string, boolean>;
-  webSearch?: boolean;
-};
 
 export type SessionOrigin = {
   label?: string;
@@ -381,6 +382,12 @@ type SessionEntryCore = SessionRestartRecoveryState &
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
+    /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
+    owner?: SessionOwnerAssignment;
+    /** Earliest external prompt actors, projected from the participant table. */
+    participants?: SessionParticipant[];
+    /** Total external prompt actors after excluding the effective owner. */
+    participantCount?: number;
     /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
     createdAt?: number;
     /** Exact source generation and optional cut entry for an actual transcript-copy fork. */
@@ -459,6 +466,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
       toolsAllowIsDefault?: boolean;
       /** Exact server-stamped authority provenance copied from the owning cron job. */
       scheduledToolPolicy?: CronScheduledToolPolicy;
+      /** Store-private origin paired with an account scheduled-tool policy. */
+      scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
       cliSessionBindingFacts?: {
         extraSystemPromptStatic?: string;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -572,6 +581,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
+    /** Persistent operator/agent-set sidebar emoji icon (single grapheme). */
+    icon?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
     /** Preferred Control UI face when a caller opens this session without explicit face intent. */

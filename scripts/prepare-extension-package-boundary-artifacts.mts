@@ -7,6 +7,7 @@ import {
   type StdioNull,
   type StdioPipe,
 } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
@@ -15,11 +16,12 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { acquireExtensionPackageBoundaryArtifactLockSync } from "./lib/extension-package-boundary-artifact-lock.mts";
 import {
   ensureRepoToolNodeModulesLink,
   isLocalCheckEnabled,
   resolveRepoToolBinPath,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   listPluginSdkDeclarationOutputs,
@@ -30,9 +32,18 @@ import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
-const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
+const TYPE_INPUT_EXTENSIONS = new Set([
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".json",
+]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
-const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
+const ROOT_BOUNDARY_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
 const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
   process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
@@ -49,13 +60,16 @@ type NodeStep = Pick<NodeStepParams, "abortKillGraceMs" | "env"> & {
   args: string[];
   label: string;
   timeoutMs: number;
+  stamp?: ArtifactStamp;
 };
 type ArtifactFreshParams = {
   includeFile?: (filePath: string) => boolean;
   inputPaths: string[];
   outputPaths: string[];
   rootDir?: string;
+  hashStampPath?: string;
 };
+type ArtifactStamp = Pick<ArtifactFreshParams, "includeFile" | "inputPaths"> & { path: string };
 type NodeStepOutput = {
   on(event: "data", listener: (chunk: string) => void): unknown;
   setEncoding(encoding: "utf8"): void;
@@ -154,29 +168,91 @@ function listSourceDtsOutputs(sourceDir: string, outputPrefix: string) {
   return outputs.toSorted((a, b) => a.localeCompare(b));
 }
 
-const PLUGIN_SDK_TYPE_INPUTS = [
+type TypeScriptBuildInfo = {
+  fileNames?: unknown;
+  packageJsons?: unknown;
+};
+
+function collapsePluginSdkTypeInput(relativePath: string) {
+  const parts = relativePath.split("/");
+  if (parts[0] === "src" && parts.length > 2) {
+    return `src/${parts[1]}`;
+  }
+  if (parts[0] === "packages" && parts.length > 3) {
+    return `packages/${parts[1]}/${parts[2]}`;
+  }
+  if ((parts[0] === "scripts" || parts[0] === "test") && parts.length > 2) {
+    return `${parts[0]}/${parts[1]}`;
+  }
+  return relativePath;
+}
+
+function derivePluginSdkTypeInputs(entries: string[], baseDir: string, rootDir: string) {
+  const inputs = new Set<string>();
+  for (const entry of entries) {
+    const relativePath = path.relative(rootDir, resolve(baseDir, entry)).replaceAll("\\", "/");
+    if (
+      relativePath.startsWith("../") ||
+      relativePath === ".." ||
+      relativePath.startsWith("node_modules/") ||
+      relativePath.includes("/node_modules/") ||
+      relativePath.startsWith("dist/") ||
+      relativePath.startsWith("packages/plugin-sdk/dist/")
+    ) {
+      continue;
+    }
+    inputs.add(collapsePluginSdkTypeInput(relativePath));
+  }
+  if (fs.existsSync(resolve(rootDir, "package.json"))) {
+    inputs.add("package.json");
+  }
+  for (const input of inputs) {
+    const packageName = input.match(/^packages\/([^/]+)\//u)?.[1];
+    if (packageName && fs.existsSync(resolve(rootDir, `packages/${packageName}/package.json`))) {
+      inputs.add(`packages/${packageName}/package.json`);
+    }
+  }
+  return [...inputs].toSorted((a, b) => a.localeCompare(b));
+}
+
+/** Derives repository-owned declaration inputs from TypeScript's build record. */
+export function derivePluginSdkTypeInputsFromBuildInfo(buildInfoPath: string, rootDir = repoRoot) {
+  const parsed = JSON.parse(fs.readFileSync(buildInfoPath, "utf8")) as TypeScriptBuildInfo;
+  const fileNames = Array.isArray(parsed.fileNames) ? parsed.fileNames : [];
+  const packageJsons = Array.isArray(parsed.packageJsons) ? parsed.packageJsons : [];
+  const buildInfoDir = path.dirname(buildInfoPath);
+  const entries = [...fileNames, ...packageJsons];
+  if (entries.some((entry) => typeof entry !== "string")) {
+    throw new Error(`Invalid TypeScript build input in ${buildInfoPath}`);
+  }
+  return derivePluginSdkTypeInputs(entries as string[], buildInfoDir, rootDir);
+}
+
+/** Resolves declaration inputs from build metadata or the compiler on cold cache. */
+export function resolvePluginSdkTypeInputs(rootDir = repoRoot) {
+  const buildInfoPath = resolve(rootDir, "dist/plugin-sdk/.tsbuildinfo");
+  if (fs.existsSync(buildInfoPath)) {
+    return derivePluginSdkTypeInputsFromBuildInfo(buildInfoPath, rootDir);
+  }
+  const tsgoPath = resolveRepoToolBinPath("tsgo");
+  ensureRepoToolNodeModulesLink(tsgoPath);
+  const result = spawnSync(
+    tsgoPath,
+    ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
+    { cwd: rootDir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+  );
+  if (result.status !== 0 || result.error) {
+    throw new Error(`Failed to derive plugin SDK type inputs: ${result.stderr || result.error}`);
+  }
+  return derivePluginSdkTypeInputs(result.stdout.trim().split("\n"), rootDir, rootDir);
+}
+
+// Compiler configuration is not part of .tsbuildinfo's file input record.
+const resolveDtsInputs = (configPath: string) => [
   "tsconfig.json",
-  "src/plugin-sdk",
-  "src/plugins/provider-runtime-model.types.ts",
-  "src/plugins/types.ts",
-  "src/auto-reply",
-  "packages/ai/src",
-  "packages/llm-core/src",
-  "packages/markdown-core/src",
-  "packages/media-core/src",
-  "packages/model-catalog-core/src",
-  "packages/memory-host-sdk/src",
-  "packages/media-generation-core/src",
-  "packages/media-understanding-common/src",
-  "packages/normalization-core/src",
-  "packages/retry/src",
-  "packages/acp-core/src",
-  "packages/terminal-core/src",
-  "src/video-generation/dashscope-compatible.ts",
-  "src/video-generation/types.ts",
-  "src/types",
+  configPath,
+  ...resolvePluginSdkTypeInputs(),
 ];
-const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
 const ACP_CORE_REQUIRED_DTS_OUTPUTS = listPackageDtsOutputsFromExports(
   "acp-core",
@@ -251,7 +327,6 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/provider-auth.d.ts",
   "dist/plugin-sdk/video-generation.d.ts",
 ];
-const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
 const ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS = listPackageDtsOutputsFromExports(
   "acp-core",
@@ -410,7 +485,7 @@ export function parseMode(argv: string[] = process.argv.slice(2)) {
 }
 
 /**
- * Reads the root shim timeout override for long package-boundary builds.
+ * Reads the root boundary timeout override for long declaration and shim builds.
  */
 export function resolveBoundaryRootShimsTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS?.trim();
@@ -420,20 +495,23 @@ export function resolveBoundaryRootShimsTimeoutMs(env: NodeJS.ProcessEnv = proce
   return parsePositiveInt(raw, "OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS");
 }
 
-function collectNewestMtime(
+function collectInputFiles(
   paths: string[],
   params: Pick<ArtifactFreshParams, "rootDir" | "includeFile"> = {},
 ) {
   const rootDir = params.rootDir ?? repoRoot;
   const includeFile = params.includeFile ?? (() => true);
-  let newestMtimeMs = 0;
+  const files: string[] = [];
 
   function visit(entryPath: string): void {
     if (!fs.existsSync(entryPath)) {
       return;
     }
-    const stats = fs.statSync(entryPath);
-    if (stats.isDirectory()) {
+    if (fs.statSync(entryPath).isDirectory()) {
+      const basename = path.basename(entryPath);
+      if (basename === "dist" || basename === "node_modules") {
+        return;
+      }
       for (const child of fs.readdirSync(entryPath)) {
         visit(path.join(entryPath, child));
       }
@@ -442,14 +520,93 @@ function collectNewestMtime(
     if (!includeFile(entryPath)) {
       return;
     }
-    newestMtimeMs = Math.max(newestMtimeMs, stats.mtimeMs);
+    files.push(entryPath);
   }
 
   for (const relativePath of paths) {
     visit(resolve(rootDir, relativePath));
   }
 
+  return files;
+}
+
+function collectNewestMtime(
+  paths: string[],
+  params: Pick<ArtifactFreshParams, "rootDir" | "includeFile"> = {},
+) {
+  let newestMtimeMs = 0;
+  for (const filePath of collectInputFiles(paths, params)) {
+    newestMtimeMs = Math.max(newestMtimeMs, fs.statSync(filePath).mtimeMs);
+  }
   return newestMtimeMs;
+}
+
+const inputFileDigestMemo = new Map<string, string>();
+
+// Keyed by stat identity, not path alone: entry-shim inputs include
+// .tsbuildinfo files that lane builds rewrite mid-run.
+function digestInputFile(filePath: string) {
+  const stats = fs.statSync(filePath);
+  const memoKey = `${filePath}\0${stats.size}\0${stats.mtimeMs}`;
+  const memoized = inputFileDigestMemo.get(memoKey);
+  if (memoized) {
+    return memoized;
+  }
+  const digest = createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  inputFileDigestMemo.set(memoKey, digest);
+  return digest;
+}
+
+/**
+ * Digests the exact input file set the mtime scan sees, so freshness can
+ * survive checkouts that re-stamp every file mtime (hosted CI runners).
+ */
+export function computeArtifactInputsDigest(
+  params: Pick<ArtifactFreshParams, "inputPaths" | "rootDir" | "includeFile">,
+) {
+  const rootDir = params.rootDir ?? repoRoot;
+  const digest = createHash("sha256");
+  for (const filePath of collectInputFiles(params.inputPaths, params).toSorted()) {
+    digest.update(path.relative(rootDir, filePath));
+    digest.update("\0");
+    digest.update(digestInputFile(filePath));
+    digest.update("\n");
+  }
+  return digest.digest("hex");
+}
+
+// These affect artifact generation or plugin compilation but TypeScript does
+// not record them as declaration-program file inputs.
+const EXTENSION_BOUNDARY_NON_TYPE_INPUTS = [
+  "tsconfig.json",
+  "tsconfig.plugin-sdk.dts.json",
+  "packages/plugin-sdk/package.json",
+  "packages/plugin-sdk/tsconfig.json",
+  "scripts/check-extension-package-tsc-boundary.mts",
+  "scripts/prepare-extension-package-boundary-artifacts.mts",
+  "scripts/write-plugin-sdk-entry-dts.ts",
+  "scripts/lib/plugin-sdk-entrypoints.json",
+  "scripts/lib/plugin-sdk-entries.mts",
+  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
+  "pnpm-lock.yaml",
+];
+
+/** Computes the single content fingerprint used by every boundary artifact cache. */
+export function computeExtensionBoundaryInputsFingerprint(rootDir = repoRoot) {
+  const digest = createHash("sha256");
+  digest.update(
+    computeArtifactInputsDigest({
+      rootDir,
+      inputPaths: resolvePluginSdkTypeInputs(rootDir),
+      includeFile: isRelevantTypeInput,
+    }),
+  );
+  digest.update(computeArtifactInputsDigest({ rootDir, inputPaths: ["extensions"] }));
+  digest.update(
+    computeArtifactInputsDigest({ rootDir, inputPaths: EXTENSION_BOUNDARY_NON_TYPE_INPUTS }),
+  );
+  digest.update(`\nnode=${process.versions.node}\n`);
+  return digest.digest("hex");
 }
 
 function collectOldestMtime(paths: string[], params: Pick<ArtifactFreshParams, "rootDir"> = {}) {
@@ -468,7 +625,11 @@ function collectOldestMtime(paths: string[], params: Pick<ArtifactFreshParams, "
 }
 
 /**
- * Compares input and output mtimes to skip fresh generated artifacts.
+ * Compares input and output mtimes to skip fresh generated artifacts. When the
+ * mtime fast path fails and the lane has a hash stamp, falls back to content
+ * identity: a fresh checkout re-stamps every input mtime, so cache-restored
+ * artifacts never look mtime-fresh on hosted CI runners even when no input
+ * byte changed.
  */
 export function isArtifactSetFresh(params: ArtifactFreshParams) {
   const newestInputMtimeMs = collectNewestMtime(params.inputPaths, {
@@ -478,7 +639,40 @@ export function isArtifactSetFresh(params: ArtifactFreshParams) {
   const oldestOutputMtimeMs = collectOldestMtime(params.outputPaths, {
     rootDir: params.rootDir,
   });
-  return oldestOutputMtimeMs !== null && oldestOutputMtimeMs >= newestInputMtimeMs;
+  if (oldestOutputMtimeMs !== null && oldestOutputMtimeMs >= newestInputMtimeMs) {
+    return true;
+  }
+  if (!params.hashStampPath || oldestOutputMtimeMs === null) {
+    return false;
+  }
+  const rootDir = params.rootDir ?? repoRoot;
+  const stampPath = resolve(rootDir, params.hashStampPath);
+  let recordedDigest: string;
+  try {
+    recordedDigest = fs.readFileSync(stampPath, "utf8").trim();
+  } catch {
+    return false;
+  }
+  if (!/^[0-9a-f]{64}$/.test(recordedDigest)) {
+    return false;
+  }
+  if (recordedDigest !== computeArtifactInputsDigest(params)) {
+    return false;
+  }
+  // Repair the mtime fast path so later invocations in this checkout skip
+  // without re-reading every input byte. The extra millisecond is required,
+  // not cosmetic: landing exactly on the newest input leaves no headroom for
+  // sub-millisecond write rounding or lagging metadata on CI filesystems, and
+  // an output that lands at or below its input silently keeps every later
+  // invocation on the expensive full-hash path this repair exists to avoid.
+  const now = new Date(Math.max(Date.now(), Math.ceil(newestInputMtimeMs)) + 1);
+  for (const relativePath of params.outputPaths) {
+    const outputPath = resolve(rootDir, relativePath);
+    if (fs.existsSync(outputPath)) {
+      fs.utimesSync(outputPath, now, now);
+    }
+  }
+  return true;
 }
 
 function hasMissingOutput(paths: string[]) {
@@ -493,10 +687,13 @@ function removeStaleIncrementalState({ tsBuildInfoPath }: { tsBuildInfoPath: str
   fs.rmSync(resolve(repoRoot, tsBuildInfoPath), { force: true });
 }
 
-function writeStampFile(relativePath: string) {
-  const filePath = resolve(repoRoot, relativePath);
+// The stamp records the lane's input digest so cache-restored artifacts stay
+// fresh across checkouts that rewrite mtimes; writing it last also gives the
+// mtime fast path a floor newer than the lane's build.
+function writeStampFile(stamp: ArtifactStamp) {
+  const filePath = resolve(repoRoot, stamp.path);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
+  fs.writeFileSync(filePath, `${computeArtifactInputsDigest(stamp)}\n`, "utf8");
 }
 
 /**
@@ -793,7 +990,7 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
 }
 
 /**
- * Chooses serial or parallel artifact execution based on local heavy-check policy.
+ * Chooses serial or parallel artifact execution based on local check policy.
  */
 export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = process.env) {
   if (!isLocalCheckEnabled(env)) {
@@ -808,73 +1005,97 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
 
 async function main(argv: string[] = process.argv.slice(2)) {
   try {
+    if (argv.includes("--print-input-fingerprint")) {
+      process.stdout.write(`${computeExtensionBoundaryInputsFingerprint()}\n`);
+      return;
+    }
     const mode = parseMode(argv);
+    const rootDtsInputs = resolveDtsInputs("tsconfig.plugin-sdk.dts.json");
+    const packageDtsInputs = resolveDtsInputs("packages/plugin-sdk/tsconfig.json");
     const rootDtsFresh =
       isArtifactSetFresh({
-        inputPaths: ROOT_DTS_INPUTS,
-        outputPaths: [ROOT_DTS_STAMP, ...ROOT_DTS_REQUIRED_OUTPUTS],
+        inputPaths: rootDtsInputs,
+        outputPaths: [ROOT_DTS_STAMP, "dist/plugin-sdk/.tsbuildinfo", ...ROOT_DTS_REQUIRED_OUTPUTS],
+        hashStampPath: ROOT_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(ROOT_DTS_REQUIRED_OUTPUTS);
     const packageDtsFresh =
       isArtifactSetFresh({
-        inputPaths: PACKAGE_DTS_INPUTS,
-        outputPaths: [PACKAGE_DTS_STAMP, ...PACKAGE_DTS_REQUIRED_OUTPUTS],
+        inputPaths: packageDtsInputs,
+        outputPaths: [
+          PACKAGE_DTS_STAMP,
+          "packages/plugin-sdk/dist/.tsbuildinfo",
+          ...PACKAGE_DTS_REQUIRED_OUTPUTS,
+        ],
+        hashStampPath: PACKAGE_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(PACKAGE_DTS_REQUIRED_OUTPUTS);
-    const entryShimsFresh = isArtifactSetFresh({
+    const entryShimsStamp: ArtifactStamp = {
+      path: "dist/plugin-sdk/.boundary-entry-shims.stamp",
       inputPaths: [
         ...ENTRY_SHIMS_INPUTS,
         "dist/plugin-sdk/.tsbuildinfo",
         "packages/plugin-sdk/dist/.tsbuildinfo",
       ],
+    };
+    const entryShimsFresh = isArtifactSetFresh({
+      inputPaths: entryShimsStamp.inputPaths,
       outputPaths: [
-        "dist/plugin-sdk/.boundary-entry-shims.stamp",
+        entryShimsStamp.path,
         ...resolveBoundaryEntryShimRequiredOutputs({
           ...process.env,
           OPENCLAW_BUILD_PRIVATE_QA: "1",
         }),
       ],
+      hashStampPath: entryShimsStamp.path,
     });
     const qaChannelDtsFresh =
       isArtifactSetFresh({
         inputPaths: QA_CHANNEL_DTS_INPUTS,
         outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
+        hashStampPath: QA_CHANNEL_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
     const memoryCoreDtsFresh =
       isArtifactSetFresh({
         inputPaths: MEMORY_CORE_DTS_INPUTS,
         outputPaths: [MEMORY_CORE_DTS_STAMP, ...MEMORY_CORE_DTS_REQUIRED_OUTPUTS],
+        hashStampPath: MEMORY_CORE_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(MEMORY_CORE_DTS_REQUIRED_OUTPUTS);
     const matrixDtsFresh =
       isArtifactSetFresh({
         inputPaths: MATRIX_DTS_INPUTS,
         outputPaths: [MATRIX_DTS_STAMP, ...MATRIX_DTS_REQUIRED_OUTPUTS],
+        hashStampPath: MATRIX_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(MATRIX_DTS_REQUIRED_OUTPUTS);
     const discordDtsFresh =
       isArtifactSetFresh({
         inputPaths: DISCORD_DTS_INPUTS,
         outputPaths: [DISCORD_DTS_STAMP, ...DISCORD_DTS_REQUIRED_OUTPUTS],
+        hashStampPath: DISCORD_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(DISCORD_DTS_REQUIRED_OUTPUTS);
     const slackDtsFresh =
       isArtifactSetFresh({
         inputPaths: SLACK_DTS_INPUTS,
         outputPaths: [SLACK_DTS_STAMP, ...SLACK_DTS_REQUIRED_OUTPUTS],
+        hashStampPath: SLACK_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(SLACK_DTS_REQUIRED_OUTPUTS);
     const telegramDtsFresh =
       isArtifactSetFresh({
         inputPaths: TELEGRAM_DTS_INPUTS,
         outputPaths: [TELEGRAM_DTS_STAMP, ...TELEGRAM_DTS_REQUIRED_OUTPUTS],
+        hashStampPath: TELEGRAM_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(TELEGRAM_DTS_REQUIRED_OUTPUTS);
     const whatsappDtsFresh =
       isArtifactSetFresh({
         inputPaths: WHATSAPP_DTS_INPUTS,
         outputPaths: [WHATSAPP_DTS_STAMP, ...WHATSAPP_DTS_REQUIRED_OUTPUTS],
+        hashStampPath: WHATSAPP_DTS_STAMP,
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(WHATSAPP_DTS_REQUIRED_OUTPUTS);
 
@@ -888,9 +1109,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
         prerequisiteSteps.push({
           label: "plugin-sdk boundary dts",
           args: [runTsgoScript, "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
-          timeoutMs: 300_000,
-          stampPath: ROOT_DTS_STAMP,
+          timeoutMs: ROOT_BOUNDARY_TIMEOUT_MS,
+          stamp: {
+            path: ROOT_DTS_STAMP,
+            inputPaths: rootDtsInputs,
+            includeFile: isRelevantTypeInput,
+          },
         });
       } else {
         process.stdout.write("[plugin-sdk boundary dts] fresh; skipping\n");
@@ -903,9 +1127,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
       prerequisiteSteps.push({
         label: "plugin-sdk package boundary dts",
         args: [runTsgoScript, "-p", "packages/plugin-sdk/tsconfig.json", "--declaration", "true"],
-        env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
-        timeoutMs: 300_000,
-        stampPath: PACKAGE_DTS_STAMP,
+        timeoutMs: ROOT_BOUNDARY_TIMEOUT_MS,
+        stamp: {
+          path: PACKAGE_DTS_STAMP,
+          inputPaths: packageDtsInputs,
+          includeFile: isRelevantTypeInput,
+        },
       });
     } else {
       process.stdout.write("[plugin-sdk package boundary dts] fresh; skipping\n");
@@ -934,9 +1161,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
-          stampPath: QA_CHANNEL_DTS_STAMP,
+          stamp: {
+            path: QA_CHANNEL_DTS_STAMP,
+            inputPaths: QA_CHANNEL_DTS_INPUTS,
+            includeFile: isRelevantTypeInput,
+          },
         });
       } else {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
@@ -964,9 +1194,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
-          stampPath: MEMORY_CORE_DTS_STAMP,
+          stamp: {
+            path: MEMORY_CORE_DTS_STAMP,
+            inputPaths: MEMORY_CORE_DTS_INPUTS,
+            includeFile: isRelevantTypeInput,
+          },
         });
       } else {
         process.stdout.write("[memory-core boundary dts] fresh; skipping\n");
@@ -994,9 +1227,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
-          stampPath: MATRIX_DTS_STAMP,
+          stamp: {
+            path: MATRIX_DTS_STAMP,
+            inputPaths: MATRIX_DTS_INPUTS,
+            includeFile: isRelevantTypeInput,
+          },
         });
       } else {
         process.stdout.write("[matrix boundary dts] fresh; skipping\n");
@@ -1024,9 +1260,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
-          stampPath: DISCORD_DTS_STAMP,
+          stamp: {
+            path: DISCORD_DTS_STAMP,
+            inputPaths: DISCORD_DTS_INPUTS,
+            includeFile: isRelevantTypeInput,
+          },
         });
       } else {
         process.stdout.write("[discord boundary dts] fresh; skipping\n");
@@ -1054,9 +1293,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
-          stampPath: SLACK_DTS_STAMP,
+          stamp: {
+            path: SLACK_DTS_STAMP,
+            inputPaths: SLACK_DTS_INPUTS,
+            includeFile: isRelevantTypeInput,
+          },
         });
       } else {
         process.stdout.write("[slack boundary dts] fresh; skipping\n");
@@ -1084,9 +1326,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
-          stampPath: WHATSAPP_DTS_STAMP,
+          stamp: {
+            path: WHATSAPP_DTS_STAMP,
+            inputPaths: WHATSAPP_DTS_INPUTS,
+            includeFile: isRelevantTypeInput,
+          },
         });
       } else {
         process.stdout.write("[whatsapp boundary dts] fresh; skipping\n");
@@ -1114,9 +1359,12 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
-          stampPath: TELEGRAM_DTS_STAMP,
+          stamp: {
+            path: TELEGRAM_DTS_STAMP,
+            inputPaths: TELEGRAM_DTS_INPUTS,
+            includeFile: isRelevantTypeInput,
+          },
         });
       } else {
         process.stdout.write("[telegram boundary dts] fresh; skipping\n");
@@ -1126,8 +1374,8 @@ async function main(argv: string[] = process.argv.slice(2)) {
     if (prerequisiteSteps.length > 0) {
       await runNodeSteps(prerequisiteSteps);
       for (const step of prerequisiteSteps) {
-        if (step.stampPath) {
-          writeStampFile(step.stampPath);
+        if (step.stamp) {
+          writeStampFile(step.stamp);
         }
       }
     }
@@ -1140,7 +1388,7 @@ async function main(argv: string[] = process.argv.slice(2)) {
           resolveTsxImportSpecifier(),
           resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts"),
         ],
-        ROOT_SHIMS_TIMEOUT_MS,
+        ROOT_BOUNDARY_TIMEOUT_MS,
         {
           env: {
             NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS,
@@ -1148,6 +1396,9 @@ async function main(argv: string[] = process.argv.slice(2)) {
           },
         },
       );
+      // Overwrite the child's timestamp stamp with the input digest after the
+      // prerequisite tsbuildinfo files have settled.
+      writeStampFile(entryShimsStamp);
     } else if (mode === "all") {
       process.stdout.write("[plugin-sdk boundary root shims] fresh; skipping\n");
     }
@@ -1155,17 +1406,22 @@ async function main(argv: string[] = process.argv.slice(2)) {
     if (dependentSteps.length > 0) {
       await runNodeSteps(dependentSteps);
       for (const step of dependentSteps) {
-        if (step.stampPath) {
-          writeStampFile(step.stampPath);
+        if (step.stamp) {
+          writeStampFile(step.stamp);
         }
       }
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
 if (import.meta.main) {
-  await main();
+  const releaseArtifactLock = acquireExtensionPackageBoundaryArtifactLockSync(repoRoot);
+  try {
+    await main();
+  } finally {
+    releaseArtifactLock();
+  }
 }

@@ -481,14 +481,21 @@ suite.define(() => {
     sessions.count = 1;
     sessions.creators = [{ id: "profile-ada", label: "Ada" }];
     sessions.sessions = [activeSession];
-    const humanIdentities = Array.from({ length: 30 }, (_, index) => ({
-      type: "human" as const,
-      id: `profile-member-${index}`,
-      label: `Member ${index + 1}`,
-    }));
-    const channelIdentities = [
-      { type: "human" as const, id: "channel:chn_design", label: "Design" },
-      { type: "human" as const, id: "discord:channel:operations", label: "Operations" },
+    const longMemberLabel =
+      "Alexandria Montgomery-Santiago from the International Collaboration Working Group";
+    const longMemberId = `profile:${"member-without-a-display-name-".repeat(6)}`;
+    const humanIdentities = [
+      { type: "human" as const, id: "profile-long-name", label: longMemberLabel },
+      { type: "human" as const, id: longMemberId },
+      ...Array.from({ length: 28 }, (_, index) => ({
+        type: "human" as const,
+        id: `profile-member-${index}`,
+        label: `Member ${index + 1}`,
+      })),
+    ];
+    const nonHumanIdentities = [
+      { type: "agent" as const, id: "agent-design", label: "Design" },
+      { type: "system" as const, id: "system-operations", label: "Operations" },
     ];
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "agent:main:ada",
@@ -502,13 +509,42 @@ suite.define(() => {
         "session.visibility.set",
       ],
       operatorScopes: ["operator.read", "operator.write"],
-      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      historyMessages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Share the launch review with the design and operations groups, then summarize the open decisions.",
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "I prepared the rollout summary, linked the review notes, and kept the workspace visible to collaborators.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Add the remaining members and confirm the sharing policy before the handoff.",
+            },
+          ],
+        },
+        { role: "assistant", content: [{ type: "text", text: "Ready." }] },
+      ],
       methodResponses: {
         "sessions.list": sessions,
         "session.members.list": {
           sessionKey: "agent:main:ada",
-          members: [],
-          identities: [...humanIdentities, ...channelIdentities],
+          members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
+          identities: [...humanIdentities, ...nonHumanIdentities],
           role: "owner",
           allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
         },
@@ -526,9 +562,29 @@ suite.define(() => {
       const animations = [...element.getAnimations(), ...(menu?.getAnimations() ?? [])];
       await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
     });
+    const longNameItem = dropdown.locator('wa-dropdown-item[value="member:profile-long-name"]');
+    const longIdItem = dropdown.locator(`wa-dropdown-item[value="member:${longMemberId}"]`);
+
+    await longIdItem.scrollIntoViewIfNeeded();
+    const selectedIndicator = longIdItem.locator('[slot="details"]');
+    await expectBrowser(selectedIndicator).toBeVisible();
+    const selectedIndicatorContained = await longIdItem.evaluate((item) => {
+      const indicator = item.querySelector<HTMLElement>('[slot="details"]');
+      const itemRect = item.getBoundingClientRect();
+      const indicatorRect = indicator?.getBoundingClientRect();
+      return Boolean(
+        indicatorRect &&
+        indicatorRect.left >= itemRect.left &&
+        indicatorRect.right <= itemRect.right,
+      );
+    });
+    expect(selectedIndicatorContained).toBe(true);
 
     const beforeScroll = await dropdown.evaluate((element) => {
       const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      if (menu) {
+        menu.scrollTop = 0;
+      }
       const visibilityTitle = element.querySelector<HTMLElement>(
         ".chat-pane__sharing-visibility-title",
       );
@@ -537,6 +593,10 @@ suite.define(() => {
       ];
       const membersTitle = element.querySelector<HTMLElement>(".chat-pane__sharing-members-title");
       const firstMember = element.querySelector<HTMLElement>(".chat-pane__sharing-member");
+      const longLabels = [
+        ...element.querySelectorAll<HTMLElement>(".chat-pane__sharing-member-label"),
+      ].slice(0, 2);
+      const menuRect = menu?.getBoundingClientRect();
       const previousVisibilityRect = visibilityItems.at(-2)?.getBoundingClientRect();
       const lastVisibilityRect = visibilityItems.at(-1)?.getBoundingClientRect();
       const membersTitleRect = membersTitle?.getBoundingClientRect();
@@ -545,6 +605,13 @@ suite.define(() => {
         menuTop: menu?.getBoundingClientRect().top ?? 0,
         scrollHeight: menu?.scrollHeight ?? 0,
         clientHeight: menu?.clientHeight ?? 0,
+        scrollWidth: menu?.scrollWidth ?? 0,
+        clientWidth: menu?.clientWidth ?? 0,
+        longLabelsContained: longLabels.every((label) => {
+          const rect = label.getBoundingClientRect();
+          return menuRect ? rect.left >= menuRect.left && rect.right <= menuRect.right : false;
+        }),
+        longLabelsOverflow: longLabels.every((label) => label.scrollWidth > label.clientWidth),
         firstMemberTop: firstMember?.getBoundingClientRect().top ?? 0,
         groupGap:
           membersTitleRect && lastVisibilityRect
@@ -594,6 +661,9 @@ suite.define(() => {
 
     expect(beforeScroll.menuHeight).toBeLessThanOrEqual(421);
     expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight);
+    expect(beforeScroll.scrollWidth).toBe(beforeScroll.clientWidth);
+    expect(beforeScroll.longLabelsContained).toBe(true);
+    expect(beforeScroll.longLabelsOverflow).toBe(true);
     expect(beforeScroll.membersTitleInset).toBe(beforeScroll.firstMemberInset);
     expect(beforeScroll.groupGap).toBeGreaterThanOrEqual(8);
     expect(beforeScroll.groupGap).toBeGreaterThan(beforeScroll.rowGap + 6);
@@ -607,7 +677,17 @@ suite.define(() => {
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
     ).toHaveCount(30);
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-channel-icon")).toHaveCount(2);
+    // Agent and system identities render the non-human icon from identity.type,
+    // not from an ID-string heuristic; owner-chip presentation is human-only.
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
+    expect(
+      await longNameItem.locator(".chat-pane__sharing-member-label").getAttribute("title"),
+    ).toBe(longMemberLabel);
+    expect(await longIdItem.locator(".chat-pane__sharing-member-label").getAttribute("title")).toBe(
+      longMemberId,
+    );
+    await expectBrowser(selectedIndicator).toHaveCount(1);
+    expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
   });
 
   it("clears a selected draft mode when sharing policy becomes unavailable", async () => {

@@ -31,8 +31,10 @@ import {
   isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
-import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
-import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
+import {
+  buildApprovalPendingMessage,
+  DEFAULT_APPROVAL_TIMEOUT_MS,
+} from "./bash-tools.exec-runtime.js";
 import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import { isExecDeniedResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";

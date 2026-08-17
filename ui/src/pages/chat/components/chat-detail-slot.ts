@@ -1,7 +1,7 @@
 import { html, type TemplateResult } from "lit";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import type { ChatProps } from "../chat-view.ts";
-import type { SidebarLayout } from "../sidebar-layout.ts";
+import { openSlot, type SidebarLayout } from "../sidebar-layout.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import "./chat-sidebar.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
@@ -50,7 +50,10 @@ export function renderChatDetailSlot(params: {
     .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
     .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
       openSessionWorkspaceFile(host, target)}
-    .onRevealInWorkspace=${(path: string) => revealSessionWorkspaceFile(host, path)}
+    .onRevealInWorkspace=${(path: string) => {
+      revealSessionWorkspaceFile(host, path);
+      host.updateSidebarLayout(openSlot(host.sidebarLayout, "workspace"));
+    }}
     .onOpenImage=${(item: Parameters<typeof host.handleOpenImage>[0]) =>
       host.handleOpenImage(item, host.beginImageOpen())}
     .embedded=${true}

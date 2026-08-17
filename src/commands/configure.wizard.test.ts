@@ -998,9 +998,7 @@ describe("runConfigureWizard", () => {
         if (callCount === 1) {
           // First call: simulate plugin mutating config during promptAuthConfig
           expect(params.baseHash).toBe(originalHash);
-          throw new ConfigMutationConflictError("config changed since last load", {
-            currentHash: newHashAfterMutation,
-          });
+          throw new ConfigMutationConflictError("config changed since last load");
         }
         // Second call: succeeds with refreshed hash
         expect(params.baseHash).toBe(newHashAfterMutation);
@@ -1084,7 +1082,6 @@ describe("runConfigureWizard", () => {
     });
     mocks.assertConfigPathForWrite.mockImplementation(() => {
       throw new ConfigMutationConflictError("config path changed since last load", {
-        currentHash: null,
         retryable: false,
       });
     });

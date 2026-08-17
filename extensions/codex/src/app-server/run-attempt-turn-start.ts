@@ -323,5 +323,6 @@ export async function startCodexAttemptTurn(
     };
   }
   turnIdRef.current = turn.turn.id;
+  resourceState.nativeSubagentMonitor?.bindTurn(turn.turn.id);
   return { turn };
 }

@@ -2,6 +2,7 @@
  * Exec tool policy, host dispatch, and process lifecycle pipeline.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
   type ExecHost,
@@ -13,10 +14,17 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
-import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
+import {
+  rejectUnsafeExecControlShellCommand,
+  rejectUnsafeExecLiveStateSqliteShellCommand,
+} from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  isSecretEgressProxyActive,
+  registerSecretEgressProxyRun,
+} from "../secrets/egress-proxy/registry.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -62,22 +70,23 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 
+type GatewayApprovalRevalidator = () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
+  const secretEgressEnabled = isSecretEgressProxyActive();
   // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
   // A new run constructs a new instance and observes later store mutations.
-  let storeEnvPromise: Promise<Record<string, string> | undefined> | undefined;
+  let storeEnvPromise:
+    | Promise<import("../secrets/store/secret-store.js").SecretStoreExecEnvironment>
+    | undefined;
   const resolveStoreEnv = () => {
     storeEnvPromise ??= import("../secrets/store/secret-store.js").then((store) => {
-      const env: Record<string, string> = {};
-      for (const entry of store.listSecretStoreEntries({ scope: { kind: "team" } })) {
-        if (entry.kind === "env" && entry.valuePreview !== undefined) {
-          env[entry.name] = entry.valuePreview;
-        }
-      }
-      return Object.keys(env).length > 0 ? env : undefined;
+      return store.readSecretStoreExecEnvironment({
+        includeSecretSentinels: secretEgressEnabled,
+      });
     });
     return storeEnvPromise;
   };
@@ -198,6 +207,7 @@ export function createExecTool(
       }
       const startedAt = Date.now();
       let execCommandOverride: string | undefined;
+      let revalidateGatewayApproval: GatewayApprovalRevalidator | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       const foregroundFallbackWarning =
@@ -385,6 +395,12 @@ export function createExecTool(
       } else {
         workdir = workdirResolution.remoteCwd;
       }
+      if (host === "gateway" && workdir) {
+        await rejectUnsafeExecLiveStateSqliteShellCommand(params.command, {
+          stateDir: resolveStateDir(),
+          workdir,
+        });
+      }
       let run: ExecProcessHandle;
       let backgroundTask: BackgroundExecTaskHandle | null = null;
       let settledOutcome: ExecProcessOutcome | null = null;
@@ -401,6 +417,19 @@ export function createExecTool(
 
         const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
         const storeEnv = await resolveStoreEnv();
+        // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
+        // cannot use its sentinels, so both sides of the contract stay absent.
+        const useSecretEgress = secretEgressEnabled && host === "gateway";
+        let secretEgressEnv: Record<string, string> | undefined;
+        if (useSecretEgress) {
+          if (!defaults?.operationalRunInstance) {
+            throw new Error("Secret egress proxy requires an admitted agent run instance");
+          }
+          secretEgressEnv = registerSecretEgressProxyRun(
+            defaults.operationalRunInstance,
+            storeEnv.secretEgressBindings ?? [],
+          );
+        }
         const { env, requestedEnv } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
@@ -409,7 +438,9 @@ export function createExecTool(
           channelContext: defaults?.channelContext,
           defaultPathPrepend,
           pluginEnv: resolvedExecEnvState?.pluginEnv,
-          storeEnv,
+          storeEnv: storeEnv.env,
+          storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
+          secretEgressEnv,
           warnings,
         });
 
@@ -507,10 +538,10 @@ export function createExecTool(
             return gatewayResult.deniedResult;
           }
           signal?.throwIfAborted();
-          execCommandOverride = gatewayResult.execCommandOverride;
-          if (gatewayResult.allowWithoutEnforcedCommand) {
-            execCommandOverride = undefined;
-          }
+          revalidateGatewayApproval = gatewayResult.revalidateBeforeExecution;
+          execCommandOverride = gatewayResult.allowWithoutEnforcedCommand
+            ? undefined
+            : gatewayResult.execCommandOverride;
         }
 
         // Pending approvals have not started the command. Add fallback warnings only
@@ -532,6 +563,10 @@ export function createExecTool(
           });
         }
 
+        const gatewayApprovalDenied = await revalidateGatewayApproval?.();
+        if (gatewayApprovalDenied) {
+          return gatewayApprovalDenied;
+        }
         signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,

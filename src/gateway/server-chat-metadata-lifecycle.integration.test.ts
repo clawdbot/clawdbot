@@ -1,4 +1,9 @@
-import "../agents/prepared-model-runtime.test-harness.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "../agents/prepared-model-runtime.test-harness.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { revokeRuntimeAuthMaterializations } from "../agents/auth-profiles/runtime-materializations.js";
 import { reportEmbeddedRunSuccessfulAuthBinding } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
@@ -6,10 +11,6 @@ import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/r
 import { getPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
-import {
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "../agents/prepared-model-runtime.test-harness.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import {

@@ -84,11 +84,13 @@ export type ApplicationChatAttachmentHandoff = {
     handoff: ChatAttachmentHandoffKey & {
       attachments: readonly ChatAttachment[];
       fallbacks: Readonly<Record<string, ChatComposerMemoryFallback>>;
+      message?: string;
     },
   ): void;
   consume(handoff: ChatAttachmentHandoffKey): {
     attachments: ChatAttachment[];
     fallbacks: Record<string, ChatComposerMemoryFallback>;
+    message?: string;
   } | null;
   clearPane(paneId: string): void;
   dispose(): void;

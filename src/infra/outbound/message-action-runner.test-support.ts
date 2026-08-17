@@ -8,8 +8,10 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 type RunMessageAction = typeof import("./message-action-runner.js").runMessageAction;
 

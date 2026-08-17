@@ -195,6 +195,48 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
 CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
   ON audit_events(direction, sequence DESC);
 
+CREATE TABLE IF NOT EXISTS outbound_message_execution_bindings (
+  event_id TEXT NOT NULL PRIMARY KEY,
+  context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),
+  execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 256),
+  FOREIGN KEY (event_id) REFERENCES audit_events(event_id) ON DELETE CASCADE
+) STRICT;
+CREATE INDEX IF NOT EXISTS outbound_message_execution_bindings_execution_event_idx
+  ON outbound_message_execution_bindings (context_id, execution_id, run_id, event_id);
+
+CREATE TABLE IF NOT EXISTS outbound_message_progress (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  progress_id TEXT NOT NULL UNIQUE CHECK (length(progress_id) BETWEEN 1 AND 256),
+  source_id TEXT NOT NULL UNIQUE CHECK (length(source_id) BETWEEN 1 AND 512),
+  source_sequence INTEGER NOT NULL CHECK (source_sequence >= 1),
+  schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+  occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
+  action TEXT NOT NULL CHECK (
+    action IN ('message.outbound.queued', 'message.outbound.platform-started')
+  ),
+  outcome TEXT NOT NULL CHECK (outcome IN ('queued', 'platform_started')),
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('agent', 'system')),
+  actor_id TEXT NOT NULL CHECK (length(actor_id) BETWEEN 1 AND 256),
+  agent_id TEXT CHECK (agent_id IS NULL OR length(agent_id) BETWEEN 1 AND 256),
+  run_id TEXT CHECK (run_id IS NULL OR length(run_id) BETWEEN 1 AND 256),
+  context_id TEXT,
+  execution_id TEXT,
+  channel TEXT NOT NULL CHECK (length(channel) BETWEEN 1 AND 256),
+  conversation_kind TEXT NOT NULL CHECK (
+    conversation_kind IN ('direct', 'group', 'channel', 'unknown')
+  ),
+  duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+  account_ref TEXT,
+  conversation_ref TEXT,
+  target_ref TEXT,
+  UNIQUE (occurred_at, progress_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS outbound_message_progress_occurred_idx
+  ON outbound_message_progress (occurred_at, sequence);
+CREATE INDEX IF NOT EXISTS outbound_message_progress_run_occurred_idx
+  ON outbound_message_progress (run_id, occurred_at, sequence);
+
 CREATE TABLE IF NOT EXISTS audit_identity_keys (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
   key_id TEXT NOT NULL,
@@ -564,6 +606,7 @@ CREATE INDEX IF NOT EXISTS idx_device_pairing_paired_approved
 CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
   token_key TEXT NOT NULL PRIMARY KEY,
   token TEXT NOT NULL,
+  setup_id TEXT,
   ts INTEGER NOT NULL,
   device_id TEXT,
   public_key TEXT,
@@ -576,6 +619,22 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
+
+-- Terminal outcome of a redeemed setup credential. The bootstrap row is deleted
+-- on redemption, so this is the only durable proof a setup code succeeded; the
+-- presenting client reconciles it when the completion broadcast is missed.
+-- Non-secret only: never the bootstrap token or anything derived from it.
+-- Bounded by retention to a handful of live rows, so the primary key is the
+-- only access path worth having.
+CREATE TABLE IF NOT EXISTS device_pair_setup_completions (
+  setup_id TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  device_name TEXT,
+  access TEXT NOT NULL,
+  completed_at_ms INTEGER NOT NULL,
+  delivery_state TEXT NOT NULL CHECK (delivery_state IN ('uncertain', 'confirmed')),
+  retain_until_ms INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   shortcode TEXT,
@@ -929,6 +988,10 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
   )
 ) STRICT;
 
+CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
+  ON node_worker_launches(completed_at_ms, launch_id)
+  WHERE completed_at_ms IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,
   position INTEGER NOT NULL,
@@ -1191,6 +1254,13 @@ CREATE TABLE IF NOT EXISTS agent_deletion_journal (
   created_at INTEGER NOT NULL,
   cleanup_completed INTEGER NOT NULL DEFAULT 0,
   delete_files INTEGER NOT NULL DEFAULT 1
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS agent_provenance (
+  agent_id TEXT PRIMARY KEY,
+  created_via TEXT NOT NULL CHECK (created_via IN ('operator', 'agent', 'claw')),
+  creator_agent_id TEXT,
+  created_at_ms INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS agent_database_leases (
@@ -1981,7 +2051,9 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 CREATE TABLE IF NOT EXISTS session_groups (
   name TEXT NOT NULL PRIMARY KEY,
   position INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  cwd TEXT,
+  worktree INTEGER
 ) STRICT;
 
 -- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or
@@ -2041,6 +2113,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
   WHERE lease_id IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_worker_environments_terminal_changed
+  ON worker_environments(state_changed_at_ms, environment_id);
+
 -- Provider-advertised fallback ports preserve stable retry order separately
 -- from the downgrade-sensitive canonical worker environment row.
 CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
@@ -2058,6 +2133,7 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   session_id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
   session_key TEXT NOT NULL,
+  execution_mode TEXT CHECK (execution_mode IN ('worker-turn', 'remote-exec')),
   state TEXT NOT NULL CHECK (
     state IN (
       'local',
@@ -2157,9 +2233,13 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   CHECK (
     turn_claim_owner IS NULL
     OR
-    (turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))
+    (turn_claim_owner IS 'local' AND (
+      state IN ('local', 'requested', 'failed')
+      OR (state IN ('active', 'draining') AND execution_mode IS 'remote-exec')
+    ))
     OR
     (turn_claim_owner IS 'worker' AND state IN ('active', 'draining')
+      AND (execution_mode IS NULL OR execution_mode IS 'worker-turn')
       AND turn_claim_owner_epoch IS active_owner_epoch)
   )
 ) STRICT;
@@ -2169,6 +2249,34 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
+
+-- Planned placement moves retain their exact source CAS and bounded target
+-- without widening the stable placement-state vocabulary. The opaque operation
+-- id fences stale asynchronous completion; it is correlation, never authority.
+CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
+  operation_id TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT NOT NULL UNIQUE
+    REFERENCES worker_session_placements(session_id) ON DELETE CASCADE,
+  source_generation INTEGER NOT NULL CHECK (source_generation >= 0),
+  source_environment_id TEXT NOT NULL CHECK (
+    length(source_environment_id) BETWEEN 1 AND 256
+    AND source_environment_id = trim(source_environment_id)
+  ),
+  source_owner_epoch INTEGER NOT NULL CHECK (source_owner_epoch >= 1),
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('gateway', 'profile', 'device')),
+  target_id TEXT,
+  last_error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK (
+    (target_kind IS 'gateway' AND target_id IS NULL)
+    OR
+    (target_kind IN ('profile', 'device')
+      AND target_id IS NOT NULL
+      AND length(target_id) BETWEEN 1 AND 256
+      AND target_id = trim(target_id))
+  )
+) STRICT;
 
 -- Worker-visible session RPC authority is persisted against the exact turn
 -- claim. The launch descriptor is informative only; Gateway dispatch always
@@ -2443,6 +2551,7 @@ CREATE TABLE IF NOT EXISTS secret_store_entries (
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
   updated_by TEXT,
   deleted_at_ms INTEGER,
+  allowed_hosts TEXT,
   CHECK ((scope_kind = 'team' AND scope_id = '') OR (scope_kind = 'identity' AND length(scope_id) > 0)),
   PRIMARY KEY (scope_kind, scope_id, name)
 ) STRICT;

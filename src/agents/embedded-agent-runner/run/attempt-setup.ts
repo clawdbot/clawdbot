@@ -22,6 +22,7 @@ import {
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -44,6 +45,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -75,7 +77,6 @@ import {
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
-import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -378,7 +379,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       ...(input.repairToolUseResultPairing
         ? {
             repairAssembledMessages: (messages) =>
-              repairAttemptToolUseResultPairing(messages, input.isOpenAIResponsesApi),
+              sanitizeToolUseResultPairingForModel(messages, input.isOpenAIResponsesApi),
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
@@ -432,6 +433,9 @@ export function installEmbeddedAttemptContextGuards(input: {
       maxBytes: MAX_IMAGE_BYTES,
       maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
       workspaceOnly: input.effectiveFsWorkspaceOnly,
+      localRoots: input.effectiveFsWorkspaceOnly
+        ? undefined
+        : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
       sandbox:
         input.sandbox?.enabled && input.sandbox.fsBridge
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }

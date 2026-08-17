@@ -8,6 +8,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
 const NOTIFICATIONS_DOCS_URL = "https://docs.openclaw.ai/web/notifications";
@@ -263,7 +264,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             ? html`
                 <div class="settings-row">
                   <div class="settings-row__text">
-                    <span class="cfg-field__error">${push.error}</span>
+                    <span class="cfg-field__error">${formatUiExternalText(push.error)}</span>
                   </div>
                 </div>
               `

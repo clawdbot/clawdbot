@@ -25,6 +25,10 @@ import {
   resolveAcpSpawnRuntimePolicyError,
   resolveRuntimeCwdForAcpSpawn,
 } from "../../../agents/subagents/spawn/acp-spawn.js";
+import {
+  readChannelContextAdmissionEvidence,
+  type ChannelAdmissionEvidence,
+} from "../../../channels/message-access/admission-evidence.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -34,6 +38,7 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { consumeChannelRunAdmission } from "../channel-run-admission.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
@@ -389,17 +394,25 @@ async function runAcpSteer(params: {
   sessionKey: string;
   instruction: string;
   requestId: string;
+  channelAdmissionEvidence?: ChannelAdmissionEvidence;
 }): Promise<string> {
   const acpManager = getAcpSessionManager();
   let output = "";
+  const channelAdmission = consumeChannelRunAdmission(params.channelAdmissionEvidence);
   const admittedRunContext = await prepareAgentRunAdmission({
     cfg: params.cfg,
     operationalRunInstance: createOperationalRunInstanceRef(params.requestId),
     facts: {
       runId: params.requestId,
       agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-      ingress: { kind: "acp", boundary: "acp.command.steer", state: "present" },
+      ingress: {
+        kind: "acp",
+        boundary: "acp.command.steer",
+        state: channelAdmission.ingressState,
+      },
+      ...channelAdmission.facts,
     },
+    onAdmitted: channelAdmission.onAdmitted,
   }).admit("acp");
 
   try {
@@ -477,6 +490,7 @@ export async function handleAcpSteerAction(
         sessionKey: target.sessionKey,
         instruction: parsed.value.instruction,
         requestId: `${resolveCommandRequestId(params)}:steer`,
+        channelAdmissionEvidence: readChannelContextAdmissionEvidence(params.rootCtx ?? params.ctx),
       }),
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "ACP steer failed before completion.",

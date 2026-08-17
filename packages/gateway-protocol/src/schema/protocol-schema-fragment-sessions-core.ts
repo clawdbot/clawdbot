@@ -30,6 +30,7 @@ export const SessionCoreProtocolSchemas = {
   SessionCompactionCheckpoint: sessions.SessionCompactionCheckpointSchema,
   SessionOperationEvent: sessions.SessionOperationEventSchema,
   SessionCreatedActor: sessions.SessionCreatedActorSchema,
+  SessionOwner: sessions.SessionOwnerSchema,
   SessionObserverHealth: sessions.SessionObserverHealthSchema,
   SessionObserverPlanProgress: sessions.SessionObserverPlanProgressSchema,
   SessionObserverDigest: sessions.SessionObserverDigestSchema,

@@ -24,6 +24,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Maximum time in milliseconds allowed for shell environment resolution before fallback behavior applies. Use tighter timeouts for faster startup, or increase when shell initialization is heavy.",
   "env.vars":
     "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
+  secrets:
+    "Secret reference providers, shared-store behavior, and optional subprocess egress protection.",
+  "secrets.egressProxy":
+    "Gateway-owned loopback proxy that replaces shared-store secret sentinels only at outbound request time. Restart the Gateway after changing this startup-scoped section.",
+  "secrets.egressProxy.enabled":
+    "Enables secret egress substitution for Gateway-hosted agent subprocesses. Default: false.",
+  "secrets.egressProxy.bypassHosts":
+    "Exact hostnames that use authenticated blind CONNECT tunnels for certificate-pinned clients. Sentinels remain ciphertext and will fail vendor authentication instead of exposing plaintext.",
   wizard:
     "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
   "wizard.accessMode":
@@ -135,12 +143,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
     'Tailscale publish mode: "off", "serve", or "funnel" for private or public exposure paths. Use "serve" for tailnet-only access and "funnel" only when public internet reachability is required.',
-  "gateway.tailscale.resetOnExit":
-    "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
-  "gateway.tailscale.serviceName":
-    'Optional Tailscale Service name for Serve mode, such as "svc:openclaw". The value must use Tailscale\'s svc:<dns-label> format. When set, OpenClaw passes it to tailscale serve --service and reports the derived Service URL.',
   "gateway.tailscale.preserveFunnel":
-    "When mode='serve' and an externally configured Tailscale Funnel route already covers the gateway port, skip re-applying tailscale serve on startup. Lets operators keep Funnel exposure managed outside OpenClaw without losing it across gateway restarts.",
+    "Deprecated migration guard for mode='serve'. If an external Funnel still targets the ordinary Gateway listener, OpenClaw leaves exposure unchanged and warns that only plugin-authenticated webhooks remain usable until password auth is configured and mode is migrated to 'funnel'.",
   "gateway.remote":
     "Remote gateway connection settings for direct or SSH transport when this instance proxies to another runtime host. Use remote mode only when split-host operation is intentionally configured.",
   "gateway.remote.transport":
@@ -330,9 +334,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.defaults.authInheritance.agentId":
     "Agent whose legacy credential store remains the inheritance source after default-marker retirement. Written automatically during upgrade when the former owner was not main.",
   "agents.defaults.sessionStore":
-    "Upgrade compatibility owner for a fixed legacy session store until its SQLite database records ownership.",
+    "Upgrade compatibility owner for retired main-agent rows and fixed legacy session stores.",
   "agents.defaults.sessionStore.agentId":
-    "Agent that owns unscoped rows in a fixed legacy session store after default-marker retirement. Written automatically during upgrade when the former owner was not main or the sole agent.",
+    "Agent that owns retired main-agent rows or unscoped rows in a fixed legacy session store after default-marker retirement. Written automatically during upgrade when the former owner was not main or the sole agent.",
   "talk.agentId":
     "Agent that owns Talk sessions created without an explicit agent-scoped session key.",
 };

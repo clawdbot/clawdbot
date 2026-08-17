@@ -18,6 +18,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 /**
@@ -29,6 +30,21 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
   runId?: string;
+  /** Exact process-local diagnostic lifecycle shared with this handle's model wrapper. */
+  readonly diagnosticOwner?: DiagnosticEmbeddedRunOwner;
+  /** Synchronously closes diagnostic authority before this handle is evicted. */
+  readonly closeDiagnostics?: () => void;
+  /** Exact authority of the concrete provider/model attempt behind this handle. */
+  toolAuthorityFingerprint?: string;
+  /** Atomically consumes one plain-text answer for this run's pending user-input request. */
+  claimPendingUserInputAnswer?: (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => Promise<boolean>;
+  /** Cancels this run's pending user-input request before an image is queued as a later turn. */
+  cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
+  /** Exact heartbeat owner retained after its reply-operation registration clears. */
+  readonly preemptByVisibleTurn?: () => boolean;
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
@@ -61,6 +77,7 @@ export type ActiveEmbeddedRunSnapshot = {
 
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
+  handle?: EmbeddedAgentQueueHandle;
   timer?: NodeJS.Timeout;
 };
 
@@ -132,6 +149,7 @@ function evictPriorLifecycleEmbeddedRuns(): void {
     if (lifecycleGeneration && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
       continue;
     }
+    handle.closeDiagnostics?.();
     staleHandles.add(handle);
     if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
       ACTIVE_EMBEDDED_RUNS.delete(sessionId);
@@ -143,6 +161,7 @@ function evictPriorLifecycleEmbeddedRuns(): void {
     if (lifecycleGeneration && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
       continue;
     }
+    handle.closeDiagnostics?.();
     staleHandles.add(handle);
     // This index only gates the separately owned chat abort controller; absence
     // is abortable. Keeping it would let stale ownership influence new work.

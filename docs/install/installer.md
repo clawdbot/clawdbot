@@ -15,7 +15,7 @@ OpenClaw ships three installer scripts, served from `openclaw.ai`.
 | [`install-cli.sh`](#install-clish) | macOS / Linux / WSL  | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) via npm or git. No root required. |
 | [`install.ps1`](#installps1)       | Windows (PowerShell) | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.       |
 
-All three support Node **22.22.3+, 24.15+, or 25.9+**. On macOS and Linux, fresh installs provision Node 26; on Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
+All three support Node **22.22.3+, 24.15+, or 25.9+**. On macOS and Linux, `install.sh` provisions Node 26 when needed, while the rootless `install-cli.sh` downloads Node 24.15.0 (Node 22.22.3 on ARMv7). On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
 ## Quick commands
 
@@ -209,6 +209,10 @@ by default, plus git-checkout installs under the same prefix flow.
     - `git` method: clones/updates a checkout (default `~/openclaw`) and still writes the wrapper to `<prefix>/bin/openclaw`
 
   </Step>
+  <Step title="Verify the installed CLI">
+    Runs `<prefix>/bin/openclaw --version` and stops with an error unless the
+    installed wrapper exits successfully with a nonempty version.
+  </Step>
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs
     `openclaw gateway install --force`, which activates the replacement service,
@@ -361,6 +365,7 @@ by default, plus git-checkout installs under the same prefix flow.
 | `-NoOnboard`                | Skip onboarding                                            |
 | `-NoGitUpdate`              | Skip `git pull`                                            |
 | `-DryRun`                   | Print actions only                                         |
+| `-Help`                     | Show usage for downloaded scriptblock invocation           |
 
   </Accordion>
 
@@ -376,6 +381,10 @@ by default, plus git-checkout installs under the same prefix flow.
 
   </Accordion>
 </AccordionGroup>
+
+<Note>
+Pass installer options by name. Unknown options and positional arguments are rejected before downloads, PATH changes, or installation begin. Use `-?` with a saved `install.ps1` file, or `-Help` with the downloaded scriptblock form.
+</Note>
 
 <Note>
 If `-InstallMethod git` is used and Git is missing, the script tries a user-local MinGit bootstrap before printing the Git for Windows link.
@@ -433,8 +442,7 @@ Use non-interactive flags/env vars for predictable runs.
   </Accordion>
 
   <Accordion title="Windows: how to get verbose installer output">
-    `install.ps1` does not expose a `-Verbose` switch.
-    Use PowerShell tracing for script-level diagnostics:
+    `install.ps1` uses `CmdletBinding`, so it accepts PowerShell's common `-Verbose` parameter. The installer does not currently write a dedicated verbose stream. For script-level diagnostics, use PowerShell tracing:
 
     ```powershell
     Set-PSDebug -Trace 1

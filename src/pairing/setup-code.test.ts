@@ -8,15 +8,16 @@ import {
 import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
-  issueDeviceBootstrapToken: vi.fn(async () => ({
+  issueDevicePairSetupBootstrapToken: vi.fn(async () => ({
     token: "bootstrap-123",
     expiresAtMs: 123,
+    setupId: "setup-123",
   })),
 }));
 
 const { decodePairingSetupCode, encodePairingSetupCode, resolvePairingSetupFromConfig } =
   await import("./setup-code.js");
-const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
+const { issueDevicePairSetupBootstrapToken: issueDevicePairSetupBootstrapTokenMock } =
   await import("../infra/device-bootstrap.js");
 
 describe("pairing setup code", () => {
@@ -98,14 +99,6 @@ describe("pairing setup code", () => {
     }));
   }
 
-  function createTailnetIpRunner() {
-    return vi.fn(async () => ({
-      code: 0,
-      stdout: '{"Self":{"TailscaleIPs":["100.64.0.9"]}}',
-      stderr: "",
-    }));
-  }
-
   function createNoRouteRunner() {
     return vi.fn(async () => ({
       code: 1,
@@ -163,7 +156,9 @@ describe("pairing setup code", () => {
     }
     expect(resolved.authLabel).toBe(params.authLabel);
     expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
-    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
+    expect(resolved.setupId).toBe("setup-123");
+    expect(resolved.expiresAtMs).toBe(123);
+    expect(issueDevicePairSetupBootstrapTokenMock).toHaveBeenCalledWith({
       baseDir: undefined,
       profile: params.bootstrapProfile ?? {
         roles: ["node", "operator"],
@@ -178,6 +173,8 @@ describe("pairing setup code", () => {
         purpose: "mobile-full",
       },
     });
+    expect(resolved.payload).not.toHaveProperty("setupId");
+    expect(resolved.payload).toHaveProperty("expiresAtMs", 123);
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
     }
@@ -279,7 +276,7 @@ describe("pairing setup code", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
+    vi.mocked(issueDevicePairSetupBootstrapTokenMock).mockClear();
   });
 
   afterEach(() => {
@@ -381,7 +378,7 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured gateway.remote.url is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -402,7 +399,7 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured publicUrl is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   async function resolveCustomGatewaySetup(params: {
@@ -708,7 +705,7 @@ describe("pairing setup code", () => {
         ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 3,
+      expectedRunCommandCalls: 1,
     });
   });
 
@@ -754,26 +751,15 @@ describe("pairing setup code", () => {
         ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 3,
+      expectedRunCommandCalls: 1,
     });
   });
 
-  it("adds a configured Tailscale Serve route to a LAN setup code", async () => {
+  it("does not advertise a legacy Serve route targeting ordinary LAN ingress", async () => {
     const defaultRoute = createDefaultRouteRunner("en0");
     const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
       if (argv.includes("serve")) {
-        return {
-          code: 0,
-          stdout: JSON.stringify({
-            TCP: { "8443": { HTTPS: true } },
-            Web: {
-              "clawmac.tail.ts.net:8443": {
-                Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
-              },
-            },
-          }),
-          stderr: "",
-        };
+        throw new Error("legacy Serve discovery must not run for a LAN bind");
       }
       return defaultRoute();
     });
@@ -792,12 +778,11 @@ describe("pairing setup code", () => {
       expected: {
         authLabel: "token",
         url: "ws://192.168.139.3:18789",
-        urls: ["ws://192.168.139.3:18789", "wss://clawmac.tail.ts.net:8443"],
         urlSource: "gateway.bind=lan",
         ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 2,
+      expectedRunCommandCalls: 1,
     });
   });
 
@@ -908,30 +893,6 @@ describe("pairing setup code", () => {
       },
     },
     {
-      name: "uses configured Tailscale Service DNS when available",
-      createOptions: () => {
-        const runCommandWithTimeout = createTailnetDnsRunner();
-        return {
-          options: {
-            runCommandWithTimeout,
-          } satisfies ResolveSetupOptions,
-          runCommandWithTimeout,
-          expectedRunCommandCalls: 1,
-        };
-      },
-      config: {
-        gateway: {
-          tailscale: { mode: "serve", serviceName: "svc:openclaw" },
-          auth: { mode: "password", password: "secret" },
-        },
-      } satisfies ResolveSetupConfig,
-      expected: {
-        authLabel: "password",
-        url: "wss://openclaw.tailnet.ts.net",
-        urlSource: "gateway.tailscale.mode=serve",
-      },
-    },
-    {
       name: "prefers gateway.remote.url over tailscale when requested",
       createOptions: () => {
         const runCommandWithTimeout = createTailnetDnsRunner();
@@ -965,21 +926,6 @@ describe("pairing setup code", () => {
       expected,
       runCommandWithTimeout,
       expectedRunCommandCalls,
-    });
-  });
-
-  it("does not advertise a node-IP URL for named Tailscale Services", async () => {
-    await expectResolvedSetupFailureCase({
-      config: {
-        gateway: {
-          tailscale: { mode: "serve", serviceName: "svc:openclaw" },
-          auth: { mode: "password", password: "secret" },
-        },
-      } satisfies ResolveSetupConfig,
-      options: {
-        runCommandWithTimeout: createTailnetIpRunner(),
-      } satisfies ResolveSetupOptions,
-      expectedError: "Service MagicDNS could not be derived",
     });
   });
 

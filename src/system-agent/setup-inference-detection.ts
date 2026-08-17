@@ -8,7 +8,7 @@ import { listRecommendedToolInstalls } from "../plugins/recommended-tool-install
 import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
 import type { SetupInferenceDetection } from "./setup-inference.js";
 
-const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 10_000;
+const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 30_000;
 
 const log = createSubsystemLogger("system-agent/setup-inference-detection");
 
@@ -17,8 +17,8 @@ class SetupInferenceDetectionTimeoutError extends Error {
 
   constructor(timeoutMs: number) {
     super(
-      `Checking this Gateway for AI access timed out after ${timeoutMs / 1_000}s. ` +
-        "The Gateway may be busy — try again.",
+      `AI access detection did not finish after ${timeoutMs / 1_000}s. ` +
+        "This Gateway may still be checking — try again.",
     );
   }
 }
@@ -29,13 +29,16 @@ type DetectionWorkerMessage =
   | { ok: false; error: string };
 
 type DetectionWorkerOptions = {
+  agentId?: string;
   timeoutMs?: number;
   workerUrl?: URL;
   workerData?: WorkerOptions["workerData"];
   fallbackEnv?: NodeJS.ProcessEnv;
 };
 
-let inFlightDetection: Promise<SetupInferenceDetection> | undefined;
+let inFlightDetection:
+  | { agentId: string | undefined; promise: Promise<SetupInferenceDetection> }
+  | undefined;
 let workerShutdown: Promise<void> | undefined;
 
 function trackWorkerShutdown(worker: Worker): void {
@@ -126,7 +129,11 @@ async function runDetectionWorker(
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const worker = new Worker(workerUrl, {
     execArgv,
-    ...(options.workerData === undefined ? {} : { workerData: options.workerData }),
+    ...(options.workerData === undefined
+      ? options.agentId
+        ? { workerData: { agentId: options.agentId } }
+        : {}
+      : { workerData: options.workerData }),
   });
   const timeoutMs = options.timeoutMs ?? SETUP_INFERENCE_DETECTION_TIMEOUT_MS;
 
@@ -202,8 +209,15 @@ async function runDetectionWorker(
 export async function detectSetupInferenceIsolated(
   options: DetectionWorkerOptions = {},
 ): Promise<SetupInferenceDetection> {
+  const agentId = options.agentId?.trim() || undefined;
   if (inFlightDetection) {
-    return await inFlightDetection;
+    if (inFlightDetection.agentId === agentId) {
+      return await inFlightDetection.promise;
+    }
+    // Native provider discovery is process-global. Serialize different owners,
+    // then rerun against the requested owner instead of sharing stale results.
+    await inFlightDetection.promise.catch(() => undefined);
+    return await detectSetupInferenceIsolated(options);
   }
   // A native provider probe can delay Worker termination. Wait for exit before
   // retrying so repeat UI requests neither stack threads nor reuse stale results.
@@ -212,11 +226,11 @@ export async function detectSetupInferenceIsolated(
     return await detectSetupInferenceIsolated(options);
   }
   const current = runDetectionWorker(options);
-  inFlightDetection = current;
+  inFlightDetection = { agentId, promise: current };
   try {
     return await current;
   } finally {
-    if (inFlightDetection === current) {
+    if (inFlightDetection?.promise === current) {
       inFlightDetection = undefined;
     }
   }

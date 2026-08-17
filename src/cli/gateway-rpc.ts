@@ -42,6 +42,7 @@ export async function callGatewayFromCli(
     expectFinal?: boolean;
     progress?: boolean;
     scopes?: OperatorScope[];
+    sharedStateMode?: "read-only";
   },
 ) {
   return await callGatewayFromCliWithTransport(method, opts, params, extra);

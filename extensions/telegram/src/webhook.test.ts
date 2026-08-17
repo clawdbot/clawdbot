@@ -26,8 +26,8 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
-import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 import {
+  writeTelegramSpooledUpdate,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
 } from "./telegram-ingress-spool.test-support.js";
@@ -2607,6 +2607,13 @@ describe("startTelegramWebhook", () => {
         token: "tok",
       }),
     ).rejects.toThrow(/requires a non-empty secret token/i);
+  });
+
+  it("rejects startup when the webhook path collides with the health path", async () => {
+    await expect(
+      withStartedWebhook({ secret: TELEGRAM_SECRET, path: "/healthz" }, async () => undefined),
+    ).rejects.toThrow(/webhook path.*conflicts with.*health/i);
+    expect(setWebhookSpy).not.toHaveBeenCalled();
   });
 
   it("registers webhook using the bound listening port when port is 0", async () => {

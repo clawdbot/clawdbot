@@ -129,6 +129,11 @@ export type CodexUserInput =
   | {
       type: "localImage";
       path: string;
+    }
+  | {
+      type: "skill";
+      name: string;
+      path: string;
     };
 
 export type CodexDynamicToolFunctionSpec = JsonObject & {

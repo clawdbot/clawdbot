@@ -222,7 +222,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .shell--mobile-nav .nav-item {
   margin: 0;
   min-height: 40px;
-  padding: 0 12px;
+  padding: 0 12px 0 8px;
   font-size: calc(13px * var(--control-ui-text-scale));
   border-radius: var(--radius-md);
   white-space: nowrap;

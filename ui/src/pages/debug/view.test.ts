@@ -47,8 +47,12 @@ async function mountDebugPage(
     subscribe: () => () => undefined,
     subscribeEventLog: () => () => undefined,
   } as unknown as ApplicationContext["gateway"];
+  const agentSelection = {
+    state: { selectedId: "main" },
+    subscribe: () => () => undefined,
+  } as unknown as ApplicationContext["agentSelection"];
   const page = document.createElement("openclaw-debug-page") as TestDebugPage;
-  page.context = { basePath: "", gateway } as ApplicationContext;
+  page.context = { agentSelection, basePath: "", gateway } as ApplicationContext;
   document.body.append(page);
   await vi.waitFor(() => expect(page.debugStatus).not.toBeNull());
   return page;

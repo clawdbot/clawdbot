@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { icon } from "./icons.ts";
 
 export function renderLazyViewError({
@@ -13,7 +14,7 @@ export function renderLazyViewError({
   render?: () => unknown;
   stale?: boolean;
 }) {
-  const detail = error instanceof Error ? error.message : String(error);
+  const detail = formatUiError(error);
   const errorClasses = `lazy-view-error${render ? " lazy-view-error--inline" : ""}${stale ? " lazy-view-error--stale" : ""}`;
   return html`
     ${render?.() ?? nothing}

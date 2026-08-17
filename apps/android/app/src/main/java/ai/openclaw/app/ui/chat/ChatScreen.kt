@@ -17,7 +17,7 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatPlanSnapshot
 import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -63,7 +63,6 @@ import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
-import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
 import android.os.SystemClock
@@ -168,7 +167,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -304,7 +302,7 @@ fun ChatScreen(
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val subagentActivities by viewModel.chatSubagentActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
-  val planSteps by viewModel.chatPlanSteps.collectAsState()
+  val planSnapshot by viewModel.chatPlanSnapshot.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val swarmGroups by viewModel.chatSwarmGroups.collectAsState()
   val sessionBranches by viewModel.chatSessionBranches.collectAsState()
@@ -789,8 +787,8 @@ fun ChatScreen(
       modifier = Modifier.weight(1f),
     )
 
-    if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
-      PlanChecklistPill(steps = planSteps)
+    if (pendingRunCount > 0 && planSnapshot.steps.isNotEmpty()) {
+      PlanChecklistPill(plan = planSnapshot)
     }
 
     ChatSwarmProgress(groups = swarmGroups)
@@ -1714,6 +1712,18 @@ internal fun ChatBubble(
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
+  val speaker =
+    when {
+      isUser -> nativeString("You")
+      normalizedRole == "system" -> nativeString("System")
+      else -> nativeString("OpenClaw")
+    }
+  val caption =
+    when {
+      live -> nativeString("OpenClaw · Live")
+      normalizedRole == "system" -> nativeString("System")
+      else -> null
+    }
   var visibleImageCount = 0
   val displayableContent =
     content.filter { part ->
@@ -1757,29 +1767,36 @@ internal fun ChatBubble(
       enabled = !live,
       listenActive = messageSpeech != null,
       onToggleListen = toggleListen,
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
+      modifier =
+        Modifier
+          .fillMaxWidth(if (isUser) 0.78f else 0.94f)
+          .semantics(mergeDescendants = true) { contentDescription = speaker },
     ) {
       Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(7.dp),
-        color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
+        color = if (isUser) ClawTheme.colors.accentSoft else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
         contentColor = ClawTheme.colors.text,
-        border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.45f)),
+        border =
+          BorderStroke(
+            1.dp,
+            when {
+              isUser -> ClawTheme.colors.accentBorder
+              live -> ClawTheme.colors.borderStrong
+              else -> ClawTheme.colors.border.copy(alpha = 0.45f)
+            },
+          ),
         tonalElevation = 1.dp,
         shadowElevation = 2.dp,
       ) {
         Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text(
-            text =
-              when {
-                live -> nativeString("OpenClaw · Live")
-                isUser -> nativeString("You")
-                normalizedRole == "system" -> nativeString("System")
-                else -> nativeString("OpenClaw")
-              },
-            style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
-            color = ClawTheme.colors.text,
-          )
+          caption?.let {
+            Text(
+              text = it,
+              style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+              color = ClawTheme.colors.text,
+            )
+          }
           if (collapsibleUserText && messageText.isNotBlank()) {
             ChatUserMessageText(
               textParts = displayableContent.mapNotNull { it.text },
@@ -1904,7 +1921,7 @@ private fun ChatUserMessageText(
   if (preview != null && !expanded) {
     Text(
       text = preview,
-      style = mobileCallout,
+      style = ClawTheme.type.body,
       color = ClawTheme.colors.text,
     )
   } else {
@@ -1926,7 +1943,7 @@ private fun ChatUserMessageText(
     ) {
       Text(
         text = toggleLabel,
-        style = mobileCallout.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+        style = ClawTheme.type.body.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
       )
     }
@@ -2108,8 +2125,9 @@ private fun ChatNotice(
 }
 
 @Composable
-private fun PlanChecklistPill(steps: List<ChatPlanStep>) {
+private fun PlanChecklistPill(plan: ChatPlanSnapshot) {
   var expanded by rememberSaveable { mutableStateOf(false) }
+  val steps = plan.steps
   val currentStep =
     steps.firstOrNull { it.status == ChatPlanStepStatus.InProgress }
       ?: steps.lastOrNull { it.status == ChatPlanStepStatus.Completed }
@@ -2131,7 +2149,7 @@ private fun PlanChecklistPill(steps: List<ChatPlanStep>) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
+        PlanStepMarker(status = currentStep.status)
         Text(
           text = currentStep.step,
           style = ClawTheme.type.caption,
@@ -2157,6 +2175,14 @@ private fun PlanChecklistPill(steps: List<ChatPlanStep>) {
       if (expanded) {
         HorizontalDivider(color = ClawTheme.colors.border)
         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+          plan.explanation?.let { explanation ->
+            Text(
+              text = explanation,
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+              modifier = Modifier.padding(start = 22.dp),
+            )
+          }
           steps.forEach { step ->
             val textColor =
               when (step.status) {
@@ -2173,30 +2199,34 @@ private fun PlanChecklistPill(steps: List<ChatPlanStep>) {
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-              Box(modifier = Modifier.width(14.dp), contentAlignment = Alignment.Center) {
-                when (step.status) {
-                  ChatPlanStepStatus.Completed ->
-                    Text(
-                      text = "✓",
-                      style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Bold),
-                      color = ClawTheme.colors.success,
-                    )
-                  ChatPlanStepStatus.InProgress ->
-                    Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
-                  ChatPlanStepStatus.Pending ->
-                    Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.textSubtle, CircleShape))
-                }
-              }
+              PlanStepMarker(status = step.status)
               Text(
                 text = step.step,
                 style = textStyle,
                 color = textColor,
-                textDecoration = if (step.status == ChatPlanStepStatus.Completed) TextDecoration.LineThrough else null,
               )
             }
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun PlanStepMarker(status: ChatPlanStepStatus) {
+  Box(modifier = Modifier.width(14.dp), contentAlignment = Alignment.Center) {
+    when (status) {
+      ChatPlanStepStatus.Completed ->
+        Text(
+          text = "✓",
+          style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Bold),
+          color = ClawTheme.colors.success,
+        )
+      ChatPlanStepStatus.InProgress ->
+        Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
+      ChatPlanStepStatus.Pending ->
+        Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.textSubtle, CircleShape))
     }
   }
 }

@@ -163,41 +163,42 @@ async function runCliAgentInternal(
   const hookStartedAt = Date.now();
   // Prompt-only inference cannot enter agent hooks: they may replace the turn
   // or add side effects before the exact zero-tool process even starts.
-  const hookResult = params.isolatedCompletion
-    ? undefined
-    : await runBeforeAgentReplyForTurn({
-        runId: params.runId,
-        trigger: params.trigger,
-        event: { cleanedBody: params.prompt },
-        context: {
+  const hookResult =
+    params.isolatedCompletion || params.controlOperation
+      ? undefined
+      : await runBeforeAgentReplyForTurn({
           runId: params.runId,
-          jobId: params.jobId,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir: params.workspaceDir,
           trigger: params.trigger,
-          ...buildAgentHookContextChannelFields(params),
-          ...buildAgentHookContextIdentityFields({
+          event: { cleanedBody: params.prompt },
+          context: {
+            runId: params.runId,
+            jobId: params.jobId,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            workspaceDir: params.workspaceDir,
             trigger: params.trigger,
-            senderId: params.senderId,
-            chatId: params.chatId,
-            channelContext: params.channelContext,
-          }),
-        },
-        onDispatch: () =>
-          params.onExecutionPhase?.({
-            phase: "before_agent_reply",
-            provider: params.provider,
-            model: params.model ?? "",
-          }),
-        onDeclined: () =>
-          params.onExecutionPhase?.({
-            phase: "runtime_plugins",
-            provider: params.provider,
-            model: params.model ?? "",
-          }),
-      });
+            ...buildAgentHookContextChannelFields(params),
+            ...buildAgentHookContextIdentityFields({
+              trigger: params.trigger,
+              senderId: params.senderId,
+              chatId: params.chatId,
+              channelContext: params.channelContext,
+            }),
+          },
+          onDispatch: () =>
+            params.onExecutionPhase?.({
+              phase: "before_agent_reply",
+              provider: params.provider,
+              model: params.model ?? "",
+            }),
+          onDeclined: () =>
+            params.onExecutionPhase?.({
+              phase: "runtime_plugins",
+              provider: params.provider,
+              model: params.model ?? "",
+            }),
+        });
   if (hookResult?.handled) {
     const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
     const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
@@ -256,7 +257,9 @@ export async function runPreparedCliAgent(
       ? { contextTokens: context.contextWindowInfo.tokens }
       : {};
   const isolatedCompletion = params.isolatedCompletion === true;
-  const hookRunner = isolatedCompletion ? undefined : getGlobalHookRunner();
+  const controlOperation = params.controlOperation !== undefined;
+  const turnSideEffectsDisabled = isolatedCompletion || controlOperation;
+  const hookRunner = turnSideEffectsDisabled ? undefined : getGlobalHookRunner();
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
@@ -264,7 +267,7 @@ export async function runPreparedCliAgent(
   const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
   // Prior turn maintenance can rewrite transcript entries after finalization.
   // Reads for the next same-session inference must observe that rewrite.
-  if (!isolatedCompletion) {
+  if (!turnSideEffectsDisabled) {
     await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
   }
   const historyMessages = needsHookHistory
@@ -480,6 +483,26 @@ export async function runPreparedCliAgent(
         preparedContextAgentMeta,
       });
     }
+    if (controlOperation) {
+      const reusableCliSessionId = resolveCliSessionId(context.reusableCliSession);
+      if (!reusableCliSessionId) {
+        throw new Error(
+          `CLI backend ${context.backendResolved.id} cannot ${params.controlOperation} without a reusable native session.`,
+        );
+      }
+      const { output, usedHistoryPrompt } = await executeCliAttempt(reusableCliSessionId);
+      return buildCliRunResult({
+        context,
+        output,
+        effectiveCliSessionId: reusableCliSessionId,
+        bindingFlushOk: true,
+        assistantTranscriptOwned: false,
+        usedHistoryPrompt,
+        userTurnHandled,
+        sessionBindingDisabled,
+        preparedContextAgentMeta,
+      });
+    }
     await bootstrapHarnessContextEngine({
       hadSessionFile: context.hadSessionFile,
       contextEngine: context.contextEngine,
@@ -552,6 +575,7 @@ export async function runPreparedCliAgent(
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned: assistantTranscript.owned,
+          assistantTranscriptIdempotencyKey: assistantTranscript.idempotencyKey,
           usedHistoryPrompt,
           userTurnHandled,
           sessionBindingDisabled,

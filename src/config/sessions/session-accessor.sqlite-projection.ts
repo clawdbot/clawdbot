@@ -12,6 +12,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
 import {
+  prunePublishedSessionArchivesByRetention,
+  publishSessionStateArchives,
+} from "./session-accessor.sqlite-archive-store.js";
+import {
   materializeSessionStateDeletePlans,
   type MaterializedSessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
@@ -26,6 +30,7 @@ import type {
   SessionEntryReplacementUpdate,
   SessionEntryStatus,
 } from "./session-accessor.sqlite-contract.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
@@ -34,7 +39,6 @@ import {
   readSessionEntryCount,
   readSessionEntryStore,
   rehomeSessionWindows,
-  sqliteSessionEntriesEqual,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
@@ -260,9 +264,11 @@ export async function applySessionEntryLifecycleMutation(params: {
     });
   });
   let materializedRemovalPlans: MaterializedSessionStateDeletePlan[] = [];
+  let removalArchiveMaterializationFailed = false;
   try {
     materializedRemovalPlans = await materializeSessionStateDeletePlans(projected.deletePlans);
   } catch (error) {
+    removalArchiveMaterializationFailed = true;
     captureArtifactCleanupError(error);
   }
   const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
@@ -272,6 +278,12 @@ export async function applySessionEntryLifecycleMutation(params: {
     runOpenClawAgentWriteTransaction((transactionDb) => {
       params.beforeCommitInTransaction?.();
       const validatedRemovals = projected.removals.filter((removal) => {
+        if (
+          removalArchiveMaterializationFailed &&
+          removal.removal.archiveRemovedTranscript === true
+        ) {
+          return false;
+        }
         const entry = readProjectedRemovalEntry(
           transactionDb,
           removal,
@@ -425,7 +437,16 @@ export async function applySessionEntryLifecycleMutation(params: {
       resolved,
       committed.maintenancePlans,
     );
-  const archivedTranscripts = [...committed.archivedTranscripts, ...maintenanceArchivedTranscripts];
+  let publishedRemovalTranscripts: SessionLifecycleArchivedTranscript[] = [];
+  try {
+    publishedRemovalTranscripts = await publishSessionStateArchives(
+      resolved,
+      committed.archivedTranscripts,
+    );
+  } catch (error) {
+    captureArtifactCleanupError(error);
+  }
+  const archivedTranscripts = [...publishedRemovalTranscripts, ...maintenanceArchivedTranscripts];
   const afterCount = readSessionEntryCount(openOpenClawAgentDatabase(toDatabaseOptions(resolved)));
   emitArchivedTranscriptUpdates(archivedTranscripts);
   const archivedTranscriptDirectories = uniqueStrings(
@@ -439,6 +460,11 @@ export async function applySessionEntryLifecycleMutation(params: {
         rules: params.cleanupArchivedTranscripts.rules,
         nowMs: params.cleanupArchivedTranscripts.nowMs,
       });
+      await prunePublishedSessionArchivesByRetention({
+        scope: resolved,
+        rules: params.cleanupArchivedTranscripts.rules,
+        nowMs: params.cleanupArchivedTranscripts.nowMs,
+      });
     } catch (error) {
       captureArtifactCleanupError(error);
     }
@@ -447,8 +473,6 @@ export async function applySessionEntryLifecycleMutation(params: {
     removedEntries: committed.removedSessionKeys.length,
     removedSessionKeys: committed.removedSessionKeys,
     archivedTranscriptDirectories,
-    unreferencedArtifacts: null,
-    maintenanceReport: null,
     afterCount,
     artifactCleanupError,
   };
@@ -540,7 +564,7 @@ export async function purgeDeletedAgentSessionEntries(
     return { archivedTranscripts, maintenancePlans, removedSessionKeys };
   });
   const archivedTranscripts = [
-    ...committed.archivedTranscripts,
+    ...(await publishSessionStateArchives(resolved, committed.archivedTranscripts)),
     ...(await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,
       committed.maintenancePlans,
@@ -554,8 +578,6 @@ export async function purgeDeletedAgentSessionEntries(
     archivedTranscriptDirectories: uniqueStrings(
       archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
     ).toSorted(),
-    unreferencedArtifacts: null,
-    maintenanceReport: null,
     afterCount,
   };
 }

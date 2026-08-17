@@ -342,6 +342,69 @@ describe("buildGatewayCronService", () => {
     });
   });
 
+  it.each(["update", "updateWithPrecondition"] as const)(
+    "forwards authority options through the %s lifecycle wrapper",
+    async (method) => {
+      const cfg = createCronConfig(`server-cron-update-authority-${method}`);
+      loadConfigMock.mockReturnValue(cfg);
+      const state = buildGatewayCronService({
+        cfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+      });
+      const owner = {
+        agentId: "main",
+        sessionKey: "agent:main:discord:group:ops",
+        accountId: "work",
+      };
+      const scheduledToolPolicy = {
+        version: 1 as const,
+        mode: "account" as const,
+        ownerSessionKey: owner.sessionKey,
+        ownerAccountId: owner.accountId,
+      };
+      let restarted: ReturnType<typeof buildGatewayCronService> | undefined;
+
+      try {
+        const job = await state.cron.add({
+          name: `authority ${method}`,
+          enabled: true,
+          owner,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "run" },
+        });
+        const commitGuard = vi.fn();
+        const patch = {
+          sessionTarget: "isolated" as const,
+          payload: { kind: "agentTurn" as const, message: "updated", toolsAllow: ["write"] },
+        };
+        const options = { scheduledToolPolicy, commitGuard };
+
+        if (method === "update") {
+          await state.cron.update(job.id, patch, options);
+        } else {
+          await state.cron.updateWithPrecondition(job.id, patch, () => undefined, options);
+        }
+
+        expect.soft(commitGuard).toHaveBeenCalledOnce();
+        state.cron.stop();
+        restarted = buildGatewayCronService({
+          cfg,
+          deps: {} as CliDeps,
+          broadcast: () => {},
+        });
+        expect((await restarted.cron.readJob(job.id))?.scheduledToolPolicy).toEqual(
+          scheduledToolPolicy,
+        );
+      } finally {
+        state.cron.stop();
+        restarted?.cron.stop();
+      }
+    },
+  );
+
   it("keeps sole-agent ownerless jobs dynamic across a restart and roster rename", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-sole-owner-${Date.now()}`);
     const store = path.join(tmpDir, "cron.json");
@@ -387,6 +450,52 @@ describe("buildGatewayCronService", () => {
       expectIsolatedRunFields({ agentId: "research" });
     } finally {
       restarted.cron.stop();
+    }
+  });
+
+  it("fires scheduled ownerless jobs as the configured system agent", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-14T12:00:00.000Z"));
+    const cfg = createCronConfig("server-cron-system-agent-owner");
+    cfg.agents = { entries: { main: {} } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.start();
+      const job = await state.cron.add({
+        name: "scheduled system owner",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "run on schedule" },
+      });
+      expect(job.agentId).toBeUndefined();
+      loadConfigMock.mockReturnValue({
+        ...cfg,
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, helper: {} },
+        },
+      } satisfies OpenClawConfig);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(state.cron.getJob(job.id)?.state).toMatchObject({
+        lastStatus: "ok",
+        consecutiveErrors: 0,
+        lastError: undefined,
+      });
+      expectIsolatedRunFields({ agentId: "main" });
+    } finally {
+      state.cron.stop();
+      vi.useRealTimers();
     }
   });
 

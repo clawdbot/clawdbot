@@ -2,7 +2,6 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { availableParallelism } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -19,7 +18,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 // These subprocess tests use explicit ready/close signals; timeout only catches broken fixtures.
 const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
-const COMMAND_HELP_RENDER_CONCURRENCY = Math.min(8, Math.max(2, availableParallelism()));
+const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const DEFAULT_COMMAND_HELP_NAMES = [
   "browser",
   "secrets",
@@ -166,6 +165,74 @@ describe("write-cli-startup-metadata", () => {
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
+  });
+
+  it("finishes root help before rendering at most two command snapshots", async () => {
+    const actualSpawn = (
+      await vi.importActual<typeof import("node:child_process")>("node:child_process")
+    ).spawn;
+    const spawnMock = vi.mocked(spawn);
+    const tempRoot = createTempDir("openclaw-startup-metadata-scheduling-");
+    const distDir = path.join(tempRoot, "dist");
+    const extensionsDir = path.join(tempRoot, "extensions");
+    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const startedCommands: string[] = [];
+    let activeCommands = 0;
+    let maxActiveCommands = 0;
+    let writePromise: Promise<void> | undefined;
+    let releaseRootHelp = () => {};
+    let reportRootHelpStarted = () => {};
+    const rootHelpStarted = new Promise<void>((resolve) => {
+      reportRootHelpStarted = resolve;
+    });
+    const rootHelpBlocked = new Promise<void>((resolve) => {
+      releaseRootHelp = resolve;
+    });
+
+    writeStartupMetadataSourceSignatureFixture(tempRoot);
+    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+
+    spawnMock.mockImplementation((_command, args) => {
+      const commandName = String(args[1]);
+      const child = createSpawnTextChild();
+      startedCommands.push(commandName);
+      activeCommands += 1;
+      maxActiveCommands = Math.max(maxActiveCommands, activeCommands);
+      setImmediate(() => {
+        child.stdout.write(`Usage: openclaw ${commandName}\n`);
+        activeCommands -= 1;
+        child.emit("close", 0, null);
+      });
+      return child as unknown as ReturnType<typeof spawn>;
+    });
+
+    try {
+      writePromise = testing.writeCliStartupMetadata({
+        distDir,
+        outputPath,
+        extensionsDir,
+        sourceRootDir: tempRoot,
+        renderBundledRootHelpText: async () => {
+          reportRootHelpStarted();
+          await rootHelpBlocked;
+          return "Usage: openclaw\n";
+        },
+      });
+
+      await rootHelpStarted;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(startedCommands).toEqual([]);
+
+      releaseRootHelp();
+      await writePromise;
+
+      expect(startedCommands).toEqual(DEFAULT_COMMAND_HELP_NAMES);
+      expect(maxActiveCommands).toBe(COMMAND_HELP_RENDER_CONCURRENCY);
+    } finally {
+      releaseRootHelp();
+      await writePromise?.catch(() => {});
+      spawnMock.mockImplementation(actualSpawn);
+    }
   });
 
   it("fails command help rendering when captured output exceeds the byte limit", async () => {

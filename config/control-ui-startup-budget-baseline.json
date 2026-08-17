@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 329483,
-  "reason": "cumulative chat/session UI growth (#122296, #122713, #122870, #122876); CI-measured build-artifacts bytes",
-  "updatedAt": "2026-08-13"
+  "startupJsGzipBytes": 338241,
+  "reason": "session placement move controls, ownership chips, assignment menus, and participant stack",
+  "updatedAt": "2026-08-17"
 }

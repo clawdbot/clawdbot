@@ -2,7 +2,8 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow } from "../../../api/types.ts";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
@@ -12,12 +13,17 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import type { SessionCapability } from "../../../lib/sessions/index.ts";
+import { createTestChatPane } from "../chat-pane.test-support.ts";
+import type { ChatPageHost } from "../chat-state-host.ts";
+import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
   resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./chat-pane-header.ts";
+import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
 
@@ -109,6 +115,46 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
   props.gatewaysSnapshot ??= props.nativeGateways?.snapshot;
   render(html`${renderChatPaneHeader(props)}`, container);
   return { container, props };
+}
+
+function mountIntegratedPresenceHeader(params: {
+  creators: NonNullable<SessionsListResult["creators"]>;
+  presence: PresenceEntry[];
+}) {
+  const client = { instanceId: "self-instance" } as unknown as GatewayBrowserClient;
+  const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const session = row({
+    key: state.sessionKey,
+    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+  });
+  state.settings = {} as ChatPageHost["settings"];
+  state.sessionsResult = {
+    ts: 1,
+    path: "",
+    count: 1,
+    creators: params.creators,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: [session],
+  };
+  pane.context.gateway.snapshot.selfUser = { id: "profile-self" };
+  pane.presencePayload = { presence: params.presence };
+  const container = document.createElement("div");
+  document.body.append(container);
+  containers.push(container);
+  const renderHeader = () =>
+    render(
+      pane.renderPaneHeader(
+        createSessionWorkspaceProps(state),
+        createBackgroundTasksProps(state),
+        session,
+        false,
+        undefined,
+        false,
+      ),
+      container,
+    );
+  renderHeader();
+  return { container, pane, renderHeader };
 }
 
 describe("chat pane header", () => {
@@ -257,11 +303,11 @@ describe("chat pane header", () => {
     expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
   });
 
-  it("moves session panel shortcuts out of a narrow header while keeping shell actions", () => {
+  it("keeps persistent surface actions in a narrow header", () => {
     const { container } = mount({
       narrow: true,
       mergedChrome: true,
-      panelActions: html`<button data-action="terminal"></button>`,
+      panelActions: html`<button data-action="persistent-surface"></button>`,
       discussionAction: html`<button data-action="discussion"></button>`,
       diffAction: html`<button data-action="diff"></button>`,
       backgroundTasksAction: html`<button data-action="tasks"></button>`,
@@ -270,7 +316,7 @@ describe("chat pane header", () => {
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
     });
 
-    expect(container.querySelector('[data-action="terminal"]')).toBeNull();
+    expect(container.querySelector('[data-action="persistent-surface"]')).not.toBeNull();
     expect(container.querySelector('[data-action="discussion"]')).toBeNull();
     expect(container.querySelector('[data-action="diff"]')).toBeNull();
     expect(container.querySelector('[data-action="tasks"]')).toBeNull();
@@ -302,7 +348,8 @@ describe("chat pane header", () => {
     expect(props.onBeginRename).toHaveBeenCalledOnce();
   });
 
-  it("renders a quiet cloud placement chip with the canonical stop action", () => {
+  it("renders a quiet cloud placement chip with move and stop actions", () => {
+    const onPlacementMove = vi.fn();
     const onPlacementReclaim = vi.fn();
     const { container } = mount({
       session: row({
@@ -319,6 +366,7 @@ describe("chat pane header", () => {
           remoteWorkspaceDir: "/worker/repo",
         },
       }),
+      onPlacementMove,
       onPlacementReclaim,
     });
 
@@ -328,13 +376,43 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__placement-state")).toBeNull();
     expect(container.querySelector(".chat-pane__placement-note")).toBeNull();
     const actions = container.querySelectorAll(".chat-pane__placement-menu wa-dropdown-item");
-    expect(actions).toHaveLength(1);
-    expect(actions[0]?.textContent?.trim()).toBe("Stop cloud worker…");
-    expect(actions[0]?.classList.contains("session-menu__item--destructive")).toBe(true);
-    expect(actions[0]?.getAttribute("variant")).toBe("danger");
-    expect(actions[0]?.querySelector(".session-menu__icon")).not.toBeNull();
+    expect(actions).toHaveLength(2);
+    expect(actions[0]?.textContent?.trim()).toBe("Move session…");
+    expect(actions[0]?.classList.contains("session-menu__item--destructive")).toBe(false);
     actions[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPlacementMove).toHaveBeenCalledOnce();
+    expect(actions[1]?.textContent?.trim()).toBe("Stop cloud worker…");
+    expect(actions[1]?.classList.contains("session-menu__item--destructive")).toBe(true);
+    expect(actions[1]?.getAttribute("variant")).toBe("danger");
+    expect(actions[1]?.querySelector(".session-menu__icon")).not.toBeNull();
+    actions[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPlacementReclaim).toHaveBeenCalledOnce();
+  });
+
+  it("shows durable move progress in the placement chip", () => {
+    const session = row({
+      placement: {
+        state: "draining",
+        generation: 2,
+        createdAtMs: 100_000,
+        updatedAtMs: 300_000,
+        stateChangedAtMs: 300_000,
+        environmentId: "worker:one",
+        activeOwnerEpoch: 1,
+        workerBundleHash: "a".repeat(64),
+        workspaceBaseManifestRef: "base-manifest",
+        remoteWorkspaceDir: "/worker/repo",
+      },
+      placementMove: {
+        target: { kind: "gateway" },
+        updatedAtMs: 300_000,
+      },
+    });
+    const { container } = mount({ session });
+
+    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+      "Moving to Gateway…",
+    );
   });
 
   it.each(["local", "reclaimed"] as const)("hides the placement chip for %s state", (state) => {
@@ -424,6 +502,126 @@ describe("chat pane header", () => {
       session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
     });
     expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
+  });
+
+  it("renders the bounded static participant facepile beside the owner", async () => {
+    const mounted = mount({
+      showOwnerChip: true,
+      session: row({
+        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+        participants: [
+          { type: "human", id: "profile-bob", label: "Bob" },
+          { type: "agent", id: "research", label: "Research" },
+        ],
+        participantCount: 2,
+      }),
+    });
+    const facepile = mounted.container.querySelector<
+      HTMLElement & { updateComplete?: Promise<unknown> }
+    >("openclaw-viewer-facepile.chat-pane__participants");
+    await facepile?.updateComplete;
+
+    expect(mounted.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+    expect(
+      [...(facepile?.querySelectorAll("[data-viewer-id]") ?? [])].map((avatar) =>
+        avatar.getAttribute("data-viewer-id"),
+      ),
+    ).toEqual(["profile-bob", "research"]);
+  });
+
+  it.each([
+    {
+      name: "excludes the creator when the owner chip is shown",
+      creators: [
+        { type: "human", id: "profile-ada", label: "Ada" },
+        { type: "human", id: "profile-zoe", label: "Zoe" },
+      ],
+      viewers: ["profile-ada", "profile-zoe"],
+      expectedChip: true,
+      expectedViewers: ["profile-zoe"],
+    },
+    {
+      name: "keeps the creator when the owner chip is hidden",
+      creators: [{ type: "human", id: "profile-ada", label: "Ada" }],
+      viewers: ["profile-ada", "profile-zoe"],
+      expectedChip: false,
+      expectedViewers: ["profile-ada", "profile-zoe"],
+    },
+    {
+      name: "omits the facepile when the shown owner is the only viewer",
+      creators: [
+        { type: "human", id: "profile-ada", label: "Ada" },
+        { type: "human", id: "profile-zoe", label: "Zoe" },
+      ],
+      viewers: ["profile-ada"],
+      expectedChip: true,
+      expectedViewers: [],
+    },
+  ])("$name", async ({ creators, viewers, expectedChip, expectedViewers }) => {
+    const sessionKey = "agent:main:current";
+    const { container } = mountIntegratedPresenceHeader({
+      creators,
+      presence: viewers.map((id) => ({
+        instanceId: `${id}-instance`,
+        ts: 1,
+        user: { id, name: id },
+        watchedSessions: [sessionKey],
+      })),
+    });
+    const ownerChip = container.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
+      "openclaw-session-owner-chip",
+    );
+    const facepile = container.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
+      "openclaw-viewer-facepile",
+    );
+
+    await Promise.all([ownerChip?.updateComplete, facepile?.updateComplete]);
+    expect(ownerChip !== null).toBe(expectedChip);
+    expect(
+      [...container.querySelectorAll(".viewer-facepile [data-viewer-id]")].map((avatar) =>
+        avatar.getAttribute("data-viewer-id"),
+      ),
+    ).toEqual(expectedViewers);
+    expect(facepile !== null).toBe(expectedViewers.length > 0);
+  });
+
+  it("updates the header owner vitality from live session presence", async () => {
+    const sessionKey = "agent:main:current";
+    const creators = [
+      { type: "human" as const, id: "profile-ada", label: "Ada" },
+      { type: "human" as const, id: "profile-zoe", label: "Zoe" },
+    ];
+    const guest = {
+      instanceId: "profile-zoe-instance",
+      ts: 1,
+      user: { id: "profile-zoe", name: "Zoe" },
+      watchedSessions: [sessionKey],
+    } satisfies PresenceEntry;
+    const mounted = mountIntegratedPresenceHeader({ creators, presence: [guest] });
+    const ownerChip = mounted.container.querySelector<
+      HTMLElement & { updateComplete?: Promise<unknown> }
+    >("openclaw-session-owner-chip");
+
+    await ownerChip?.updateComplete;
+    expect(mounted.container.querySelector(".session-owner-chip--header")?.classList).toContain(
+      "session-owner-chip--away",
+    );
+    mounted.pane.presencePayload = {
+      presence: [
+        {
+          instanceId: "profile-ada-instance",
+          ts: 1,
+          user: { id: "profile-ada", name: "Ada" },
+          watchedSessions: [sessionKey],
+        },
+        guest,
+      ],
+    };
+    mounted.renderHeader();
+    await ownerChip?.updateComplete;
+    expect(mounted.container.querySelector(".session-owner-chip--header")?.classList).not.toContain(
+      "session-owner-chip--away",
+    );
   });
 
   it("renders the durable session actor avatar with the header attribution semantics", async () => {

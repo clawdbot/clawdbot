@@ -141,14 +141,14 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         realtimeVoiceProviders: ["openai"],
         imageGenerationProviders: ["openai"],
         videoGenerationProviders: ["openai"],
-        memoryEmbeddingProviders: ["openai"],
+        embeddingProviders: ["openai"],
       },
     },
     {
       id: "ollama",
       enabledByDefault: true,
       providers: ["ollama"],
-      contracts: { memoryEmbeddingProviders: ["ollama"] },
+      contracts: { embeddingProviders: ["ollama"] },
     },
     {
       id: "generic-embedding",
@@ -1479,6 +1479,45 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads enabled plugin tool owners before turns can enter the Gateway", () => {
+    useManifestRegistryFixture({
+      diagnostics: [],
+      plugins: [
+        withManifestLoadPaths({
+          id: "bundled-tool-owner",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["bundled_tool"] },
+        }),
+        withManifestLoadPaths({
+          id: "external-tool-owner",
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["external_tool"] },
+        }),
+      ],
+    });
+
+    expectStartupPluginIds({
+      config: createStartupConfig({ noConfiguredChannels: true, memorySlot: "none" }),
+      expected: ["bundled-tool-owner"],
+    });
+    expectStartupPluginIds({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-tool-owner"],
+        allowPluginIds: ["external-tool-owner"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-tool-owner"],
     });
   });
 

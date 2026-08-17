@@ -633,7 +633,7 @@ describe("node host invoke", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "keeps prepared allow-always coverage incomplete when any planned command is prompt-only",
+    "fails closed when a prepared command contains an unsafe shell pipeline",
     async () => {
       const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
       const skillBins: SkillBinsProvider = { current: async () => [] };
@@ -652,15 +652,19 @@ describe("node host invoke", () => {
         skillBins,
       );
 
-      const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
-      const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
-        allowAlwaysCoverage?: {
-          complete?: boolean;
-          patterns?: Array<{ pattern?: string }>;
-        };
-      };
-      expect(payload.allowAlwaysCoverage?.complete).toBe(false);
-      expect(payload.allowAlwaysCoverage?.patterns?.length).toBeGreaterThan(0);
+      expect(request).toHaveBeenCalledWith(
+        "node.invoke.result",
+        expect.objectContaining({
+          id: "invoke-prepare-partial",
+          nodeId: "node-1",
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          },
+        }),
+      );
     },
   );
 

@@ -103,8 +103,6 @@ import {
   createCodexTestBindingStore,
   resetCodexTestBindingStore,
   type CodexAppServerBindingIdentity,
-} from "./session-binding.test-helpers.js";
-import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
@@ -2403,8 +2401,127 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+    const planRestoreRequest = harness.requests.find(
+      (request) => request.method === "thread/inject_items",
+    );
+    expect(planRestoreRequest?.params).toMatchObject({
+      threadId: "thread-1",
+      items: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: expect.stringContaining('"step":"Restore progress","status":"in_progress"'),
+            },
+          ],
+        },
+      ],
+    });
+
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+  });
+
+  it("does not inject plan state after compaction when the turn has no plan", async () => {
+    const params = createRunParams();
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/inject_items");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("bounds restored plan state after compaction", async () => {
+    const params = createRunParams();
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/plan/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        explanation: "e".repeat(10_000),
+        plan: Array.from({ length: 100 }, (_, index) => ({
+          step: `${index}: ${"x".repeat(2_000)}`,
+          status: index === 0 ? "inProgress" : "pending",
+        })),
+      },
+    });
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+
+    const request = harness.requests.find((entry) => entry.method === "thread/inject_items");
+    const text = (
+      request?.params as { items?: Array<{ content?: Array<{ text?: string }> }> } | undefined
+    )?.items?.[0]?.content?.[0]?.text;
+    expect(text).toBeDefined();
+    const payloadText = text?.slice((text?.indexOf("\n") ?? -1) + 1) ?? "";
+    const payload = JSON.parse(payloadText) as {
+      explanation?: string;
+      plan: Array<{ step: string; status: string }>;
+    };
+    expect(Buffer.byteLength(payloadText, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(Buffer.byteLength(payload.explanation ?? "", "utf8")).toBeLessThanOrEqual(2 * 1024);
+    expect(payload.plan.length).toBeLessThanOrEqual(50);
+    expect(payload.plan.every((step) => Buffer.byteLength(step.step, "utf8") <= 512)).toBe(true);
+    expect(payload.plan[0]?.status).toBe("in_progress");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("continues the turn when restoring plan state after compaction fails", async () => {
+    const params = createRunParams();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/inject_items") {
+        throw new Error("injected test failure");
+      }
+      return undefined;
+    });
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/plan/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        explanation: "Keep working",
+        plan: [{ step: "Finish safely", status: "inProgress" }],
+      },
+    });
+    await harness.notify(
+      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+    );
+    expect(harness.requests.map((request) => request.method)).toContain("thread/inject_items");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -4040,11 +4157,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
   });
 
-  it("promotes implicit Codex yolo approval policy when OpenClaw tool policy exists", async () => {
+  it("keeps effective default Codex yolo when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
-    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -4053,17 +4169,12 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    const turnRequest = harness.requests.find((request) => request.method === "turn/start");
+    const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(startParams?.approvalPolicy).toBe("never");
     expect(startParams?.sandbox).toBe("danger-full-access");
-    expect(info).toHaveBeenCalledWith(
-      "codex app-server approval policy promoted for OpenClaw tool policy",
-      {
-        from: "never",
-        to: "untrusted",
-        beforeToolCallHook: true,
-        trustedToolPolicies: [],
-      },
-    );
+    expect(turnParams?.approvalPolicy).toBe("never");
+    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });
   it("keeps explicit Codex yolo mode unpromoted when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
@@ -4123,7 +4234,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
-  it("ignores invalid Codex app-server env overrides when promoting tool policy approval", async () => {
+  it("ignores invalid Codex app-server env overrides without weakening default yolo", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
@@ -4137,7 +4248,7 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    expect(startParams?.approvalPolicy).toBe("never");
   });
   it("preserves a healthy binding when invalid image cleanup hits a transient thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -4392,6 +4503,50 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStartParams?.input).toEqual([
       { type: "text", text: "hello", text_elements: [] },
       { type: "image", url: `data:image/png;base64,${pngBase64}` },
+    ]);
+    expect(
+      requests.filter(
+        (entry) =>
+          entry.method === "skills/list" &&
+          (entry.params as { forceReload?: boolean } | undefined)?.forceReload === false,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("appends path-matched explicit skills to the initial turn input", async () => {
+    const params = createRunParams();
+    const skillPath = path.join(params.workspaceDir, ".agents", "skills", "release", "SKILL.md");
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method !== "skills/list") {
+        return undefined;
+      }
+      return {
+        data: [
+          {
+            cwd: params.workspaceDir,
+            skills: [
+              {
+                name: "release",
+                description: "Release workflow",
+                path: skillPath,
+                scope: "repo",
+                enabled: true,
+              },
+            ],
+            errors: [],
+          },
+        ],
+      } satisfies v2.SkillsListResponse;
+    });
+    params.explicitSkillSelections = [{ name: "release-command", path: skillPath }];
+
+    const run = runCodexAppServerAttempt(params);
+    await completeStartedRun(run, harness.waitForMethod, harness.completeTurn);
+
+    const turnStart = harness.requests.find((entry) => entry.method === "turn/start");
+    expect((turnStart?.params as { input?: unknown[] } | undefined)?.input).toEqual([
+      { type: "text", text: "hello", text_elements: [] },
+      { type: "skill", name: "release", path: skillPath },
     ]);
   });
 
@@ -5181,6 +5336,101 @@ describe("runCodexAppServerAttempt", () => {
         value: '{"sender":{"id":"profile-grace","name":"Grace"}}',
       },
     ]);
+  });
+  it("keeps context usage fresh across two turns of one Codex thread", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const turnIds = ["turn-1", "turn-2"] as const;
+    let nextTurnIndex = 0;
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        const turnId = turnIds[nextTurnIndex++];
+        if (!turnId) {
+          throw new Error("unexpected extra turn/start");
+        }
+        return turnStartResult(turnId);
+      }
+      return {};
+    });
+
+    const runTurn = async (index: number) => {
+      const turnId = turnIds[index]!;
+      const expectedTurnStarts = index + 1;
+      const run = runCodexAppServerAttempt(
+        createParams(sessionFile, workspaceDir, {
+          prompt: `turn ${index + 1}`,
+          runId: `run-${index + 1}`,
+        }),
+      );
+      await vi.waitFor(
+        () =>
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(expectedTurnStarts),
+        fastWait,
+      );
+      const inputTokens = 15_000 + index * 1_000;
+      const outputTokens = 100;
+      if (index === 0) {
+        await harness.notify({
+          method: "rawResponse/completed",
+          params: {
+            threadId: "thread-1",
+            turnId,
+            responseId: "response-1",
+            usage: {
+              totalTokens: inputTokens + outputTokens,
+              inputTokens,
+              cachedInputTokens: 0,
+              outputTokens,
+              reasoningOutputTokens: 0,
+            },
+          },
+        });
+      }
+      await harness.notify({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          tokenUsage: {
+            last: {
+              totalTokens: inputTokens + outputTokens,
+              inputTokens,
+              cachedInputTokens: 0,
+              cacheWriteInputTokens: 0,
+              outputTokens,
+              reasoningOutputTokens: 0,
+            },
+          },
+        },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId });
+      return run;
+    };
+
+    const first = await runTurn(0);
+    const second = await runTurn(1);
+
+    expect(first.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 15_000,
+      totalTokens: 15_100,
+    });
+    expect(second.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 16_000,
+      totalTokens: 16_100,
+    });
+    expect(
+      harness.requests
+        .filter((request) =>
+          ["thread/start", "thread/resume", "turn/start"].includes(request.method),
+        )
+        .map((request) => request.method),
+    ).toEqual(["thread/start", "turn/start", "turn/start"]);
   });
   it("starts a fresh Codex thread before resume when the native rollout reaches the fallback fuse", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();

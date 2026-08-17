@@ -13,8 +13,8 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import {
+  sessionDeliveryChannel,
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
@@ -39,6 +39,7 @@ import { normalizeReplyPayload } from "./normalize-reply.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
@@ -312,6 +313,9 @@ export async function handleReplyAgentRunError(
     sessionCtx,
   } = context;
 
+  if (isReplyOperationSuperseded(replyOperation)) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
@@ -460,7 +464,6 @@ export type RunReplyAgentParams = {
   runtimePolicySessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
   toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;

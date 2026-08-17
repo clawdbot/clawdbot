@@ -1,5 +1,6 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
@@ -231,7 +232,10 @@ export function needsSqliteProjectionBackfill(params: {
   if (!normalizedConfig) {
     return true;
   }
-  const projected = params.projectedJob as unknown as Record<string, unknown>;
+  if (!isRecord(params.projectedJob)) {
+    return true;
+  }
+  const projected = params.projectedJob;
   for (const field of [
     "agentId",
     "deleteAfterRun",

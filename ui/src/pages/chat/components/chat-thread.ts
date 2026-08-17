@@ -8,7 +8,7 @@ import {
 import { t } from "../../../i18n/index.ts";
 import {
   handleTranscriptContextMenu,
-  handleTranscriptSelection,
+  handleTranscriptPointerUp,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import {
@@ -87,25 +87,20 @@ function renderTranscriptShell(
   transcript: ChatTranscriptSession,
 ): TemplateResult {
   const projection = projectChatTranscript(props, transcript);
+  const historySentinel =
+    props.historyLoading === undefined ? nothing : renderHistorySentinel(props.historyLoading);
   const transcriptContents =
     projection.showLoadingSkeleton || projection.isEmpty
       ? html`
           <div class="chat-thread-inner">
-            ${props.historyPagination
-              ? renderHistorySentinel(props.historyPagination.loading)
-              : nothing}
-            ${projection.showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
+            ${historySentinel} ${projection.showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
             ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
             ${projection.isEmpty && projection.searchOpen
               ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
               : nothing}
           </div>
         `
-      : projection.renderRows(
-          props.historyPagination
-            ? renderHistorySentinel(props.historyPagination.loading)
-            : nothing,
-        );
+      : projection.renderRows(historySentinel);
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
@@ -141,7 +136,7 @@ function renderTranscriptShell(
         }
       }}
       @contextmenu=${(event: MouseEvent) => handleTranscriptContextMenu(event, props)}
-      @pointerup=${(event: PointerEvent) => handleTranscriptSelection(event, props)}
+      @pointerup=${(event: PointerEvent) => handleTranscriptPointerUp(event, props)}
     >
       <span
         class="chat-transcript-announcement sr-only"

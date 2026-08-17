@@ -41,13 +41,11 @@ import {
   validateTalkSessionSteerParams,
   validateWakeParams,
   type ValidationError,
-} from "./index.js";
-import type {
-  ConfigSchemaLookupParams,
-  ModelsListParams,
-  SessionsCatalogListParams,
-  SessionsCatalogStartTerminalParams,
-  TalkEvent,
+  type ConfigSchemaLookupParams,
+  type ModelsListParams,
+  type SessionsCatalogListParams,
+  type SessionsCatalogStartTerminalParams,
+  type TalkEvent,
 } from "./index.js";
 import type * as Schema from "./schema.js";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
@@ -168,8 +166,9 @@ describe("lazy protocol validators", () => {
       { archived: false },
       { archived: true },
       { archived: "all" },
+      { involvingMe: true },
     ]);
-    expectRejected(validateSessionsListParams, [{ archived: "archived" }]);
+    expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
   });
 
   it("validates session board face list and patch values", () => {
@@ -297,6 +296,7 @@ describe("lazy protocol validators", () => {
     expectRejected(validateConnectParams, [{}]);
     expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");
     expectAccepted(validateConnectParams, [connect]);
+    expectAccepted(validateConnectParams, [{ ...connect, computerUse: { version: 2 } }]);
     expect(validateConnectParams.errors).toBeNull();
   });
 

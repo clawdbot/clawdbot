@@ -20,6 +20,7 @@ import type {
 } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { WorkerConnectionIdentity } from "./admission.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerEnvironmentAccess } from "./environment-access.js";
@@ -87,9 +88,10 @@ type WorkerEnvironmentServiceOptions = {
     profile: WorkerProfile;
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
-  resolveNodeWorkerBuild?: (deviceId: string) => Promise<WorkerAdmissionHandshake | undefined>;
+  ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
+  stopNodeWorkerBundleTransfers?: () => void;
   reconcileIntervalMs?: number;
   providerCallTimeoutMs?: number;
   bootstrapCallTimeoutMs?: number;
@@ -150,7 +152,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const inference = createWorkerInferenceManager({
     execute: options.executeInference,
     getConfig: options.getConfig,
-    now,
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   const inferenceWithDrain = inference as typeof inference & {
@@ -159,6 +160,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
+  let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler((claim) =>
+    inference.cancelClaim(claim),
+  );
   let stopping = false;
 
   const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
@@ -198,13 +202,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     );
   };
 
-  const callBootstrap = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  const callBootstrap = async <T>(
+    installation: WorkerInstallationArtifact,
+    run: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
     const controller = new AbortController();
     const operation = Promise.resolve().then(() => run(controller.signal));
     try {
       return await withTimeout(
         operation,
-        options.bootstrapCallTimeoutMs ?? 35 * 60_000,
+        options.bootstrapCallTimeoutMs ?? workerBootstrapOperationTimeoutMs(installation),
         "Worker bootstrap operation",
       );
     } catch (error) {
@@ -274,7 +281,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareInstallation: options.prepareInstallation,
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
-    resolveNodeWorkerBuild: options.resolveNodeWorkerBuild,
+    ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
     credentialBroker,
@@ -293,6 +300,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     store,
     getConfig: options.getConfig,
+    prepareCurrentBundle: async () => await options.prepareInstallation("bundle"),
     tunnelManager: options.tunnelManager,
     nodeTunnelManager: options.nodeTunnelManager,
     resolveWorkerGateway: options.resolveWorkerGateway,
@@ -318,24 +326,32 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     withLock,
   });
 
+  const reconcileEnvironment = async (environmentId: string) => {
+    if (stopping) {
+      return;
+    }
+    await withLock(environmentId, async () => {
+      const current = store.get(environmentId);
+      if (!current || inState(current, "destroyed", "failed", "orphaned")) {
+        return;
+      }
+      await providerLifecycle.reconcileRecord(current);
+    });
+  };
+
   const reconcilePass = async () => {
-    const tasks = store.listForReconcile().map(
-      (candidate) => () =>
-        withLock(candidate.environmentId, async () => {
-          const current = store.get(candidate.environmentId);
-          if (!current || inState(current, "destroyed", "failed")) {
-            return;
-          }
-          await providerLifecycle
-            .reconcileRecord(current)
-            .catch(() =>
-              warn(
-                `Worker environment reconcile failed (${current.environmentId}, ${current.providerId})`,
-              ),
-            );
-        }),
-    );
+    const tasks = store
+      .listForReconcile()
+      .map(
+        (candidate) => () =>
+          reconcileEnvironment(candidate.environmentId).catch(() =>
+            warn(
+              `Worker environment reconcile failed (${candidate.environmentId}, ${candidate.providerId})`,
+            ),
+          ),
+      );
     await runTasksWithConcurrency({ tasks, limit: 8 });
+    store.pruneTerminalEnvironments();
   };
 
   const reconcileOnce = () => {
@@ -372,9 +388,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     interval = undefined;
     unsubscribeSessionIdentityMutation?.();
     unsubscribeSessionIdentityMutation = undefined;
+    unsubscribeTurnClaimClosed?.();
+    unsubscribeTurnClaimClosed = undefined;
     await inference.stop();
     credentialBroker.clear();
     options.liveEvents?.clear();
+    options.stopNodeWorkerBundleTransfers?.();
     await environmentAccess.stopAllTunnels();
     const reconciliation = reconcileInFlight;
     if (reconciliation) {
@@ -391,18 +410,28 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const service = {
     list: environmentAccess.list,
     get: environmentAccess.get,
-    create: async (profileId: string, idempotencyKey: string) =>
+    listMachineOptions: async (profileId: string) =>
+      providerLifecycle.listMachineOptions(profileId),
+    create: async (profileId: string, idempotencyKey: string, machineClass?: string) =>
       environmentAccess.project(
-        await providerLifecycle.createWithProfile(profileId, idempotencyKey),
+        await providerLifecycle.createWithProfile(
+          profileId,
+          idempotencyKey,
+          machineClass === undefined ? {} : { machineClass },
+        ),
       ),
     createFromProfileSnapshot: async (
       profile: { profileId: string; providerId: string; profileSnapshot: WorkerProfile },
       idempotencyKey: string,
+      machineClass?: string,
     ) =>
       environmentAccess.project(
         await providerLifecycle.createWithProfile(profile.profileId, idempotencyKey, {
-          providerId: profile.providerId,
-          profileSnapshot: profile.profileSnapshot,
+          inherited: {
+            providerId: profile.providerId,
+            profileSnapshot: profile.profileSnapshot,
+          },
+          ...(machineClass === undefined ? {} : { machineClass }),
         }),
       ),
     destroy: async (environmentId: string) =>
@@ -423,12 +452,31 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,
     hasInferenceForSession: turnRpc.hasInferenceForSession,
     resolveInferenceSessionForRunId: turnRpc.resolveInferenceSessionForRunId,
+    resolveSshIdentity: async (environmentId: string) => {
+      const record = store.get(environmentId);
+      if (!record) {
+        throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
+      }
+      if (!record.leaseId || !record.sshEndpoint) {
+        throw serviceError(
+          "invalid_state",
+          `Worker environment ${environmentId} has no active SSH endpoint`,
+        );
+      }
+      const provider = providerLifecycle.providerFor(record.providerId);
+      return await providerLifecycle.identityResolverFor(
+        record,
+        provider,
+        record.leaseId,
+      )(record.sshEndpoint.keyRef);
+    },
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
     startTunnel: environmentAccess.startTunnel,
     stopTunnel: environmentAccess.stopTunnel,
+    reconcileEnvironment,
     reconcileOnce,
     start,
     stop,

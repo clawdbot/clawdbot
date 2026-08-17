@@ -65,7 +65,6 @@ export type ResolvedAgentConfig = {
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
-  contextTokens?: AgentEntry["contextTokens"];
   contextInjection?: AgentEntry["contextInjection"];
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
@@ -220,21 +219,33 @@ export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): strin
 }
 
 /** Resolves the configured owner for ambient system work and explicit consults. */
-export function resolveSystemAgentTargetAgentId(
+export function tryResolveSystemAgentTargetAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
-): string {
+): string | undefined {
   const configuredAgentId =
     normalizeOptionalString(requestedAgentId) ??
     normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId);
-  if (configuredAgentId) {
-    return normalizeAgentId(configuredAgentId);
+  return configuredAgentId ? normalizeAgentId(configuredAgentId) : tryResolveSoleAgentId(cfg);
+}
+
+export function resolveSystemAgentTargetAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+  context?: AgentSelectionContext,
+): string {
+  const resolvedAgentId = tryResolveSystemAgentTargetAgentId(cfg, requestedAgentId);
+  if (resolvedAgentId) {
+    return resolvedAgentId;
   }
   return normalizeAgentId(
-    resolveSoleAgentId(cfg, {
-      surface: "system-agent consult routing",
-      hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
-    }),
+    resolveSoleAgentId(
+      cfg,
+      context ?? {
+        surface: "system-agent consult routing",
+        hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
+      },
+    ),
   );
 }
 
@@ -305,7 +316,6 @@ export function resolveAgentConfig(
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
-    contextTokens: entry.contextTokens ?? agentDefaults?.contextTokens,
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,

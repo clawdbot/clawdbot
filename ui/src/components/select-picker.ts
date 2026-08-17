@@ -24,8 +24,9 @@ export type PickerParams<Option extends PickerOption> = {
 };
 
 export function renderPicker<Option extends PickerOption>(params: PickerParams<Option>) {
-  // Web Awesome syncs the listbox to its trigger; keep 8ch for the label after
-  // its fixed check and leading-icon columns instead of collapsing the options.
+  // Web Awesome syncs the listbox to its trigger; keep a 138px label floor so
+  // option text does not collapse to an ellipsis at phone widths, but never
+  // exceed the host container (cron/channel grids legitimately shrink below it).
   const options =
     params.value === null ||
     params.value === "" ||
@@ -42,7 +43,7 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
     <wa-select
       id=${params.id ?? nothing}
       class=${`settings-select picker-select ${params.className ?? ""}`}
-      style="width:100%;min-width:138px"
+      style="width:100%;min-width:min(138px,100%)"
       title=${params.title ?? nothing}
       placement=${params.placement ?? nothing}
       .value=${params.value}

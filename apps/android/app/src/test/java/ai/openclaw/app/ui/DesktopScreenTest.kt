@@ -34,4 +34,33 @@ class DesktopScreenTest {
     assertFalse(url.contains("token="))
     assertFalse(url.contains("password="))
   }
+
+  @Test
+  fun desktopUrlEncodesProvidedSession() {
+    val url =
+      desktopUrl(
+        baseUrl = "https://gateway.example.com:8443/openclaw/",
+        session = "agent:main:mobile session",
+      )
+
+    assertEquals(
+      "https://gateway.example.com:8443/openclaw/?view=desktop&session=agent%3Amain%3Amobile%20session",
+      url,
+    )
+  }
+
+  @Test
+  fun desktopUrlRetainsExplicitSourceAlongsideSession() {
+    val url =
+      desktopUrl(
+        baseUrl = "https://gateway.example.com:8443",
+        source = "node:worker-1",
+        session = "agent:main:mobile",
+      )
+
+    assertEquals(
+      "https://gateway.example.com:8443/?view=desktop&source=node%3Aworker-1&session=agent%3Amain%3Amobile",
+      url,
+    )
+  }
 }

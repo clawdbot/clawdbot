@@ -20,7 +20,7 @@ import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.j
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
-import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
@@ -28,14 +28,14 @@ import {
 import {
   deviceBootstrapProfilesEqual,
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  resolvePairingSetupAccess,
   type DeviceBootstrapProfileInput,
+  type PairingSetupAccess,
 } from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import {
   resolveTailnetHostWithRunner,
-  resolveTailscaleServeGatewayUrlsWithRunner,
   resolveTailscalePublishedHost,
 } from "../shared/tailscale-status.js";
 
@@ -46,8 +46,6 @@ type PairingSetupPayload = {
   expiresAtMs?: number;
   tlsFingerprint?: string;
 };
-
-type PairingSetupAccess = "full" | "limited" | "node";
 
 const PAIRING_SETUP_MAX_URLS = 8;
 
@@ -83,6 +81,7 @@ type PairingSetupResolution =
       urlSource: string;
       access: PairingSetupAccess;
       accessDowngraded: boolean;
+      setupId: string;
       expiresAtMs: number;
     }
   | {
@@ -170,16 +169,6 @@ function isFullAccessMobilePairingUrl(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-function resolvePairingSetupAccess(profile: DeviceBootstrapProfileInput): PairingSetupAccess {
-  if (deviceBootstrapProfilesEqual(profile, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
-    return "full";
-  }
-  if (deviceBootstrapProfilesEqual(profile, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
-    return "node";
-  }
-  return "limited";
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {
@@ -370,14 +359,7 @@ async function resolveGatewayUrl(
     const publishedHost = resolveTailscalePublishedHost({
       tailscaleMode,
       tailnetHost: host,
-      serviceName: cfg.gateway?.tailscale?.serviceName,
     });
-    if (!publishedHost) {
-      return {
-        error:
-          "Tailscale Serve serviceName is configured, but Service MagicDNS could not be derived.",
-      };
-    }
     return { url: `wss://${publishedHost}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
@@ -529,19 +511,7 @@ export async function resolvePairingSetupFromConfig(
     return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
-  const urls = [urlResult.url];
-  if (urlResult.source === "gateway.bind=lan") {
-    const serveUrls = await resolveTailscaleServeGatewayUrlsWithRunner(
-      resolveGatewayPort(cfgForAuth, env),
-      options.runCommandWithTimeout,
-    );
-    for (const serveUrl of serveUrls) {
-      if (!validateMobilePairingUrl(serveUrl, "tailscale serve status")) {
-        urls.push(serveUrl);
-      }
-    }
-  }
-  const uniqueUrls = [...new Set(urls)].slice(0, PAIRING_SETUP_MAX_URLS);
+  const uniqueUrls = [urlResult.url];
   const requestedBootstrapProfile =
     options.bootstrapProfile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE;
   const accessDowngraded =
@@ -555,11 +525,11 @@ export async function resolvePairingSetupFromConfig(
   const issuedBootstrapProfile = accessDowngraded
     ? PAIRING_SETUP_BOOTSTRAP_PROFILE
     : requestedBootstrapProfile;
-
-  const issuedBootstrap = await issueDeviceBootstrapToken({
+  const issued = await issueDevicePairSetupBootstrapToken({
     baseDir: options.pairingBaseDir,
     profile: issuedBootstrapProfile,
   });
+
   const directGatewayTlsFingerprint =
     urlResult.url.startsWith("wss://") && urlResult.source?.startsWith("gateway.bind=")
       ? (normalizeOptionalString(options.localTlsFingerprint) ??
@@ -573,14 +543,15 @@ export async function resolvePairingSetupFromConfig(
     payload: {
       url: urlResult.url,
       ...(uniqueUrls.length > 1 ? { urls: uniqueUrls } : {}),
-      bootstrapToken: issuedBootstrap.token,
-      expiresAtMs: issuedBootstrap.expiresAtMs,
+      bootstrapToken: issued.token,
+      expiresAtMs: issued.expiresAtMs,
       ...(directGatewayTlsFingerprint ? { tlsFingerprint: directGatewayTlsFingerprint } : {}),
     },
-    expiresAtMs: issuedBootstrap.expiresAtMs,
     authLabel: authLabel.label,
     urlSource: urlResult.source ?? "unknown",
     access: resolvePairingSetupAccess(issuedBootstrapProfile),
     accessDowngraded,
+    setupId: issued.setupId,
+    expiresAtMs: issued.expiresAtMs,
   };
 }

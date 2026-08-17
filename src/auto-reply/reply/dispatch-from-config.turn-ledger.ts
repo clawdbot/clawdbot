@@ -5,9 +5,12 @@
 // no-visible-reply fallback gate with a fresh inference flag.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../reply-payload.js";
+import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import {
   captureReplyDispatchDeliveryOutcome,
+  isReplyDispatchProvenInvisible,
   type ReplyDispatchDeliveryOutcome,
+  waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
@@ -39,6 +42,27 @@ type ReplyTurnLedger = {
    * treats them conservatively as visible: silence over a double-send. */
   hasForeignQueuedAdmissions: () => boolean;
 };
+
+export async function requireQueuedReplyDelivery(params: {
+  delivery: LedgerQueuedSend;
+  dispatcher: Pick<ReplyDispatcher, "waitForIdle">;
+  abortSignal: AbortSignal | undefined;
+}): Promise<void> {
+  if (!params.delivery.queued) {
+    throw new Error("queued reply delivery failed");
+  }
+  const outcome = params.delivery.outcome;
+  // Core dispatchers expose the payload's exact settlement. Custom dispatchers
+  // expose only an idle barrier, which preserves their existing admission contract.
+  if (!outcome) {
+    await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+    return;
+  }
+  const settledOutcome = await runWithDispatchAbortSignal(params.abortSignal, () => outcome);
+  if (isReplyDispatchProvenInvisible(settledOutcome)) {
+    throw new Error("queued reply delivery failed");
+  }
+}
 
 export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLedger {
   let visibleDeliveries = 0;
@@ -80,7 +104,7 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
           // chunked sends may already have shown partial content, so only
           // outcomes that never reached the transport ("cancelled",
           // "failed-before-deliver") count as proven-invisible.
-          if (contentful && outcome !== "cancelled" && outcome !== "failed-before-deliver") {
+          if (contentful && !isReplyDispatchProvenInvisible(outcome)) {
             visibleDeliveries += 1;
           }
         }),

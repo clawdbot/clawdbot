@@ -14,8 +14,16 @@ import {
 } from "./models-list-result.openai-routes.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const IMPLICIT_CODEX_RUNTIME = { id: "codex", source: "implicit" } as const;
-const IMPLICIT_OPENCLAW_RUNTIME = { id: "openclaw", source: "implicit" } as const;
+const IMPLICIT_CODEX_RUNTIME = {
+  id: "codex",
+  cloudPlacementSupported: false,
+  source: "implicit",
+} as const;
+const IMPLICIT_OPENCLAW_RUNTIME = {
+  id: "openclaw",
+  cloudPlacementSupported: true,
+  source: "implicit",
+} as const;
 
 function preparedOwnerFacts(config: OpenClawConfig) {
   return {
@@ -215,7 +223,7 @@ describe("models.list OpenAI routes", () => {
         expect.objectContaining({
           id: "gpt-owner",
           provider: "openai",
-          agentRuntime: { id: "codex", source: "model" },
+          agentRuntime: { id: "codex", cloudPlacementSupported: false, source: "model" },
         }),
       ],
     });
@@ -240,6 +248,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        catalogComplete: false,
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
         ...preparedOwnerFacts(replacementConfig),
@@ -249,6 +258,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        catalogComplete: true,
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
         ...preparedOwnerFacts(replacementConfig),
@@ -286,6 +296,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "main",
         agentDir: "/tmp/models-list-main-agent",
+        catalogComplete: false,
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
         ...preparedOwnerFacts(replacementConfig),
@@ -295,6 +306,7 @@ describe("models.list OpenAI routes", () => {
       .mockResolvedValueOnce({
         agentId: "worker",
         agentDir: "/tmp/models-list-worker-agent",
+        catalogComplete: true,
         workspaceDir: "/tmp/models-list-worker-workspace",
         config: replacementConfig,
         ...preparedOwnerFacts(replacementConfig),
@@ -456,7 +468,7 @@ describe("models.list OpenAI routes", () => {
         expect.objectContaining({
           id: "gpt-worker",
           provider: "openai",
-          agentRuntime: { id: "openclaw", source: "model" },
+          agentRuntime: { id: "openclaw", cloudPlacementSupported: true, source: "model" },
         }),
       ],
     });
@@ -1026,7 +1038,7 @@ describe("models.list OpenAI routes", () => {
         expect(result.models).toContainEqual(
           expect.objectContaining({
             id: "gpt-5.4-nano",
-            agentRuntime: { id: "codex", source: "model" },
+            agentRuntime: { id: "codex", cloudPlacementSupported: false, source: "model" },
           }),
         );
       },

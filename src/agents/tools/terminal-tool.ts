@@ -1,5 +1,4 @@
 import { Type } from "typebox";
-import type { UiCommandParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { renderTerminalBufferText } from "../../gateway/terminal/buffer-text.js";
 import { buildTerminalEnv, resolveTerminalSpawnPlan } from "../../gateway/terminal/launch.js";
@@ -19,11 +18,7 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
-import {
-  callInProcessGatewayTool,
-  getInProcessGatewayToolContext,
-  type InProcessGatewayCaller,
-} from "./in-process-gateway.js";
+import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
 
 const ACTIONS = ["open", "read", "input", "resize", "close", "list"] as const;
 const DEFAULT_COLS = 100;
@@ -39,7 +34,6 @@ const TerminalToolSchema = Type.Object(
     data: Type.Optional(Type.String({ description: "Raw terminal input" })),
     cols: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_DIMENSION })),
     rows: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_DIMENSION })),
-    show: Type.Optional(Type.Boolean({ description: "Show in web UI. Default: true" })),
   },
   { additionalProperties: false },
 );
@@ -86,7 +80,6 @@ type TerminalToolOptions = {
     runId: string,
     childSessionKey: string,
   ) => Promise<Pick<TaskRecord, "taskId" | "status" | "childSessionKey"> | undefined>;
-  callGateway?: InProcessGatewayCaller;
   getGatewayContext?: () => TerminalToolGatewayContext | undefined;
 };
 
@@ -115,17 +108,6 @@ function readDimension(
     return fallback;
   }
   throw new ToolInputError(`${key} required`);
-}
-
-function readShow(params: Record<string, unknown>): boolean {
-  const value = params.show;
-  if (value === undefined) {
-    return true;
-  }
-  if (typeof value !== "boolean") {
-    throw new ToolInputError("show must be boolean");
-  }
-  return value;
 }
 
 function readOptionalStringParam(
@@ -158,18 +140,20 @@ function launchBlockMessage(
   if (block.kind === "unknown-agent") {
     return `unknown agent: ${block.agentId}`;
   }
+  if (block.kind === "owner-required") {
+    return block.message;
+  }
   return `terminal unavailable: agent sandboxed (${block.mode})`;
 }
 
 export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool {
-  const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   const getContext = opts.getGatewayContext ?? getInProcessGatewayToolContext;
   const findOwnerTask = opts.lookupTaskByRunIdForChildSession ?? lookupTaskByRunIdForChildSession;
   return {
     label: "Terminal",
     name: "terminal",
     description:
-      "Own terminal on gateway host. open/read/input/resize/close/list. User sees it in web UI, can type too. read = buffer snapshot.",
+      "Own terminal on gateway host. open/read/input/resize/close/list. Operator can attach in web UI and type too. read = buffer snapshot.",
     parameters: TerminalToolSchema,
     outputSchema: TerminalToolOutputSchema,
     execute: async (_toolCallId, rawArgs, signal) => {
@@ -195,7 +179,6 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         const cwd = readOptionalStringParam(params, "cwd");
         const cols = readDimension(params, "cols", DEFAULT_COLS);
         const rows = readDimension(params, "rows", DEFAULT_ROWS);
-        const show = readShow(params);
         if (!context.isTerminalEnabled()) {
           throw new ToolInputError("terminal disabled");
         }
@@ -275,23 +258,6 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         ) {
           manager.closeAgent(agentSessionKey, outcome.sessionId, agentId);
           throw new ToolInputError("terminal command failed");
-        }
-        if (show) {
-          const uiCommand: UiCommandParams = {
-            command: {
-              kind: "panel",
-              panel: "terminal",
-              open: true,
-              terminalSessionId: outcome.sessionId,
-            },
-            sessionKey: agentSessionKey,
-            agentId,
-          };
-          try {
-            await gatewayCall("ui.command", uiCommand);
-          } catch {
-            // Terminal remains useful when no capable Control UI is connected.
-          }
         }
         return jsonResult(outcome);
       }

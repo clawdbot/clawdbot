@@ -62,16 +62,8 @@ export function resolveConfiguredModelCatalogOverrides(params: {
   }).get(configuredIdentity?.key ?? normalizeExactModelId(params.entry.id));
   const overrides: ModelCatalogLogicalOverrides = {
     ...(model?.name ? { name: model.name } : {}),
-    ...(model?.contextWindow !== undefined
-      ? { contextWindow: model.contextWindow }
-      : providerConfig.contextWindow !== undefined
-        ? { contextWindow: providerConfig.contextWindow }
-        : {}),
-    ...(model?.contextTokens !== undefined
-      ? { contextTokens: model.contextTokens }
-      : providerConfig.contextTokens !== undefined
-        ? { contextTokens: providerConfig.contextTokens }
-        : {}),
+    ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+    ...(model?.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
     ...(model?.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
     ...(model?.input !== undefined ? { input: model.input } : {}),
   };

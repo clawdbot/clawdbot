@@ -13,6 +13,7 @@ import {
   deleteSecretStoreEntry,
   listSecretStoreEntries,
   purgeExpiredSecretStoreEntries,
+  readSecretStoreExecEnvironment,
   readSecretStoreValue,
   SECRET_STORE_VALUE_MAX_BYTES,
   writeSecretStoreEntry,
@@ -51,12 +52,17 @@ describe("secret store", () => {
       name: "SERVICE_API_KEY",
       value: "stored-super-secret",
       kind: "secret",
+      allowedHosts: ["API.EXAMPLE.COM", "bücher.example"],
       updatedBy: "test",
       database,
     });
 
     expect(listSecretStoreEntries({ scope: team, database })).toEqual([
-      expect.objectContaining({ name: "SERVICE_API_KEY", kind: "secret" }),
+      expect.objectContaining({
+        name: "SERVICE_API_KEY",
+        kind: "secret",
+        allowedHosts: ["api.example.com", "xn--bcher-kva.example"],
+      }),
       expect.objectContaining({
         name: "SERVICE_URL",
         kind: "env",
@@ -69,6 +75,15 @@ describe("secret store", () => {
       value: "stored-super-secret",
     });
     expect(isSecretValueRegisteredForRedaction("stored-super-secret")).toBe(true);
+    expect(
+      readSecretStoreExecEnvironment({ includeSecretSentinels: true, database })
+        .secretEgressBindings,
+    ).toEqual([
+      expect.objectContaining({
+        name: "SERVICE_API_KEY",
+        allowedHosts: ["api.example.com", "xn--bcher-kva.example"],
+      }),
+    ]);
   });
 
   it("soft-deletes idempotently and purges after the 30-day retention", () => {
@@ -137,6 +152,23 @@ describe("secret store", () => {
       }),
     ).toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_TOO_LARGE" }));
   });
+
+  it.each(["*.example.com", "https://api.example.com", "api.example.com:443", "bad host"])(
+    "rejects invalid allowed host %s at write time",
+    (allowedHost) => {
+      expect(() =>
+        writeSecretStoreEntry({
+          scope: team,
+          name: "HOST_BOUND_SECRET",
+          value: "value",
+          kind: "secret",
+          allowedHosts: [allowedHost],
+          updatedBy: null,
+          database: createDatabaseOptions(),
+        }),
+      ).toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_ALLOWED_HOST" }));
+    },
+  );
 
   it("rejects an empty secret value but keeps empty env values legal", () => {
     const database = createDatabaseOptions();

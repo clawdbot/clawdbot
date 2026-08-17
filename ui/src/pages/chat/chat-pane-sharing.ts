@@ -14,6 +14,7 @@ import type {
 } from "../../api/types.ts";
 import { hasMultiplePresenceIdentities } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -27,6 +28,7 @@ import {
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
   type ChatPaneConnectionScope,
 } from "./chat-pane-shared.ts";
+import { resetSessionCompanion } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import {
@@ -34,7 +36,29 @@ import {
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing.ts";
 
+type HeaderScope = ChatPaneConnectionScope;
+
 export abstract class ChatPaneSharing extends ChatPaneBase {
+  protected readonly clearSessionCompanion = async () => {
+    const scope = this.captureConnectionScope();
+    const key = scope?.state.sessionKey;
+    if (!scope || !key) {
+      return;
+    }
+    const agentId = resolveChatAgentId(scope.state);
+    await this.sessionCompanionThreads
+      .reset(key, (sessionKey) => resetSessionCompanion(scope.client, sessionKey, agentId), agentId)
+      .catch((error: unknown) => {
+        if (
+          this.presented &&
+          this.isConnectionScopeCurrent(scope) &&
+          scope.state.sessionKey === key
+        ) {
+          this.publishHeaderError(error);
+        }
+      });
+  };
+
   protected setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {
     this.sessionSharingStates = new Map(this.sessionSharingStates).set(cacheKey, state);
   }
@@ -111,7 +135,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
           : {}),
       });
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow) ||
         !ownsLoadingState()
       ) {
@@ -123,7 +147,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       this.setSessionSharingState(cacheKey, { loading: false, result });
     } catch (error) {
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow) ||
         !ownsLoadingState()
       ) {
@@ -132,20 +156,22 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         }
         return;
       }
-      this.setSessionSharingState(cacheKey, { loading: false, error: String(error) });
+      this.setSessionSharingState(cacheKey, { loading: false, error: formatUiError(error) });
     }
   }
 
-  protected publishSharingFailure(cacheKey: string, sessionKey: string, error: unknown): void {
-    this.setSessionSharingState(cacheKey, {
-      ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
+  protected failSharing(scope: HeaderScope, key: string, session: string, error: unknown): void {
+    if (!this.ownsHeaderOutcomeScope(scope)) {
+      return;
+    }
+    this.setSessionSharingState(key, {
+      ...(this.sessionSharingStates.get(key) ?? { loading: false }),
       loading: false,
-      error: String(error),
+      error: formatUiError(error),
     });
-    // Sharing errors stay with their session; the visible page slot belongs
-    // only to the selected session after same-connection navigation.
-    if (areUiSessionKeysEquivalent(this.state?.sessionKey, sessionKey)) {
-      this.publishHeaderError(error);
+    // Sharing errors stay with their session; the visible slot belongs only to the selected session.
+    if (areUiSessionKeysEquivalent(this.state?.sessionKey, session)) {
+      this.publishHeaderError(error, scope.headerOutcomeOwner);
     }
   }
 
@@ -176,25 +202,25 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     try {
       await scope.client.request("session.visibility.set", params);
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
       }
       await scope.sessions.refreshReplacement(agentId);
       const refreshedRow = this.currentSessionSharingRow(scope, currentRow);
-      if (!this.isConnectionScopeCurrent(scope) || !refreshedRow) {
+      if (!this.ownsHeaderOutcomeScope(scope) || !refreshedRow) {
         return;
       }
       await this.loadSessionSharing(refreshedRow, true);
     } catch (error) {
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
       }
-      this.publishSharingFailure(cacheKey, currentRow.key, error);
+      this.failSharing(scope, cacheKey, currentRow.key, error);
     }
   }
 
@@ -227,14 +253,14 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     try {
       await scope.client.request(method, params);
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
       }
       await this.loadSessionSharing(currentRow, true);
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
@@ -242,43 +268,35 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       await scope.sessions.refreshReplacement(agentId);
     } catch (error) {
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
       }
-      this.publishSharingFailure(cacheKey, currentRow.key, error);
+      this.failSharing(scope, cacheKey, currentRow.key, error);
     }
   }
 
   protected captureConnectionScope(): ChatPaneConnectionScope | null {
-    const context = this.context;
     const state = this.state;
-    const client = state?.client;
-    if (
-      !this.isConnected ||
-      !state?.connected ||
-      !client ||
-      this.connectedClient !== client ||
-      context.gateway.snapshot.phase !== "connected" ||
-      context.gateway.snapshot.client !== client
-    ) {
+    if (!state?.client) {
       return null;
     }
-    return {
-      context,
+    const scope = {
+      context: this.context,
       state,
-      client,
+      client: state.client,
       generation: this.connectionGeneration,
-      sessions: context.sessions,
+      headerOutcomeOwner: this.headerOutcomeOwner,
+      sessions: this.context.sessions,
     };
+    return this.isConnectionScopeCurrent(scope) ? scope : null;
   }
 
   protected isConnectionScopeCurrent(scope: ChatPaneConnectionScope): boolean {
     return (
       this.isConnected &&
       this.context === scope.context &&
-      this.context.sessions === scope.sessions &&
       this.state === scope.state &&
       scope.state.connected &&
       scope.state.client === scope.client &&
@@ -287,6 +305,10 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       scope.context.gateway.snapshot.client === scope.client &&
       this.connectionGeneration === scope.generation
     );
+  }
+
+  protected ownsHeaderOutcomeScope(scope: HeaderScope): boolean {
+    return this.isConnectionScopeCurrent(scope) && this.ownsHeaderOutcome(scope.headerOutcomeOwner);
   }
 
   protected suggestionMatchesCurrentSession(
@@ -476,7 +498,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const operation = Symbol();
+    const operation = Symbol("session-suggestion-add");
     this.sessionSuggestionAddOperation = operation;
     this.requestUpdate();
     try {
@@ -507,7 +529,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         this.sessionSuggestionAddOperation === operation &&
         this.isConnectionScopeCurrent(scope)
       ) {
-        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {
@@ -541,7 +563,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       scope.state.sessionKey === sessionKey &&
       this.sessionSuggestionTargetSignature === targetSignature;
     const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
-    const editOperation = resolution === "edit" ? Symbol() : undefined;
+    const editOperation = resolution === "edit" ? Symbol("session-suggestion-edit") : undefined;
     if (editOperation) {
       this.sessionSuggestionEditOperation = editOperation;
     }
@@ -590,7 +612,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         ) {
           scope.state.handleChatDraftChange(previousEditDraft);
         }
-        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {

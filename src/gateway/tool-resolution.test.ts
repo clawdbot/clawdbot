@@ -90,6 +90,23 @@ describe("resolveGatewayScopedTools", () => {
     expect(grantBound.tools.some((tool) => tool.name === "image")).toBe(true);
   });
 
+  it("uses the prepared vision fact for the loopback image loader", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      agentDir: "/agents/cli",
+      sessionKey: "agent:main:main",
+      modelHasVision: true,
+      surface: "loopback",
+    });
+
+    const imageTool = result.tools.find((tool) => tool.name === "image");
+    expect(imageTool).toMatchObject({
+      label: "Inspect Image",
+      catalogMode: "direct-only",
+    });
+    expect(imageTool?.description).toContain("private model context");
+  });
+
   it("applies a borrowed runtime policy without reassigning session tools", () => {
     const cfg = {
       agents: {

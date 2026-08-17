@@ -18,7 +18,8 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
-import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
@@ -209,15 +210,6 @@ function modelsText(card: ModelProviderCard): string | null {
       : t("modelProviders.models", { count: String(card.modelCount) });
 }
 
-// formatTokens tops out at "M"; month-scale totals can cross a billion (e.g. "4132M").
-function formatTokenTotal(tokens: number): string {
-  if (tokens >= 1_000_000_000) {
-    const billions = tokens / 1_000_000_000;
-    return billions < 10 ? `${billions.toFixed(1)}B` : `${Math.round(billions)}B`;
-  }
-  return formatTokens(tokens);
-}
-
 function renderLocalCost(card: ModelProviderCard, costDays: number) {
   const cost = card.localCost;
   if (!cost || (cost.totalTokens === 0 && cost.totalCost === 0)) {
@@ -231,7 +223,7 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
       </div>
       <div class="model-providers__local-cost-detail">
         ${t("modelProviders.localCostDetail", {
-          tokens: formatTokenTotal(cost.totalTokens),
+          tokens: formatCompactTokenCount(cost.totalTokens),
           sessions: String(cost.sessionCount),
         })}
       </div>
@@ -292,7 +284,7 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
             >`
           : nothing}
       </div>
-      ${result.error ? html`<div>${result.error}</div>` : nothing}
+      ${result.error ? html`<div>${formatUiExternalText(result.error)}</div>` : nothing}
       ${result.results.map(
         (target) => html`
           <div class="model-providers__probe-target">
@@ -302,7 +294,7 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
                 ? ` · ${t("modelProviders.probe.latency", { ms: String(target.latencyMs) })}`
                 : ""}
             </span>
-            ${target.error ? html`<small>${target.error}</small>` : nothing}
+            ${target.error ? html`<small>${formatUiExternalText(target.error)}</small>` : nothing}
           </div>
         `,
       )}

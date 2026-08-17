@@ -33,6 +33,10 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant().sourceReplyOnly).toBe(true);
   });
 
+  it("carries the prepared model vision capability into the loopback grant", () => {
+    expect(buildGrant({ modelHasVision: true }).modelHasVision).toBe(true);
+  });
+
   it.each([
     { label: "the provider", overrides: { messageProvider: undefined } },
     { label: "the destination", overrides: { currentChannelId: undefined } },

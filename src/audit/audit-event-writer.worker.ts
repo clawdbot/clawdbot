@@ -2,7 +2,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { pruneExpiredAuditEvents, recordAuditEvent } from "./audit-event-store.js";
-import type { AuditEventInput } from "./audit-event-types.js";
+import { isOutboundMessageProgressInput, type AuditEventInput } from "./audit-event-types.js";
 import {
   pruneExpiredExecutionDecisionFacts,
   recordExecutionDecisionFact,
@@ -11,6 +11,10 @@ import {
   processExecutionIdentityAdmissionWork,
   pruneExpiredExecutionIdentityContexts,
 } from "./execution-identity-context.js";
+import {
+  pruneExpiredOutboundMessageProgress,
+  recordOutboundMessageProgress,
+} from "./message-delivery-progress-store.js";
 
 const AUDIT_MAINTENANCE_INTERVAL_MS = 60 * 60_000;
 
@@ -70,6 +74,11 @@ function reportMaintenance(): void {
   } catch (error) {
     port.postMessage({ type: "maintenance-error", error: String(error) });
   }
+  try {
+    pruneExpiredOutboundMessageProgress({ database });
+  } catch (error) {
+    port.postMessage({ type: "maintenance-error", error: String(error) });
+  }
 }
 
 reportMaintenance();
@@ -79,7 +88,11 @@ port.postMessage({ type: "ready" });
 port.on("message", (message: AuditWriterRequest) => {
   if (message.type === "record-event") {
     try {
-      recordAuditEvent(message.input, database);
+      if (isOutboundMessageProgressInput(message.input)) {
+        recordOutboundMessageProgress(message.input, database);
+      } else {
+        recordAuditEvent(message.input, database);
+      }
       port.postMessage({ type: "recorded" });
     } catch (error) {
       port.postMessage({ type: "record-error", error: String(error) });
@@ -107,7 +120,9 @@ port.on("message", (message: AuditWriterRequest) => {
   clearInterval(maintenanceTimer);
   reportMaintenance();
   try {
-    closeOpenClawStateDatabase();
+    // The Gateway may still own a live connection. Leave WAL reset to the
+    // final lifecycle owner instead of waiting on or invalidating its readers.
+    closeOpenClawStateDatabase({ checkpointMode: "PASSIVE" });
   } catch (error) {
     port.postMessage({ type: "maintenance-error", error: String(error) });
   }

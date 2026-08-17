@@ -136,6 +136,9 @@ describe("AgentsListResultSchema", () => {
         {
           id: "investment-master",
           kind: "agent",
+          createdVia: "agent",
+          creatorAgentId: "main",
+          createdAt: 42,
           name: "Investment Master",
           workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
@@ -251,7 +254,12 @@ describe("ModelsListResultSchema", () => {
       id: "gpt-image",
       name: "GPT Image",
       provider: "openai",
-      agentRuntime: { id: "codex", fallback: "openclaw", source: "model" },
+      agentRuntime: {
+        id: "codex",
+        fallback: "openclaw",
+        cloudPlacementSupported: true,
+        source: "model",
+      },
       thinkingLevels: [
         { id: "off", label: "Off" },
         { id: "xhigh", label: "Extra high" },

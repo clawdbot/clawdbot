@@ -29,6 +29,10 @@ import {
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import { enforceCrossContextPolicy } from "./outbound-policy.js";
+import {
+  invalidMessageActionTargetError,
+  missingMessageActionTargetError,
+} from "./target-errors.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 
@@ -37,6 +41,7 @@ async function resolveChannel(
   params: Record<string, unknown>,
   toolContext?: { currentChannelProvider?: string },
   action?: ChannelMessageActionName,
+  agentId?: string,
 ) {
   const channel = readToolStringParam(params, "channel");
   // Explicit reads must never switch to the source conversation when their
@@ -47,6 +52,7 @@ async function resolveChannel(
     cfg,
     channel,
     fallbackChannel,
+    agentId,
   });
   if (selection.source === "tool-context-fallback") {
     params.channel = selection.channel;
@@ -214,7 +220,7 @@ async function resolveResolvedTargetOrThrow(params: {
   }
   const validationError = params.validateResolvedTarget?.(resolved.target);
   if (validationError) {
-    throw new Error(validationError);
+    throw invalidMessageActionTargetError(validationError);
   }
   return resolved.target;
 }
@@ -346,10 +352,10 @@ export async function prepareMessageRoute(params: {
   // Missing targets must fail before channel discovery, which can bootstrap or
   // probe configured plugins. Non-standard params may still be owner aliases.
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, actionParams)) {
-    throw new Error(`Action ${action} requires a target.`);
+    throw missingMessageActionTargetError(action);
   }
 
-  const selection = await resolveChannel(cfg, actionParams, input.toolContext, action);
+  const selection = await resolveChannel(cfg, actionParams, input.toolContext, action, agentId);
   const { channel, plugin: channelPlugin } = selection;
   actionParams.channel = channel;
   const explicitAccountId = validateExplicitMessageAccountSelection({

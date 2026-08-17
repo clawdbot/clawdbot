@@ -16,6 +16,7 @@ import {
   runWithSqliteCoordinator,
   SqliteCoordinatorError,
 } from "../infra/sqlite-coordinator.js";
+import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
@@ -244,6 +245,7 @@ function acquireOpenClawStateWriteAccess(options: {
   const resolvedPath = path.resolve(options.databasePath);
   const access = acquireOpenClawStateOwnershipCoordinator(resolvedPath);
   try {
+    quarantineOrphanedSqliteSidecars(resolvedPath);
     assertOwnershipAllowsWrite(
       inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(resolvedPath),
       resolvedPath,
@@ -282,17 +284,22 @@ export function runWithOpenClawStateWriteAccess<T>(
   );
 }
 
-/** Check path-based write admission without retaining the coordinator past this call. */
+/** Check write admission; callers may defer orphan-sidecar recovery until mutation is certain. */
 export async function assertOpenClawStateWriteAllowedAtPath(options: {
   databasePath: string;
   env?: NodeJS.ProcessEnv;
+  recoverOrphanedSidecars?: boolean;
 }): Promise<void> {
   const databasePath = path.resolve(options.databasePath);
+  const recoverOrphanedSidecars = options.recoverOrphanedSidecars !== false;
+  if (recoverOrphanedSidecars) {
+    quarantineOrphanedSqliteSidecars(databasePath);
+  }
   if (!existsSync(databasePath)) {
     return;
   }
   const env = options.env ?? process.env;
-  if (isGatewayExternallySupervised(env)) {
+  if (recoverOrphanedSidecars && isGatewayExternallySupervised(env)) {
     runWithOpenClawStateWriteAccess(
       { ...options, databasePath },
       "shared state write admission",
@@ -300,8 +307,6 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     );
     return;
   }
-  // Unmarked startup must discover ownership without opening the source writable.
-  // The async private snapshot keeps Windows PowerShell work off the sync startup path.
   const prepared = await prepareSqliteReadOnlyLocation(databasePath);
   try {
     assertOwnershipAllowsWrite(

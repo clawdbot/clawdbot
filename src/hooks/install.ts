@@ -94,6 +94,7 @@ function buildHookInstallForwardParams(params: HookInstallForwardParams): HookIn
   return {
     config: params.config,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     hooksDir: params.hooksDir,
     timeoutMs: params.timeoutMs,
@@ -156,6 +157,7 @@ async function runHookInstallPolicy(params: {
       await scanPackageInstallSource({
         config: params.forward.config,
         dangerouslyForceUnsafeInstall: params.forward.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.forward.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall: params.forward.trustedSourceLinkedOfficialInstall,
         packageDir: params.packageDir,
         pluginId: params.hookPackId,
@@ -187,6 +189,7 @@ async function runHookInstalledDependencyPolicy(params: {
     scan: async () =>
       await scanInstalledPackageDependencyTree({
         config: params.forward.config,
+        onInstallPolicyWarning: params.forward.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall: params.forward.trustedSourceLinkedOfficialInstall,
         packageDir: params.installedDir,
         pluginId: params.hookPackId,

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
@@ -10,7 +11,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveNodeWorkerInstallation } from "./node-worker-build.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -37,10 +37,16 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function fixture() {
+function fixture(
+  options: {
+    capacity?: number;
+    capacityWaitMs?: number;
+    onAvailabilityChanged?: (available: boolean) => void;
+  } = {},
+) {
   const root = tempDirs.make("node-worker-supervisor-");
   const { bundleRoot, env, stateDir, workspaceDir } = writeNodeWorkerFixture(root);
-  const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
+  const supervisor = createNodeWorkerSupervisor({ bundleRoot, env, ...options });
   return { bundleRoot, env, root, stateDir, supervisor, workspaceDir };
 }
 
@@ -136,7 +142,13 @@ describe("node worker supervisor", () => {
       supervisorIdentity.startTime,
     );
 
-    const sameHandle = createNodeWorkerSupervisor({ bundleRoot, env });
+    const availability: boolean[] = [];
+    const sameHandle = createNodeWorkerSupervisor({
+      bundleRoot,
+      env,
+      capacity: 2,
+      onAvailabilityChanged: (available) => availability.push(available),
+    });
     expect(await sameHandle.status("pending-launch")).toMatchObject({
       state: "pending",
       worker: null,
@@ -145,6 +157,7 @@ describe("node worker supervisor", () => {
       state: "running",
       worker: supervisorIdentity,
     });
+    expect(availability).toEqual([false]);
     await supervisor.close();
     await sameHandle.close();
     closeOpenClawStateDatabaseForTest();
@@ -178,7 +191,7 @@ describe("node worker supervisor", () => {
     const completed = await waitForTerminal(supervisor, input.launchId);
     expect(completed).toMatchObject({ state: "completed", errorText: null });
     expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
-      argv: ["worker", "--internal-worker-ipc"],
+      argv: ["--internal-worker-ipc"],
       status: "completed",
     });
     expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toEqual(completed);
@@ -199,57 +212,107 @@ describe("node worker supervisor", () => {
     await supervisor.close();
   });
 
-  it("runs the advertised local install and refuses it after its worker bytes change", async () => {
-    const root = tempDirs.make("node-worker-local-install-");
-    const packageRoot = path.join(root, "package");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module", dependencies: {} }),
-    );
-    fs.writeFileSync(path.join(packageRoot, "openclaw.mjs"), TEST_WORKER_SOURCE, { mode: 0o755 });
-    const distPath = path.join(packageRoot, "dist", "entry.js");
-    fs.writeFileSync(distPath, "export const workerBuild = 1;\n");
-    const installation = await resolveNodeWorkerInstallation({
-      packageRoot,
-      openclawVersion: "2026.8.1",
-      protocolFeatures: [],
+  it("admits two durable launches and releases one physical slot at a time", async () => {
+    const availability: boolean[] = [];
+    const { env, supervisor, workspaceDir } = fixture({
+      capacity: 2,
+      capacityWaitMs: 5_000,
+      onAvailabilityChanged: (available) => availability.push(available),
     });
-    const supervisor = createNodeWorkerSupervisor({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      localInstallation: installation,
-    });
-    const localInput = (launchId: string) => {
-      const input = launchInput(workspaceDir, launchId);
-      input.installKind = "local";
-      input.expectedBundleHash = installation.build.bundleHash;
-      input.descriptor.admission.handshake = structuredClone(installation.build);
-      return input;
-    };
+    const first = launchInput(workspaceDir, "capacity-a", "wait");
+    const second = launchInput(workspaceDir, "capacity-b", "wait");
+    const third = launchInput(workspaceDir, "capacity-c", "wait");
+    const fourth = launchInput(workspaceDir, "capacity-d", "wait");
+    const store = new NodeWorkerLaunchStore({ env });
 
-    const first = localInput("local-success");
-    expect(await supervisor.launch(first, TEST_WORKER_ENDPOINT)).toMatchObject({
+    await supervisor.launch(first, TEST_WORKER_ENDPOINT);
+    await supervisor.launch(second, TEST_WORKER_ENDPOINT);
+    await expect(supervisor.launch(first, TEST_WORKER_ENDPOINT)).resolves.toMatchObject({
+      launchId: first.launchId,
       state: "running",
     });
-    expect(await waitForTerminal(supervisor, first.launchId)).toMatchObject({ state: "completed" });
+    expect(availability).toEqual([false, true, false]);
 
-    fs.writeFileSync(distPath, "export const workerBuild = 2;\n");
-    expect(
-      await supervisor.launch(localInput("local-mutated"), TEST_WORKER_ENDPOINT),
-    ).toMatchObject({
-      state: "failed",
-      errorText: expect.stringContaining("changed after its build was advertised"),
+    const thirdAdmission = supervisor.launch(third, TEST_WORKER_ENDPOINT);
+    const fourthAdmission = supervisor.launch(fourth, TEST_WORKER_ENDPOINT);
+    await vi.waitFor(() => {
+      expect(store.get(third.launchId)).toBeUndefined();
+      expect(store.get(fourth.launchId)).toBeUndefined();
     });
+
+    await supervisor.cancel(testNodeWorkerLaunchIdentity(first));
+    await vi.waitFor(() => {
+      expect([third, fourth].filter((input) => store.get(input.launchId))).toHaveLength(1);
+    });
+    const thirdAdmittedFirst = Boolean(store.get(third.launchId));
+    await expect(thirdAdmittedFirst ? thirdAdmission : fourthAdmission).resolves.toMatchObject({
+      state: "running",
+    });
+    expect(store.get(thirdAdmittedFirst ? fourth.launchId : third.launchId)).toBeUndefined();
+
+    await supervisor.cancel(testNodeWorkerLaunchIdentity(second));
+    await expect(thirdAdmittedFirst ? fourthAdmission : thirdAdmission).resolves.toMatchObject({
+      state: "running",
+    });
+    expect(availability).toEqual([false, true, false, true, false, true, false]);
+
     await supervisor.close();
+  });
+
+  it("times out saturated admission without creating a launch row", async () => {
+    const { env, supervisor, workspaceDir } = fixture({ capacity: 1, capacityWaitMs: 25 });
+    const running = launchInput(workspaceDir, "capacity-running", "wait");
+    const rejected = launchInput(workspaceDir, "capacity-rejected", "wait");
+    await supervisor.launch(running, TEST_WORKER_ENDPOINT);
+
+    await expect(supervisor.launch(rejected, TEST_WORKER_ENDPOINT)).rejects.toMatchObject({
+      name: "NodeWorkerCapacityExhaustedError",
+      code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+      message: "node worker capacity remained full for 25 ms",
+    });
+    expect(new NodeWorkerLaunchStore({ env }).get(rejected.launchId)).toBeUndefined();
+    await supervisor.close();
+  });
+
+  it("abandons saturated admission when its invocation is cancelled", async () => {
+    const { env, supervisor, workspaceDir } = fixture({ capacity: 1, capacityWaitMs: 5_000 });
+    const running = launchInput(workspaceDir, "capacity-abort-running", "wait");
+    const waiting = launchInput(workspaceDir, "capacity-abort-waiting", "wait");
+    const controller = new AbortController();
+    await supervisor.launch(running, TEST_WORKER_ENDPOINT);
+    const admission = supervisor.launch(waiting, TEST_WORKER_ENDPOINT, controller.signal);
+    const rejected = expect(admission).rejects.toThrow("invoke cancelled");
+
+    controller.abort(new Error("invoke cancelled"));
+    await rejected;
+    expect(new NodeWorkerLaunchStore({ env }).get(waiting.launchId)).toBeUndefined();
+    await supervisor.close();
+  });
+
+  it("aborts saturated admission when the supervisor closes", async () => {
+    const { env, supervisor, workspaceDir } = fixture({ capacity: 1, capacityWaitMs: 5_000 });
+    const running = launchInput(workspaceDir, "capacity-close-running", "wait");
+    const waiting = launchInput(workspaceDir, "capacity-close-waiting", "wait");
+    await supervisor.launch(running, TEST_WORKER_ENDPOINT);
+    const admission = supervisor.launch(waiting, TEST_WORKER_ENDPOINT);
+    const rejected = expect(admission).rejects.toThrow("node worker supervisor is closed");
+    await vi.waitFor(() => {
+      expect(new NodeWorkerLaunchStore({ env }).get(waiting.launchId)).toBeUndefined();
+    });
+
+    await supervisor.close();
+    await rejected;
+    expect(new NodeWorkerLaunchStore({ env }).get(waiting.launchId)).toBeUndefined();
   });
 
   it.each(["status", "launch", "cancel", "close"] as const)(
     "retains an observed terminal outcome when %s reconciliation keeps failing",
     async (operation) => {
-      const { env, supervisor, workspaceDir } = fixture();
+      const availability: boolean[] = [];
+      const { env, supervisor, workspaceDir } = fixture({
+        capacity: 1,
+        onAvailabilityChanged: (available) => availability.push(available),
+      });
       const input = launchInput(workspaceDir, `finish-failure-${operation}`);
       const store = (supervisor as unknown as { store: NodeWorkerLaunchStore }).store;
       const originalFinish = store.finish.bind(store);
@@ -281,9 +344,11 @@ describe("node worker supervisor", () => {
       });
       await vi.waitFor(() => expect(finish).toHaveBeenCalled(), { timeout: 5_000 });
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
+      expect(availability.at(-1)).toBe(false);
 
       await expect(invoke()).rejects.toThrow("injected finish failure");
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
+      expect(availability.at(-1)).toBe(false);
 
       persistenceUnavailable = false;
       const completed = await invoke();
@@ -292,6 +357,7 @@ describe("node worker supervisor", () => {
         resultJson: expect.stringContaining('"status":"completed"'),
       });
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("completed");
+      expect(availability.at(-1)).toBe(true);
       await supervisor.close();
     },
   );
@@ -331,7 +397,7 @@ describe("node worker supervisor", () => {
           LC_TIME: suppliedEnv.LC_TIME,
           NODE_EXTRA_CA_CERTS: suppliedEnv.NODE_EXTRA_CA_CERTS,
           NODE_USE_SYSTEM_CA: suppliedEnv.NODE_USE_SYSTEM_CA,
-          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_COMPILE_CACHE: expect.stringContaining("node-worker-compile-cache"),
           OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: suppliedEnv.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS,
           OPENCLAW_NO_RESPAWN: "1",
           [suppliedPathKey]: suppliedEnv[suppliedPathKey],
@@ -493,6 +559,32 @@ describe("node worker supervisor", () => {
     await supervisor.close();
   });
 
+  it("records the child's last gateway connection failure when cancelling admission", async () => {
+    const { supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "connection-failure-launch", "connection-failure");
+    expect(
+      await supervisor.launch(input, {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+      }),
+    ).toMatchObject({
+      state: "running",
+    });
+    await vi.waitFor(() =>
+      expect(fs.existsSync(path.join(workspaceDir, "connection-failure-reported"))).toBe(true),
+    );
+
+    const cancelled = await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+    expect(cancelled).toMatchObject({
+      state: "cancelled",
+      errorText: expect.stringMatching(
+        /^worker could not reach gateway gateway\.example: certificate rejected .+; check TLS pin\/publicUrl configuration$/u,
+      ),
+    });
+    expect(cancelled?.errorText).not.toContain(TEST_WORKER_CREDENTIAL);
+    await supervisor.close();
+  });
+
   it.each([
     ["cancel", "cancelled"],
     ["close", "interrupted"],
@@ -573,7 +665,7 @@ describe("node worker supervisor", () => {
     const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
     expect(running.state).toBe("running");
     const grandchildPath = path.join(workspaceDir, "grandchild.pid");
-    await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
+    await vi.waitFor(() => expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u));
     const grandchildPid = Number(fs.readFileSync(grandchildPath, "utf8"));
     const grandchild = requireNodeWorkerProcessIdentity(grandchildPid);
     expect(inspectNodeWorkerProcessIdentity(grandchild)).toBe("live");
@@ -600,7 +692,7 @@ describe("node worker supervisor", () => {
     const outsideEntry = path.join(root, "outside.mjs");
     fs.mkdirSync(escapedBundle, { recursive: true });
     fs.writeFileSync(outsideEntry, TEST_WORKER_SOURCE);
-    fs.symlinkSync(outsideEntry, path.join(escapedBundle, "openclaw.mjs"));
+    fs.symlinkSync(outsideEntry, path.join(escapedBundle, "worker.mjs"));
     const input = launchInput(workspaceDir, "escaped-entry");
     input.expectedBundleHash = escapedHash;
     input.descriptor.admission.handshake.bundleHash = escapedHash;

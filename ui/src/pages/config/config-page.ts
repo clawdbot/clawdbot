@@ -12,6 +12,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
+import { isBrowserPanelAvailable } from "../../app/app-shell-chrome.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -47,6 +48,7 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -63,6 +65,7 @@ import {
 } from "../chat/realtime-talk-input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/realtime-talk.ts";
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "../connection/system-info.ts";
+import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import {
   configSectionKeysForPage,
   SCOPED_CONFIG_SECTION_KEYS,
@@ -101,7 +104,8 @@ type ConfigPageSetting =
   | "chatSendShortcut"
   | "chatFollowUpMode"
   | "catalogOpenTarget"
-  | "composerHoldToRecord";
+  | "composerHoldToRecord"
+  | "openLinksInControlUiBrowser";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
@@ -186,7 +190,6 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
     return {
       gatewayAuth: "unknown",
       execPolicy: "unknown",
-      deviceAuth: false,
       browserEnabled: true,
       browserEnabledOverridden: false,
       toolProfile: "full",
@@ -198,7 +201,6 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
   const tools = asConfigRecord(root.tools);
   const exec = asConfigRecord(tools?.exec) ?? {};
   const browser = asConfigRecord(root.browser);
-  const controlUi = asConfigRecord(gateway?.controlUi);
   let gatewayAuth = "unknown";
   if (auth) {
     const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
@@ -217,7 +219,6 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
   return {
     gatewayAuth,
     execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
-    deviceAuth: controlUi?.dangerouslyDisableDeviceAuth !== true,
     browserEnabled: browser?.enabled !== false,
     browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
     toolProfile: typeof profile === "string" && profile.trim() ? profile.trim() : "full",
@@ -302,7 +303,12 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private updateStatusClient: GatewayBrowserClient | null = null;
   private sessionObserverModelsClient: GatewayBrowserClient | null = null;
-  private readonly sessionObserverModelLoads = new WeakMap<GatewayBrowserClient, Promise<void>>();
+  private sessionObserverModelsAgentId: string | null = null;
+  private sessionObserverModelsRequest: {
+    client: GatewayBrowserClient;
+    agentId: string;
+    promise: Promise<void>;
+  } | null = null;
   private readonly systemInfoPolling = new PollController(
     this,
     SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS,
@@ -331,7 +337,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfo = systemInfo;
       const client = this.systemInfoRequestClient();
       if (client) {
-        void this.ensureSessionObserverModels(client);
+        void this.ensureSessionObserverModels(client, this.context.agentSelection.state.selectedId);
       }
     },
     onError: (error) => {
@@ -397,6 +403,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.synchronizeSystemInfoGateway(gateway),
+    )
+    .watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
     )
     .watch(
       () => this.context?.nativeNotifications ?? undefined,
@@ -513,7 +524,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     } catch (error) {
       // Discovery is best-effort in blocked/inactive contexts; a rejection
       // must not wedge the picker in its loading state.
-      this.microphoneError = error instanceof Error ? error.message : String(error);
+      this.microphoneError = formatUiError(error);
     } finally {
       this.microphoneLoading = false;
       this.microphoneRefreshRequestsPermission = false;
@@ -542,7 +553,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         ? realtimeTalkDeviceIssueMessage(result.issue, "videoinput")
         : null;
     } catch (error) {
-      this.cameraError = error instanceof Error ? error.message : String(error);
+      this.cameraError = formatUiError(error);
     } finally {
       this.cameraLoading = false;
       this.cameraRefreshRequestsPermission = false;
@@ -667,9 +678,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.updateStatusClient = null;
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
-      this.sessionObserverModelsClient = null;
-      this.sessionObserverModels = [];
-      this.sessionObserverModelsUnavailable = false;
+      this.resetSessionObserverModels();
     }
     this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
     this.syncUpdateStatusRefresh();
@@ -688,9 +697,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.invalidateSystemInfoRequest();
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
-      this.sessionObserverModelsClient = null;
-      this.sessionObserverModels = [];
-      this.sessionObserverModelsUnavailable = false;
+      this.resetSessionObserverModels();
     } else if (snapshot.phase !== "connected") {
       this.invalidateSystemInfoRequest();
       this.systemInfo = null;
@@ -745,45 +752,72 @@ export class ConfigPage extends OpenClawLightDomElement {
     return gateway.client;
   }
 
-  private ensureSessionObserverModels(client: GatewayBrowserClient): Promise<void> {
-    if (this.sessionObserverModelsClient === client) {
+  private synchronizeSessionObserverAgent(agentId: string | null) {
+    if (
+      this.sessionObserverModelsAgentId === agentId &&
+      (agentId !== null || this.sessionObserverModelsUnavailable)
+    ) {
+      return;
+    }
+    this.resetSessionObserverModels(!agentId);
+    const client = this.systemInfoRequestClient();
+    if (this.systemInfo && client) {
+      void this.ensureSessionObserverModels(client, agentId);
+    }
+  }
+
+  private ensureSessionObserverModels(
+    client: GatewayBrowserClient,
+    agentId: string | null,
+  ): Promise<void> {
+    if (!agentId) {
+      this.resetSessionObserverModels(true);
       return Promise.resolve();
     }
-    const existing = this.sessionObserverModelLoads.get(client);
-    if (existing) {
-      return existing;
+    if (
+      this.sessionObserverModelsClient === client &&
+      this.sessionObserverModelsAgentId === agentId
+    ) {
+      return Promise.resolve();
+    }
+    const existing = this.sessionObserverModelsRequest;
+    if (existing?.client === client && existing.agentId === agentId) {
+      return existing.promise;
     }
     const gatewaySource = this.systemInfoGatewaySource;
-    const promise = loadModels(client, { preparedOnly: true })
+    const isCurrent = () =>
+      this.isConnected &&
+      this.systemInfoGatewaySource === gatewaySource &&
+      this.context.gateway.snapshot.client === client &&
+      this.context.agentSelection.state.selectedId === agentId;
+    const promise = loadModels(client, { agentId, preparedOnly: true })
       .then((models) => {
-        if (
-          this.isConnected &&
-          this.systemInfoGatewaySource === gatewaySource &&
-          this.context.gateway.snapshot.client === client
-        ) {
+        if (isCurrent()) {
           this.sessionObserverModels = models;
           this.sessionObserverModelsClient = client;
+          this.sessionObserverModelsAgentId = agentId;
           this.sessionObserverModelsUnavailable = false;
         }
       })
       .catch(() => {
-        if (
-          this.isConnected &&
-          this.systemInfoGatewaySource === gatewaySource &&
-          this.context.gateway.snapshot.client === client
-        ) {
-          this.sessionObserverModels = [];
-          this.sessionObserverModelsClient = null;
-          this.sessionObserverModelsUnavailable = true;
+        if (isCurrent()) {
+          this.resetSessionObserverModels(true);
         }
       })
       .finally(() => {
-        if (this.sessionObserverModelLoads.get(client) === promise) {
-          this.sessionObserverModelLoads.delete(client);
+        if (this.sessionObserverModelsRequest?.promise === promise) {
+          this.sessionObserverModelsRequest = null;
         }
       });
-    this.sessionObserverModelLoads.set(client, promise);
+    this.sessionObserverModelsRequest = { client, agentId, promise };
     return promise;
+  }
+
+  private resetSessionObserverModels(unavailable = false) {
+    this.sessionObserverModels = [];
+    this.sessionObserverModelsClient = null;
+    this.sessionObserverModelsAgentId = null;
+    this.sessionObserverModelsUnavailable = unavailable;
   }
 
   private setFormMode(mode: ConfigFormMode) {
@@ -979,7 +1013,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       });
     } catch (error) {
       if (request === this.cameraSelectionRequest) {
-        this.cameraError = error instanceof Error ? error.message : String(error);
+        this.cameraError = formatUiError(error);
       }
     }
   }
@@ -1105,6 +1139,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.selections[this.pageId].activeSubsection,
     );
     const activeSection = this.pageId === "mcp" ? "mcp" : selection.activeSection;
+    const browserPanelAvailable = isBrowserPanelAvailable(this.context.gateway.snapshot);
     const activeSubsection = this.pageId === "mcp" ? null : selection.activeSubsection;
     const gatewayConfig = asConfigRecord(configObject.gateway);
     const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
@@ -1298,6 +1333,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : configPageTitle(this.pageId),
+      sectionPrelude:
+        activeSection === "browser" && browserPanelAvailable
+          ? renderBrowserLinkPreferencesRow({
+              enabled: this.settings.openLinksInControlUiBrowser === true,
+              onChange: (enabled) => this.setSetting("openLinksInControlUiBrowser", enabled),
+            })
+          : undefined,
       showRootTab: !includeSections?.length,
       includeSections: includeSections ? [...includeSections] : undefined,
       excludeSections,

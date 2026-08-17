@@ -692,7 +692,8 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
     expect(rawToggle).toBeInstanceOf(HTMLButtonElement);
     expect(rawBody).toBeInstanceOf(HTMLElement);
-    expect([...rawToggle!.classList]).toEqual(["chat-tool-card__raw-toggle"]);
+    expect(rawToggle!.classList).toContain("chat-inline-disclosure");
+    expect(rawToggle!.classList).toContain("chat-tool-card__raw-toggle");
     expect(rawToggle!.textContent?.trim()).toBe("Raw details");
     expect(rawToggle!.getAttribute("aria-expanded")).toBe("false");
     expect(rawBody!.hidden).toBe(true);

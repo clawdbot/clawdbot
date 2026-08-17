@@ -13,6 +13,16 @@ const cases = [
     violation: `${FIXTURES}/raw-window-open-violation.ts`,
     violations: 5,
   },
+  {
+    rule: "openclaw-boundaries/no-widen-then-assert",
+    violation: `${FIXTURES}/widen-then-assert-violation.test.ts`,
+    violations: 3,
+  },
+  {
+    rule: "openclaw-boundaries/no-chained-type-assertions",
+    violation: `${FIXTURES}/chained-type-assertions-violation.ts`,
+    violations: 3,
+  },
 ];
 
 function runGuard(target: string) {
@@ -30,7 +40,7 @@ function runGuard(target: string) {
 }
 
 describe("oxlint boundary guards", () => {
-  it.each(cases)("matches legacy call-only semantics for $rule", (testCase) => {
+  it.each(cases)("reports expected violations for $rule", (testCase) => {
     const violation = runGuard(testCase.violation);
     const output = `${violation.stdout}${violation.stderr}`;
     expect(violation.status).toBe(1);

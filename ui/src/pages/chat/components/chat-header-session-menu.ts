@@ -1,9 +1,14 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
+import { ref } from "lit/directives/ref.js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "../../../components/menu-shortcuts.ts";
-import "../../../components/web-awesome.ts";
+import {
+  renderSessionOwnerMenuAvatar,
+  type SessionOwnerOption,
+} from "../../../components/session-owner-chip.ts";
+import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -11,6 +16,7 @@ import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 export type HeaderMenuAction =
   | { kind: "open-in"; editor: EditorId; path: string }
   | { kind: "rename" }
+  | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
   | { kind: "fork" }
   | { kind: "continue-in-terminal" }
   | { kind: "toggle-archived" }
@@ -38,10 +44,14 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) layoutActions: HeaderMenuQuickAction[] = [];
+  @property({ attribute: false }) ownerOptions: readonly SessionOwnerOption[] = [];
+  @property({ attribute: false }) selfOwner: SessionOwnerOption | null = null;
+  @property({ attribute: false }) currentOwnerId: string | null = null;
   @property({ attribute: false }) actionDisabledReasons: Partial<
     Record<HeaderMenuActionKind, string>
   > = {};
   @property({ attribute: false }) forkDisabled = false;
+  @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) onOpen: () => void = () => {};
@@ -94,6 +104,18 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       }
       return;
     }
+    if (value === "assign-owner:self" && this.selfOwner) {
+      this.onAction({ kind: "assign-owner", owner: this.selfOwner });
+      return;
+    }
+    if (value.startsWith("assign-owner:")) {
+      const [, type, encodedId] = value.split(":");
+      const id = encodedId ? decodeURIComponent(encodedId) : "";
+      if ((type === "human" || type === "agent") && id) {
+        this.onAction({ kind: "assign-owner", owner: { type, id } });
+      }
+      return;
+    }
     if (
       value === "rename" ||
       value === "fork" ||
@@ -109,6 +131,34 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       }
     }
   };
+
+  private renderOwnerSubmenu() {
+    return this.ownerOptions.map((owner) => {
+      const checked = owner.id === this.currentOwnerId;
+      return html`
+        <wa-dropdown-item
+          slot="submenu"
+          class="session-menu__item"
+          value=${`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
+          role="menuitemradio"
+          aria-checked=${String(checked)}
+          ${ref((element) => syncDropdownItemRadio(element, checked))}
+          ?disabled=${this.actionDisabled("assign-owner", checked)}
+          title=${this.actionTitle("assign-owner")}
+        >
+          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+            >${renderSessionOwnerMenuAvatar(owner)}</span
+          >
+          <span class="session-menu__text">${owner.label ?? owner.id}</span>
+          ${checked
+            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                >${icons.check}</span
+              >`
+            : nothing}
+        </wa-dropdown-item>
+      `;
+    });
+  }
 
   private renderEditorSubmenu() {
     return EDITOR_IDS.map(
@@ -237,6 +287,31 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           <span class="session-menu__text">${t("sessionsView.renameSessionMenu")}</span>
           ${menuShortcutHint("r")}
         </wa-dropdown-item>
+        ${this.selfOwner
+          ? html`<wa-dropdown-item
+              class="session-menu__item"
+              value="assign-owner:self"
+              ?disabled=${this.actionDisabled(
+                "assign-owner",
+                this.currentOwnerId === this.selfOwner.id,
+              )}
+              title=${this.actionTitle("assign-owner")}
+            >
+              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.users}</span>
+              <span class="session-menu__text">${t("sessionsView.assignToMe")}</span>
+            </wa-dropdown-item>`
+          : nothing}
+        ${this.ownerOptions.length > 0
+          ? html`<wa-dropdown-item
+              class="session-menu__item"
+              ?disabled=${this.actionDisabled("assign-owner")}
+              title=${this.actionTitle("assign-owner")}
+            >
+              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.users}</span>
+              <span class="session-menu__text">${t("sessionsView.assignTo")}</span>
+              ${this.renderOwnerSubmenu()}
+            </wa-dropdown-item>`
+          : nothing}
         <wa-dropdown-item class="session-menu__item">
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.eye}</span>
           <span class="session-menu__text">${t("chat.view.menu")}</span>
@@ -251,7 +326,13 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           title=${this.actionTitle("fork")}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
-          <span class="session-menu__text">${t("sessionsView.forkSession")}</span>
+          <span class="session-menu__text"
+            >${t(
+              this.forkFromLastCompleted
+                ? "sessionsView.forkFromLastCompleted"
+                : "sessionsView.forkSession",
+            )}</span
+          >
           ${menuShortcutHint("f")}
         </wa-dropdown-item>
         <wa-dropdown-item

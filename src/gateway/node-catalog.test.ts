@@ -133,6 +133,15 @@ describe("gateway/node-catalog", () => {
           caps: ["camera", "screen"],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: ["screen.snapshot", "system.run"],
+          computerUse: {
+            contractVersion: 2,
+            provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+            actions: ["screenshot"],
+            targets: ["screen"],
+            deliveryModes: ["foreground"],
+            observations: ["image"],
+            features: { recording: false, agentCursor: false, multiDisplay: false },
+          },
           declaredNodePluginTools: [],
           nodePluginTools: [],
           nodeSkills: [],
@@ -154,6 +163,11 @@ describe("gateway/node-catalog", () => {
       remoteIp: "100.0.0.11",
       caps: ["camera", "screen"],
       commands: ["screen.snapshot", "system.run"],
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", generation: "generation-1" },
+        actions: ["screenshot"],
+      },
       pathEnv: "/usr/bin:/bin",
       approvedAtMs: 100,
       connectedAtMs,
@@ -165,35 +179,6 @@ describe("gateway/node-catalog", () => {
       connected: true,
       sessionHost: true,
     });
-  });
-
-  it("does not infer live session hosting from the connect-time build ceiling", () => {
-    const catalog = createKnownNodeCatalog({
-      pairedDevices: [pairedDevice()],
-      pairedNodes: [pairedNode()],
-      connectedNodes: [
-        {
-          nodeId: "mac-1",
-          connId: "conn-1",
-          client: {} as never,
-          declaredCaps: [],
-          caps: [],
-          declaredCommands: [],
-          commands: [],
-          workerRuns: {
-            bundleHash: "a".repeat(64),
-            openclawVersion: "2026.8.12",
-            protocolFeatures: ["worker-heartbeat-v1"],
-          },
-          declaredNodePluginTools: [],
-          nodePluginTools: [],
-          nodeSkills: [],
-          connectedAtMs: 1,
-        },
-      ],
-    });
-
-    expect(getKnownNode(catalog, "mac-1")?.sessionHost).toBe(false);
   });
 
   it("keeps the operator node name across live metadata and reconnects", () => {

@@ -11,11 +11,11 @@ const mocks = vi.hoisted(() => {
   return {
     closeMcp,
     closeWorkerSupervisor: vi.fn(async () => undefined),
+    initializeWorkerSupervisor: vi.fn(async () => undefined),
     handleInvoke: vi.fn(async () => undefined),
     progressStartHeartbeats: vi.fn(),
     progressWrite: vi.fn(async () => undefined),
     startMcp: vi.fn(async (_servers: unknown, _deps?: { signal?: AbortSignal }) => ({
-      configuredServerCount: 0,
       descriptors: [],
       callMcpTool: vi.fn(),
       close: closeMcp,
@@ -45,17 +45,9 @@ vi.mock("./node-invoke-progress.js", () => ({
 }));
 
 vi.mock("./node-worker-supervisor.js", () => ({
-  createNodeWorkerSupervisor: vi.fn(() => ({ close: mocks.closeWorkerSupervisor })),
-}));
-
-vi.mock("./node-worker-build.js", () => ({
-  resolveNodeWorkerInstallation: vi.fn(async () => ({
-    packageRoot: "/tmp/openclaw-node-worker",
-    build: {
-      bundleHash: "a".repeat(64),
-      openclawVersion: "2026.8.1",
-      protocolFeatures: [],
-    },
+  createNodeWorkerSupervisor: vi.fn(() => ({
+    initialize: mocks.initializeWorkerSupervisor,
+    close: mocks.closeWorkerSupervisor,
   })),
 }));
 
@@ -92,6 +84,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.closeMcp.mockResolvedValue(undefined);
   mocks.closeWorkerSupervisor.mockResolvedValue(undefined);
+  mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
 });
 
 async function startRuntime() {
@@ -132,6 +125,19 @@ function holdInvoke() {
     release: () => release?.(),
   };
 }
+
+describe("node-host worker manifest", () => {
+  it("keeps local consent separate from connection metadata", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
+      env: { PATH: "/usr/bin" },
+      enableWorkerRuns: true,
+    });
+
+    expect(prepared.workerHostingEnabled).toBe(true);
+    expect(prepared.manifest).not.toHaveProperty("workerRuns");
+  });
+});
 
 describe("node-host invocation cancellation", () => {
   it("cancels ordinary node invocations", async () => {
@@ -259,7 +265,6 @@ describe("node-host invocation cancellation", () => {
     expect(startupSignal?.aborted).toBe(true);
     await vi.waitFor(() => expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce());
     resolveStartup({
-      configuredServerCount: 0,
       descriptors: [],
       callMcpTool: vi.fn(),
       close: mocks.closeMcp,

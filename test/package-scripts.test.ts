@@ -207,12 +207,24 @@ describe("package scripts", () => {
     const scripts = readPackageJson().scripts;
     const partScripts = readWindowsCiPartScripts();
     const partTargets = partScripts.map(readWindowsCiTargets);
-    const allTargets = partTargets.flat();
 
+    // Blacksmith's Windows class admits exactly 2 concurrent jobs, so the split
+    // width is pinned here: a 3rd part queues and a single lane serializes.
     expect(scripts["test:windows:ci"]).toBe("pnpm test:windows:ci:1 && pnpm test:windows:ci:2");
-    expect(partTargets.map((targets) => targets.length)).toEqual([23, 41]);
-    expect(new Set(allTargets).size).toBe(64);
-    expect(partTargets[0]?.filter((target) => partTargets[1]?.includes(target))).toEqual([]);
+    expect(scripts["test:windows:ci:3"]).toBeUndefined();
+    for (const [partIndex, targets] of partTargets.entries()) {
+      const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
+      expect(
+        targets.filter((target) => laterTargets.has(target)),
+        `Windows CI part ${partIndex + 1} overlaps a later part`,
+      ).toEqual([]);
+    }
+  });
+
+  it("runs node workspace transfer coverage in Windows CI", () => {
+    expect(readWindowsCiCoverageScript()).toContain(
+      "src/node-host/node-worker-transfer-client.test.ts",
+    );
   });
 
   it("runs generated module formatting coverage in Windows CI", () => {

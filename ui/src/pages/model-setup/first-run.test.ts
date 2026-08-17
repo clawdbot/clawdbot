@@ -90,6 +90,10 @@ describe("model setup first-run redirect", () => {
         },
         subscribe,
       },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -135,6 +139,10 @@ describe("model setup first-run redirect", () => {
           return () => undefined;
         },
       },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
       replace,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -147,11 +155,13 @@ describe("model setup first-run redirect", () => {
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith(
       "openclaw.setup.detect",
-      {},
-      expect.objectContaining({ timeoutMs: 20_000 }),
+      { agentId: "main" },
+      expect.objectContaining({ timeoutMs: 40_000 }),
     );
     expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
-    expect(consumeCachedModelSetupDetection({ client, hello: snapshot.hello })).toEqual(result);
+    expect(
+      consumeCachedModelSetupDetection({ client, hello: snapshot.hello, agentId: "main" }),
+    ).toEqual(result);
   });
 
   it("does not redirect after the operator leaves the default landing", async () => {
@@ -184,6 +194,10 @@ describe("model setup first-run redirect", () => {
           return () => undefined;
         },
       },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
       replace,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -192,7 +206,9 @@ describe("model setup first-run redirect", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
     expect(replace).not.toHaveBeenCalled();
-    expect(consumeCachedModelSetupDetection({ client, hello: snapshot.hello })).toEqual(result);
+    expect(
+      consumeCachedModelSetupDetection({ client, hello: snapshot.hello, agentId: "main" }),
+    ).toEqual(result);
   });
 
   it("rejects stale detection and retries first-run guidance after a same-client reconnect", async () => {
@@ -233,7 +249,14 @@ describe("model setup first-run redirect", () => {
       },
     };
     const replace = vi.fn();
-    const context = { gateway, replace } as unknown as ApplicationContext<RouteId>;
+    const context = {
+      gateway,
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
+      replace,
+    } as unknown as ApplicationContext<RouteId>;
     await startRedirect(context);
     expect(request).toHaveBeenCalledOnce();
 
@@ -247,8 +270,12 @@ describe("model setup first-run redirect", () => {
     await Promise.resolve();
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(consumeCachedModelSetupDetection({ client, hello: nextHello })).toEqual(current);
-    expect(consumeCachedModelSetupDetection({ client, hello: firstHello })).toBeNull();
+    expect(consumeCachedModelSetupDetection({ client, hello: nextHello, agentId: "main" })).toEqual(
+      current,
+    );
+    expect(
+      consumeCachedModelSetupDetection({ client, hello: firstHello, agentId: "main" }),
+    ).toBeNull();
     expect(replace).toHaveBeenCalledOnce();
   });
 
@@ -264,6 +291,10 @@ describe("model setup first-run redirect", () => {
           listener = next;
           return () => undefined;
         },
+      },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
       },
       replace: vi.fn(),
     } as unknown as ApplicationContext<RouteId>;

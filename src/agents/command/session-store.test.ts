@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  resolveFreshSessionTotalTokens,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions.js";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -382,7 +385,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadPersistedSessionStore(storePath);
-      expect(Object.keys(persisted).filter((key) => key !== sessionKey)).toHaveLength(42);
+      expect(Object.keys(persisted)).toHaveLength(42);
       expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
       expect(persisted["agent:main:stale:44"]).toBeUndefined();
     });
@@ -553,7 +556,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -696,7 +698,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        contextTokensOverride: 200_000,
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result,
@@ -768,7 +769,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        contextTokensOverride: 200_000,
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result,
@@ -814,7 +814,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore: staleInMemory,
-        contextTokensOverride: 200_000,
         defaultProvider: "openai",
         defaultModel: "gpt-5.4",
         result: {
@@ -930,7 +929,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        contextTokensOverride: 200_000,
         defaultProvider: "openai",
         defaultModel: "gpt-5.4",
         result: {
@@ -981,7 +979,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey: first.sessionKey!,
         storePath: first.storePath,
         sessionStore: first.sessionStore!,
-        contextTokensOverride: 200_000,
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result: {
@@ -1255,7 +1252,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -1301,7 +1297,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg: {} as OpenClawConfig,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -1415,7 +1410,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: 1_000_000,
         sessionId,
         sessionKey,
         storePath,
@@ -2729,7 +2723,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
 });
 
 describe("recordCliCompactionInStore", () => {
-  it("persists native compaction token counts and clears stale CLI usage breakdown", async () => {
+  it("persists native compaction token counts without clearing its CLI binding", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-record-cli-compaction";
       const sessionId = "test-record-cli-compaction-session";
@@ -2775,27 +2769,35 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
-        provider: "codex",
+        compactionKind: "native-harness",
         sessionKey,
         sessionStore,
         storePath,
-        tokensAfter: 0,
+        tokensAfter: 3_210,
       });
 
       const persisted = loadPersistedSessionStore(storePath);
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(3_210);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(resolveFreshSessionTotalTokens(sessionStore[sessionKey])).toBe(3_210);
       expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
       expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
       expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
       expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
-      expect(persisted[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toEqual({
+        sessionId: "stale-cli-session",
+      });
+      expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBe("stale-cli-session");
+      expect(persisted[sessionKey]?.totalTokens).toBe(3_210);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(resolveFreshSessionTotalTokens(persisted[sessionKey])).toBe(3_210);
       expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
+      expect(persisted[sessionKey]?.cliSessionBindings?.codex).toEqual({
+        sessionId: "stale-cli-session",
+      });
+      expect(persisted[sessionKey]?.cliSessionIds?.codex).toBe("stale-cli-session");
     });
   });
 
@@ -2837,7 +2839,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
-        provider: "codex",
+        compactionKind: "native-harness",
         sessionKey,
         sessionStore,
         storePath,
@@ -2872,7 +2874,7 @@ describe("recordCliCompactionInStore", () => {
       await seedSessionStore(storePath, sessionStore);
 
       await recordCliCompactionInStore({
-        provider: "codex",
+        compactionKind: "native-harness",
         sessionKey,
         sessionStore,
         storePath,
@@ -2890,7 +2892,7 @@ describe("recordCliCompactionInStore", () => {
     });
   });
 
-  it("recreates a complete persisted row when the caller snapshot survived a missing store row", async () => {
+  it("recreates a complete persisted row and clears its context-engine CLI binding", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-record-cli-compaction-missing-row";
       const sessionId = "test-record-cli-compaction-missing-row-session";
@@ -2910,15 +2912,20 @@ describe("recordCliCompactionInStore", () => {
             codex: {
               sessionId: "stale-cli-session",
             },
+            "claude-cli": {
+              sessionId: "stale-claude-session",
+            },
           },
           cliSessionIds: {
             codex: "stale-cli-session",
+            "claude-cli": "stale-claude-session",
           },
+          claudeCliSessionId: "stale-claude-session",
         },
       };
 
       await recordCliCompactionInStore({
-        provider: "codex",
+        compactionKind: "context-engine",
         sessionKey,
         sessionStore,
         storePath,
@@ -2932,12 +2939,16 @@ describe("recordCliCompactionInStore", () => {
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.totalTokens).toBe(42);
       expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds).toBeUndefined();
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
       expect(persisted?.sessionId).toBe(sessionId);
       expect(persisted?.modelProvider).toBe("openai");
       expect(persisted?.model).toBe("gpt-5.5");
       expect(persisted?.compactionCount).toBe(1);
       expect(persisted?.totalTokens).toBe(42);
       expect(persisted?.cliSessionBindings?.codex).toBeUndefined();
+      expect(persisted?.cliSessionIds?.codex).toBeUndefined();
     });
   });
 
@@ -2956,7 +2967,7 @@ describe("recordCliCompactionInStore", () => {
       };
 
       const result = await recordCliCompactionInStore({
-        provider: "codex",
+        compactionKind: "context-engine",
         sessionKey,
         sessionStore,
         storePath,

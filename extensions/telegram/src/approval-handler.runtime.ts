@@ -5,8 +5,8 @@ import type {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
+  buildPluginApprovalPendingReplyPayload,
   buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
 } from "openclaw/plugin-sdk/approval-reply-runtime";

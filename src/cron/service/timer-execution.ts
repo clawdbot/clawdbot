@@ -1,7 +1,9 @@
 import {
+  HEARTBEAT_IDLE_RETRY_GRACE_MS,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_PREEMPTED,
   type HeartbeatRunResult,
-  isRetryableHeartbeatBusySkipReason,
+  isRetryableHeartbeatSkipReason,
 } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
@@ -297,7 +299,7 @@ async function executeMainSessionCronJob(
       }
       if (
         heartbeatResult.status !== "skipped" ||
-        !isRetryableHeartbeatBusySkipReason(heartbeatResult.reason)
+        !isRetryableHeartbeatSkipReason(heartbeatResult.reason)
       ) {
         break;
       }
@@ -318,7 +320,8 @@ async function executeMainSessionCronJob(
         removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
         return { status: "error", error: timeoutErrorMessage() };
       }
-      if (state.deps.nowMs() - waitStartedAt > maxWaitMs) {
+      const elapsedMs = state.deps.nowMs() - waitStartedAt;
+      if (elapsedMs >= maxWaitMs) {
         if (abortSignal?.aborted) {
           removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
           return { status: "error", error: timeoutErrorMessage() };
@@ -333,7 +336,14 @@ async function executeMainSessionCronJob(
         });
         return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
       }
-      await waitWithAbort(retryDelayMs);
+      await waitWithAbort(
+        Math.min(
+          heartbeatResult.reason === HEARTBEAT_SKIP_PREEMPTED
+            ? HEARTBEAT_IDLE_RETRY_GRACE_MS
+            : retryDelayMs,
+          maxWaitMs - elapsedMs,
+        ),
+      );
     }
 
     if (heartbeatResult.status === "ran") {
@@ -497,11 +507,11 @@ async function executeScriptCronJob(
   streamBatch?: string,
   assertRunCurrent?: () => void,
 ) {
-  if (state.deps.cronConfig?.triggers?.enabled !== true) {
+  if (state.deps.cronConfig?.triggers?.enabled === false) {
     return {
       status: "error" as const,
       error:
-        "cron script payload execution is disabled; set cron.triggers.enabled=true to allow unattended scripts",
+        "cron script payload execution is disabled because the operator set cron.triggers.enabled: false; remove it or set it to true to allow unattended scripts",
     };
   }
   if (!state.deps.runScriptJob) {

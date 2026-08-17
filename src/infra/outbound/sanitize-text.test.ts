@@ -82,6 +82,12 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText('<a href="https://example.com">link</a>')).toBe("link");
   });
 
+  it("strips colon- and dot-qualified tags", () => {
+    expect(
+      sanitizeForPlainText("<vendor:note>one</vendor:note><vendor.note>two</vendor.note>"),
+    ).toBe("onetwo");
+  });
+
   it("keeps stripping tags exposed by malformed tag text", () => {
     const sanitized = sanitizeForPlainText(
       "before <<script>script>alert(1)</<script>script> after",
@@ -89,6 +95,70 @@ describe("sanitizeForPlainText", () => {
 
     expect(sanitized).toBe("before alert(1) after");
     expect(sanitized).not.toContain("<script");
+  });
+
+  it("preserves tag-shaped code inside fenced blocks while converting prose tags", () => {
+    const reply = [
+      "Here is the nginx snippet:",
+      "",
+      "```xml",
+      '<server port="8080">',
+      '  <route path="/api"/>',
+      "</server>",
+      "```",
+      "",
+      "Wrap it in <b>bold</b> when quoting.",
+    ].join("\n");
+
+    expect(sanitizeForPlainText(reply, { style: "markdown" })).toBe(
+      [
+        "Here is the nginx snippet:",
+        "",
+        "```xml",
+        '<server port="8080">',
+        '  <route path="/api"/>',
+        "</server>",
+        "```",
+        "",
+        "Wrap it in **bold** when quoting.",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves large control-character runs around code", () => {
+    const reply = `${"\u0000".repeat(40_000)}e\u0000p\n\`\`\`text\nline one\n\n\n<Button>\n\`\`\``;
+
+    expect(sanitizeForPlainText(reply)).toBe(reply);
+  });
+
+  it("preserves generics and JSX inside inline code spans", () => {
+    expect(
+      sanitizeForPlainText("Use `Array<string>` for ids, and render `<Button onClick={save}>`."),
+    ).toBe("Use `Array<string>` for ids, and render `<Button onClick={save}>`.");
+  });
+
+  it("keeps paired HTML formatting that wraps an inline code span", () => {
+    expect(sanitizeForPlainText("<strong>Use `<Button>` now</strong>")).toBe(
+      "*Use `<Button>` now*",
+    );
+    expect(sanitizeForPlainText("<em>render `<Button>` twice</em>", { style: "markdown" })).toBe(
+      "_render `<Button>` twice_",
+    );
+    expect(sanitizeForPlainText("<li>call `Array<string>` first</li>")).toBe(
+      "• call `Array<string>` first\n",
+    );
+  });
+
+  it("preserves tag-shaped code inside indented code blocks", () => {
+    expect(sanitizeForPlainText('Example:\n\n    <div id="root"></div>\n\ndone')).toBe(
+      'Example:\n\n    <div id="root"></div>\n\ndone',
+    );
+  });
+
+  it("keeps stripping tags after an unterminated inline code delimiter", () => {
+    expect(sanitizeForPlainText("prefix ` unterminated <span>text</span>")).toBe(
+      "prefix ` unterminated text",
+    );
   });
 
   it("strips known internal runtime scaffolding tags including underscore names", () => {
@@ -104,6 +174,16 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("See <https://example.com/path?q=1> now")).toBe(
       "See https://example.com/path?q=1 now",
     );
+  });
+
+  it("preserves angle-addr email addresses", () => {
+    expect(sanitizeForPlainText("Contact us at Support <support@example.com> or reply here")).toBe(
+      "Contact us at Support <support@example.com> or reply here",
+    );
+  });
+
+  it("still strips tags whose name ends at a tag boundary", () => {
+    expect(sanitizeForPlainText("Ping <users/abc> for access")).toBe("Ping  for access");
   });
 
   // --- passthrough --------------------------------------------------------

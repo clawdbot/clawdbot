@@ -1,6 +1,6 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
-import { tryResolveSoleAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
@@ -38,13 +38,18 @@ import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
+import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
+import { defineSplitHealthCheckInput } from "./health-check-adapter.js";
+import type {
+  SplitHealthCheckDefinition,
+  SplitHealthCheckInput,
+} from "./health-check-runner-types.js";
 import type {
   HealthCheck,
   HealthCheckContext,
@@ -74,7 +79,9 @@ const loadDoctorWorkspaceModule = async () => await import("../commands/doctor-w
 
 export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: typeof detectUnavailableSkillsWithRuntime;
-  readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
+  readonly collectSecurityWarnings: (
+    cfg: OpenClawConfig,
+  ) => Promise<readonly SecurityAuditFinding[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
   readonly collectRuntimeToolSchemaFindings: (
     ctx: HealthCheckContext,
@@ -99,7 +106,9 @@ async function detectUnavailableSkillsWithRuntime(
   return ctx.cwd ? runtime.detectUnavailableSkills(ctx.cfg, ctx.cwd) : [];
 }
 
-async function collectSecurityWarningsWithRuntime(cfg: OpenClawConfig): Promise<readonly string[]> {
+async function collectSecurityWarningsWithRuntime(
+  cfg: OpenClawConfig,
+): Promise<readonly SecurityAuditFinding[]> {
   const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
   return collectSecurityWarnings(cfg);
 }
@@ -318,24 +327,27 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
   description: "Autonomous Skill Workshop capture has a callable review tool.",
   source: "doctor",
   async detect(ctx) {
-    const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-      config: ctx.cfg,
-      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off",
-    });
-    if (!diagnostic) {
-      return [];
-    }
-    return [
-      {
-        checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-        severity: "warning",
-        message: diagnostic.detail,
-        path: diagnostic.source,
-        target: diagnostic.agentId,
-        requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
-        fixHint: diagnostic.fix,
+    const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
+    const listedAgentIds = listAgentIds(ctx.cfg);
+    const diagnostics = (listedAgentIds.length > 0 ? listedAgentIds : [undefined]).flatMap(
+      (agentId) => {
+        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
+          config: ctx.cfg,
+          workshopEnabled,
+          ...(agentId ? { agentId } : {}),
+        });
+        return diagnostic ? [diagnostic] : [];
       },
-    ];
+    );
+    return diagnostics.map((diagnostic) => ({
+      checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+      severity: "warning",
+      message: diagnostic.detail,
+      path: diagnostic.source,
+      target: diagnostic.agentId,
+      requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
+      fixHint: diagnostic.fix,
+    }));
   },
 };
 
@@ -484,7 +496,11 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
+    const catalog = await loadPreparedModelCatalog({
+      config: ctx.cfg,
+      readOnly: true,
+      providerDiscoveryProviderIds: [],
+    });
     const status = getModelRefStatus({
       cfg: ctx.cfg,
       catalog,
@@ -574,6 +590,7 @@ const bootstrapSizeCheck: HealthCheck = {
       workspaceDir,
       config: ctx.cfg,
       agentId: defaultAgentId,
+      readOnlyState: true,
     });
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
@@ -756,15 +773,22 @@ function createSecurityCheck(deps: CoreHealthCheckDeps): HealthCheck {
     description: "Security posture checks produce structured findings.",
     source: "doctor",
     async detect(ctx) {
-      const warnings = await deps.collectSecurityWarnings(ctx.cfg);
-      return warnings.map((warning) =>
-        noteTextToFinding({
-          checkId: "core/doctor/security",
-          severity: warning.includes("CRITICAL") ? "error" : "warning",
-          text: warning,
-        }),
-      );
+      const findings = await deps.collectSecurityWarnings(ctx.cfg);
+      return findings.map(securityAuditFindingToHealthFinding);
     },
+  };
+}
+
+function securityAuditFindingToHealthFinding(finding: SecurityAuditFinding): HealthFinding {
+  const detailLines = finding.detail.split("\n");
+  const firstDetail = detailLines.shift() ?? "";
+  const fixHint = [...detailLines, ...(finding.remediation?.split("\n") ?? [])].join("\n");
+  return {
+    checkId: "core/doctor/security",
+    severity:
+      finding.severity === "critical" ? "error" : finding.severity === "warn" ? "warning" : "info",
+    message: `${finding.title}${firstDetail ? `: ${firstDetail}` : ""}`,
+    ...(fixHint ? { fixHint } : {}),
   };
 }
 
@@ -820,7 +844,7 @@ const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false
   },
 };
 
-const legacyCronStoreCheck: SplitHealthCheckInput = {
+const legacyCronStoreCheck: SplitHealthCheckDefinition = {
   id: "core/doctor/legacy-cron-store",
   kind: "core",
   description: "Legacy cron store, run-log, and payload state is normalized.",
@@ -974,7 +998,7 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
-function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckInput {
+function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
   return {
     id: GATEWAY_HEALTH_CHECK_ID,
     kind: "core",
@@ -987,7 +1011,7 @@ function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckIn
   };
 }
 
-function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckInput {
+function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
   return {
     id: GATEWAY_DAEMON_CHECK_ID,
     kind: "core",
@@ -1298,7 +1322,7 @@ function createWorkspaceSuggestionsCheck(
 
 function createConvertedWorkflowChecks(
   deps: CoreHealthCheckDeps,
-): readonly SplitHealthCheckInput[] {
+): readonly SplitHealthCheckDefinition[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
@@ -1364,7 +1388,7 @@ function createConvertedWorkflowChecks(
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
 ): readonly SplitHealthCheckInput[] {
-  return [
+  const checks: readonly SplitHealthCheckDefinition[] = [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
@@ -1372,6 +1396,7 @@ export function createCoreHealthChecks(
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
   ];
+  return checks.map(defineSplitHealthCheckInput);
 }
 
 export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();

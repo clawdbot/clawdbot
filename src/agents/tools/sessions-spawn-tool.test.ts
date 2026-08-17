@@ -4,17 +4,18 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "../subagents/swarm/swarm-code-mode.js";
-import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
+  const inProcessCreationMock = vi.fn();
   const getSubagentDeliveryBacklogPressureMock = vi.fn(() => ({
     suspended: 0,
     blocked: false,
@@ -24,6 +25,7 @@ const hoisted = vi.hoisted(() => {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
     registerSubagentRunMock,
+    inProcessCreationMock,
     getSubagentDeliveryBacklogPressureMock,
     runSubagentProgressMock,
   };
@@ -43,6 +45,15 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
   registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
   getSubagentDeliveryBacklogPressure: () => hoisted.getSubagentDeliveryBacklogPressureMock(),
 }));
+
+vi.mock("./in-process-gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./in-process-gateway.js")>();
+  return {
+    ...actual,
+    callInProcessGatewayToolWithCreation: (...args: unknown[]) =>
+      hoisted.inProcessCreationMock(...args),
+  };
+});
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
@@ -73,6 +84,7 @@ describe("sessions_spawn tool", () => {
       runId: "run-acp",
     });
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.inProcessCreationMock.mockReset();
     hoisted.getSubagentDeliveryBacklogPressureMock
       .mockReset()
       .mockReturnValue({ suspended: 0, blocked: false });
@@ -417,10 +429,15 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.visible?.description).toBe(
       "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     );
+    expect(schema.properties?.cwd?.description).toContain(
+      "outside configured agent workspaces require operator.admin",
+    );
     expect(tool.description).toContain("`visible=true`: persistent sidebar dashboard session");
     expect(tool.description).toContain("when the user asks to create/open a thread");
     expect(tool.description).toContain('no `mode="run"`');
     expect(tool.description).toContain("inherits the caller tool-policy ceiling");
+    expect(tool.description).toContain("session URL on the first line");
+    expect(tool.description).toContain("`Owner: <label>` on the second line");
     expect(tool.description).toContain("`tools.sessions.visibility`");
     expect(schema.properties?.runtime?.description).toContain("visible=true");
     expect(schema.properties?.mode?.description).toContain("Omit with visible=true");
@@ -511,6 +528,120 @@ describe("sessions_spawn tool", () => {
         }),
       );
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("explains an out-of-workspace visible cwd denial without suggesting a CLI fallback", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-external-cwd-" }, async (workspace) => {
+      const outside = path.dirname(workspace);
+      const callGateway = vi.fn(async () => {
+        throw new GatewayClientRequestError({
+          code: "FORBIDDEN",
+          message: "permission denied",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        });
+      });
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: { agents: { list: [{ id: "main", workspace }] } },
+        callGateway: callGateway as never,
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("visible-external-cwd", {
+        task: "inspect issue",
+        cwd: outside,
+        visible: true,
+        worktree: true,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "forbidden",
+        error: `Visible session cwd "${outside}" is outside configured agent workspaces and requires operator.admin. Omit cwd to use the target agent workspace, or ask the operator to start the session from a registered project. Do not substitute the synchronous \`openclaw agent\` CLI for a persistent visible session.`,
+      });
+      expect(callGateway).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("preserves matching error text without structured missing-scope details", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("missing scope: operator.admin");
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway: callGateway as never,
+      countActiveRuns: () => 0,
+    });
+
+    await expect(
+      tool.execute("visible-message-only-denial", {
+        task: "inspect issue",
+        cwd: "/srv/external/repo",
+        visible: true,
+      }),
+    ).rejects.toThrow("missing scope: operator.admin");
+  });
+
+  it("preserves inconsistent structured missing-scope details", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new GatewayClientRequestError({
+        code: "FORBIDDEN",
+        message: "permission denied",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.write"],
+        },
+      });
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway: callGateway as never,
+      countActiveRuns: () => 0,
+    });
+
+    await expect(
+      tool.execute("visible-inconsistent-scope-denial", {
+        task: "inspect issue",
+        cwd: "/srv/external/repo",
+        visible: true,
+      }),
+    ).rejects.toThrow("permission denied");
+  });
+
+  it("preserves unrelated visible-session admin denials with an allowed cwd", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-allowed-cwd-" }, async (workspace) => {
+      const callGateway = vi.fn(async () => {
+        throw new GatewayClientRequestError({
+          code: "FORBIDDEN",
+          message: "permission denied",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        });
+      });
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: { agents: { list: [{ id: "main", workspace }] } },
+        callGateway: callGateway as never,
+        countActiveRuns: () => 0,
+      });
+
+      await expect(
+        tool.execute("visible-admin-denial", {
+          task: "inspect issue",
+          cwd: workspace,
+          visible: true,
+        }),
+      ).rejects.toThrow("permission denied");
     });
   });
 
@@ -710,6 +841,8 @@ describe("sessions_spawn tool", () => {
       });
 
       expect(result.details).toMatchObject({ status: "accepted" });
+      expect(result.details).toMatchObject({ owner: { type: "agent", id: "main" } });
+      expect(result.details).not.toHaveProperty("sessionUrl");
       expect(callGateway).toHaveBeenCalledWith("sessions.create", expect.objectContaining({ cwd }));
     });
   });
@@ -774,18 +907,20 @@ describe("sessions_spawn tool", () => {
   });
 
   it("creates visible sessions while carrying inherited tool restrictions forward", async () => {
-    const callGateway = vi.fn(async () => ({
+    hoisted.inProcessCreationMock.mockResolvedValue({
       key: "agent:main:dashboard:restricted-child",
       runStarted: true,
       runId: "run-visible-restricted",
-    })) as InProcessGatewayCaller;
+    });
     const registerRun = vi.fn();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      config: { agents: { list: [{ id: "main" }] } },
+      config: {
+        agents: { list: [{ id: "main", identity: { name: "Roboclaw" } }] },
+        gateway: { publicOrigin: "https://openclaw.example", controlUi: { basePath: "/control" } },
+      },
       inheritedToolAllowlist: ["read", "sessions_spawn"],
       inheritedToolDenylist: ["exec"],
-      callGateway,
       registerRun,
       countActiveRuns: () => 0,
     });
@@ -800,8 +935,10 @@ describe("sessions_spawn tool", () => {
       status: "accepted",
       childSessionKey: "agent:main:dashboard:restricted-child",
       runId: "run-visible-restricted",
+      sessionUrl: "https://openclaw.example/control/chat/main/dashboard/restricted-child",
+      owner: { type: "agent", id: "main", label: "Roboclaw" },
     });
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
       "sessions.create",
       expect.objectContaining({
         agentId: "main",
@@ -809,6 +946,17 @@ describe("sessions_spawn tool", () => {
         parentSessionKey: "agent:main:main",
         spawnDepth: 1,
       }),
+      {
+        via: "spawn",
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: "agent:main:main",
+        completionOwnerSessionKey: "agent:main:main",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
     );
     expect(registerRun).toHaveBeenCalledWith(
       expect.objectContaining({

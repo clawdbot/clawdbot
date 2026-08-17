@@ -14,7 +14,10 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  getLoadedRuntimePluginRegistry,
+  registryMatchesManifestPluginIds,
+} from "./active-runtime-registry.js";
 import {
   isBundledConversationReadToolRegistration,
   isHostRestrictedConversationReadTool,
@@ -74,6 +77,7 @@ type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
   replaySafe?: boolean;
+  sideEffecting?: boolean;
   trustedLocalMedia?: boolean;
   mcp?: PluginToolMcpMeta;
 };
@@ -315,6 +319,15 @@ export function buildPluginToolMetadataKey(pluginId: string, toolName: string): 
   return JSON.stringify([pluginId, toolName]);
 }
 
+/** Binds a side-effect declaration to the concrete plugin tool that owns it. */
+export function getPluginToolSideEffectOwnerKey(tool: AnyAgentTool): string | undefined {
+  const meta = getPluginToolMeta(tool);
+  const toolName = normalizeToolPolicyName(tool.name);
+  return meta?.sideEffecting && toolName
+    ? buildPluginToolMetadataKey(meta.pluginId, toolName)
+    : undefined;
+}
+
 function normalizeAllowlist(list?: string[]) {
   return new Set(normalizeUniqueStringEntries((list ?? []).map(normalizeToolPolicyName)));
 }
@@ -376,6 +389,13 @@ function isManifestToolReplaySafe(params: {
   toolName: string;
 }): boolean {
   return params.manifestPlugin?.toolMetadata?.[params.toolName]?.replaySafe === true;
+}
+
+function isManifestToolSideEffecting(params: {
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolName: string;
+}): boolean {
+  return params.manifestPlugin?.toolMetadata?.[params.toolName]?.sideEffecting === true;
 }
 
 function isTrustedManifestLocalMediaTool(params: {
@@ -908,6 +928,10 @@ function createCachedDescriptorPluginTool(params: {
       manifestPlugin: params.plugin,
       toolName,
     }),
+    sideEffecting: isManifestToolSideEffecting({
+      manifestPlugin: params.plugin,
+      toolName,
+    }),
     trustedLocalMedia: isTrustedManifestLocalMediaTool({
       manifestPlugin: params.plugin,
       toolName,
@@ -1106,6 +1130,7 @@ function resolvePluginToolRegistry(params: {
 function registryHasScopedPluginTools(
   registry: PluginRegistry | undefined,
   pluginIds: readonly string[] | undefined,
+  manifestPlugins?: PluginMetadataManifestView["plugins"],
 ): registry is PluginRegistry {
   if (!registry) {
     return false;
@@ -1118,7 +1143,11 @@ function registryHasScopedPluginTools(
     return true;
   }
   const registryPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
-  return Array.from(scopedPluginIds).every((pluginId) => registryPluginIds.has(pluginId));
+  return (
+    Array.from(scopedPluginIds).every((pluginId) => registryPluginIds.has(pluginId)) &&
+    (manifestPlugins === undefined ||
+      registryMatchesManifestPluginIds(registry, manifestPlugins, pluginIds))
+  );
 }
 
 type PreparedPluginToolRuntime = {
@@ -1293,7 +1322,11 @@ export function resolvePluginTools(params: {
     context === params.preparedRuntime?.loadContext
       ? params.preparedRuntime.registry
       : params.runtimeRegistry;
-  let registry = registryHasScopedPluginTools(preparedOrExplicitRegistry, runtimePluginIds)
+  let registry = registryHasScopedPluginTools(
+    preparedOrExplicitRegistry,
+    runtimePluginIds,
+    snapshot.plugins,
+  )
     ? preparedOrExplicitRegistry
     : undefined;
   if (!registry) {
@@ -1545,6 +1578,10 @@ export function resolvePluginTools(params: {
         pluginId: entry.pluginId,
         optional,
         replaySafe: isManifestToolReplaySafe({
+          manifestPlugin,
+          toolName: tool.name,
+        }),
+        sideEffecting: isManifestToolSideEffecting({
           manifestPlugin,
           toolName: tool.name,
         }),

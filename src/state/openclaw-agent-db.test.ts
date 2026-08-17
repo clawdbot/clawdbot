@@ -47,6 +47,7 @@ import {
   migrateOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase as openOpenClawAgentDatabaseRuntime,
+  readOpenClawAgentDatabaseRegistryToken,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
@@ -420,11 +421,10 @@ function downgradeCurrentAgentDatabaseToV13(databasePath: string): void {
 function readRegisteredAgentDatabaseLastSeenAt(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
-  path: string;
 }): number | undefined {
   const row = openOpenClawStateDatabase({ env: params.env })
-    .db.prepare("SELECT last_seen_at FROM agent_databases WHERE agent_id = ? AND path = ?")
-    .get(params.agentId, params.path) as { last_seen_at?: unknown } | undefined;
+    .db.prepare("SELECT last_seen_at FROM agent_databases WHERE agent_id = ?")
+    .get(params.agentId) as { last_seen_at?: unknown } | undefined;
   return typeof row?.last_seen_at === "number" ? row.last_seen_at : undefined;
 }
 
@@ -1075,9 +1075,10 @@ describe("openclaw agent database", () => {
     expect(fs.existsSync(stateDatabasePath)).toBe(false);
   });
 
-  it("invalidates the registered database memo after a registry write", () => {
+  it("rotates the registry token on pathname switches and committed writes", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
+    const otherEnv = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const databasePath = path.join(
       stateDir,
       "agents",
@@ -1086,11 +1087,69 @@ describe("openclaw agent database", () => {
       "openclaw-agent.sqlite",
     );
 
+    const firstToken = readOpenClawAgentDatabaseRegistryToken({ env });
     expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+    expect(readOpenClawAgentDatabaseRegistryToken({ env })).toBe(firstToken);
+    expect(readOpenClawAgentDatabaseRegistryToken({ env: otherEnv })).not.toBe(firstToken);
+    const returnedToken = readOpenClawAgentDatabaseRegistryToken({ env });
+    expect(returnedToken).not.toBe(firstToken);
+
     registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env });
+    const registeredToken = readOpenClawAgentDatabaseRegistryToken({ env });
+    expect(registeredToken).not.toBe(returnedToken);
     expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
       expect.objectContaining({ agentId: "worker-1", path: databasePath }),
     ]);
+    expect(readOpenClawAgentDatabaseRegistryToken({ env })).toBe(registeredToken);
+
+    unregisterOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env });
+    expect(readOpenClawAgentDatabaseRegistryToken({ env })).not.toBe(registeredToken);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+  });
+
+  it("stores state-owned registrations relative while preserving external paths", () => {
+    const stateDir = createTempStateDir();
+    const externalStateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const inRootPath = path.join(stateDir, "agents", "worker-1", "agent", "openclaw-agent.sqlite");
+    const externalPath = path.join(externalStateDir, "external.sqlite");
+
+    registerOpenClawAgentDatabase({ agentId: "worker-1", path: inRootPath, env });
+    registerOpenClawAgentDatabase({ agentId: "external", path: externalPath, env });
+
+    const stateDatabase = openOpenClawStateDatabase({ env });
+    expect(
+      stateDatabase.db
+        .prepare("SELECT agent_id, path FROM agent_databases ORDER BY agent_id")
+        .all(),
+    ).toEqual([
+      { agent_id: "external", path: externalPath },
+      {
+        agent_id: "worker-1",
+        path: path.join("agents", "worker-1", "agent", "openclaw-agent.sqlite"),
+      },
+    ]);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({ agentId: "external", path: externalPath }),
+      expect.objectContaining({ agentId: "worker-1", path: inRootPath }),
+    ]);
+
+    stateDatabase.db
+      .prepare(
+        `INSERT INTO agent_databases (
+           agent_id, path, schema_version, last_seen_at, size_bytes
+         ) VALUES (?, ?, ?, 0, NULL)`,
+      )
+      .run("worker-1", inRootPath, OPENCLAW_AGENT_SCHEMA_VERSION);
+    unregisterOpenClawAgentDatabase({ agentId: "worker-1", path: inRootPath, env });
+    expect(
+      stateDatabase.db
+        .prepare("SELECT path FROM agent_databases WHERE agent_id = ?")
+        .all("worker-1"),
+    ).toEqual([]);
+
+    unregisterOpenClawAgentDatabase({ agentId: "external", path: externalPath, env });
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
   });
 
   it("keeps incompatible schema versions maintenance-only", () => {
@@ -2126,6 +2185,77 @@ describe("openclaw agent database", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "keeps an existing alias identity consistent when realpath retargets it",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      const firstDir = path.join(stateDir, "identity-first");
+      const secondDir = path.join(stateDir, "identity-second");
+      const aliasDir = path.join(stateDir, "identity-alias");
+      fs.mkdirSync(firstDir);
+      fs.mkdirSync(secondDir);
+      fs.symlinkSync(firstDir, aliasDir, "dir");
+      const firstPath = path.join(firstDir, "worker.sqlite");
+      const secondPath = path.join(secondDir, "worker.sqlite");
+      const aliasPath = path.join(aliasDir, "worker.sqlite");
+      fs.writeFileSync(firstPath, "first");
+      fs.writeFileSync(secondPath, "second");
+
+      const originalRealpathNative = fs.realpathSync.native;
+      let retargeted = false;
+      const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((pathname) => {
+        if (!retargeted && path.resolve(String(pathname)) === aliasPath) {
+          fs.unlinkSync(aliasDir);
+          fs.symlinkSync(secondDir, aliasDir, "dir");
+          retargeted = true;
+        }
+        return originalRealpathNative(pathname);
+      });
+      try {
+        const matchesPath = createOpenClawAgentDatabasePathMatcher();
+        expect(matchesPath(aliasPath, firstPath)).toBe(false);
+        expect(matchesPath(aliasPath, secondPath)).toBe(true);
+        expect(retargeted).toBe(true);
+      } finally {
+        realpathNative.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps a missing-leaf identity consistent when its parent retargets",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      const firstParent = path.join(stateDir, "missing-first");
+      const movedFirstParent = path.join(stateDir, "missing-first-moved");
+      const secondParent = path.join(stateDir, "missing-second");
+      fs.mkdirSync(firstParent);
+      fs.mkdirSync(secondParent);
+      const racedPath = path.join(firstParent, "future.sqlite");
+      const movedFirstPath = path.join(movedFirstParent, "future.sqlite");
+      const secondPath = path.join(secondParent, "future.sqlite");
+
+      const originalRealpathNative = fs.realpathSync.native;
+      let retargeted = false;
+      const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((pathname) => {
+        if (!retargeted && path.resolve(String(pathname)) === firstParent) {
+          fs.renameSync(firstParent, movedFirstParent);
+          fs.symlinkSync(secondParent, firstParent, "dir");
+          retargeted = true;
+        }
+        return originalRealpathNative(pathname);
+      });
+      try {
+        const matchesPath = createOpenClawAgentDatabasePathMatcher();
+        expect(matchesPath(racedPath, movedFirstPath)).toBe(false);
+        expect(matchesPath(racedPath, secondPath)).toBe(true);
+        expect(retargeted).toBe(true);
+      } finally {
+        realpathNative.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "retries path resolution failures within one matcher",
     () => {
       const stateDir = fs.realpathSync(createTempStateDir());
@@ -2531,7 +2661,6 @@ describe("openclaw agent database", () => {
         readRegisteredAgentDatabaseLastSeenAt({
           agentId: "worker-1",
           env,
-          path: first.path,
         }),
       ).toBe(1_000);
 
@@ -2546,7 +2675,6 @@ describe("openclaw agent database", () => {
         readRegisteredAgentDatabaseLastSeenAt({
           agentId: "worker-1",
           env,
-          path: first.path,
         }),
       ).toBe(1_000);
     } finally {

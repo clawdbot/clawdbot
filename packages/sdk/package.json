@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@openclaw/gateway-client": "workspace:*",
+    "@openclaw/gateway-protocol": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   }
 }

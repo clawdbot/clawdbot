@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { lazyCompile as compile } from "./protocol-validator.js";
 import * as S from "./schema-modules.js";
 import type {
@@ -233,6 +232,9 @@ export const validateSessionsRecoverParams = compile(S.SessionsRecoverParamsSche
 export const validateSessionsSendParams = compile(S.SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = compile(S.SessionsDispatchParamsSchema);
 export const validateSessionsReclaimParams = compile(S.SessionsReclaimParamsSchema);
+export const validateSessionsReclaimResult = compile(S.SessionsReclaimResultSchema);
+export const validateSessionsMoveParams = compile(S.SessionsMoveParamsSchema);
+export const validateSessionsMoveResult = compile(S.SessionsMoveResultSchema);
 export const validateSessionsMessagesSubscribeParams = compile(
   S.SessionsMessagesSubscribeParamsSchema,
 );
@@ -243,26 +245,20 @@ export const validateSessionsViewerPresenceSetParams = compile(
   S.SessionsViewerPresenceSetParamsSchema,
 );
 export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
-// Keep the current generated/client contract icon-free while accepting the
-// retired field from beta v4 clients at the raw Gateway validation boundary.
-const SessionsPatchV4CompatibilityParamsSchema = Type.Object(
-  {
-    ...S.SessionsPatchParamsSchema.properties,
-    icon: Type.Optional(Type.Union([S.NonEmptyString, Type.Null()])),
-  },
-  { additionalProperties: false },
-);
-export const validateSessionsPatchParams = compile<S.SessionsPatchParams>(
-  SessionsPatchV4CompatibilityParamsSchema,
-);
+export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
 export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);
 export const validateSessionsDeleteParams = compile(S.SessionsDeleteParamsSchema);
+export const validateSessionsAssignOwnerParams = compile(S.SessionsAssignOwnerParamsSchema);
 export const validateSessionsGroupsListParams = compile(S.SessionsGroupsListParamsSchema);
 export const validateSessionsGroupsListResult = compile(S.SessionsGroupsListResultSchema);
+export const validateSessionsGroupsDefaultsParams = compile(S.SessionsGroupsDefaultsParamsSchema);
+export const validateSessionsGroupsDefaultsResult = compile(S.SessionsGroupsDefaultsResultSchema);
 export const validateSessionsGroupsPutParams = compile(S.SessionsGroupsPutParamsSchema);
 export const validateSessionsGroupsRenameParams = compile(S.SessionsGroupsRenameParamsSchema);
+export const validateSessionsGroupsUpdateParams = compile(S.SessionsGroupsUpdateParamsSchema);
+export const validateSessionsGroupsUpdateResult = compile(S.SessionsGroupsUpdateResultSchema);
 export const validateSessionsGroupsDeleteParams = compile(S.SessionsGroupsDeleteParamsSchema);
 export const validateSessionsGroupsMutationResult = compile(S.SessionsGroupsMutationResultSchema);
 export const validateSessionsCompactParams = compile(S.SessionsCompactParamsSchema);
@@ -392,6 +388,7 @@ export const validateDevicePairApproveParams = compile(S.DevicePairApproveParams
 export const validateDevicePairRejectParams = compile(S.DevicePairRejectParamsSchema);
 export const validateDevicePairRemoveParams = compile(S.DevicePairRemoveParamsSchema);
 export const validateDevicePairSetupCodeParams = compile(S.DevicePairSetupCodeParamsSchema);
+export const validateDevicePairSetupStatusParams = compile(S.DevicePairSetupStatusParamsSchema);
 export const validateDevicePairRenameParams = compile(S.DevicePairRenameParamsSchema);
 export const validateDeviceTokenRotateParams = compile(S.DeviceTokenRotateParamsSchema);
 export const validateDeviceTokenRevokeParams = compile(S.DeviceTokenRevokeParamsSchema);

@@ -13,8 +13,9 @@ lands in **one rolling conversation**: the main session. Ask something on your
 phone, follow up from your laptop, and the agent has the same context in both
 places. There is one brain, and this is where it thinks.
 
-Under the hood the main session is an ordinary session with the key
-`agent:<agentId>:main` (for example `agent:main:main`). What makes it special
+Under the hood the main session is an ordinary session with the default key
+`agent:<agentId>:main` (for example `agent:main:main`; `session.mainKey` can
+change the final segment). What makes it special
 is that the default DM scope collapses all direct messages into it, and that
 the rest of the system treats it as the agent's root: heartbeats wake it,
 background work reports back to it, and activity elsewhere flows up to it.
@@ -32,13 +33,14 @@ coding/CLI sessions under **Coding**.
 The main session is not just a chat log; it is the place where your agent's
 world converges:
 
-- **Group activity.** Group and room sessions stay isolated (see below), but
-  under the default DM scope the main session automatically watches them.
+- **Group activity.** Group and room sessions stay isolated by default (see
+  below), but under the default DM scope the main session automatically watches them.
   Activity queues up as compact notices — coalesced per conversation, never
   one wake-up per message — and the agent sees them the next time it runs: on
-  your next message or on a scheduled heartbeat. The agent can also read the
-  sessions it watches — its system prompt names them — so "what did I miss in
-  the family group?" works.
+  your next message or on a scheduled heartbeat. Under the default `tree`
+  visibility, the main session can use session tools across every session of
+  the same agent; its system prompt names watched groups so it knows where
+  recent activity happened.
 - **Background work.** Sub-agents and spawned sessions announce their results
   back to the session that started them, so work the agent kicked off from
   Home reports back to Home.
@@ -101,6 +103,12 @@ defaults off. `openclaw security audit` recommends isolation when it detects
 multiple DM senders. The full scope matrix, identity linking, and per-route
 overrides are covered in [Session management](/concepts/session) and
 [Channel routing](/channels/channel-routing).
+
+Groups and rooms use separate sessions by default. To make selected trusted
+team rooms part of the rolling main conversation, set
+`bindings[].session.groupScope: "main"` on their route bindings. This changes
+the session key and shared context; mention gating and reply routing still use
+the originating room. See [Session management](/concepts/session#group-and-room-routing).
 
 ## Related
 

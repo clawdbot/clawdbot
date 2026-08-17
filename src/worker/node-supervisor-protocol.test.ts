@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+  parseNodeWorkerConnectionFailureMessage,
   parseNodeWorkerSupervisorReceipt,
   type NodeWorkerSupervisorIdentity,
 } from "./node-supervisor-protocol.js";
@@ -18,6 +20,30 @@ const identity: NodeWorkerSupervisorIdentity = {
 };
 
 describe("node worker supervisor wire receipt", () => {
+  it("accepts only bounded worker connection diagnostics", () => {
+    expect(
+      parseNodeWorkerConnectionFailureMessage({
+        type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+        cause: "certificate rejected",
+      }),
+    ).toEqual({
+      type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+      cause: "certificate rejected",
+    });
+    expect(
+      parseNodeWorkerConnectionFailureMessage({
+        type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+        cause: null,
+      }),
+    ).toEqual({ type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE, cause: null });
+    expect(
+      parseNodeWorkerConnectionFailureMessage({
+        type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+        cause: "x".repeat(64 * 1024 + 1),
+      }),
+    ).toBeNull();
+  });
+
   it.each([
     { ...identity, state: "pending" },
     { ...identity, state: "running" },

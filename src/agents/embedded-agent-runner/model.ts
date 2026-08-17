@@ -122,7 +122,11 @@ export function resolveModel(
   modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
-  const derivedWorkspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
+  const derivedWorkspaceDir = resolveModelWorkspaceDir(
+    cfg,
+    options?.workspaceDir,
+    options?.agentId,
+  );
   const preparedSnapshot =
     !options?.authStorage || !options?.modelRegistry
       ? resolvePreparedAgentSnapshot(
@@ -194,7 +198,11 @@ export async function resolveModelAsync(
   modelRegistry: ModelRegistry;
 }> {
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
-  const derivedWorkspaceDir = resolveModelWorkspaceDir(cfg, options?.workspaceDir);
+  const derivedWorkspaceDir = resolveModelWorkspaceDir(
+    cfg,
+    options?.workspaceDir,
+    options?.agentId,
+  );
   const emptyDiscoveryStores =
     options?.skipAgentDiscovery && (!options.authStorage || !options.modelRegistry)
       ? createEmptyAgentDiscoveryStores()

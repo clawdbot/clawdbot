@@ -14,7 +14,7 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "./openai-responses-compaction-replay.js";
-import { tagOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay-internal.js";
+import { OPENAI_RESPONSES_REASONING_REPLAY_META_KEY } from "./openai-responses-contracts.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 const SDK_FULL_HISTORY_PREFIX = "full history before compaction";
@@ -135,18 +135,14 @@ function createCompactionContext(
           {
             type: "thinking",
             thinking: "prior reasoning",
-            thinkingSignature: JSON.stringify(
-              tagOpenAIResponsesReasoningReplayItem(
-                {
-                  type: "reasoning",
-                  id: "rs_sdk_retry",
-                  encrypted_content: SDK_REASONING_CIPHERTEXT,
-                  summary: [],
-                },
-                model,
-                identity,
-              ),
-            ),
+            thinkingSignature: JSON.stringify({
+              type: "reasoning",
+              id: "rs_sdk_retry",
+              encrypted_content: SDK_REASONING_CIPHERTEXT,
+              summary: [],
+              [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]:
+                buildOpenAIResponsesReasoningReplayMetadata(model, identity),
+            }),
           },
         ]
       : [],
@@ -181,6 +177,53 @@ function createCompactionContext(
       { role: "user", content: SDK_FULL_HISTORY_PREFIX, timestamp: 0 },
       prior,
       { role: "user", content: "continue", timestamp: 2 },
+    ],
+  };
+}
+
+function createOrphanedToolOutputCompactionContext(
+  model: Model,
+  identity: { authProfileId: string; sessionId: string },
+): Context {
+  const callId = "call_compacted";
+  const prior: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: callId, name: "lookup", arguments: {} }],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  };
+  captureOpenAIResponsesCompaction(
+    prior,
+    { type: "compaction", id: "cmp_orphaned_output", encrypted_content: "opaque-compaction" },
+    1,
+    model,
+    buildOpenAIResponsesReasoningReplayMetadata(model, identity),
+  );
+  return {
+    systemPrompt: "PRIVATE-ORPHANED-OUTPUT-RECOVERY-PROMPT",
+    messages: [
+      { role: "user", content: SDK_FULL_HISTORY_PREFIX, timestamp: 0 },
+      prior,
+      {
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "lookup",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+        timestamp: 2,
+      },
+      { role: "user", content: "continue", timestamp: 3 },
     ],
   };
 }
@@ -338,6 +381,43 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify(observations)).not.toContain("opaque-azure-compaction");
   });
 
+  it("rebuilds full history when compaction leaves an orphaned function output", async () => {
+    const identity = { sessionId: "orphan-recovery-session", authProfileId: "openai-profile" };
+    const openAIModel = createModel();
+    const context = createOrphanedToolOutputCompactionContext(openAIModel, identity);
+    const observations: ResponsesPromptObservation[] = [];
+    const options = { apiKey: "test-key", ...identity };
+    responsesPromptObserver.set(options, (observation) => observations.push(observation));
+    sdkState.outcomes = [
+      Object.assign(
+        new Error("400 No tool call found for function call output with call_id call_compacted."),
+        { status: 400, type: "invalid_request_error", param: "input", code: null },
+      ),
+      completedSdkResponse("resp_orphan_recovered"),
+    ];
+
+    const stream = await Promise.resolve(
+      createOpenAIResponsesTransportStreamFn()(openAIModel, context, options as never),
+    );
+    const recovered = await stream.result();
+
+    expect(recovered).toMatchObject({
+      stopReason: "stop",
+      providerReplay: { type: "openai-responses-compaction-suppression", data: "rejected" },
+    });
+    expect(sdkState.requests).toHaveLength(2);
+    expect(requestHasCompaction(sdkState.requests[0])).toBe(true);
+    expect(JSON.stringify(sdkState.requests[0]?.input)).toContain("function_call_output");
+    expect(JSON.stringify(sdkState.requests[0]?.input)).not.toContain('"type":"function_call"');
+    expect(requestHasCompaction(sdkState.requests[1])).toBe(false);
+    expect(JSON.stringify(sdkState.requests[1]?.input)).toContain('"type":"function_call"');
+    expect(JSON.stringify(sdkState.requests[1]?.input)).toContain("function_call_output");
+    expect(observations.map((entry) => entry.payloadVariant)).toEqual([
+      "initial",
+      "compaction-stripped",
+    ]);
+  });
+
   it("lazily rebuilds full history after reasoning and compaction rejection", async () => {
     const identity = { sessionId: "sdk-recovery-session", authProfileId: "sdk-profile" };
     const openAIModel = createModel();
@@ -347,6 +427,7 @@ describe("OpenAI Responses provider prompt observer", () => {
         code: "invalid_encrypted_content",
       });
     const onPayload = vi.fn((request: unknown) => request);
+    const onCompactionRejected = vi.fn();
     sdkState.outcomes = [
       invalidEncryptedContent(),
       invalidEncryptedContent(),
@@ -357,6 +438,7 @@ describe("OpenAI Responses provider prompt observer", () => {
       createOpenAIResponsesTransportStreamFn()(openAIModel, context, {
         apiKey: "test-key",
         ...identity,
+        onCompactionRejected,
         onPayload,
       } as never),
     );
@@ -372,6 +454,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify(sdkState.requests[2]?.input)).toContain(SDK_FULL_HISTORY_PREFIX);
     expect(JSON.stringify(sdkState.requests[2]?.input)).not.toContain(SDK_REASONING_CIPHERTEXT);
     expect(onPayload).toHaveBeenCalledTimes(2);
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
   });
 
   it("does not invoke the provider or retry when prompt observation throws", async () => {

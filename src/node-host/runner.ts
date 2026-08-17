@@ -5,6 +5,8 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
@@ -13,6 +15,8 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_BUNDLE_RETENTION_VERSION,
+  NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
@@ -79,6 +83,7 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
@@ -252,9 +257,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
 
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
+  let workerRunsAvailable = false;
   let gatewayHelloReceived = false;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
+  let gatewaySupportsBundleRetention = false;
+  let gatewaySupportsBundleStatus = false;
   let optionalPublicationStates = new Map<
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
@@ -271,6 +279,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     gatewayConnectionGeneration += 1;
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
+    gatewaySupportsBundleRetention = false;
+    gatewaySupportsBundleStatus = false;
     retireOptionalPublications();
   };
 
@@ -463,9 +473,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       NODE_RUNNER_INVENTORY_UPDATE_METHOD,
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        ...(preparedRuntime.manifest.workerRuns
-          ? { workerRuns: preparedRuntime.manifest.workerRuns }
-          : {}),
+        workerHost: preparedRuntime.workerHostingEnabled
+          ? {
+              enabled: true,
+              capacity: workerRunsAvailable ? "available" : "full",
+              bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
+              ...(gatewaySupportsBundleRetention
+                ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
+                : {}),
+              ...(gatewaySupportsBundleRetention && gatewaySupportsBundleStatus
+                ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
+                : {}),
+            }
+          : { enabled: false },
       },
       "runner inventory",
     );
@@ -503,7 +523,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       // restart-scoped availability, not a capability upgrade requiring re-pairing.
       caps: preparedRuntime.manifest.caps,
       commands: preparedRuntime.manifest.commands,
-      workerRuns: preparedRuntime.manifest.workerRuns,
+      computerUse: preparedRuntime.manifest.computerUse,
       pathEnv: preparedRuntime.manifest.pathEnv,
       permissions: undefined,
       deviceIdentity: loadOrCreateDeviceIdentity(),
@@ -537,6 +557,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
       connectedGatewayProtocol = hello.protocol;
+      gatewaySupportsBundleRetention =
+        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) ===
+        true;
+      gatewaySupportsBundleStatus =
+        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS) ===
+        true;
       retireOptionalPublications();
       optionalPublicationStates = new Map();
       if (opts.stopAfterFirstConnect) {
@@ -573,6 +599,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;
       publishInventory();
+    },
+    onRunnerAvailabilityChanged: (available) => {
+      workerRunsAvailable = available;
+      publishRunnerInventory();
     },
     onManifestChanged: (manifest) => {
       // Manifest changes force a reconnect. Retire the current publication queue

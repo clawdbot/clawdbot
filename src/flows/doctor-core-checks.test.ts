@@ -100,7 +100,7 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async detectUnavailableSkills(): Promise<readonly SkillStatusEntry[]> {
       return [];
     },
-    async collectSecurityWarnings(): Promise<readonly string[]> {
+    async collectSecurityWarnings() {
       return [];
     },
     async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
@@ -327,50 +327,6 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
   });
 
-  it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
-    const check = getCheck(
-      createCoreHealthChecks(createDeps()),
-      "core/doctor/skill-workshop-tool-policy",
-    );
-
-    const findings = await check.detect({
-      mode: "doctor",
-      runtime,
-      cfg: {
-        skills: { workshop: { autonomous: { mode: "propose" } } },
-        tools: { profile: "messaging" },
-      },
-    });
-
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/skill-workshop-tool-policy",
-        severity: "warning",
-        message: 'tools.profile: "messaging" does not include "skill_workshop".',
-        path: "tools.profile",
-        fixHint: 'Add tools.alsoAllow: ["skill_workshop"].',
-      }),
-    ]);
-  });
-
-  it("does not warn when autonomous Skill Workshop capture is disabled", async () => {
-    const check = getCheck(
-      createCoreHealthChecks(createDeps()),
-      "core/doctor/skill-workshop-tool-policy",
-    );
-
-    await expect(
-      check.detect({
-        mode: "doctor",
-        runtime,
-        cfg: {
-          skills: { workshop: { autonomous: { mode: "off" } } },
-          tools: { profile: "messaging" },
-        },
-      }),
-    ).resolves.toEqual([]);
-  });
-
   it("threads deep mode into structured extra gateway service detection", async () => {
     const check = getCheck(
       createCoreHealthChecks(createDeps()),
@@ -583,14 +539,25 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
   });
 
-  it("converts security doctor warnings into health findings", async () => {
+  it("keeps one structured security condition as one health finding", async () => {
     const check = getCheck(
       createCoreHealthChecks(
         createDeps({
-          async collectSecurityWarnings(): Promise<readonly string[]> {
+          async collectSecurityWarnings() {
             return [
-              '- CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
-              '- WARNING: Gateway bound to "lan" (0.0.0.0).',
+              {
+                checkId: "gateway.bind_no_auth",
+                severity: "critical" as const,
+                title: "CRITICAL",
+                detail: [
+                  'Gateway bound to "lan" (0.0.0.0) without authentication.',
+                  "Anyone on your network can fully control your agent.",
+                ].join("\n"),
+                remediation: [
+                  "Fix: openclaw config set gateway.bind loopback",
+                  "Fix: openclaw doctor --fix to generate a token",
+                ].join("\n"),
+              },
             ];
           },
         }),
@@ -611,20 +578,18 @@ describe("CORE_HEALTH_CHECKS", () => {
       },
     });
 
-    expect(findings).toContainEqual(
+    expect(findings).toEqual([
       expect.objectContaining({
         checkId: "core/doctor/security",
         severity: "error",
-        message: expect.stringContaining("Gateway bound"),
+        message: 'CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
+        fixHint: [
+          "Anyone on your network can fully control your agent.",
+          "Fix: openclaw config set gateway.bind loopback",
+          "Fix: openclaw doctor --fix to generate a token",
+        ].join("\n"),
       }),
-    );
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/security",
-        severity: "warning",
-        message: expect.stringContaining("Gateway bound"),
-      }),
-    );
+    ]);
   });
 
   it("reports disabled Codex plugin routes as core health findings", async () => {
@@ -674,7 +639,9 @@ describe("CORE_HEALTH_CHECKS", () => {
         },
       },
     };
-    expect(hooksModelCatalogCase.calls).toContainEqual([{ config: cfg, readOnly: true }]);
+    expect(hooksModelCatalogCase.calls).toContainEqual([
+      { config: cfg, readOnly: true, providerDiscoveryProviderIds: [] },
+    ]);
   });
 
   it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {
@@ -1015,62 +982,5 @@ describe("CORE_HEALTH_CHECKS", () => {
         target: "mockplugin",
       }),
     );
-  });
-});
-
-describe("core/doctor/bootstrap-size", () => {
-  let tmp: string | undefined;
-
-  afterEach(async () => {
-    if (tmp !== undefined) {
-      await fs.rm(tmp, { recursive: true, force: true });
-      tmp = undefined;
-    }
-  });
-
-  it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-"));
-    // This size fits the global default but exceeds the default agent's effective budget.
-    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(15_000), "utf-8");
-
-    const check = getCheck(CORE_HEALTH_CHECKS, "core/doctor/bootstrap-size");
-    const findings = await check.detect({
-      mode: "lint",
-      runtime,
-      cfg: {
-        agents: {
-          defaults: {
-            workspace: tmp,
-            bootstrapMaxChars: 20_000,
-          },
-          list: [{ id: "custom-agent", default: true, bootstrapMaxChars: 10_000 }],
-        },
-      },
-      cwd: tmp,
-    });
-
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "warning",
-        message: expect.stringContaining("AGENTS.md"),
-        fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
-      }),
-    );
-    await expect(
-      check.detect({
-        mode: "lint",
-        runtime,
-        cfg: {
-          agents: {
-            defaults: { bootstrapMaxChars: 20_000 },
-            list: [
-              { id: "alpha", default: true, workspace: tmp, bootstrapMaxChars: 10_000 },
-              { id: "beta" },
-            ],
-          },
-        },
-      }),
-    ).resolves.toEqual([]);
   });
 });

@@ -2,7 +2,7 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import type { ConfigFileSnapshot } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
-import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,6 +12,7 @@ import {
   type SecretRef,
 } from "../config/types.secrets.js";
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import {
@@ -30,6 +31,7 @@ import { formatCliCommand } from "./command-format.js";
 import type { ConfigSetOperation } from "./config-cli-input.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type { ConfigSetDryRunError } from "./config-set-dryrun.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 
 function formatInvalidConfigRepairHint(
   snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "warnings" | "legacyIssues">,
@@ -53,22 +55,14 @@ export async function loadValidConfig(
   }
   if (options.json) {
     writeRuntimeJson(runtime, {
-      error: `OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`,
+      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
       issues: normalizeConfigIssues(snapshot.issues),
     });
     runtime.exit(1);
     return snapshot;
   }
   runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
-  const displayIssues = attachConfigIssueDiagnostics(snapshot.issues, {
-    raw: snapshot.raw,
-    parsed: snapshot.parsed,
-    effective: snapshot.sourceConfig,
-    configPath: snapshot.path,
-    formatPathForDisplay: true,
-    includeReceivedValueHint: true,
-  });
-  for (const line of formatConfigIssueLines(displayIssues, "-", { normalizeRoot: true })) {
+  for (const line of renderConfigValidationIssueLines(snapshot)) {
     runtime.error(line);
   }
   runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
@@ -155,7 +149,7 @@ export async function collectDryRunResolvabilityErrors(params: {
     } catch (err) {
       failures.push({
         kind: "resolvability",
-        message: String(err),
+        message: formatErrorMessage(err),
         ref: `${ref.source}:${ref.provider}:${ref.id}`,
       });
     }

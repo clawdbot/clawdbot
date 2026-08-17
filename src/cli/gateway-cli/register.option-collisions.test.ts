@@ -85,6 +85,7 @@ vi.mock("../../commands/health.js", () => ({
   emitReachableGatewayAuthDiagnostic: (params: unknown) =>
     mocks.emitReachableGatewayAuthDiagnostic(params),
   formatHealthChannelLines: () => mocks.formatHealthChannelLines(),
+  readBestEffortHealthConfig: async () => ({}),
 }));
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
@@ -215,6 +216,15 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+      name: "gives setup detection enough transport grace",
+      argv: ["gateway", "call", "openclaw.setup.detect", "--json"],
+      assert: () => {
+        const [method, opts] = firstGatewayCall();
+        expect(method).toBe("openclaw.setup.detect");
+        expect((opts as { timeout?: string } | undefined)?.timeout).toBe("40000");
+      },
+    },
+    {
       name: "projects gateway call --port into local config",
       argv: ["gateway", "call", "health", "--port", "19084", "--json"],
       assert: () => {
@@ -329,7 +339,7 @@ describe("gateway register option collisions", () => {
 
     expect(callGatewayCli).not.toHaveBeenCalled();
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      "Gateway call failed: Error: Use either --url or --port, not both.",
+      "Gateway call failed: Use either --url or --port, not both.",
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });

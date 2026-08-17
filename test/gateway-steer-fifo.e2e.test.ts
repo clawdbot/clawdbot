@@ -486,7 +486,12 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
     mode: GATEWAY_CLIENT_MODES.UI,
     role: "operator",
     scopes: ["operator.admin", "operator.read", "operator.write"],
-    caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+    caps: [
+      GATEWAY_CLIENT_CAPS.AGENT_KIND,
+      GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
+      GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+    ],
     platform: process.platform,
     requestTimeoutMs: 30_000,
     onHelloOk: resolveHello,

@@ -146,8 +146,12 @@ export function buildCliMcpGrantContext(params: {
     ...(params.run.scheduledToolPolicy
       ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
       : {}),
+    ...(params.run.cronCreatorCallerOrigin
+      ? { cronCreatorCallerOrigin: { ...params.run.cronCreatorCallerOrigin } }
+      : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    modelHasVision: params.run.modelHasVision,
     messageProvider,
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
     currentChannelId,

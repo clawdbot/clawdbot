@@ -12,8 +12,8 @@ import {
   type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
   type AgentHarnessV2,
   type AgentMessage,
+  type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -2013,12 +2013,20 @@ describe("runCopilotAttempt", () => {
     });
     const pool = makeFakePool(sdk);
 
-    const attempt = runCopilotAttempt(makeParams({ onBlockReply }), { pool });
+    const toolAuthorityFingerprint = "ask-user-authority";
+    const attempt = runCopilotAttempt(makeParams({ onBlockReply, toolAuthorityFingerprint }), {
+      pool,
+    });
 
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
     expect(queueAgentHarnessMessage("session-1", "tool progress")).toBe(true);
     await waitForEventLoopTurn();
-    expect(queueAgentHarnessMessage("session-1", "2", { isInboundUserMessage: true })).toBe(true);
+    expect(
+      queueAgentHarnessMessage("session-1", "2", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
     const result = await attempt;
 
     const cfg = requireCreateSessionConfig(sdk);

@@ -49,7 +49,6 @@ const runtime = vi.hoisted(() => ({
     messages,
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
-  enforceChatHistoryFinalBudget: vi.fn(({ messages }: { messages: unknown[] }) => ({ messages })),
   loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
@@ -525,7 +524,7 @@ describe("embedded gateway stub", () => {
       messages: rawMessages,
       totalMessages: 10,
     }));
-    runtime.enforceChatHistoryFinalBudget.mockReturnValueOnce({ messages: returnedMessages });
+    runtime.capArrayByJsonBytes.mockReturnValueOnce({ items: returnedMessages });
 
     const callGateway = createEmbeddedCallGateway();
     const result = await callGateway<{

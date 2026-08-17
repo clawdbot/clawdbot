@@ -165,8 +165,11 @@ export async function prepareGatewayKernelState(params: {
   const {
     workerEnvironmentService,
     workerLiveEvents,
+    nodeWorkerGatewayNamespace,
     bindDeviceNodeControl,
     bindNodeWorkspaceBindingResolver,
+    handleNodeWorkerBundleTransferRequest,
+    handleNodeWorkspaceTransferRequest,
   } = workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
   const workerDispatchAuthority = {
@@ -175,13 +178,13 @@ export async function prepareGatewayKernelState(params: {
     },
   };
   const workerPlacementRuntime =
-    workerEnvironmentService && workerEnvironmentStartup
+    workerEnvironmentService && workerEnvironmentStartup && nodeWorkerGatewayNamespace
       ? await startupTrace.measure("worker-environments.placement-runtime", async () => {
           const placementModule = await loadWorkerPlacementStartupModule();
           return placementModule.createGatewayWorkerPlacementRuntime({
             placements: workerEnvironmentStartup.placementStore,
             environments: workerEnvironmentService,
-            admitNewPlacements: true,
+            gatewayNamespace: nodeWorkerGatewayNamespace,
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
             warn: (message) => log.warn(message),
           });
@@ -193,6 +196,12 @@ export async function prepareGatewayKernelState(params: {
       workerPlacementRuntime.dispatchService.dispatch,
     );
   }
+  const bindDeviceNodeRuntime = bindDeviceNodeControl
+    ? (transport: Parameters<NonNullable<typeof bindDeviceNodeControl>>[0]) => {
+        bindDeviceNodeControl(transport);
+        workerPlacementRuntime?.bindNodeWorkerSupervisorTransport(transport);
+      }
+    : undefined;
   const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = workerPlacementControlAvailable;
   const workerDesktopObserveAvailable =
@@ -202,9 +211,9 @@ export async function prepareGatewayKernelState(params: {
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
-  const channelRuntimeEnvs = Object.fromEntries(
+  const channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>> = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
-  ) as unknown as Record<ChannelId, RuntimeEnv>;
+  );
   const listStartupChannelGatewayMethods = () => {
     const methods: string[] = [];
     for (const plugin of listGatewayStartupChannelPlugins()) {
@@ -219,7 +228,8 @@ export async function prepareGatewayKernelState(params: {
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
       (method) =>
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || method !== "sessions.reclaim") &&
+        (workerPlacementControlAvailable ||
+          (method !== "sessions.reclaim" && method !== "sessions.move")) &&
         (desktopObserveAvailable || method !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (method !== "desktop.launch" &&
@@ -390,7 +400,7 @@ export async function prepareGatewayKernelState(params: {
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
-  const isGatewayStartupPending = () => !startupState.sidecarsReady && sidecarStartup === "start";
+  const isGatewayStartupPending = () => !startupState.sidecarsReady;
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
@@ -455,10 +465,13 @@ export async function prepareGatewayKernelState(params: {
     getStartup,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+    handleNodeWorkerBundleTransferRequest,
+    handleNodeWorkspaceTransferRequest,
     workerIngressEnabled: Boolean(workerEnvironmentService),
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     clients: connectionState.clients,
+    tailscaleMode,
   });
   const {
     clients,
@@ -476,6 +489,7 @@ export async function prepareGatewayKernelState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
+    isConnectionActive,
   } = connectionState;
 
   return {
@@ -483,7 +497,7 @@ export async function prepareGatewayKernelState(params: {
     pluginRuntime,
     workerEnvironmentService,
     workerLiveEvents,
-    bindDeviceNodeControl,
+    bindDeviceNodeControl: bindDeviceNodeRuntime,
     workerDispatchAuthority,
     workerPlacementRuntime,
     workerPlacementControlAvailable,
@@ -558,7 +572,9 @@ export async function prepareGatewayKernelState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
+    isConnectionActive,
     getWorkerIngressEndpoint: transportBridge.getWorkerIngressEndpoint,
+    getTailscaleIngressEndpoint: transportBridge.getTailscaleIngressEndpoint,
     getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
     getPortalService: transportBridge.getPortalService,

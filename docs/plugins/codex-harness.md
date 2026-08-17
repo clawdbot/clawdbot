@@ -57,6 +57,11 @@ runtime allowlist disables native Code Mode and leaves the turn without an
 execution environment, OpenClaw keeps its policy-filtered `exec` and `process`
 tools available instead for direct, unsandboxed execution.
 
+When `tools.exec.host: "node"` or `/exec host=node` makes the node the session
+default, OpenClaw hides the Codex-native shell and exposes `node_exec` and
+`node_process` as the shell path. This keeps the configured execution host from
+silently falling back to the app-server or Gateway machine.
+
 This Codex-native feature is separate from
 [OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
 for generic OpenClaw runs with a different `exec` input shape. For the
@@ -218,6 +223,7 @@ rules, paired-node limits, metadata exposure, and troubleshooting.
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | Enable the harness                                  | `plugins.entries.codex.enabled: true`                                                                     | OpenClaw config                    |
 | Hide native Codex session discovery                 | `plugins.entries.codex.config.sessionCatalog.enabled: false`                                              | Codex plugin config                |
+| Include additional local Codex stores (stdio only)  | `plugins.entries.codex.config.sessionCatalog.homes`                                                       | Codex plugin config                |
 | Keep an allowlisted plugin install                  | Include `codex` in `plugins.allow`                                                                        | OpenClaw config                    |
 | Allow eligible OpenAI turns to use Codex implicitly | Exact official HTTPS Responses/ChatGPT route, no authored provider request override, runtime unset/`auto` | OpenAI provider/model config       |
 | Sign in with ChatGPT/Codex OAuth                    | `openclaw models auth login --provider openai`                                                            | CLI auth profile                   |
@@ -254,6 +260,11 @@ Do not set `compaction.model` or `compaction.provider` on Codex-backed
 agents. Codex compacts through its native app-server thread state, so
 OpenClaw ignores those local summarizer overrides at runtime, and
 `openclaw doctor --fix` removes them when the agent uses Codex.
+
+An authored `models.providers.*.models[].contextTokens` cap is forwarded to
+Codex thread start and resume as `model_context_window`. Codex clamps the value
+to the model's native maximum and derives automatic compaction from the capped
+window. When the model entry has no authored cap, OpenClaw sends no override.
 
 Lossless remains supported as a context engine for assembly, ingestion, and
 maintenance around Codex turns, configured through
@@ -462,6 +473,18 @@ Then check Codex app-server state:
 /codex binding
 ```
 
+After installing or updating OpenClaw, explicitly verify the managed package
+binary before cutover:
+
+```bash
+openclaw doctor --lint --only codex/managed-app-server --json
+```
+
+For an effective Codex route using the managed stdio app-server, this
+default-disabled check resolves the platform-native executable and requires the
+exact Codex version pinned by OpenClaw. It does not execute custom, remote, or
+macOS desktop-owned app-servers.
+
 `/status` reports the resolved OpenClaw Fast policy (`on`, `off`, or `auto`)
 and the selected runtime. It does not report the upstream service tier actually
 honored or returned for a completed request. `/codex binding` reports the
@@ -505,6 +528,7 @@ Keep provider refs and runtime policy separate:
 | Resume a stored Codex CLI session as a paired-node turn    | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
 | View non-archived Codex sessions across computers          | Enable Codex supervision and open **Codex Sessions**                                                  |
 | Change the bound thread's model, fast-mode, or permissions | `/codex model <model>`, `/codex fast [on\|off\|status]`, `/codex permissions [default\|yolo\|status]` |
+| Compact the current Codex session                          | `/codex compact`                                                                                      |
 | Stop or steer the active turn                              | `/codex stop`, `/codex steer <text>`                                                                  |
 | Detach the current binding                                 | `/codex detach` (alias `/codex unbind`)                                                               |
 | Send Codex feedback only                                   | `/codex diagnostics [note]`                                                                           |
@@ -728,7 +752,9 @@ Common forms:
 - `/codex stop` stops the active turn; `/codex steer <text>` steers it.
 - `/codex model <model>`, `/codex fast [on|off|status]`, and
   `/codex permissions [default|yolo|status]` change per-conversation state.
-- `/codex compact` asks Codex app-server to compact the attached thread.
+- `/codex compact` runs the same completion and session-accounting pipeline as
+  `/compact`, then reports whether Codex compacted the session and the resulting
+  token count. If compaction is skipped or fails, the reply includes the reason.
 - `/codex review` starts Codex native review for the attached thread.
 - `/codex diagnostics [note]` asks before sending Codex feedback for the
   attached thread.

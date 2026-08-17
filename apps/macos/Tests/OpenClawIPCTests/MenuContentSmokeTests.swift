@@ -86,6 +86,42 @@ struct MenuContentSmokeTests {
         #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
     }
 
+    @Test func `application termination waits for Peekaboo Bridge shutdown`() async {
+        let delegate = AppDelegate()
+        let cleanupStarted = AsyncStream<Void>.makeStream()
+        let cleanupRelease = AsyncStream<Void>.makeStream()
+        let deadlineRelease = AsyncStream<Void>.makeStream()
+        var startedIterator = cleanupStarted.stream.makeAsyncIterator()
+        var replies: [Bool] = []
+        delegate.nodeTerminationCleanup = {}
+        delegate.peekabooBridgeTerminationCleanup = {
+            cleanupStarted.continuation.yield()
+            for await _ in cleanupRelease.stream {
+                return
+            }
+        }
+        delegate.waitForTerminationCleanupDeadline = {
+            for await _ in deadlineRelease.stream {
+                return
+            }
+        }
+        delegate.applicationTerminationReply = { _, allow in
+            replies.append(allow)
+        }
+
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+        _ = await startedIterator.next()
+        #expect(replies.isEmpty)
+
+        cleanupRelease.continuation.yield()
+        cleanupRelease.continuation.finish()
+        while replies.isEmpty {
+            await Task.yield()
+        }
+        #expect(replies == [true])
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
+    }
+
     @Test func `application termination deadline does not await stalled cleanup`() async {
         let delegate = AppDelegate()
         let cleanup = CancellationIgnoringTerminationCleanup()
