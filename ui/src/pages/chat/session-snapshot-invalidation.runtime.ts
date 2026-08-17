@@ -10,8 +10,8 @@ type SnapshotKeyHost = {
 const loadSnapshotInvalidation = () => import("./session-snapshot-invalidation.ts");
 
 export function clearStoredChatSnapshots(): Promise<void> {
-  return loadSnapshotInvalidation().then(({ clearStoredChatSnapshots }) =>
-    clearStoredChatSnapshots(),
+  return loadSnapshotInvalidation().then(({ clearStoredChatSnapshots: clearSnapshots }) =>
+    clearSnapshots(),
   );
 }
 
