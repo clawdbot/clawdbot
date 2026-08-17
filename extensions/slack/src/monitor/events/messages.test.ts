@@ -436,13 +436,13 @@ describe("registerSlackMessageEvents", () => {
     {
       name: "message_changed",
       event: makeChangedEvent({ channel: "C123", user: "U123" }),
-      expectedText: "Slack message edited in direct.",
+      expectedText: "Slack message edited in #direct.",
       expectedContextKey: "slack:message:changed:C123:123.456:Ev-enterprise-subtype",
     },
     {
       name: "message_deleted",
       event: makeDeletedEvent({ channel: "C123", user: "U123" }),
-      expectedText: "Slack message deleted in direct.",
+      expectedText: "Slack message deleted in #direct.",
       expectedContextKey: "slack:message:deleted:C123:123.456:Ev-enterprise-subtype",
     },
   ])(
