@@ -15,10 +15,10 @@ import {
   openSessionSnapshotDatabase,
   resetSessionSnapshotDatabase,
 } from "./session-snapshot-database.ts";
+import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import {
   CHAT_SNAPSHOT_STORE_NAME,
   deleteStoredChatSnapshot,
-  subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation.ts";
 const MAX_STORED_ROW_HEIGHTS = 500;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;

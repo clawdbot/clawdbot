@@ -9,14 +9,10 @@ import {
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
+import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 
 export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
-
-type SnapshotInvalidation = { sessionKey: string } | { sessionKey?: undefined };
-type SnapshotInvalidationListener = (invalidation: SnapshotInvalidation) => void | Promise<void>;
-
-const invalidationListeners = new Set<SnapshotInvalidationListener>();
 
 type ChatSnapshotKeyHost = Pick<UiSessionDefaultsHost, "assistantAgentId" | "agentsList" | "hello">;
 
@@ -52,17 +48,6 @@ export function resolveChatSnapshotKey(
   return `agent:${agentId}:${sessionKey}`;
 }
 
-export function subscribeSnapshotInvalidation(listener: SnapshotInvalidationListener): () => void {
-  invalidationListeners.add(listener);
-  return () => invalidationListeners.delete(listener);
-}
-
-async function notifySnapshotInvalidation(invalidation: SnapshotInvalidation): Promise<void> {
-  await Promise.all(
-    [...invalidationListeners].map((listener) => Promise.resolve(listener(invalidation))),
-  );
-}
-
 function indexedDbFactory(): IDBFactory | null {
   try {
     return globalThis.indexedDB ?? null;
@@ -72,7 +57,7 @@ function indexedDbFactory(): IDBFactory | null {
 }
 
 export async function deleteStoredChatSnapshot(sessionKey: string): Promise<void> {
-  await notifySnapshotInvalidation({ sessionKey });
+  await publishSnapshotInvalidation({ sessionKey });
   const factory = indexedDbFactory();
   if (!factory) {
     return;
@@ -106,8 +91,7 @@ export async function deleteStoredChatSnapshot(sessionKey: string): Promise<void
   } catch {}
 }
 
-export async function clearStoredChatSnapshots(): Promise<void> {
-  await notifySnapshotInvalidation({});
+export async function clearStoredChatSnapshotStorage(): Promise<void> {
   const factory = indexedDbFactory();
   if (!factory) {
     return;
@@ -120,4 +104,9 @@ export async function clearStoredChatSnapshots(): Promise<void> {
       request.addEventListener("blocked", () => resolve());
     });
   } catch {}
+}
+
+export async function clearStoredChatSnapshots(): Promise<void> {
+  await publishSnapshotInvalidation({});
+  await clearStoredChatSnapshotStorage();
 }

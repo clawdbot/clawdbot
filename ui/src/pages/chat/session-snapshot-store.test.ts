@@ -2,6 +2,7 @@
 
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   cacheChatSessionSnapshot,
   observeChatCache,
@@ -70,6 +71,7 @@ async function readRawRecord(sessionKey: string): Promise<{ savedAt: number } | 
 describe("persistent chat session snapshots", () => {
   beforeEach(() => {
     vi.stubGlobal("indexedDB", new IDBFactory());
+    vi.stubGlobal("localStorage", createStorageMock());
   });
 
   afterEach(async () => {
@@ -208,6 +210,50 @@ describe("persistent chat session snapshots", () => {
     const reader = new SessionSnapshotStore();
     expect(await reader.read("agent:main:deleted")).toBeNull();
     expect(await reader.read("agent:main:retained")).not.toBeNull();
+  });
+
+  it("broadcasts invalidation and clears active memory for a peer-tab signal", async () => {
+    const sessionKey = "agent:main:cross-tab";
+    const memoryCache: ChatMessageCache = new Map();
+    const store = new SessionSnapshotStore(memoryCache);
+    store.connect();
+    observeChatCache(memoryCache, store);
+    cacheChatSessionSnapshot(
+      memoryCache,
+      { assistantAgentId: "main", agentsList: null, hello: null },
+      { sessionKey },
+      snapshot("local"),
+    );
+    await store.flush();
+    const setItem = vi.spyOn(localStorage, "setItem");
+
+    try {
+      await clearStoredChatSnapshots();
+      expect(setItem).toHaveBeenCalledWith(
+        "openclaw.control.chatSnapshots.invalidate.v1",
+        expect.any(String),
+      );
+
+      cacheChatSessionSnapshot(
+        memoryCache,
+        { assistantAgentId: "main", agentsList: null, hello: null },
+        { sessionKey },
+        snapshot("refilled"),
+      );
+      await store.flush();
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "openclaw.control.chatSnapshots.invalidate.v1",
+          newValue: "other-tab",
+        }),
+      );
+
+      expect(memoryCache.size).toBe(0);
+      expect(store.readSavedAt(sessionKey)).toBeNull();
+    } finally {
+      store.disconnect();
+      await store.whenIdle();
+    }
   });
 
   it("keeps every operation non-fatal when IndexedDB is unavailable or throws", async () => {

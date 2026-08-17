@@ -15,6 +15,7 @@ import {
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -673,6 +674,38 @@ describe("chat pane initialization", () => {
       store.disconnect();
       await store.whenIdle();
       await clearStoredChatSnapshots();
+    }
+  });
+
+  it("clears a mounted transcript and fences delayed history after cross-tab invalidation", async () => {
+    const response = createDeferred<Record<string, unknown>>();
+    const request = vi.fn(() => response.promise);
+    const client = createGatewayBrowserClientFixture({ request });
+    const sessions = createSessionCapabilityFixture();
+    const { state } = createTestChatPane({ client, sessions });
+    state.chatMessagesBySession = new Map();
+    state.chatMessages = [nativeHistoryMessage(1, "prior account transcript")];
+    const stop = subscribeChatPaneSnapshotInvalidation(() => state);
+    const loading = loadChatHistory(state);
+
+    try {
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "openclaw.control.chatSnapshots.invalidate.v1",
+          newValue: "other-tab",
+        }),
+      );
+      expect(state.chatMessages).toEqual([]);
+
+      response.resolve({
+        messages: [nativeHistoryMessage(2, "stale delayed transcript")],
+        sessionId: "stale-session",
+      });
+      await loading;
+      expect(state.chatMessages).toEqual([]);
+    } finally {
+      stop();
     }
   });
 

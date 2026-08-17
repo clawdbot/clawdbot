@@ -49,7 +49,10 @@ import {
   CHAT_SPACE_ACTIVATION_SELECTOR,
   keyboardEventPathMatches,
 } from "./chat-pane-shared.ts";
-import { subscribeChatPaneStartup } from "./chat-pane-startup-subscriptions.ts";
+import {
+  subscribeChatPaneSnapshotInvalidation,
+  subscribeChatPaneStartup,
+} from "./chat-pane-startup-subscriptions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -602,6 +605,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.applySessionsState(this.context.sessions.state);
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
     chatState.addCleanup(subscribeChatPaneStartup(this.context, () => this.state));
+    chatState.addCleanup(subscribeChatPaneSnapshotInvalidation(() => this.state));
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
   }
 

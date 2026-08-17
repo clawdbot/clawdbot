@@ -160,7 +160,7 @@ function shouldApplyChatHistoryResult(
   );
 }
 
-function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
   const requests = getChatHistoryPaneRequests(state);
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
