@@ -1,6 +1,10 @@
 // Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
-import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  onAgentEvent,
+  wrapToolWithBeforeToolCallHook,
+  type AgentEventPayload,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -10,6 +14,7 @@ import {
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { resolveCodexAppServerHookChannelId } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolStartedDiagnostic,
@@ -20,9 +25,11 @@ import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
   createParams,
+  createCodexRuntimePlanFixture,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
@@ -58,6 +65,65 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("emits one audit lifecycle for a wrapped dynamic tool call", async () => {
+    const tool = wrapToolWithBeforeToolCallHook(createRuntimeDynamicTool("echo"), {
+      agentId: "main",
+      runId: "run-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      loopDetection: { enabled: false },
+    });
+    dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
+    const harness = createStartedThreadHarness();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
+      if ("toolCallId" in event && event.toolCallId === "call-echo-audit") {
+        diagnosticEvents.push(event);
+      }
+    });
+    try {
+      const params = createParams(
+        path.join(tempDir, "session.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      setCodexTestModelSupportsTools(params, true);
+      const runtimePlan = createCodexRuntimePlanFixture();
+      params.runtimePlan = {
+        ...runtimePlan,
+        tools: {
+          ...runtimePlan.tools,
+          normalize: (tools) => tools.map((entry) => ({ ...entry })),
+        },
+      };
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const toolResult = (await harness.handleServerRequest({
+        id: "request-echo-audit",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-echo-audit",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+        },
+      })) as { success?: boolean };
+      expect(toolResult.success).toBe(true);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribeDiagnostics();
+    }
+
+    expect(diagnosticEvents.map((event) => event.type)).toEqual([
+      "tool.execution.started",
+      "tool.execution.completed",
+    ]);
+  });
+
   it.each(["cancelled", "timed_out"] as const)(
     "preserves the %s terminal reason in trusted tool diagnostics",
     async (terminalReason) => {

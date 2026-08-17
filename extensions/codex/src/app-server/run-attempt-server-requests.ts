@@ -1,4 +1,7 @@
-import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  hasPendingInternalDiagnosticEvent,
+  onInternalDiagnosticEvent,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
@@ -11,7 +14,7 @@ import {
   handleDynamicToolCallWithTimeout,
   hasPendingDynamicToolTerminalDiagnostic,
   isDynamicToolTerminalDiagnosticEvent,
-  isMatchingDynamicToolTerminalDiagnostic,
+  isMatchingDynamicToolDiagnostic,
   resolveDynamicToolCallTimeoutMs,
   shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   toCodexDynamicToolProgressResponse,
@@ -172,13 +175,6 @@ export function createCodexAttemptServerRequestController(
         tool: call.tool,
         toolCallId: call.callId,
       });
-      emitDynamicToolStartedDiagnostic({
-        call,
-        agentId: sessionAgentId,
-        runId: params.runId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-      });
       const toolMeta = inferCodexDynamicToolMeta(
         call,
         resolveCodexToolProgressDetailMode(params.toolProgressDetail),
@@ -201,21 +197,48 @@ export function createCodexAttemptServerRequestController(
       }
       const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
       const toolStartedAt = Date.now();
+      let startedDiagnosticObserved = false;
       let terminalDiagnosticObserved = false;
+      const diagnosticMatch = {
+        call,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
       const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent((event) => {
         if (
+          event.type === "tool.execution.started" &&
+          isMatchingDynamicToolDiagnostic({ event, ...diagnosticMatch })
+        ) {
+          startedDiagnosticObserved = true;
+        }
+        if (
           isDynamicToolTerminalDiagnosticEvent(event) &&
-          isMatchingDynamicToolTerminalDiagnostic({
-            event,
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
+          isMatchingDynamicToolDiagnostic({ event, ...diagnosticMatch })
         ) {
           terminalDiagnosticObserved = true;
         }
       });
+      const emitBridgeStartedDiagnosticIfNeeded = () => {
+        if (
+          startedDiagnosticObserved ||
+          hasPendingInternalDiagnosticEvent(
+            (event) =>
+              event.type === "tool.execution.started" &&
+              isMatchingDynamicToolDiagnostic({ event, ...diagnosticMatch }),
+          )
+        ) {
+          return;
+        }
+        emitDynamicToolStartedDiagnostic({
+          ...diagnosticMatch,
+          agentId: sessionAgentId,
+        });
+        startedDiagnosticObserved = true;
+      };
+      if (!toolBridge.availableTools.some((tool) => tool.name === call.tool)) {
+        emitBridgeStartedDiagnosticIfNeeded();
+      }
       try {
         const { execution } = openClawDynamicToolExecutions.claim(call, () =>
           handleDynamicToolCallWithTimeout({
@@ -244,6 +267,7 @@ export function createCodexAttemptServerRequestController(
           }),
         );
         const response = await execution;
+        emitBridgeStartedDiagnosticIfNeeded();
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
         if (!protocolResponse.success && toolCallOrdinal !== undefined) {
           suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
@@ -319,6 +343,7 @@ export function createCodexAttemptServerRequestController(
         return protocolResponse as JsonValue;
       } catch (error) {
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
+        emitBridgeStartedDiagnosticIfNeeded();
         if (
           !terminalDiagnosticObserved &&
           !hasPendingDynamicToolTerminalDiagnostic({
