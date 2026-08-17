@@ -943,4 +943,3 @@ export type SessionSystemPromptReport = {
 };
 
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
-export const DEFAULT_IDLE_MINUTES = 0;
