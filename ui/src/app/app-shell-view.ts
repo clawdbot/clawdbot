@@ -43,7 +43,7 @@ import {
 } from "./settings.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
-const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
+const EMPTY_FAILED_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const EMPTY_SESSION_HAS_DRAFT = () => false;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -224,14 +224,13 @@ export function renderApplicationShell(host: ShellViewHost) {
   const storedDraftScopeKeys = outboxStoreRuntime
     ? outboxStoreRuntime.listStoredDraftScopes(outboxScopeHost)
     : null;
-  const outboxCountForSession = outboxStoreRuntime
+  const failedOutboxCountForSession = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        return (
-          storedOutboxes?.countsByScope.get(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) ?? 0
-        );
+        const scopeKey = outboxStoreRuntime.storedChatOutboxScopeKey(scope);
+        return storedOutboxes?.failedCountsByScope.get(scopeKey) ?? 0;
       }
-    : EMPTY_OUTBOX_COUNT_FOR_SESSION;
+    : EMPTY_FAILED_OUTBOX_COUNT_FOR_SESSION;
   const hasSessionDraft = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -366,7 +365,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
-      outboxCountForSession,
+      failedOutboxCountForSession,
       hasSessionDraft,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),

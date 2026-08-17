@@ -73,6 +73,7 @@ type StoredComposerRow = {
 
 type StoredChatOutboxSummary = {
   countsByScope: ReadonlyMap<string, number>;
+  failedCountsByScope: ReadonlyMap<string, number>;
   total: number;
 };
 
@@ -695,24 +696,34 @@ export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutb
 }
 
 export function summarizeStoredChatOutboxes(state: ChatComposerScope): StoredChatOutboxSummary {
-  const idsByScope = new Map<string, Set<string>>();
+  const idsByScope = new Map<string, { all: Set<string>; failed: Set<string> }>();
   for (const outbox of listStoredChatOutboxes(state)) {
     const scopeKey = storedChatOutboxScopeKey(outbox);
-    const ids = idsByScope.get(scopeKey) ?? new Set<string>();
+    const ids = idsByScope.get(scopeKey) ?? {
+      all: new Set<string>(),
+      failed: new Set<string>(),
+    };
     for (const item of outbox.queue) {
       if (!item.pendingRunId) {
-        ids.add(item.id);
+        ids.all.add(item.id);
+        if (item.sendState === "failed") {
+          ids.failed.add(item.id);
+        }
       }
     }
-    if (ids.size) {
+    if (ids.all.size) {
       idsByScope.set(scopeKey, ids);
     }
   }
   const countsByScope = new Map<string, number>();
+  const failedCountsByScope = new Map<string, number>();
   let total = 0;
   for (const [scopeKey, ids] of idsByScope) {
-    countsByScope.set(scopeKey, ids.size);
-    total += ids.size;
+    countsByScope.set(scopeKey, ids.all.size);
+    total += ids.all.size;
+    if (ids.failed.size) {
+      failedCountsByScope.set(scopeKey, ids.failed.size);
+    }
   }
-  return { countsByScope, total };
+  return { countsByScope, failedCountsByScope, total };
 }

@@ -99,7 +99,7 @@ export type SidebarRecentSession = {
   cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
-  outboxCount?: number;
+  failedOutboxCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
   lastMessagePreview?: string;

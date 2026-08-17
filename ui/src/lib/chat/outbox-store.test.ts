@@ -275,6 +275,55 @@ describe("stored outbox summaries", () => {
     expect(summary.countsByScope.get(storedChatOutboxScopeKey({ sessionKey: "thread-b" }))).toBe(1);
   });
 
+  it("counts only explicit retryable failures for session-row attention", () => {
+    const gatewayUrl = "ws://gateway.test/control";
+    const nonfailedSendStates = [
+      undefined,
+      "waiting-idle",
+      "executing-command",
+      "steering",
+      "sending",
+      "waiting-reconnect",
+      "unconfirmed",
+    ] as const;
+    sessionStorage.setItem(
+      `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: {
+          "thread-a\u0000agent:main": {
+            queue: [
+              ...nonfailedSendStates.map((sendState, index) => ({
+                id: `healthy-${index}`,
+                text: `healthy ${index}`,
+                createdAt: index,
+                sendState,
+              })),
+              { id: "failed", text: "failed", createdAt: 10, sendState: "failed" },
+              { id: "failed", text: "duplicate", createdAt: 11, sendState: "failed" },
+            ],
+            updatedAt: 11,
+          },
+          "thread-b\u0000agent:main": {
+            queue: [{ id: "failed", text: "other scope", createdAt: 13, sendState: "failed" }],
+            updatedAt: 13,
+          },
+        },
+      }),
+    );
+
+    const summary = summarizeStoredChatOutboxes({ settings: { gatewayUrl } });
+    const threadA = storedChatOutboxScopeKey({ sessionKey: "thread-a" });
+    const threadB = storedChatOutboxScopeKey({ sessionKey: "thread-b" });
+
+    expect(summary.total).toBe(9);
+    expect(summary.countsByScope.get(threadA)).toBe(8);
+    expect(summary.countsByScope.get(threadB)).toBe(1);
+    expect(summary.failedCountsByScope.get(threadA)).toBe(1);
+    expect(summary.failedCountsByScope.get(threadB)).toBe(1);
+  });
+
   it("derives badges and replay from the same migrated durable queue", () => {
     const gatewayUrl = "ws://gateway.test/control";
     const legacyKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;

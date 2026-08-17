@@ -162,7 +162,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const mainRow = host.mainSessionRow(agentId);
   const attention = host.resolveHomeSessionAttention(mainKey, mainRow);
   const attentionLabel = sessionAttentionSubtitle(attention);
-  const outboxCount = host.outboxCountForSession(mainKey);
+  const failedOutboxCount = host.failedOutboxCountForSession(mainKey);
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
@@ -214,10 +214,14 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
             >
           </openclaw-tooltip>`
         : nothing}
-      ${running || outboxCount > 0 || hasComposerDraft
+      ${running || failedOutboxCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
             ${running ? renderSessionRunSpinner() : nothing}
-            ${renderSessionRowBadges({ hasAutomation: false, outboxCount, hasComposerDraft })}
+            ${renderSessionRowBadges({
+              hasAutomation: false,
+              failedOutboxCount,
+              hasComposerDraft,
+            })}
           </span>`
         : nothing}
     </a>

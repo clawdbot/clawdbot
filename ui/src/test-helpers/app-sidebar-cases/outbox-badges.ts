@@ -31,28 +31,30 @@ describe("AppSidebar outbox badges", () => {
     ).toBeNull();
   });
 
-  it("shows connected session outbox counts and removes the badge when empty", async () => {
-    const sessionKey = "agent:main:queued-thread";
+  it("shows failed delivery attention and removes the badge when empty", async () => {
+    const sessionKey = "agent:main:failed-thread";
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", [sessionKey]));
     sidebar.connected = true;
-    sidebar.outboxCountForSession = (rowSessionKey) => (rowSessionKey === sessionKey ? 3 : 0);
+    sidebar.failedOutboxCountForSession = (rowSessionKey) => (rowSessionKey === sessionKey ? 3 : 0);
+    sidebar.requestUpdate();
     await sidebar.updateComplete;
 
     const badge = sidebar.querySelector<HTMLElement>(
-      `[data-session-key="${sessionKey}"] .session-row-badge--queued`,
+      `[data-session-key="${sessionKey}"] .session-row-badge--failed`,
     );
     expect(badge?.textContent).toContain("3");
-    expect(badge?.getAttribute("aria-label")).toBe("3 messages queued to send");
+    expect(badge?.getAttribute("aria-label")).toBe("3 messages need attention");
 
-    sidebar.outboxCountForSession = () => 0;
+    sidebar.failedOutboxCountForSession = () => 0;
+    sidebar.requestUpdate();
     await sidebar.updateComplete;
     expect(
-      sidebar.querySelector(`[data-session-key="${sessionKey}"] .session-row-badge--queued`),
+      sidebar.querySelector(`[data-session-key="${sessionKey}"] .session-row-badge--failed`),
     ).toBeNull();
   });
 
-  it("resolves agent-main aliases to one queued badge count", async () => {
+  it("resolves agent-main aliases to one failed delivery badge count", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -65,11 +67,12 @@ describe("AppSidebar outbox badges", () => {
         agents: [{ id: "main" }],
       },
     );
-    sidebar.outboxCountForSession = () => 3;
+    sidebar.failedOutboxCountForSession = () => 3;
     sidebar.hasSessionDraft = () => true;
+    sidebar.requestUpdate();
     await sidebar.updateComplete;
 
-    const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--queued");
+    const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--failed");
     expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent).toContain("3");
     expect(

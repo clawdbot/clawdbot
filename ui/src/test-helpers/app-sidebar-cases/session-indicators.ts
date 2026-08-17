@@ -58,7 +58,7 @@ describe("AppSidebar session indicators", () => {
       createGatewayHarness({} as GatewayBrowserClient).gateway,
       sessions.sessions,
     );
-    sidebar.outboxCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
+    sidebar.failedOutboxCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
     sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
     sidebar.requestUpdate();
     await sidebar.updateComplete;
@@ -77,7 +77,7 @@ describe("AppSidebar session indicators", () => {
       sessionSpinner?.getAttribute("aria-label"),
     );
     expect(
-      home?.querySelector(".nav-item__state .session-row-badge--queued")?.textContent,
+      home?.querySelector(".nav-item__state .session-row-badge--failed")?.textContent,
     ).toContain("2");
     expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
   });

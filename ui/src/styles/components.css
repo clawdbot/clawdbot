@@ -5708,8 +5708,9 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.session-row-badge--queued {
+.session-row-badge--failed {
   gap: 2px;
+  color: var(--warn);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
