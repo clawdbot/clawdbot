@@ -393,6 +393,7 @@ export function createSessionsHistoryTool(opts?: {
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          requesterAgentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
       const requesterAgentId = resolveSessionAgentIds({

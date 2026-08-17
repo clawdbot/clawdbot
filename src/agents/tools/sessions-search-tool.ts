@@ -366,6 +366,7 @@ export function createSessionsSearchTool(opts?: {
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          requesterAgentId: opts?.agentId,
           sandboxed: opts?.sandboxed,
         });
       const requesterAgentId = resolveSessionAgentId({

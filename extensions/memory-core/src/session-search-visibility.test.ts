@@ -959,6 +959,43 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     },
   );
 
+  it("applies canonical global-main tree visibility in an explicit fleet", async () => {
+    combinedSessionStore = {
+      "agent:main:slack:channel:team": {
+        sessionId: "team",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/team.jsonl",
+        chatType: "channel",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/team.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "team context",
+      startLine: 1,
+      endLine: 2,
+    };
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({
+        session: { scope: "global" },
+        tools: { sessions: { visibility: "tree" } },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {}, research: {} },
+        },
+      }),
+      agentId: "main",
+      requesterSessionKey: "global",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
+
   it("keeps same-agent live orphan transcript hits", async () => {
     combinedSessionStore = {};
     const hit: MemorySearchResult = {

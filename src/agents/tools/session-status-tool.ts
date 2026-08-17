@@ -594,6 +594,7 @@ export function createSessionStatusTool(opts?: {
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          requesterAgentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
       const a2aPolicy = createAgentToAgentPolicy(cfg);

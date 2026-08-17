@@ -163,6 +163,7 @@ export function createSessionsListTool(opts?: {
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          requesterAgentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
       const effectiveRequesterKey = requesterInternalKey ?? alias;

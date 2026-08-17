@@ -20,6 +20,7 @@ import {
   type SessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import {
   lookupRequesterSessionOwnership,
@@ -113,6 +114,7 @@ export async function resolveSessionToolAccess(params: {
 export function resolveSandboxedSessionToolContext(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
+  requesterAgentId?: string;
   sandboxed?: boolean;
 }) {
   const { mainKey, alias, scope } = resolveMainSessionAlias(params.cfg);
@@ -131,7 +133,15 @@ export function resolveSandboxedSessionToolContext(params: {
     visibility === "spawned" &&
     Boolean(requesterInternalKey) &&
     !isSubagentSessionKey(requesterInternalKey);
-  const requesterAgentId = parseAgentSessionKey(requesterInternalKey)?.agentId;
+  const requesterAgentId =
+    parseAgentSessionKey(requesterInternalKey)?.agentId ??
+    (!restrictToSpawned && requesterInternalKey === alias
+      ? resolveSessionAgentId({
+          config: params.cfg,
+          sessionKey: requesterInternalKey,
+          agentId: params.requesterAgentId,
+        })
+      : undefined);
   const mainSessionKey =
     !restrictToSpawned && requesterAgentId
       ? resolveCanonicalMainSessionKey({

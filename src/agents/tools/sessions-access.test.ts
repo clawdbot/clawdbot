@@ -103,6 +103,23 @@ describe("sandbox session-tools context", () => {
 
     expect(context.mainSessionKey).toBe("agent:main:work");
   });
+
+  it("resolves the canonical global main key from its explicit store owner", () => {
+    const context = resolveSandboxedSessionToolContext({
+      cfg: {
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      agentSessionKey: "global",
+      requesterAgentId: "ops",
+    });
+
+    expect(context.mainSessionKey).toBe("global");
+  });
 });
 
 describe("createAgentToAgentPolicy", () => {
