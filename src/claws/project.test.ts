@@ -8,6 +8,20 @@ import { buildClawProject } from "./project-build.js";
 import { ClawProjectError, createClawProject, validateClawProject } from "./project.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const GOLDEN_ARTIFACT_INTEGRITY =
+  "sha256:5fba54933e519f4fc12422a3d555d076ce373be993eed3f6b3575a89aaa62618";
+
+async function createDistinctFile(path: string, content: string): Promise<boolean> {
+  try {
+    await writeFile(path, content, { flag: "wx" });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      return false;
+    }
+    throw error;
+  }
+}
 
 async function writeRichProject(root: string): Promise<void> {
   await mkdir(join(root, "workspace"), { recursive: true });
@@ -50,9 +64,7 @@ describe("Claw projects", () => {
       output,
     );
 
-    expect(result.integrity).toBe(
-      "sha256:f7377ae66679a8d1088ac2d259b8567d19f584dbc4357949d3d4e0cc09d05874",
-    );
+    expect(result.integrity).toBe(GOLDEN_ARTIFACT_INTEGRITY);
   });
 
   it("matches the golden artifact digest under a restrictive umask", () => {
@@ -85,9 +97,7 @@ describe("Claw projects", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      "sha256:f7377ae66679a8d1088ac2d259b8567d19f584dbc4357949d3d4e0cc09d05874",
-    );
+    expect(result.stdout).toBe(GOLDEN_ARTIFACT_INTEGRITY);
   });
 
   it("creates a minimal project that validates through the canonical reader", async () => {
@@ -428,52 +438,57 @@ describe("Claw projects", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "rejects a workspace source that portably collides with CLAW.md",
-    async () => {
-      const project = tempDirs.make("openclaw-claw-manifest-case-collision-");
-      await writeRichProject(project);
-      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-      await writeFile(
-        join(project, "CLAW.md"),
-        manifest.replace("workspace/reference.md", "claw.md"),
-      );
-      await writeFile(join(project, "claw.md"), "# Conflicting source\n");
+  it("rejects a workspace source that portably collides with CLAW.md", async ({ skip }) => {
+    const project = tempDirs.make("openclaw-claw-manifest-case-collision-");
+    await writeRichProject(project);
+    if (!(await createDistinctFile(join(project, "claw.md"), "# Conflicting source\n"))) {
+      skip("filesystem cannot represent CLAW.md and claw.md as distinct paths");
+    }
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest.replace("workspace/reference.md", "claw.md"),
+    );
 
-      await expect(validateClawProject(project)).resolves.toMatchObject({
-        ok: false,
-        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
-      });
-    },
-  );
+    await expect(validateClawProject(project)).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
+    });
+  });
 
-  it.runIf(process.platform !== "win32")(
-    "rejects a workspace source that portably collides with a custom profile",
-    async () => {
-      const project = tempDirs.make("openclaw-claw-profile-case-collision-");
-      await writeRichProject(project);
-      await rename(
-        join(project, "profiles", "openclaw.yml"),
-        join(project, "profiles", "custom.yaml"),
-      );
-      await writeFile(join(project, "profiles", "CUSTOM.yaml"), "schemaVersion: 1\nagent: {}\n");
-      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-      await writeFile(
-        join(project, "CLAW.md"),
-        manifest
-          .replace(
-            "agent:\n  id: demo-claw",
-            "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: profiles/custom.yaml",
-          )
-          .replace("workspace/reference.md", "profiles/CUSTOM.yaml"),
-      );
+  it("rejects a workspace source that portably collides with a custom profile", async ({
+    skip,
+  }) => {
+    const project = tempDirs.make("openclaw-claw-profile-case-collision-");
+    await writeRichProject(project);
+    await rename(
+      join(project, "profiles", "openclaw.yml"),
+      join(project, "profiles", "custom.yaml"),
+    );
+    if (
+      !(await createDistinctFile(
+        join(project, "profiles", "CUSTOM.yaml"),
+        "schemaVersion: 1\nagent: {}\n",
+      ))
+    ) {
+      skip("filesystem cannot represent custom.yaml and CUSTOM.yaml as distinct paths");
+    }
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest
+        .replace(
+          "agent:\n  id: demo-claw",
+          "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: profiles/custom.yaml",
+        )
+        .replace("workspace/reference.md", "profiles/CUSTOM.yaml"),
+    );
 
-      await expect(validateClawProject(project)).resolves.toMatchObject({
-        ok: false,
-        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
-      });
-    },
-  );
+    await expect(validateClawProject(project)).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
+    });
+  });
 
   it.runIf(process.platform !== "win32")(
     "rejects Unicode-normalization collisions between workspace sources",

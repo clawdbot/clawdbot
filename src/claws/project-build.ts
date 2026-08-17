@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { constants as zlibConstants } from "node:zlib";
 import * as tar from "tar";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
@@ -184,7 +185,8 @@ export async function buildClawProject(
       {
         cwd: stagingRoot,
         file: temporaryArtifact,
-        gzip: { level: 9, portable: true },
+        // Native zlib match selection varies by version; Huffman-only keeps artifact bytes portable.
+        gzip: { level: 9, portable: true, strategy: zlibConstants.Z_HUFFMAN_ONLY },
         mtime: new Date(0),
         portable: true,
         prefix: "package",
