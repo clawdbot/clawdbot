@@ -45,6 +45,8 @@ import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-man
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
@@ -165,6 +167,13 @@ async function updateCommandInternal(
     defaultRuntime.error(formatExternalSupervisorUpdateRequired());
     defaultRuntime.exit(1);
     return;
+  }
+  if (opts.dryRun !== true) {
+    // Startup migrations belong to the freshly installed Doctor, but mutable updates
+    // must retain their read-only ownership fence before inspecting package state.
+    await assertOpenClawStateWriteAllowedAtPath({
+      databasePath: resolveOpenClawStateSqlitePath(process.env),
+    });
   }
   const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const discoveredRoot = await resolveUpdateRoot();

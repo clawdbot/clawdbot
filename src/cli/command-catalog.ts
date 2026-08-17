@@ -1,5 +1,5 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
-import { getCommandPositionalsWithRootOptions, hasFlag } from "./argv.js";
+import { hasFlag } from "./argv.js";
 
 export type CliCommandPluginLoadPolicy =
   | "never"
@@ -65,29 +65,6 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
     }
   }
   return false;
-}
-
-const UPDATE_BOOLEAN_FLAGS = [
-  "--acknowledge-clawhub-risk",
-  "--dry-run",
-  "--json",
-  "--no-restart",
-  "--update",
-  "--yes",
-] as const;
-const UPDATE_VALUE_FLAGS = ["--channel", "--tag", "--timeout"] as const;
-
-function isRootUpdateDryRun(argv: string[], commandPath: string[]): boolean {
-  if (commandPath.length !== 1 || !hasFlag(argv, "--dry-run")) {
-    return false;
-  }
-  const usesRootShorthand = hasFlag(argv, "--update");
-  const positionals = getCommandPositionalsWithRootOptions(argv, {
-    commandPath: usesRootShorthand ? [] : ["update"],
-    booleanFlags: UPDATE_BOOLEAN_FLAGS,
-    valueFlags: UPDATE_VALUE_FLAGS,
-  });
-  return positionals?.length === 0;
 }
 
 /** Command path registry used before Commander registration has loaded all plugins. */
@@ -561,8 +538,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["update"],
     policy: {
-      configGuard: ({ argv, commandPath }) =>
-        isRootUpdateDryRun(argv, commandPath) ? "skip" : "run",
+      configGuard: "skip",
       hideBanner: true,
     },
   },

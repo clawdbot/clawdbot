@@ -47,7 +47,7 @@ function snapshotDatabaseArtifacts(snapshot: string[]): string[] {
   return snapshot.filter((entry) => /^f .*\.sqlite(?:-(?:wal|shm))? /.test(entry));
 }
 
-function runUpdateDryRun(root: string, args: string[]) {
+function runUpdateProcess(root: string, args: string[]) {
   const configPath = path.join(root, "config", "openclaw.json");
   const stateDir = path.join(root, "state");
   const entryPath = fileURLToPath(new URL("../entry.ts", import.meta.url));
@@ -85,7 +85,7 @@ function runUpdateDryRun(root: string, args: string[]) {
   });
 }
 
-describe("update dry-run process state", () => {
+describe("update process state", () => {
   it("keeps malformed config immutable while producing a best-effort preview", async () => {
     const root = tempDirs.make("openclaw-update-dry-run-malformed-");
     const configPath = path.join(root, "config", "openclaw.json");
@@ -95,7 +95,7 @@ describe("update dry-run process state", () => {
     const configBefore = await fs.readFile(configPath);
     const treeBefore = await snapshotTree(root);
 
-    const result = runUpdateDryRun(root, ["update", "--dry-run", "--no-restart", "--json"]);
+    const result = runUpdateProcess(root, ["update", "--dry-run", "--no-restart", "--json"]);
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
@@ -129,7 +129,7 @@ describe("update dry-run process state", () => {
     const treeBefore = await snapshotTree(root);
     const databaseArtifactsBefore = snapshotDatabaseArtifacts(treeBefore);
 
-    const result = runUpdateDryRun(root, ["--update", "--dry-run", "--no-restart", "--json"]);
+    const result = runUpdateProcess(root, ["--update", "--dry-run", "--no-restart", "--json"]);
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
@@ -141,6 +141,44 @@ describe("update dry-run process state", () => {
       wal: await sha256File(walPath),
     }).toEqual(markerHashesBefore);
     expect(snapshotDatabaseArtifacts(await snapshotTree(root))).toEqual(databaseArtifactsBefore);
+  });
+
+  it("defers legacy-state migration until the updated runtime", async () => {
+    const root = tempDirs.make("openclaw-update-legacy-state-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const sessionsDir = path.join(root, "state", "sessions");
+    const sessionId = "legacy-会議-session";
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(configPath, '{ "gateway": { "mode": "local" } }\n');
+    await fs.writeFile(
+      path.join(sessionsDir, "sessions.json"),
+      `${JSON.stringify({
+        "agent:main:discord:direct:user": {
+          sessionId,
+          sessionFile: path.join(sessionsDir, `${sessionId}.jsonl`),
+          updatedAt: 1,
+        },
+      })}\n`,
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, `${sessionId}.jsonl`),
+      `${JSON.stringify({ type: "session", id: sessionId })}\n`,
+    );
+    const before = await snapshotTree(root);
+
+    const result = runUpdateProcess(root, [
+      "update",
+      "--timeout",
+      "invalid",
+      "--no-restart",
+      "--json",
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/--timeout must be a positive integer/iu);
+    expect(await snapshotTree(root)).toEqual(before);
   });
 
   it("fences the full mutable update path before observation or action", async () => {
@@ -163,19 +201,12 @@ describe("update dry-run process state", () => {
     const before = await snapshotTree(root);
     const beforeDatabaseHash = await sha256File(databasePath);
 
-    const refused = runUpdateDryRun(root, [
-      "update",
-      "--timeout",
-      "invalid",
-      "--no-restart",
-      "--json",
-    ]);
+    const refused = runUpdateProcess(root, ["update", "--timeout", "1", "--no-restart", "--json"]);
 
     expect(refused.error).toBeUndefined();
     expect(refused.status).not.toBe(0);
     expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/gateway-supervisor/u);
     expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/OPENCLAW_SUPERVISOR_MODE=external/u);
-    expect(`${refused.stdout}\n${refused.stderr}`).not.toMatch(/invalid timeout/iu);
     expect(await snapshotTree(root)).toEqual(before);
     expect(await sha256File(databasePath)).toBe(beforeDatabaseHash);
   });
