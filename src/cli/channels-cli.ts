@@ -236,7 +236,9 @@ export async function registerChannelsCli(
         const agentSource = command.getOptionValueSource("agent");
         const agent =
           agentSource && agentSource !== "default"
-            ? (opts.agent as string | undefined)
+            ? typeof opts.agent === "string"
+              ? opts.agent
+              : undefined
             : inheritOptionFromParent<string>(command, "agent");
         await channelsResolveCommand(
           {
