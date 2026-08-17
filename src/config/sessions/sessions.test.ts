@@ -174,17 +174,25 @@ it("drops malformed assistant transcript repair records", () => {
 
 describe("session path safety", () => {
   it("preserves path-safe Unicode session IDs", () => {
-    const sessionId = "volume-main-会議-000000";
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
-    expect(validateSessionId(sessionId)).toBe(sessionId);
-    expect(normalizePersistedSessionEntryShape({ sessionId, updatedAt: 42 })).toMatchObject({
-      sessionId,
-      updatedAt: 42,
-    });
-    expect(resolveSessionTranscriptPathInDir(sessionId, sessionsDir)).toBe(
-      path.resolve(sessionsDir, `${sessionId}.jsonl`),
-    );
+    for (const sessionId of ["volume-main-会議-000000", "volume-main-हिन्दी-000001"]) {
+      expect(validateSessionId(sessionId)).toBe(sessionId);
+      expect(normalizePersistedSessionEntryShape({ sessionId, updatedAt: 42 })).toMatchObject({
+        sessionId,
+        updatedAt: 42,
+      });
+      expect(resolveSessionTranscriptPathInDir(sessionId, sessionsDir)).toBe(
+        path.resolve(sessionsDir, `${sessionId}.jsonl`),
+      );
+    }
+  });
+
+  it("rejects noncanonical Unicode session IDs", () => {
+    for (const sessionId of ["session-Å", "session-A\u030A", "session-e\u0301"]) {
+      expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
+      expect(normalizePersistedSessionEntryShape({ sessionId, updatedAt: 42 })).toBeUndefined();
+    }
   });
 
   it("rejects unsafe session IDs", () => {

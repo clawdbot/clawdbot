@@ -58,11 +58,12 @@ export function resolveSessionFilePathOptions(params: {
   return undefined;
 }
 
-const SAFE_SESSION_ID_RE = /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,127}$/u;
+const SAFE_SESSION_ID_RE = /^[\p{L}\p{N}][\p{L}\p{N}\p{M}._-]{0,127}$/u;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
   if (
+    trimmed !== trimmed.normalize("NFC") ||
     !SAFE_SESSION_ID_RE.test(trimmed) ||
     Buffer.byteLength(`${trimmed}.jsonl`, "utf8") > 255 ||
     isCompactionCheckpointTranscriptFileName(`${trimmed}.jsonl`)

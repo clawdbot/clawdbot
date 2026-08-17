@@ -4616,7 +4616,7 @@ describe("state migrations", () => {
   it("keeps a path-safe Unicode legacy session attached to its transcript", async () => {
     const { root, stateDir, env, cfg } = await createLegacyStateFixture();
 
-    const sessionId = "volume-main-会議-000000";
+    const sessionId = "volume-main-हिन्दी-会議-000000";
     const transcriptName = `${sessionId}.jsonl`;
     const legacySessionsDir = path.join(stateDir, "sessions");
     const legacyStorePath = path.join(legacySessionsDir, "sessions.json");

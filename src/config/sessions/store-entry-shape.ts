@@ -12,13 +12,13 @@ function isSafeSessionId(value: unknown): value is string {
     return false;
   }
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 255) {
+  if (!trimmed || trimmed.length > 255 || trimmed !== trimmed.normalize("NFC")) {
     return false;
   }
   if (trimmed.includes("/") || trimmed.includes("\\") || trimmed === "." || trimmed === "..") {
     return false;
   }
-  return /^[\p{L}\p{N}][\p{L}\p{N}._:@-]*$/u.test(trimmed);
+  return /^[\p{L}\p{N}][\p{L}\p{N}\p{M}._:@-]*$/u.test(trimmed);
 }
 
 function normalizeTranscriptSessionId(value: string): string | undefined {
