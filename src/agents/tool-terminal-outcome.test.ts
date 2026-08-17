@@ -44,6 +44,35 @@ describe("tool terminal outcome observer", () => {
     ).toBeUndefined();
   });
 
+  it("surfaces the successful cross-tool recovery without leaking failure details", () => {
+    const observe = createToolTerminalObserver("run-edit-recovery");
+
+    observe({
+      toolName: "edit",
+      arguments: { path: "/tmp/demo.txt", oldText: "missing", newText: "after" },
+      outcome: "failure",
+      failure: { error: "Could not find TOP_SECRET text in /tmp/demo.txt" },
+    });
+    const recovered = observe({
+      toolName: "write",
+      arguments: { path: "/tmp/demo.txt", content: "after" },
+      outcome: "success",
+    });
+    const afterRead = observe({
+      toolName: "read",
+      arguments: { path: "/tmp/demo.txt" },
+      outcome: "success",
+    });
+    const payloads = buildPayloads({ lastToolRecovery: afterRead.lastToolRecovery });
+
+    expect(recovered.lastToolError).toBeUndefined();
+    expect(recovered.lastToolRecovery).toEqual({ toolName: "write" });
+    expect(afterRead.lastToolRecovery).toEqual({ toolName: "write" });
+    expect(payloads.map((payload) => payload.text)).toEqual(["✅ ✍️ Write succeeded after retry."]);
+    expect(JSON.stringify(payloads)).not.toContain("TOP_SECRET");
+    expect(JSON.stringify(payloads)).not.toContain("/tmp/demo.txt");
+  });
+
   it("uses host execution and adjusted-argument evidence before fallback facts", () => {
     const runId = "run-2";
     const toolCallId = "call-1";
