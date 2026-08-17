@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -146,10 +147,16 @@ describe("worker turn launcher claim admission", () => {
       },
     });
     placements.markWorkspaceResultPending(priorClaim);
+    placements.startWorkspaceResultDrain(priorClaim);
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementationOnce(async () => {
       placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
       placements.acceptWorkspaceResult(priorClaim);
-      placements.completeWorkspaceResultAndReleaseTurn(priorClaim, { reclaim: true });
+      completeReclaimedWorkspaceTeardown({
+        placements,
+        turnClaim: priorClaim,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      });
     });
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),

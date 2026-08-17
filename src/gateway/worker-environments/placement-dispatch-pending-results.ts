@@ -6,6 +6,7 @@ import {
   type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
 import { placementTurnOwner } from "./placement-record.js";
+import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
@@ -49,6 +50,7 @@ export type PlacementRecoveryDeps = {
     sessionKey: string;
     agentId: string;
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
+  recoverPlacementMoves?: () => Promise<Set<string>>;
 };
 
 function pendingWorkerLossError(
@@ -91,7 +93,7 @@ export async function recoverPendingWorkspaceResults(
       continue;
     }
     try {
-      const active =
+      let active =
         placement?.state === "active" || placement?.state === "draining" ? placement : undefined;
       const turnClaim =
         active &&
@@ -170,6 +172,13 @@ export async function recoverPendingWorkspaceResults(
           root: localPath,
           stagedResultRef: preparedWorkerWorkspaceResultRef(canonicalStagedResultRef),
         }));
+      if (active.state === "active" && (!sameGatewayInstance || stagedResultRef)) {
+        const draining = placements.startWorkspaceResultDrain(turnClaim);
+        if (draining.state !== "draining") {
+          throw new Error(`Pending workspace result did not drain session ${active.sessionId}`);
+        }
+        active = draining;
+      }
       const environment = environments.get(active.environmentId);
       if (
         environment?.state === "attached" &&
@@ -201,8 +210,11 @@ export async function recoverPendingWorkspaceResults(
         ) {
           await environments.destroy(active.environmentId);
         }
-        const reclaimed = placements.completeWorkspaceResultAndReleaseTurn(turnClaim, {
-          reclaim: true,
+        const reclaimed = completeReclaimedWorkspaceTeardown({
+          placements,
+          turnClaim,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
         });
         if (reclaimed.state !== "reclaimed") {
           throw new Error("Recovered cleaned worker result did not reclaim its environment");
@@ -220,7 +232,7 @@ export async function recoverPendingWorkspaceResults(
           sessionId: active.sessionId,
           environmentId: active.environmentId,
           ownerEpoch: active.activeOwnerEpoch,
-          placementGeneration: active.generation,
+          placementGeneration: pending.placementGeneration,
         };
         const journal = {
           load: () => placements.loadWorkspaceReconciliation(owner),
@@ -281,7 +293,6 @@ export async function recoverPendingWorkspaceResults(
             root: localPath,
             stagedResultRef: ownedStagedResultRef,
             conflictRetained: finalized.conflictRetained,
-            reclaim: true,
             beforeComplete: async () => {
               const currentEnvironment = environments.get(active.environmentId);
               if (
@@ -292,6 +303,13 @@ export async function recoverPendingWorkspaceResults(
                 await environments.destroy(active.environmentId);
               }
             },
+            complete: () =>
+              completeReclaimedWorkspaceTeardown({
+                placements,
+                turnClaim,
+                environmentId: active.environmentId,
+                ownerEpoch: active.activeOwnerEpoch,
+              }),
             validateCompleted: (completed) => {
               if (completed.state !== "reclaimed") {
                 throw new Error("Recovered worker result did not reclaim its stale environment");
@@ -311,7 +329,12 @@ export async function recoverPendingWorkspaceResults(
           continue;
         }
         if (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed") {
-          placements.completeWorkspaceResultAndReleaseTurn(turnClaim, { reclaim: true });
+          completeReclaimedWorkspaceTeardown({
+            placements,
+            turnClaim,
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+          });
           continue;
         }
         const failed = placements.failWorkspaceResultAndReleaseTurn(
@@ -327,7 +350,7 @@ export async function recoverPendingWorkspaceResults(
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
-        placementGeneration: active.generation,
+        placementGeneration: pending.placementGeneration,
       };
       const journal = {
         load: () => placements.loadWorkspaceReconciliation(owner),
@@ -395,7 +418,6 @@ export async function recoverPendingWorkspaceResults(
             root: localPath,
             stagedResultRef: recordedStagedResultRef,
             conflictRetained: finalized.conflictRetained,
-            reclaim: !sameGatewayInstance,
             beforeComplete: async () => {
               if (sameGatewayInstance) {
                 await quiescence.resume();
@@ -404,6 +426,17 @@ export async function recoverPendingWorkspaceResults(
               }
               quiescenceHandled = true;
             },
+            ...(sameGatewayInstance
+              ? {}
+              : {
+                  complete: () =>
+                    completeReclaimedWorkspaceTeardown({
+                      placements,
+                      turnClaim,
+                      environmentId: active.environmentId,
+                      ownerEpoch: active.activeOwnerEpoch,
+                    }),
+                }),
             validateCompleted: (completed) => {
               if (!sameGatewayInstance && completed.state !== "reclaimed") {
                 throw new Error("Recovered worker result did not reclaim its stale environment");

@@ -23,7 +23,7 @@ import {
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
-import { reclaimChatPanePlacement } from "./chat-pane-placement.ts";
+import { moveChatPanePlacement, reclaimChatPanePlacement } from "./chat-pane-placement.ts";
 import {
   applySelectedSessionProjection,
   resolveAssistantAttachmentAuthToken,
@@ -57,6 +57,30 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
     super.disconnectedCallback();
+  }
+
+  protected async moveHeaderPlacement(row: GatewaySessionRow): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
+      return;
+    }
+    const onMovingChange = (movingKey: string | null) => {
+      if (movingKey !== null || this.headerPlacementMovingKey === row.key) {
+        this.headerPlacementMovingKey = movingKey;
+      }
+    };
+    await moveChatPanePlacement({
+      client: scope.client,
+      connectionGeneration: scope.generation,
+      gatewaySnapshot: scope.context.gateway.snapshot,
+      movingKey: this.headerPlacementMovingKey,
+      row,
+      isCurrent: () => this.ownsHeaderOutcomeScope(scope),
+      onMovingChange,
+      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
+      requestUpdate: () => this.requestUpdate(),
+    });
   }
 
   protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {

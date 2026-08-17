@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
+import { WorkerIdentifierSchema } from "./worker-protocol-primitives.js";
 
 export {
   isCloudWorkerPlacementState,
@@ -239,7 +240,7 @@ export const SessionsReclaimResultSchema = Type.Object(
 /** Exact active source observed before a session placement move. */
 export const SessionMoveExpectedSourceSchema = closedObject({
   generation: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-  environmentId: NonEmptyString,
+  environmentId: WorkerIdentifierSchema,
   ownerEpoch: SessionPlacementOwnerEpochSchema,
 });
 
@@ -251,13 +252,13 @@ export const SessionMoveGatewayTargetSchema = closedObject({
 /** Moves the session to one configured cloud worker profile. */
 export const SessionMoveProfileTargetSchema = closedObject({
   kind: Type.Literal("profile"),
-  profileId: NonEmptyString,
+  profileId: WorkerIdentifierSchema,
 });
 
 /** Moves the session to one paired device worker. */
 export const SessionMoveDeviceTargetSchema = closedObject({
   kind: Type.Literal("device"),
-  deviceId: NonEmptyString,
+  deviceId: WorkerIdentifierSchema,
 });
 
 /** Closed destination union for session placement moves. */
@@ -266,6 +267,13 @@ export const SessionMoveTargetSchema = Type.Union([
   SessionMoveProfileTargetSchema,
   SessionMoveDeviceTargetSchema,
 ]);
+
+/** Durable operator-visible progress for one placement move intent. */
+export const SessionPlacementMoveSchema = closedObject({
+  target: SessionMoveTargetSchema,
+  updatedAtMs: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  error: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
+});
 
 /** Requests one exact-source placement move without replaying active work. */
 export const SessionsMoveParamsSchema = closedObject({
@@ -292,7 +300,6 @@ export const SessionsMoveResultSchema = closedObject({
   ok: Type.Literal(true),
   key: NonEmptyString,
   sessionId: NonEmptyString,
-  target: SessionMoveTargetSchema,
   placement: SessionMovePlacementSchema,
 });
 
@@ -320,6 +327,7 @@ export const SessionPlacementProtocolSchemas = {
   SessionMoveProfileTarget: SessionMoveProfileTargetSchema,
   SessionMoveDeviceTarget: SessionMoveDeviceTargetSchema,
   SessionMoveTarget: SessionMoveTargetSchema,
+  SessionPlacementMove: SessionPlacementMoveSchema,
   SessionsMoveParams: SessionsMoveParamsSchema,
   SessionMovePlacementState: SessionMovePlacementStateSchema,
   SessionMovePlacement: SessionMovePlacementSchema,
@@ -335,6 +343,7 @@ export type SessionsReclaimResultPlacement = Static<typeof SessionsReclaimResult
 export type SessionsReclaimResult = Static<typeof SessionsReclaimResultSchema>;
 export type SessionMoveExpectedSource = Static<typeof SessionMoveExpectedSourceSchema>;
 export type SessionMoveTarget = Static<typeof SessionMoveTargetSchema>;
+export type SessionPlacementMove = Static<typeof SessionPlacementMoveSchema>;
 export type SessionsMoveParams = Static<typeof SessionsMoveParamsSchema>;
 export type SessionMovePlacementState = Static<typeof SessionMovePlacementStateSchema>;
 export type SessionMovePlacement = Static<typeof SessionMovePlacementSchema>;

@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  SessionPlacementMoveSchema,
   SessionPlacementSchema,
   SessionPlacementStateSchema,
   validateSessionsDispatchParams,
@@ -376,6 +377,34 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("bounds move source and target identifiers", () => {
+    const accepted = "x".repeat(256);
+    const rejected = "x".repeat(257);
+    expect(
+      validateSessionsMoveParams({
+        key: "agent:main:dispatch",
+        expected: { generation: 4, environmentId: accepted, ownerEpoch: 7 },
+        target: { kind: "profile", profileId: accepted },
+      }),
+    ).toBe(true);
+    for (const value of [rejected, " leading", "trailing "]) {
+      expect(
+        validateSessionsMoveParams({
+          key: "agent:main:dispatch",
+          expected: { generation: 4, environmentId: value, ownerEpoch: 7 },
+          target: { kind: "gateway" },
+        }),
+      ).toBe(false);
+      expect(
+        validateSessionsMoveParams({
+          key: "agent:main:dispatch",
+          expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+          target: { kind: "device", deviceId: value },
+        }),
+      ).toBe(false);
+    }
+  });
+
   it.each([
     { kind: "gateway", profileId: "development" },
     { kind: "profile" },
@@ -408,12 +437,34 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("keeps the move result bounded to target identity and placement state", () => {
+  it("projects bounded durable move progress without operation authority", () => {
+    expect(
+      Value.Check(SessionPlacementMoveSchema, {
+        target: { kind: "gateway" },
+        updatedAtMs: 1,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementMoveSchema, {
+        target: { kind: "device", deviceId: "device-1" },
+        updatedAtMs: 2,
+        error: "device worker is offline",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementMoveSchema, {
+        target: { kind: "gateway" },
+        updatedAtMs: 1,
+        operationId: "move:v1:secret",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the move result bounded to terminal placement state", () => {
     const result = {
       ok: true,
       key: "agent:main:dispatch",
       sessionId: "session-dispatch",
-      target: { kind: "device", deviceId: "device-1" },
       placement: { state: "active", generation: 5 },
     };
     expect(validateSessionsMoveResult(result)).toBe(true);

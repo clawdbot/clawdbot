@@ -225,7 +225,7 @@ describe("staged worker placement result recovery", () => {
     expect(placementStore.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({
-      state: "active",
+      state: "draining",
       turnClaim: { claimId: claim.claimId },
     });
     expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);

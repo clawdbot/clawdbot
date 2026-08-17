@@ -16,6 +16,7 @@ import {
   dispatchTestSessionKey as sessionKey,
   getDispatchTestMocks,
   invokeSessionDispatch as invoke,
+  invokeSessionMove,
   makeDispatchTestContext as makeContext,
   makeFailedPlacement as failedPlacementRecord,
   makeReclaimedPlacement as reclaimedPlacementRecord,
@@ -24,6 +25,16 @@ import {
 
 const mocks = getDispatchTestMocks();
 const originalPluginRegistry = getActivePluginRegistry();
+
+function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
+  return {
+    ...reclaimedPlacementRecord(),
+    state: "active",
+    recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
+  };
+}
 
 describe("sessions.dispatch", () => {
   beforeEach(() => {
@@ -259,6 +270,116 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
         message: expect.stringContaining("archived"),
+      }),
+    );
+  });
+
+  it("moves an active session back to the Gateway with exact-source CAS", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const move = vi.fn().mockResolvedValue({ state: "local", generation: 7 });
+    const source = { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 };
+
+    const respond = await invokeSessionMove(
+      makeContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), move } as never,
+        workerSessionPlacementService: {
+          getMany: () => new Map([[sessionId, activePlacementRecord()]]),
+        },
+      }),
+      { expected: source, target: { kind: "gateway" } },
+    );
+
+    expect(move).toHaveBeenCalledWith(
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        source,
+        target: { kind: "gateway" },
+      },
+      expect.any(Function),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        key: sessionKey,
+        sessionId,
+        placement: { state: "local", generation: 7 },
+      },
+      undefined,
+    );
+  });
+
+  it("resolves a worker move through the canonical destination owner", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const move = vi.fn().mockResolvedValue({ state: "active", generation: 12 });
+
+    await invokeSessionMove(
+      makeContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), move } as never,
+        workerSessionPlacementService: {
+          getMany: () => new Map([[sessionId, activePlacementRecord()]]),
+        },
+      }),
+      {
+        expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
+        target: { kind: "profile", profileId: "test" },
+      },
+    );
+
+    expect(move).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "profile", profileId: "test" },
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it("rejects a move when the session is no longer worker-owned", async () => {
+    mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
+    const move = vi.fn();
+
+    const respond = await invokeSessionMove(
+      makeContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), move } as never,
+        workerSessionPlacementService: {
+          getMany: () => new Map([[sessionId, { state: "local" } as never]]),
+        },
+      }),
+      {
+        expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+    );
+
+    expect(move).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "session cannot move from placement local",
       }),
     );
   });

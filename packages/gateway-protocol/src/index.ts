@@ -292,6 +292,7 @@ export {
   SessionMoveProfileTargetSchema,
   SessionMoveDeviceTargetSchema,
   SessionMoveTargetSchema,
+  SessionPlacementMoveSchema,
   SessionsMoveParamsSchema,
   SessionMovePlacementStateSchema,
   SessionMovePlacementSchema,

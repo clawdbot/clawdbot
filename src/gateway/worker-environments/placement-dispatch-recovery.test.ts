@@ -101,7 +101,10 @@ describe("worker placement restart recovery", () => {
         workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
         runLocalBarrier: async ({ startDispatch }) => startDispatch(),
         runActivationBarrier: async ({ activate }) => activate(),
-        runReclaimBarrier: async ({ reclaim }) => await reclaim("/gateway/workspace"),
+        runMoveBarrier: async ({ begin }) => begin(),
+        resolveMoveDestination: async () => undefined,
+        runReclaimBarrier: async ({ begin, reclaim }) =>
+          await reclaim("/gateway/workspace", begin()),
         resolveWorkspacePath: async () => "/gateway/workspace",
         reportWorkspaceResultConflict: async () => {},
         resolveWorkspaceResultConflict: async () => undefined,

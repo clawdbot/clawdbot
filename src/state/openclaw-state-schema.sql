@@ -2251,12 +2251,17 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
 
 -- Planned placement moves retain their exact source CAS and bounded target
--- without widening the stable placement-state vocabulary.
+-- without widening the stable placement-state vocabulary. The opaque operation
+-- id fences stale asynchronous completion; it is correlation, never authority.
 CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
-  session_id TEXT NOT NULL PRIMARY KEY
+  operation_id TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT NOT NULL UNIQUE
     REFERENCES worker_session_placements(session_id) ON DELETE CASCADE,
   source_generation INTEGER NOT NULL CHECK (source_generation >= 0),
-  source_environment_id TEXT NOT NULL,
+  source_environment_id TEXT NOT NULL CHECK (
+    length(source_environment_id) BETWEEN 1 AND 256
+    AND source_environment_id = trim(source_environment_id)
+  ),
   source_owner_epoch INTEGER NOT NULL CHECK (source_owner_epoch >= 1),
   target_kind TEXT NOT NULL CHECK (target_kind IN ('gateway', 'profile', 'device')),
   target_id TEXT,

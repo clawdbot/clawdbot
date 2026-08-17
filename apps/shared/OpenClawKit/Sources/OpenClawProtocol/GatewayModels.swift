@@ -7787,6 +7787,28 @@ public struct SessionMoveDeviceTarget: Codable, Sendable {
     }
 }
 
+public struct SessionPlacementMove: Codable, Sendable {
+    public let target: SessionMoveTarget
+    public let updatedatms: Int
+    public let error: String?
+
+    public init(
+        target: SessionMoveTarget,
+        updatedatms: Int,
+        error: String? = nil)
+    {
+        self.target = target
+        self.updatedatms = updatedatms
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case target
+        case updatedatms = "updatedAtMs"
+        case error
+    }
+}
+
 public struct SessionsMoveParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
@@ -7835,20 +7857,17 @@ public struct SessionsMoveResult: Codable, Sendable {
     public let ok: Bool
     public let key: String
     public let sessionid: String
-    public let target: SessionMoveTarget
     public let placement: SessionMovePlacement
 
     public init(
         ok: Bool,
         key: String,
         sessionid: String,
-        target: SessionMoveTarget,
         placement: SessionMovePlacement)
     {
         self.ok = ok
         self.key = key
         self.sessionid = sessionid
-        self.target = target
         self.placement = placement
     }
 
@@ -7856,7 +7875,6 @@ public struct SessionsMoveResult: Codable, Sendable {
         case ok
         case key
         case sessionid = "sessionId"
-        case target
         case placement
     }
 }

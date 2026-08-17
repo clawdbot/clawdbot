@@ -186,6 +186,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     clientGatewayUrl: string;
     scope: ChatPaneConnectionScope;
   } | null = null;
+  @litState() protected headerPlacementMovingKey: string | null = null;
   @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();

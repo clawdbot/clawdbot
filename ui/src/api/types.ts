@@ -438,6 +438,7 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = SessionRow & {
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
+  placementMove?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacementMove;
   icon?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;

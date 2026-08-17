@@ -1,20 +1,37 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
+import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as StateDatabase,
   WorkerSessionPlacementMoves,
 } from "../../state/openclaw-state-db.generated.js";
-import { normalizeEpoch, required } from "./placement-record.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { drainWorkerSessionPlacement } from "./placement-drain.js";
+import { normalizeEpoch, required, type WorkerSessionPlacementRecord } from "./placement-record.js";
+import { getRequired, query, transitionValues } from "./placement-row-codec.js";
+import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { boundedWorkerError } from "./worker-error.js";
 
-export type WorkerPlacementMoveTarget =
-  | { kind: "gateway" }
-  | { kind: "profile"; profileId: string }
-  | { kind: "device"; deviceId: string };
+const MOVE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (";
+const MOVE_SCHEMA_END = "\n) STRICT;";
+const MOVE_OPERATION_PREFIX = "move:v1:";
+
+type MoveRow = Selectable<WorkerSessionPlacementMoves>;
+type MoveDatabase = Pick<
+  StateDatabase,
+  "worker_environments" | "worker_session_placement_moves" | "worker_session_placements"
+>;
+
+export type WorkerPlacementMoveTarget = SessionMoveTarget;
 
 export type WorkerPlacementMoveSource = {
   generation: number;
@@ -23,6 +40,7 @@ export type WorkerPlacementMoveSource = {
 };
 
 export type WorkerPlacementMoveIntent = {
+  operationId: string;
   sessionId: string;
   source: WorkerPlacementMoveSource;
   target: WorkerPlacementMoveTarget;
@@ -31,16 +49,44 @@ export type WorkerPlacementMoveIntent = {
   updatedAtMs: number;
 };
 
-type MoveRow = Selectable<WorkerSessionPlacementMoves>;
-type MoveDatabase = Pick<StateDatabase, "worker_session_placement_moves">;
+const moveQuery = (db: DatabaseSync) => getNodeSqliteKysely<MoveDatabase>(db);
 
-export const moveQuery = (db: DatabaseSync) => getNodeSqliteKysely<MoveDatabase>(db);
+function moveSchemaSql(): string {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(MOVE_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(MOVE_SCHEMA_END, start);
+  if (start < 0 || endMarkerStart < start) {
+    throw new Error("Worker placement move schema marker is missing");
+  }
+  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + MOVE_SCHEMA_END.length);
+}
+
+function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
+  db.exec(moveSchemaSql()); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
+}
 
 function normalizeGeneration(value: number): number {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error("Worker placement move source generation must be a non-negative integer");
   }
   return value;
+}
+
+function boundedIdentifier(value: string, field: string): string {
+  const normalized = required(value, field);
+  if (normalized.length > WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH) {
+    throw new Error(
+      `Worker session placement ${field} exceeds ${WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH} characters`,
+    );
+  }
+  return normalized;
+}
+
+function normalizeOperationId(value: string): string {
+  const operationId = required(value, "move operation id");
+  if (!operationId.startsWith(MOVE_OPERATION_PREFIX) || operationId.length > 128) {
+    throw new Error("Worker session placement move operation id is invalid");
+  }
+  return operationId;
 }
 
 export function normalizeWorkerPlacementMoveTarget(
@@ -50,10 +96,11 @@ export function normalizeWorkerPlacementMoveTarget(
     case "gateway":
       return { kind: "gateway" };
     case "profile":
-      return { kind: "profile", profileId: required(target.profileId, "move profile id") };
+      return { kind: "profile", profileId: boundedIdentifier(target.profileId, "move profile id") };
     case "device":
-      return { kind: "device", deviceId: required(target.deviceId, "move device id") };
+      return { kind: "device", deviceId: boundedIdentifier(target.deviceId, "move device id") };
   }
+  throw new Error("Worker placement move target is invalid");
 }
 
 export function normalizeWorkerPlacementMoveSource(
@@ -61,7 +108,7 @@ export function normalizeWorkerPlacementMoveSource(
 ): WorkerPlacementMoveSource {
   return {
     generation: normalizeGeneration(source.generation),
-    environmentId: required(source.environmentId, "move source environment id"),
+    environmentId: boundedIdentifier(source.environmentId, "move source environment id"),
     ownerEpoch: normalizeEpoch(source.ownerEpoch, "move source owner epoch"),
   };
 }
@@ -78,6 +125,7 @@ function targetValues(target: WorkerPlacementMoveTarget): {
     case "device":
       return { target_kind: target.kind, target_id: target.deviceId };
   }
+  throw new Error("Worker placement move target is invalid");
 }
 
 function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
@@ -90,13 +138,14 @@ function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
   if (row.target_kind === "gateway" && row.target_id === null) {
     target = { kind: "gateway" };
   } else if (row.target_kind === "profile" && row.target_id !== null) {
-    target = { kind: "profile", profileId: required(row.target_id, "move profile id") };
+    target = { kind: "profile", profileId: boundedIdentifier(row.target_id, "move profile id") };
   } else if (row.target_kind === "device" && row.target_id !== null) {
-    target = { kind: "device", deviceId: required(row.target_id, "move device id") };
+    target = { kind: "device", deviceId: boundedIdentifier(row.target_id, "move device id") };
   } else {
     throw new Error(`Invalid worker placement move target: ${row.target_kind}`);
   }
   return {
+    operationId: normalizeOperationId(row.operation_id),
     sessionId: required(row.session_id, "move session id"),
     source,
     target,
@@ -106,72 +155,327 @@ function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
   };
 }
 
-export function findWorkerPlacementMoveIntent(
-  db: DatabaseSync,
-  sessionId: string,
-): WorkerPlacementMoveIntent | undefined {
-  const row = executeSqliteQueryTakeFirstSync(
+function findMoveRowBySession(db: DatabaseSync, sessionId: string): MoveRow | undefined {
+  if (!tableExists(db, "worker_session_placement_moves")) {
+    return undefined;
+  }
+  return executeSqliteQueryTakeFirstSync(
     db,
     moveQuery(db)
       .selectFrom("worker_session_placement_moves")
       .selectAll()
       .where("session_id", "=", sessionId),
   );
-  return row ? fromRow(row) : undefined;
 }
 
-export function listWorkerPlacementMoveIntents(db: DatabaseSync): WorkerPlacementMoveIntent[] {
-  return executeSqliteQuerySync(
+function findMoveRowByOperation(db: DatabaseSync, operationId: string): MoveRow | undefined {
+  if (!tableExists(db, "worker_session_placement_moves")) {
+    return undefined;
+  }
+  return executeSqliteQueryTakeFirstSync(
     db,
     moveQuery(db)
       .selectFrom("worker_session_placement_moves")
       .selectAll()
-      .orderBy("created_at_ms")
-      .orderBy("session_id"),
-  ).rows.map(fromRow);
+      .where("operation_id", "=", operationId),
+  );
 }
 
-export function insertWorkerPlacementMoveIntent(
+function requireExactMove(
+  db: DatabaseSync,
+  input: { operationId: string; sessionId: string },
+): WorkerPlacementMoveIntent {
+  const operationId = normalizeOperationId(input.operationId);
+  const sessionId = required(input.sessionId, "move session id");
+  const row = findMoveRowByOperation(db, operationId);
+  if (!row || row.session_id !== sessionId) {
+    throw new Error(`Session ${sessionId} placement move changed before completion`);
+  }
+  return fromRow(row);
+}
+
+function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): void {
+  const values = targetValues(intent.target);
+  let statement = moveQuery(db)
+    .deleteFrom("worker_session_placement_moves")
+    .where("operation_id", "=", intent.operationId)
+    .where("session_id", "=", intent.sessionId)
+    .where("source_generation", "=", intent.source.generation)
+    .where("source_environment_id", "=", intent.source.environmentId)
+    .where("source_owner_epoch", "=", intent.source.ownerEpoch)
+    .where("target_kind", "=", values.target_kind);
+  statement =
+    values.target_id === null
+      ? statement.where("target_id", "is", null)
+      : statement.where("target_id", "=", values.target_id);
+  const result = executeSqliteQuerySync(db, statement);
+  if (result.numAffectedRows !== 1n) {
+    throw new Error(`Session ${intent.sessionId} placement move changed before completion`);
+  }
+}
+
+function requireExactAttachedEnvironment(
   db: DatabaseSync,
   input: {
     sessionId: string;
-    source: WorkerPlacementMoveSource;
-    target: WorkerPlacementMoveTarget;
-    nowMs: number;
+    environmentId: string;
+    ownerEpoch: number;
+    profileId?: string;
   },
 ): void {
-  const sessionId = required(input.sessionId, "move session id");
-  const source = normalizeWorkerPlacementMoveSource(input.source);
-  const target = normalizeWorkerPlacementMoveTarget(input.target);
-  const result = executeSqliteQuerySync(
+  const row = executeSqliteQueryTakeFirstSync(
     db,
     moveQuery(db)
-      .insertInto("worker_session_placement_moves")
-      .values({
-        session_id: sessionId,
-        source_generation: source.generation,
-        source_environment_id: source.environmentId,
-        source_owner_epoch: source.ownerEpoch,
-        ...targetValues(target),
-        last_error: null,
-        created_at_ms: input.nowMs,
-        updated_at_ms: input.nowMs,
-      })
-      .onConflict((conflict) => conflict.column("session_id").doNothing()),
+      .selectFrom("worker_environments")
+      .select(["state", "owner_epoch", "profile_id", "attached_session_ids_json"])
+      .where("environment_id", "=", input.environmentId),
   );
-  if (result.numAffectedRows !== 1n) {
-    throw new Error(`Session ${sessionId} already has a placement move`);
+  let attachedSessionIds: unknown;
+  try {
+    attachedSessionIds = row ? (JSON.parse(row.attached_session_ids_json) as unknown) : undefined;
+  } catch {
+    attachedSessionIds = undefined;
+  }
+  if (
+    !row ||
+    row.state !== "attached" ||
+    row.owner_epoch !== input.ownerEpoch ||
+    (input.profileId !== undefined && row.profile_id !== input.profileId) ||
+    !Array.isArray(attachedSessionIds) ||
+    attachedSessionIds.length !== 1 ||
+    attachedSessionIds[0] !== input.sessionId
+  ) {
+    throw new Error(`Cannot move stale worker environment for session ${input.sessionId}`);
   }
 }
 
-export function deleteWorkerPlacementMoveIntent(db: DatabaseSync, sessionId: string): void {
-  const result = executeSqliteQuerySync(
-    db,
-    moveQuery(db)
-      .deleteFrom("worker_session_placement_moves")
-      .where("session_id", "=", sessionId),
-  );
-  if (result.numAffectedRows !== 1n) {
-    throw new Error(`Session ${sessionId} placement move changed before completion`);
-  }
+export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
+  const { read, write, now } = runtime;
+  return {
+    getPlacementMove(sessionId: string): WorkerPlacementMoveIntent | undefined {
+      const row = findMoveRowBySession(read(), required(sessionId, "move session id"));
+      return row ? fromRow(row) : undefined;
+    },
+
+    getPlacementMoves(
+      sessionIds: readonly string[],
+    ): ReadonlyMap<string, WorkerPlacementMoveIntent> {
+      const normalizedIds = [
+        ...new Set(sessionIds.map((sessionId) => required(sessionId, "move session id"))),
+      ];
+      const results = new Map<string, WorkerPlacementMoveIntent>();
+      const db = read();
+      if (!tableExists(db, "worker_session_placement_moves")) {
+        return results;
+      }
+      for (let offset = 0; offset < normalizedIds.length; offset += 250) {
+        const chunk = normalizedIds.slice(offset, offset + 250);
+        for (const row of executeSqliteQuerySync(
+          db,
+          moveQuery(db)
+            .selectFrom("worker_session_placement_moves")
+            .selectAll()
+            .where("session_id", "in", chunk),
+        ).rows) {
+          const intent = fromRow(row);
+          results.set(intent.sessionId, intent);
+        }
+      }
+      return results;
+    },
+
+    listPlacementMoves(): WorkerPlacementMoveIntent[] {
+      const db = read();
+      if (!tableExists(db, "worker_session_placement_moves")) {
+        return [];
+      }
+      return executeSqliteQuerySync(
+        db,
+        moveQuery(db)
+          .selectFrom("worker_session_placement_moves")
+          .selectAll()
+          .orderBy("created_at_ms")
+          .orderBy("session_id"),
+      ).rows.map(fromRow);
+    },
+
+    beginPlacementMove(input: {
+      sessionId: string;
+      source: WorkerPlacementMoveSource;
+      target: WorkerPlacementMoveTarget;
+    }): {
+      intent: WorkerPlacementMoveIntent;
+      placement: WorkerSessionPlacementRecord;
+      joined: boolean;
+    } {
+      const sessionId = required(input.sessionId, "move session id");
+      const source = normalizeWorkerPlacementMoveSource(input.source);
+      const target = normalizeWorkerPlacementMoveTarget(input.target);
+      const operationId = `${MOVE_OPERATION_PREFIX}${generateSecureToken(32)}`;
+      return write((db) => {
+        const existingRow = findMoveRowBySession(db, sessionId);
+        if (existingRow) {
+          const existing = fromRow(existingRow);
+          if (
+            !isDeepStrictEqual(existing.source, source) ||
+            !isDeepStrictEqual(existing.target, target)
+          ) {
+            throw new Error(`Session ${sessionId} already has a conflicting placement move`);
+          }
+          return { intent: existing, placement: getRequired(db, sessionId), joined: true };
+        }
+        const current = getRequired(db, sessionId);
+        if (
+          current.state !== "active" ||
+          current.generation !== source.generation ||
+          current.environmentId !== source.environmentId ||
+          current.activeOwnerEpoch !== source.ownerEpoch
+        ) {
+          throw new Error(`Cannot move stale worker placement for session ${sessionId}`);
+        }
+        requireExactAttachedEnvironment(db, { sessionId, ...source });
+        ensureWorkerPlacementMoveSchema(db);
+        const timestamp = now();
+        const row: MoveRow = {
+          operation_id: operationId,
+          session_id: sessionId,
+          source_generation: source.generation,
+          source_environment_id: source.environmentId,
+          source_owner_epoch: source.ownerEpoch,
+          ...targetValues(target),
+          last_error: null,
+          created_at_ms: timestamp,
+          updated_at_ms: timestamp,
+        };
+        executeSqliteQuerySync(
+          db,
+          moveQuery(db).insertInto("worker_session_placement_moves").values(row),
+        );
+        const placement = drainWorkerSessionPlacement(
+          db,
+          {
+            sessionId,
+            environmentId: source.environmentId,
+            ownerEpoch: source.ownerEpoch,
+            expectedGeneration: source.generation,
+          },
+          timestamp,
+        );
+        return { intent: fromRow(row), placement, joined: false };
+      });
+    },
+
+    recordPlacementMoveError(input: {
+      operationId: string;
+      sessionId: string;
+      error: string;
+    }): boolean {
+      return write((db) => {
+        const row = findMoveRowByOperation(db, normalizeOperationId(input.operationId));
+        if (!row || row.session_id !== required(input.sessionId, "move session id")) {
+          return false;
+        }
+        const intent = fromRow(row);
+        const values = targetValues(intent.target);
+        let statement = moveQuery(db)
+          .updateTable("worker_session_placement_moves")
+          .set({ last_error: boundedWorkerError(input.error), updated_at_ms: now() })
+          .where("operation_id", "=", intent.operationId)
+          .where("session_id", "=", intent.sessionId)
+          .where("source_generation", "=", intent.source.generation)
+          .where("source_environment_id", "=", intent.source.environmentId)
+          .where("source_owner_epoch", "=", intent.source.ownerEpoch)
+          .where("target_kind", "=", values.target_kind);
+        statement =
+          values.target_id === null
+            ? statement.where("target_id", "is", null)
+            : statement.where("target_id", "=", values.target_id);
+        return executeSqliteQuerySync(db, statement).numAffectedRows === 1n;
+      });
+    },
+
+    completePlacementMoveSourceToLocal(input: {
+      operationId: string;
+      sessionId: string;
+      expectedGeneration: number;
+    }): WorkerSessionPlacementRecord {
+      return write((db) => {
+        const intent = requireExactMove(db, input);
+        const current = getRequired(db, intent.sessionId);
+        if (
+          current.state !== "reconciling" ||
+          current.generation !== input.expectedGeneration ||
+          current.environmentId !== intent.source.environmentId ||
+          current.activeOwnerEpoch !== intent.source.ownerEpoch
+        ) {
+          throw new Error(
+            `Cannot complete stale Gateway placement move for session ${intent.sessionId}`,
+          );
+        }
+        const values = transitionValues(current, "local", {}, now());
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_session_placements")
+            .set(values)
+            .where("session_id", "=", intent.sessionId)
+            .where("state", "=", "reconciling")
+            .where("transition_generation", "=", current.generation)
+            .where("environment_id", "=", intent.source.environmentId)
+            .where("active_owner_epoch", "=", intent.source.ownerEpoch)
+            .where("turn_claim_owner", "is", null),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Session ${intent.sessionId} changed during Gateway placement move`);
+        }
+        if (intent.target.kind === "gateway") {
+          deleteExactMove(db, intent);
+        }
+        return getRequired(db, intent.sessionId);
+      });
+    },
+
+    completePlacementMoveToWorker(input: {
+      operationId: string;
+      sessionId: string;
+      expectedGeneration: number;
+      environmentId: string;
+      ownerEpoch: number;
+    }): WorkerSessionPlacementRecord {
+      const environmentId = boundedIdentifier(
+        input.environmentId,
+        "move destination environment id",
+      );
+      const ownerEpoch = normalizeEpoch(input.ownerEpoch, "move destination owner epoch");
+      return write((db) => {
+        const intent = requireExactMove(db, input);
+        if (intent.target.kind === "gateway") {
+          throw new Error(`Session ${intent.sessionId} placement move target is not a worker`);
+        }
+        const current = getRequired(db, intent.sessionId);
+        if (
+          current.state !== "active" ||
+          current.generation !== input.expectedGeneration ||
+          current.environmentId !== environmentId ||
+          current.activeOwnerEpoch !== ownerEpoch
+        ) {
+          throw new Error(
+            `Cannot complete stale worker placement move for session ${intent.sessionId}`,
+          );
+        }
+        const profileId =
+          intent.target.kind === "profile"
+            ? intent.target.profileId
+            : `device:${intent.target.deviceId}`;
+        requireExactAttachedEnvironment(db, {
+          sessionId: intent.sessionId,
+          environmentId,
+          ownerEpoch,
+          profileId,
+        });
+        deleteExactMove(db, intent);
+        return current;
+      });
+    },
+  };
 }

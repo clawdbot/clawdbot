@@ -1591,6 +1591,19 @@ export interface WorkerInferenceTurns {
   updated_at_ms: number;
 }
 
+export interface WorkerSessionPlacementMoves {
+  created_at_ms: number;
+  last_error: string | null;
+  operation_id: string;
+  session_id: string;
+  source_environment_id: string;
+  source_generation: number;
+  source_owner_epoch: number;
+  target_id: string | null;
+  target_kind: string;
+  updated_at_ms: number;
+}
+
 export interface WorkerSessionPlacements {
   active_owner_epoch: number | null;
   agent_id: string;
@@ -1616,18 +1629,6 @@ export interface WorkerSessionPlacements {
   updated_at_ms: number;
   worker_bundle_hash: string | null;
   workspace_base_manifest_ref: string | null;
-}
-
-export interface WorkerSessionPlacementMoves {
-  created_at_ms: number;
-  last_error: string | null;
-  session_id: string;
-  source_environment_id: string;
-  source_generation: number;
-  source_owner_epoch: number;
-  target_id: string | null;
-  target_kind: string;
-  updated_at_ms: number;
 }
 
 export interface WorkerSessionToolOperations {
