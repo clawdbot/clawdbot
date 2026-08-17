@@ -1,9 +1,20 @@
 import path from "node:path";
+import type { HealthCheck } from "openclaw/plugin-sdk/health";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { operationLeaseId, resolveCrabboxBinary } from "./crabbox-worker-profile.js";
+import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
+import {
+  findCrabboxBinary,
+  operationLeaseId,
+  resolveCrabboxBinary,
+} from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./crabbox-worker-provider.js";
+import {
+  CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
+  registerCrabboxWorkerProviderDoctorChecks,
+} from "./doctor.js";
 
 const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
 const LEASE_ID = "cbx_6071fc2062a6";
@@ -1675,6 +1686,25 @@ describe("Crabbox binary resolution", () => {
     ).toBe("crabbox");
   });
 
+  it("distinguishes executable discovery from the dispatch fallback", () => {
+    const explicitBinary = path.resolve(path.sep, "custom", "crabbox");
+
+    expect(
+      findCrabboxBinary({
+        explicit: explicitBinary,
+        openclawRoot: OPENCLAW_ROOT,
+        isExecutable: () => false,
+      }),
+    ).toBeUndefined();
+    expect(
+      findCrabboxBinary({
+        openclawRoot: OPENCLAW_ROOT,
+        pathEnv: path.resolve(path.sep, "not-executable"),
+        isExecutable: () => false,
+      }),
+    ).toBeUndefined();
+  });
+
   it("derives the package root from source and bundled plugin roots", () => {
     expect(resolveOpenClawRoot(path.join(OPENCLAW_ROOT, "extensions", "crabbox"))).toBe(
       OPENCLAW_ROOT,
@@ -1682,5 +1712,147 @@ describe("Crabbox binary resolution", () => {
     expect(resolveOpenClawRoot(path.join(OPENCLAW_ROOT, "dist", "extensions", "crabbox"))).toBe(
       OPENCLAW_ROOT,
     );
+  });
+});
+
+function captureCrabboxDoctorCheck(): HealthCheck {
+  let check: HealthCheck | undefined;
+  registerCrabboxWorkerProviderDoctorChecks({
+    openclawRoot: OPENCLAW_ROOT,
+    registerHealthCheck(value) {
+      check = value;
+    },
+  });
+  if (!check) {
+    throw new Error("Crabbox doctor check was not registered");
+  }
+  return check;
+}
+
+describe("Crabbox worker doctor", () => {
+  it("reports a configured non-executable binary with a profile-specific repair", async () => {
+    const probe = vi.spyOn(doctorRuntime, "probeCrabboxVersion");
+    const binary = path.resolve(path.sep, "nonexistent", "crabbox");
+    try {
+      await expect(
+        captureCrabboxDoctorCheck().detect({
+          cfg: {
+            cloudWorkers: {
+              profiles: {
+                aws: { provider: "crabbox", settings: { binary } },
+              },
+            },
+          },
+          env: { PATH: "" },
+        } as never),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
+          severity: "warning",
+          message: expect.stringContaining('profile "aws"'),
+          path: binary,
+          target: "aws",
+          fixHint: expect.stringContaining("cloudWorkers.profiles.aws.settings.binary"),
+        }),
+      ]);
+      expect(probe).not.toHaveBeenCalled();
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it("emits no finding for a supported configured binary", async () => {
+    const probe = vi
+      .spyOn(doctorRuntime, "probeCrabboxVersion")
+      .mockResolvedValue({ status: "supported", version: "0.41.6" });
+    try {
+      await expect(
+        captureCrabboxDoctorCheck().detect({
+          cfg: {
+            cloudWorkers: {
+              profiles: {
+                aws: { provider: "crabbox", settings: { binary: process.execPath } },
+              },
+            },
+          },
+        } as never),
+      ).resolves.toEqual([]);
+      expect(probe).toHaveBeenCalledOnce();
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it("reports an indeterminate version probe without asserting failure", async () => {
+    const probe = vi.spyOn(doctorRuntime, "probeCrabboxVersion").mockResolvedValue({
+      status: "indeterminate",
+      reason: "version command timed out after 2000 ms",
+    });
+    try {
+      await expect(
+        captureCrabboxDoctorCheck().detect({
+          cfg: {
+            cloudWorkers: {
+              profiles: {
+                aws: { provider: "crabbox", settings: { binary: process.execPath } },
+              },
+            },
+          },
+        } as never),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          severity: "info",
+          message: expect.stringContaining("could not determine its version"),
+          fixHint: expect.stringContaining(`${process.execPath} --version`),
+        }),
+      ]);
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it("does not probe when no Crabbox cloud worker profile is configured", async () => {
+    const probe = vi.spyOn(doctorRuntime, "probeCrabboxVersion");
+    try {
+      await expect(captureCrabboxDoctorCheck().detect({ cfg: {} } as never)).resolves.toEqual([]);
+      expect(probe).not.toHaveBeenCalled();
+    } finally {
+      probe.mockRestore();
+    }
+  });
+});
+
+describe("Crabbox version probe", () => {
+  it.each([
+    { output: "0.41.1\n", expected: { status: "supported", version: "0.41.1" } },
+    { output: "crabbox 0.41.6\n", expected: { status: "supported", version: "0.41.6" } },
+    { output: "0.40.9\n", expected: { status: "outdated", version: "0.40.9" } },
+  ])("classifies $output", async ({ output, expected }) => {
+    const run = vi
+      .spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValue(commandResult({ stdout: output }));
+    try {
+      await expect(doctorRuntime.probeCrabboxVersion("/opt/crabbox")).resolves.toEqual(expected);
+      expect(run).toHaveBeenCalledWith(
+        ["/opt/crabbox", "--version"],
+        expect.objectContaining({ timeoutMs: 2_000, killProcessTree: true }),
+      );
+    } finally {
+      run.mockRestore();
+    }
+  });
+
+  it("turns timeout into an indeterminate result", async () => {
+    const run = vi
+      .spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValue(commandResult({ code: 124, termination: "timeout" }));
+    try {
+      await expect(doctorRuntime.probeCrabboxVersion("/opt/crabbox")).resolves.toEqual({
+        status: "indeterminate",
+        reason: "version command timed out after 2000 ms",
+      });
+    } finally {
+      run.mockRestore();
+    }
   });
 });
