@@ -217,10 +217,12 @@
 }
 
 .chat-thread .chat-bubble .chat-text :where(th, td) {
+  min-width: 8rem;
+  max-width: 24rem;
   border-right: 0;
   border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
-  overflow-wrap: normal;
-  white-space: nowrap;
+  overflow-wrap: break-word;
+  white-space: normal;
   word-break: normal;
 }
 
