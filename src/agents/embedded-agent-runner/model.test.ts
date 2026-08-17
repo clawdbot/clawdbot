@@ -257,6 +257,7 @@ import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { resolveModel, resolveModelAsync, resolveModelWithRegistry } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
+  makeOpenClawConfigFixture,
   makeModel,
   mockDiscoveredModel,
   OPENAI_CODEX_TEMPLATE_MODEL,
@@ -478,13 +479,13 @@ function makeProviderConfig(
   provider: string,
   overrides: Record<string, unknown> = {},
 ): OpenClawConfig {
-  return {
+  return makeOpenClawConfigFixture({
     models: {
       providers: {
         [provider]: { models: [], ...overrides },
       },
     },
-  } as unknown as OpenClawConfig;
+  });
 }
 
 const deepSeekCatalogCompat = {
@@ -702,14 +703,14 @@ describe("resolveModel", () => {
     const defaultAgentDir = path.join(rootDir, "default-agent");
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(defaultAgentDir, { recursive: true });
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         list: [
           { id: "main", default: true, agentDir: defaultAgentDir },
           { id: "worker", agentDir },
         ],
       },
-    } as unknown as OpenClawConfig;
+    });
     mockModelDiscovery();
 
     const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
@@ -739,11 +740,11 @@ describe("resolveModel", () => {
     const workspaceDir = path.join(rootDir, "workspace");
     fs.mkdirSync(agentDir, { recursive: true });
     mockModelDiscovery();
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         list: [{ id: "workspace-agent", default: true, agentDir, workspace: workspaceDir }],
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModel("openai", "gpt-5.5", agentDir, cfg, {
       runtimeHooks: createRuntimeHooks(),
@@ -1084,7 +1085,7 @@ describe("resolveModel", () => {
   });
 
   it("falls back to bundled static catalog rows without agent discovery", async () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           openai: {
@@ -1094,7 +1095,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "openai",
       id: "gpt-5.3-codex",
@@ -1228,7 +1229,7 @@ describe("resolveModel", () => {
       contextWindow: 262_144,
       maxTokens: 262_144,
     });
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           fireworks: {
@@ -1245,7 +1246,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest(
       "fireworks",
@@ -1441,7 +1442,7 @@ describe("resolveModel", () => {
         image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
       },
     });
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           mistral: {
@@ -1458,7 +1459,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = await resolveModelAsync("mistral", "mistral-medium-3-5", "/tmp/agent", cfg, {
       allowBundledStaticCatalogFallback: true,
@@ -2062,7 +2063,7 @@ describe("resolveModel", () => {
       "typoProvider",
       "typoed-model",
       "/tmp/agent",
-      cfg as unknown as OpenClawConfig,
+      makeOpenClawConfigFixture(cfg),
     );
 
     expect(result.model).toBeUndefined();
@@ -2084,7 +2085,7 @@ describe("resolveModel", () => {
       "openai",
       "typoed-model",
       "/tmp/agent",
-      cfg as unknown as OpenClawConfig,
+      makeOpenClawConfigFixture(cfg),
     );
 
     expect(result.model).toBeUndefined();
@@ -2154,7 +2155,7 @@ describe("resolveModel", () => {
   });
 
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: {
           model: { primary: "local-agent-proxy/gpt-5.2" },
@@ -2168,7 +2169,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("local-agent-proxy", "gpt-5.2", "/tmp/agent", cfg);
     const model = expectResolvedModel(result);
@@ -2444,7 +2445,7 @@ describe("resolveModel", () => {
     mockMinimalModelDiscovery("ollama", "qwen3:32b", {
       params: { num_ctx: 4096, keep_alive: "1m" },
     });
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: {
           models: {
@@ -2467,7 +2468,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
 
@@ -2528,7 +2529,7 @@ describe("resolveModel", () => {
       "openai",
       "gpt-5.5",
       "/tmp/agent",
-      cfg as unknown as OpenClawConfig,
+      makeOpenClawConfigFixture(cfg),
     );
 
     expect(result.error).toBeUndefined();
@@ -2553,7 +2554,7 @@ describe("resolveModel", () => {
       "openai",
       "gpt-5.5",
       "/tmp/agent",
-      cfg as unknown as OpenClawConfig,
+      makeOpenClawConfigFixture(cfg),
     );
 
     expect(result.error).toBeUndefined();
@@ -2610,7 +2611,7 @@ describe("resolveModel", () => {
 
   it("applies agent default model params without explicit provider config", () => {
     mockMinimalModelDiscovery("ollama", "llama3.2");
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: {
           models: {
@@ -2620,7 +2621,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("ollama", "llama3.2", "/tmp/agent", cfg);
 
@@ -3043,7 +3044,7 @@ describe("resolveModel", () => {
   );
 
   it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           custom: {
@@ -3058,7 +3059,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
 
@@ -3068,7 +3069,7 @@ describe("resolveModel", () => {
 
   it("resolves custom MLX-style Hugging Face ids without adding the provider prefix", () => {
     const modelId = "mlx-community/Qwen3-30B-A3B-6bit";
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: {
           model: { primary: `mlx/${modelId}` },
@@ -3090,7 +3091,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("mlx", modelId, "/tmp/agent", cfg);
 
@@ -3105,7 +3106,7 @@ describe("resolveModel", () => {
 
   it("prefers provider-prefixed configured metadata over discovered text-only models", () => {
     mockMinimalModelDiscovery("custom", "vision-model", { input: ["text"] });
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           custom: {
@@ -3120,7 +3121,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
 
@@ -3133,7 +3134,7 @@ describe("resolveModel", () => {
   });
 
   it("keeps unknown fallback models text-only instead of borrowing image input from another configured model", () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           custom: {
@@ -3147,7 +3148,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("custom", "typoed-model", "/tmp/agent", cfg);
 
@@ -3222,7 +3223,7 @@ describe("resolveModel", () => {
   });
 
   it("suggests adding config entry when a non-bundled provider model is missing", async () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: {
           models: {
@@ -3230,7 +3231,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = await resolveModelAsync("custom-provider", "some-model", "/tmp/agent", cfg, {
       runtimeHooks: createRuntimeHooks(),
@@ -3243,7 +3244,7 @@ describe("resolveModel", () => {
   });
 
   it("points runtime-bound model entries at the runtime catalog instead of provider registration", async () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       agents: {
         defaults: {
           models: {
@@ -3253,7 +3254,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", cfg, {
       runtimeHooks: createRuntimeHooks(),
@@ -3266,7 +3267,7 @@ describe("resolveModel", () => {
   });
 
   it("repairs stale text-only Foundry fallback rows for GPT-family models", () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           "microsoft-foundry": {
@@ -3283,7 +3284,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent", cfg);
 
@@ -3291,7 +3292,7 @@ describe("resolveModel", () => {
   });
 
   it("repairs stale text-only Anthropic fallback rows for Claude vision models", () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           anthropic: {
@@ -3308,7 +3309,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
 
@@ -3316,7 +3317,7 @@ describe("resolveModel", () => {
   });
 
   it("repairs stale text-only Foundry discovered rows for GPT-family models", () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           "microsoft-foundry": {
@@ -3333,7 +3334,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     mockDiscoveredModel(discoverModels, {
       provider: "microsoft-foundry",
@@ -3381,7 +3382,7 @@ describe("resolveModel", () => {
   });
 
   it("matches prefixed OpenRouter native ids in configured fallback models", () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           openrouter: {
@@ -3399,7 +3400,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const models = buildInlineProviderModels(cfg.models?.providers ?? {});
     const model = models.find((entry) => entry.id === "openrouter/healer-alpha");
@@ -3592,7 +3593,7 @@ describe("resolveModel", () => {
 
   it("threads the model id through inline configured transport normalization", () => {
     const normalizeProviderTransportWithPlugin = vi.fn(() => undefined);
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           openai: {
@@ -3608,7 +3609,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModel("openai", "gpt-5.5", "/tmp/agent", cfg, {
       authStorage: { mocked: true } as never,
@@ -3646,7 +3647,7 @@ describe("resolveModel", () => {
       },
     });
 
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           onehub: {
@@ -3664,7 +3665,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("onehub", "glm-5", "/tmp/agent", cfg);
 
@@ -3698,7 +3699,7 @@ describe("resolveModel", () => {
       },
     });
 
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           "amazon-bedrock": {
@@ -3723,7 +3724,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("bedrock", "bedrock-alias-exact-test", "/tmp/agent", cfg);
 
@@ -3827,7 +3828,7 @@ describe("resolveModel", () => {
   it("applies canonical openai overrides when resolving the gpt-5.4-codex alias", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           openai: {
@@ -3845,7 +3846,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("openai", "gpt-5.4-codex", "/tmp/agent", cfg);
 
@@ -3865,7 +3866,7 @@ describe("resolveModel", () => {
   it("prefers alias-specific overrides over canonical ones for gpt-5.4-codex", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           openai: {
@@ -3885,7 +3886,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("openai", "gpt-5.4-codex", "/tmp/agent", cfg);
 
@@ -3923,7 +3924,7 @@ describe("resolveModel", () => {
   });
 
   it("does not build a configured fallback for unsupported xAI multi-agent models", () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           xai: {
@@ -3933,7 +3934,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("xai", "grok-4.20-multi-agent-0309", "/tmp/agent", cfg);
 
@@ -3977,7 +3978,7 @@ describe("resolveModel", () => {
   it("lets official openai metadata override stale configured model rows", () => {
     mockOpenAIForwardCompatDiscovery();
 
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           openai: {
@@ -3999,7 +4000,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("openai", "gpt-5.5-pro", "/tmp/agent", cfg);
 
@@ -4041,7 +4042,7 @@ describe("resolveModel", () => {
       contextWindow: 400_000,
     });
 
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           openai: {
@@ -4062,7 +4063,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
 
@@ -4326,7 +4327,7 @@ describe("resolveModel", () => {
       }),
     });
 
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           openai: {
@@ -4335,7 +4336,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("openai", "gpt-5.4", "/tmp/agent", cfg);
 
@@ -4352,7 +4353,7 @@ describe("resolveModel", () => {
   });
 
   it("applies configured overrides to github-copilot dynamic models", () => {
-    const cfg = {
+    const cfg = makeOpenClawConfigFixture({
       models: {
         providers: {
           "github-copilot": {
@@ -4371,7 +4372,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
 
     const result = resolveModelForTest("github-copilot", "gpt-5.4-mini", "/tmp/agent", cfg);
 

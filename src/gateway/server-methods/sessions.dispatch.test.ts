@@ -77,6 +77,49 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("rejects an unconfigured cloud worker profile before dispatch", async () => {
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: "missing" },
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "cloud worker profile is not configured: missing",
+      }),
+    );
+  });
+
+  it("treats a whitespace-only profile as an omitted dispatch target", async () => {
+    mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: " " },
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "worker dispatch target is missing",
+      }),
+    );
+  });
+
   it("rejects sessions without their bound managed worktree", async () => {
     mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
     const dispatch = vi.fn();
@@ -163,6 +206,33 @@ describe("sessions.dispatch", () => {
         code: ErrorCodes.UNAVAILABLE,
         message: "remote dispatch reached",
       }),
+    );
+  });
+
+  it("passes a per-dispatch machine class to placement", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockRejectedValue(new Error("machine dispatch reached"));
+    await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: "test", machineClass: "large" },
+    );
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "test", machineClass: "large" }),
+      expect.any(Function),
     );
   });
 

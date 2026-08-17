@@ -1,6 +1,8 @@
 // Imessage plugin module implements send behavior.
 import { constants, accessSync } from "node:fs";
 import { basename } from "node:path";
+import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   createChannelPartialDeliveryError,
   type MediaPlaceholderTextFact,
@@ -38,10 +40,8 @@ import {
   type ResolvedIMessageAccount,
 } from "./accounts.js";
 import {
-  appendIMessageApprovalReactionHintForOutboundMessage,
-  extractIMessageApprovalPromptBinding,
   type IMessageApprovalConversationKey,
-  registerIMessageApprovalReactionTargetForOutboundMessage,
+  registerIMessageApprovalReactionTarget,
 } from "./approval-reactions.js";
 import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
@@ -76,6 +76,12 @@ const MIN_PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
 const PENDING_PERSISTED_ECHO_GRACE_MS = 5_000;
 type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
+type IMessageApprovalPromptBinding = {
+  approvalId: string;
+  approvalKind: "exec" | "plugin";
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+};
+
 type IMessageSendOpts = {
   cliPath?: string;
   dbPath?: string;
@@ -95,7 +101,7 @@ type IMessageSendOpts = {
   client?: IMessageRpcClient;
   config: OpenClawConfig;
   account?: ResolvedIMessageAccount;
-  approvalKind?: "exec" | "plugin";
+  approvalPrompt?: IMessageApprovalPromptBinding;
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
@@ -387,16 +393,11 @@ async function resolveFallbackSentMessageGuid(params: {
 }
 
 function shouldRecoverApprovalPromptGuid(params: {
-  message: string;
+  approvalPrompt?: IMessageApprovalPromptBinding;
   filePath?: string;
   replyToId?: string | null;
 }): boolean {
-  return (
-    !params.filePath &&
-    !params.replyToId &&
-    Boolean(params.message.trim()) &&
-    Boolean(extractIMessageApprovalPromptBinding(params.message))
-  );
+  return Boolean(params.approvalPrompt && !params.filePath && !params.replyToId);
 }
 
 function canCheckSentMessageAfterRpcTimeout(params: {
@@ -880,8 +881,12 @@ export async function sendMessageIMessage(
       : typeof account.config.mediaMaxMb === "number"
         ? account.config.mediaMaxMb * 1024 * 1024
         : 16 * 1024 * 1024;
-  let message =
-    text && opts.approvalKind ? appendIMessageApprovalReactionHintForOutboundMessage(text) : text;
+  let message = opts.approvalPrompt
+    ? addApprovalReactionHintToText({
+        text,
+        allowedDecisions: opts.approvalPrompt.allowedDecisions,
+      })
+    : text;
   const protectedRoles = protectIMessageFencedRoleMarkers(message);
   message = protectedRoles.text;
   let filePath: string | undefined;
@@ -1113,7 +1118,7 @@ export async function sendMessageIMessage(
         throw error;
       } else if (
         !shouldRecoverApprovalPromptGuid({
-          message,
+          approvalPrompt: opts.approvalPrompt,
           filePath,
           replyToId: resolvedReplyToId,
         }) ||
@@ -1155,7 +1160,7 @@ export async function sendMessageIMessage(
     if (
       !approvalBindingMessageId &&
       shouldRecoverApprovalPromptGuid({
-        message,
+        approvalPrompt: opts.approvalPrompt,
         filePath,
         replyToId: effectiveReplyToId,
       })
@@ -1196,7 +1201,7 @@ export async function sendMessageIMessage(
         isFromMe: true,
       });
     }
-    if (message && approvalBindingMessageId && opts.approvalKind) {
+    if (message && approvalBindingMessageId && opts.approvalPrompt) {
       const handleForKey =
         target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
       const conversation: IMessageApprovalConversationKey = {
@@ -1205,12 +1210,13 @@ export async function sendMessageIMessage(
         ...(target.kind === "chat_id" ? { chatId: target.chatId } : {}),
         ...(handleForKey ? { handle: handleForKey } : {}),
       };
-      registerIMessageApprovalReactionTargetForOutboundMessage({
+      registerIMessageApprovalReactionTarget({
         accountId: account.accountId,
         conversation,
         messageId: approvalBindingMessageId,
-        text: message,
-        approvalKind: opts.approvalKind,
+        approvalId: opts.approvalPrompt.approvalId,
+        approvalKind: opts.approvalPrompt.approvalKind,
+        allowedDecisions: opts.approvalPrompt.allowedDecisions,
       });
     }
     return {

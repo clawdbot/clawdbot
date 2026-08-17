@@ -385,6 +385,19 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Directives stripped before render");
   });
 
+  it("teaches structured speech fields for message-tool-only replies", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolNames: ["message"],
+    });
+
+    expect(prompt).toContain("voiceText");
+    expect(prompt).toContain("voiceProvider");
+    expect(prompt).toContain("voiceId");
+    expect(prompt).not.toContain("[[tts:");
+  });
+
   it("omits the heartbeat section when no heartbeat prompt is provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

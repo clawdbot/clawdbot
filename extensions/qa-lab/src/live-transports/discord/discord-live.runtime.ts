@@ -52,6 +52,12 @@ export type DiscordQaScenarioRun =
       input: string;
     }
   | {
+      kind: "progress-draft-lifecycle";
+      finalMarker: string;
+      input: string;
+      progressLabel: string;
+    }
+  | {
       kind: "thread-reply-filepath-attachment";
       expectedAttachmentFilename: string;
       input: string;
@@ -283,6 +289,23 @@ export const discordQaStatusReactionsToolOnlyScenario: DiscordQaScenarioImplemen
   },
 };
 
+export const discordQaProgressDraftLifecycleScenario: DiscordQaScenarioImplementation = {
+  buildRun: (sutApplicationId) => {
+    const suffix = randomUUID().slice(0, 8).toUpperCase();
+    const finalMarker = `DISCORD_QA_PROGRESS_FINAL_${suffix}`;
+    return {
+      kind: "progress-draft-lifecycle",
+      finalMarker,
+      progressLabel: `Discord progress QA ${suffix}`,
+      input: [
+        `<@${sutApplicationId}> Tool progress QA check:`,
+        "call the exec tool exactly once with this exact command before answering: `sleep 5`.",
+        `After that command completes, reply exactly \`${finalMarker}\`.`,
+      ].join(" "),
+    };
+  },
+};
+
 export const discordQaThreadReplyFilepathAttachmentScenario: DiscordQaScenarioImplementation = {
   buildRun: () => {
     const token = `DISCORD_QA_THREAD_FILE_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -369,6 +392,7 @@ function buildDiscordQaConfig(
     sutBotToken: string;
   },
   options: {
+    progressDraftLabel?: string;
     statusReactionsToolOnly?: boolean;
     voiceChannelAccess?: {
       channelId: string;
@@ -457,6 +481,18 @@ function buildDiscordQaConfig(
           [params.sutAccountId]: {
             enabled: true,
             token: params.sutBotToken,
+            ...(options.progressDraftLabel
+              ? {
+                  streaming: {
+                    mode: "progress" as const,
+                    progress: {
+                      commentary: false,
+                      label: options.progressDraftLabel,
+                      toolProgress: true,
+                    },
+                  },
+                }
+              : {}),
             allowBots: options.statusReactionsToolOnly ? true : "mentions",
             groupPolicy: "allowlist",
             guilds: {
@@ -629,6 +665,54 @@ async function getChannelMessage(params: { token: string; channelId: string; mes
     {
       timeoutMs: 15_000,
     },
+  );
+}
+
+async function waitForDiscordMessageText(params: {
+  token: string;
+  channelId: string;
+  messageId: string;
+  textIncludes: string[];
+  timeoutMs: number;
+}) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < params.timeoutMs) {
+    const message = await getChannelMessage(params);
+    const normalized = normalizeDiscordObservedMessage(message);
+    if (normalized && params.textIncludes.every((text) => normalized.text.includes(text))) {
+      return normalized;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
+  }
+  throw new Error(
+    `timed out after ${params.timeoutMs}ms waiting for Discord message ${params.messageId} text`,
+  );
+}
+
+async function waitForDiscordMessageDeleted(params: {
+  token: string;
+  channelId: string;
+  messageId: string;
+  timeoutMs: number;
+}) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < params.timeoutMs) {
+    try {
+      await getChannelMessage(params);
+    } catch (error) {
+      if (error instanceof DiscordApiError && error.status === 404) {
+        return;
+      }
+      throw error;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
+  }
+  throw new Error(
+    `timed out after ${params.timeoutMs}ms waiting for Discord message ${params.messageId} deletion`,
   );
 }
 
@@ -1433,6 +1517,8 @@ const testing = {
   renderDiscordThreadReplyAttachmentHtml,
   resolveDiscordQaRuntimeEnv,
   waitForDiscordChannelRunning,
+  waitForDiscordMessageDeleted,
+  waitForDiscordMessageText,
   waitForDiscordVoiceState,
   writeDiscordStatusReactionEvidence,
 };

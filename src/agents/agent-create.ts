@@ -20,6 +20,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
@@ -86,6 +87,7 @@ type CreateAgentParams = {
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   bindingSpecs?: string[];
   transformConfig?: typeof transformConfigFileWithRetry;
+  provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
 class DuplicateAgentError extends Error {}
@@ -459,6 +461,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }
       const result = committed.result!;
+      if (result.status === "created") {
+        recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
+      }
       return typeof committed.persistedHash === "string"
         ? { ...result, configHash: committed.persistedHash }
         : result;

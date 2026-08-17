@@ -105,6 +105,25 @@ export type DurableMessageBatchSendResult =
       payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
     };
 
+/** Whether platform delivery completed or advanced far enough that retry could duplicate it. */
+export function durableMessageBatchMayHaveReachedRecipient(
+  result: DurableMessageBatchSendResult,
+): boolean {
+  if (result.status === "sent" || result.status === "partial_failed") {
+    return true;
+  }
+  if (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") {
+    return true;
+  }
+  return (
+    result.payloadOutcomes?.some((outcome) =>
+      outcome.status === "failed"
+        ? outcome.sentBeforeError
+        : outcome.status === "sent" || outcome.reason === "adapter_returned_no_identity",
+    ) === true
+  );
+}
+
 export type SerializedDurableMessagePayloadOutcome =
   | { index: number; status: "sent"; resultCount: number }
   | {

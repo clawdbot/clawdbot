@@ -17,6 +17,7 @@ import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
+  loadDeviceIdentityIfPresentReadOnly,
   loadOrCreateDeviceIdentity,
   loadOrCreateProcessDeviceIdentity,
   normalizeDevicePublicKeyBase64Url,
@@ -267,6 +268,37 @@ describe("device identity SQLite store", () => {
       expect(loadDeviceIdentityIfPresent(options)).toBeNull();
       expect(fs.existsSync(options.path!)).toBe(false);
       expect(fs.existsSync(path.dirname(options.path!))).toBe(false);
+    });
+  });
+
+  it("reads a missing database without creating coordinator artifacts", async () => {
+    await withTempDir("openclaw-device-identity-artifact-free-", async (rootDir) => {
+      const options = storeOptions(rootDir);
+      const coordinatorPaths = resolveDeviceIdentityCoordinatorPaths({
+        databasePath: options.path!,
+        stateDir: rootDir,
+        temporaryDirectory: os.tmpdir(),
+        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+      });
+
+      expect(loadDeviceIdentityIfPresentReadOnly(options)).toBeNull();
+      expect(fs.existsSync(options.path!)).toBe(false);
+      for (const coordinatorPath of coordinatorPaths) {
+        expect(fs.existsSync(coordinatorPath)).toBe(false);
+      }
+    });
+  });
+
+  it("reads an existing identity without changing canonical SQLite artifacts", async () => {
+    await withTempDir("openclaw-device-identity-artifact-preserving-", async (rootDir) => {
+      const options = storeOptions(rootDir);
+      const created = loadOrCreateDeviceIdentity(options);
+      closeOpenClawStateDatabaseForTest();
+      const databaseDirectory = path.dirname(options.path!);
+      const artifactsBeforeRead = fs.readdirSync(databaseDirectory).toSorted();
+
+      expect(loadDeviceIdentityIfPresentReadOnly(options)).toEqual(created);
+      expect(fs.readdirSync(databaseDirectory).toSorted()).toEqual(artifactsBeforeRead);
     });
   });
 

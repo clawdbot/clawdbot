@@ -6,14 +6,16 @@ import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
-import type {
-  ListSpeechVoices,
-  PrepareTtsRequest,
-  TextToSpeech,
-  TextToSpeechStream,
-  TextToSpeechTelephony,
-} from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
+
+type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
+type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
+type PrepareTtsRequest = (
+  ...args: Parameters<TtsRuntimeApi["prepareTtsRequest"]>
+) => Promise<ReturnType<TtsRuntimeApi["prepareTtsRequest"]>>;
+type TextToSpeech = typeof import("../../tts/tts.js").textToSpeech;
+type TextToSpeechStream = TtsRuntimeApi["textToSpeechStream"];
+type TextToSpeechTelephony = TtsRuntimeApi["textToSpeechTelephony"];
 
 type RuntimeRequestHeartbeatOptions = Parameters<
   typeof import("../../infra/heartbeat-wake.js").requestHeartbeat

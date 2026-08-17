@@ -11,7 +11,10 @@ import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.
 import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawRegisteredAgentDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
 
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
@@ -150,7 +153,7 @@ export function listOpenClawRegisteredAgentDatabases(
     ).rows;
     return rows.map((row) => ({
       agentId: normalizeAgentId(row.agent_id),
-      path: row.path,
+      path: resolveOpenClawRegisteredAgentDatabasePath(pathname, row.path),
       schemaVersion: row.schema_version,
       lastSeenAt: row.last_seen_at,
       sizeBytes: row.size_bytes,

@@ -19,6 +19,7 @@ import {
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
+    chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
@@ -918,55 +919,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({
       summary: "Error: active run changed; review and retry",
     });
-  });
-
-  it("retires a landed steer chip when its request run finishes inside the active run", () => {
-    const activePrompt = {
-      id: "active-prompt",
-      text: "Keep this run active",
-      createdAt: 1,
-      sendRunId: "active-run",
-      sendState: "waiting-model" as const,
-      sessionKey: "main",
-    };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "active-run",
-      chatQueue: [
-        activePrompt,
-        {
-          id: "landed-steer-chip",
-          text: "Use the deployment plan",
-          createdAt: 3,
-          kind: "steered",
-          pendingRunId: "steer-request-run",
-          sendRunId: "steer-request-run",
-          steerTargetRunId: "active-run",
-          sessionKey: "main",
-        },
-      ],
-    });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "steer-request-run",
-        sessionKey: "main",
-        state: "final",
-      }),
-    ).toBe("final");
-
-    expect(state.chatQueue).toEqual([activePrompt]);
-    expect(state.chatRunId).toBe("active-run");
-    expect(state.chatMessages).toEqual([
-      expect.objectContaining({
-        role: "user",
-        __openclaw: { idempotencyKey: "active-run:user" },
-      }),
-      expect.objectContaining({
-        role: "user",
-        __openclaw: { idempotencyKey: "steer-request-run:user" },
-      }),
-    ]);
   });
 
   it("keeps a pending steer chip when an unrelated request run finishes", () => {
@@ -2892,7 +2844,7 @@ describe("loadChatHistory filtering", () => {
     ]);
   });
 
-  it("falls back to chat.history when startup history is not advertised", async () => {
+  it("requests chat.startup even when the handshake methods omit it", async () => {
     const { request, state } = createResolvedHistoryState(
       { messages: [] },
       {
@@ -2907,7 +2859,7 @@ describe("loadChatHistory filtering", () => {
 
     await loadChatHistory(state, { startup: true });
 
-    expect(request).toHaveBeenCalledWith("chat.history", {
+    expect(request).toHaveBeenCalledWith("chat.startup", {
       sessionKey: "main",
       limit: 100,
     });
@@ -2929,16 +2881,13 @@ describe("chat send Gateway requests", () => {
 });
 
 describe("loadChatHistory retry handling", () => {
-  it("falls back to chat.history when chat.startup is unknown", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "unknown method: chat.startup",
-        }),
-      )
-      .mockResolvedValueOnce(createAssistantHistory("fallback"));
+  it("surfaces unknown chat.startup failures without requesting chat.history", async () => {
+    const request = vi.fn().mockRejectedValue(
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: chat.startup",
+      }),
+    );
     const state = createHistoryState(request);
 
     await loadChatHistory(state, { startup: true });
@@ -2947,13 +2896,9 @@ describe("loadChatHistory retry handling", () => {
       sessionKey: "main",
       limit: 100,
     });
-    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
-      sessionKey: "main",
-      limit: 100,
-    });
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "fallback" }] },
-    ]);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.lastError).toContain("unknown method: chat.startup");
+    expect(state.chatError).toContain("unknown method: chat.startup");
   });
 
   it("retries retryable startup unavailability before showing history", async () => {

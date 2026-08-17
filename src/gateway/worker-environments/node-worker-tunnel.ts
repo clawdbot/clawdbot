@@ -26,6 +26,7 @@ import {
   recordNodeSyncPath,
 } from "./node-worker-workspace-fallback.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import type {
   WorkerTunnelHandle,
@@ -95,12 +96,7 @@ type NodeWorkerTunnelManagerOptions = {
   getEnvironment: (environmentId: string) => WorkerEnvironmentRecord | undefined;
   getTransport: () => NodeWorkerSupervisorTransport | undefined;
   launchNodeWorker: NodeWorkerLaunch;
-  validateWorkerTurn: (binding: {
-    environmentId: string;
-    ownerEpoch: number;
-    sessionId: string;
-    runId: string;
-  }) => boolean;
+  validateWorkerTurn: (claim: WorkerSessionTurnClaim) => boolean;
   workspaceTransfer: NodeWorkspaceTransferService;
 };
 
@@ -517,21 +513,22 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ownerEpoch: entry.ownerEpoch,
       launchTurn: async (request) => {
         const plan = request.plan;
+        const claim = request.turnClaim;
         const isDispatchAuthorized = () =>
           isEnvironmentOwner(entry as NodeTunnelEntry) &&
-          options.validateWorkerTurn({
-            environmentId: entry.environmentId,
-            ownerEpoch: entry.ownerEpoch,
-            sessionId: plan.admission.sessionId,
-            runId: plan.assignment.runId,
-          });
+          claim.owner.kind === "worker" &&
+          claim.owner.environmentId === entry.environmentId &&
+          claim.owner.ownerEpoch === entry.ownerEpoch &&
+          claim.sessionId === plan.admission.sessionId &&
+          claim.runId === plan.assignment.runId &&
+          options.validateWorkerTurn(claim);
         const operation = options.launchNodeWorker({
           deviceId: entry.deviceId,
           input: {
             launchId: plan.assignment.turnId,
             gatewayNamespace,
             expectedBundleHash: entry.expectedBuild.bundleHash,
-            placementGeneration: request.placementGeneration,
+            placementGeneration: claim.placementGeneration,
             descriptor: plan,
           },
           isDispatchAuthorized,

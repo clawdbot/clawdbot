@@ -175,6 +175,12 @@ export const SessionPlacementSchema = Type.Union([
   FailedSessionPlacementSchema,
 ]);
 
+const WORKER_MACHINE_CLASS_MAX_LENGTH = 128;
+const WorkerMachineClassSchema = Type.String({
+  minLength: 1,
+  maxLength: WORKER_MACHINE_CLASS_MAX_LENGTH,
+});
+
 /** Requests one-way dispatch of an existing local session to exactly one worker target. */
 export const SessionsDispatchParamsSchema = Type.Object(
   {
@@ -182,12 +188,16 @@ export const SessionsDispatchParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     profileId: Type.Optional(NonEmptyString),
     deviceId: Type.Optional(NonEmptyString),
+    machineClass: Type.Optional(WorkerMachineClassSchema),
   },
   {
     additionalProperties: false,
     oneOf: [
       { required: ["profileId"], not: { required: ["deviceId"] } },
-      { required: ["deviceId"], not: { required: ["profileId"] } },
+      {
+        required: ["deviceId"],
+        not: { anyOf: [{ required: ["profileId"] }, { required: ["machineClass"] }] },
+      },
     ],
   },
 );
@@ -209,13 +219,19 @@ export const SessionsReclaimParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Result returned once worker ownership has been destroyed and reclaimed. */
+/** Terminal placement returned after a worker reclaim operation. */
+export const SessionsReclaimResultPlacementSchema = Type.Union([
+  LocalSessionPlacementSchema,
+  ReclaimedSessionPlacementSchema,
+]);
+
+/** Result returned once worker ownership is reclaimed or a failed placement is cleared. */
 export const SessionsReclaimResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
     key: NonEmptyString,
     sessionId: NonEmptyString,
-    placement: ReclaimedSessionPlacementSchema,
+    placement: SessionsReclaimResultPlacementSchema,
   },
   { additionalProperties: false },
 );
@@ -237,6 +253,7 @@ export const SessionPlacementProtocolSchemas = {
   SessionsDispatchParams: SessionsDispatchParamsSchema,
   SessionsDispatchResult: SessionsDispatchResultSchema,
   SessionsReclaimParams: SessionsReclaimParamsSchema,
+  SessionsReclaimResultPlacement: SessionsReclaimResultPlacementSchema,
   SessionsReclaimResult: SessionsReclaimResultSchema,
 } as const;
 
@@ -245,4 +262,5 @@ export type SessionPlacementDiskSpace = Static<typeof SessionPlacementDiskSpaceS
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;
+export type SessionsReclaimResultPlacement = Static<typeof SessionsReclaimResultPlacementSchema>;
 export type SessionsReclaimResult = Static<typeof SessionsReclaimResultSchema>;

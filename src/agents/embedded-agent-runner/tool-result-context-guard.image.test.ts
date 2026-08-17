@@ -48,7 +48,7 @@ async function executeNativeImageTool(imageCount: number): Promise<AgentMessage>
   });
   const content = result.content as ContentBlock[];
   expect(content[0]?.text).toBe(
-    `Loaded ${imageCount} image${imageCount === 1 ? "" : "s"} for direct visual inspection.`,
+    `Loaded ${imageCount} image${imageCount === 1 ? "" : "s"} into private model context for inspection; not displayed, attached, or sent to the user.`,
   );
   expect(content.filter((block) => block.type === "image")).toHaveLength(imageCount);
   expect(content.filter((block) => block.type === "image")).toEqual(

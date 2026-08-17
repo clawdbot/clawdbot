@@ -315,6 +315,21 @@ CREATE TABLE IF NOT EXISTS heartbeat_outcomes (
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS message_tool_run_outcomes (
+  id INTEGER PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('tool_delivered', 'mute')),
+  run_status TEXT NOT NULL CHECK (run_status IN ('completed', 'errored', 'aborted')),
+  occurred_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_message_tool_run_outcomes_occurred
+  ON message_tool_run_outcomes(occurred_at DESC, id DESC);
+
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,

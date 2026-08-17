@@ -154,6 +154,29 @@ describe("readBestEffortConfig", () => {
     });
   });
 
+  it("records why an unparseable config was ignored by best-effort reads", async () => {
+    await withTempHome(async (home) => {
+      const configPath = `${home}/.openclaw/openclaw.json`;
+      await fs.mkdir(`${home}/.openclaw`, { recursive: true });
+      await fs.writeFile(configPath, "{ definitely not json", "utf-8");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const config = await readSourceConfigBestEffort();
+
+        // The fallback value stays {} — but the degradation is recorded.
+        expect(config).toEqual({});
+        expect(
+          warn.mock.calls.some(([line]) =>
+            String(line).includes("best-effort read ignored unparseable config"),
+          ),
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   it("preserves Windows case-insensitive env lookup in isolated reads", async () => {
     await withTempHome(async (home) => {
       const mixedCaseKey = "OpenClaw_Config_Path";

@@ -14,11 +14,15 @@ import {
   type WorkerSshEndpoint,
   type WorkerSshIdentity,
 } from "../../plugins/types.js";
-import { verifyWorkerAdmissionHandshake } from "./admission.js";
+import { STALE_WORKER_BUILD_REASON, verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
-import { requireWorkerLease, requireWorkerLeaseStatus } from "./service-validation.js";
+import {
+  normalizeWorkerMachineOptions,
+  requireWorkerLease,
+  requireWorkerLeaseStatus,
+} from "./service-validation.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -144,6 +148,17 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     throw serviceError("provider_not_found", `Worker provider is unavailable: ${providerId}`);
   };
 
+  const listMachineOptions = (profileId: string) => {
+    const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
+    if (!profile) {
+      return undefined;
+    }
+    const provider = options.resolveProvider(profile.provider);
+    return normalizeWorkerMachineOptions(
+      provider?.listMachineOptions?.(requireWorkerProfile(profile.settings ?? {})),
+    );
+  };
+
   const installFor = (record: WorkerEnvironmentRecord): WorkerInstallationArtifact["install"] => {
     const install = record.profileSnapshot.install;
     if (install === undefined || install === "bundle") {
@@ -252,7 +267,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       lease = requireWorkerLease(
         await callProvider(
           record.environmentId,
-          () => provider.provision(profile, record.provisionOperationId),
+          () =>
+            provider.provision(
+              profile,
+              record.provisionOperationId,
+              typeof record.profileSnapshot.machineClass === "string"
+                ? { machineClass: record.profileSnapshot.machineClass }
+                : undefined,
+            ),
           providerTimeoutMs,
         ),
       );
@@ -381,6 +403,19 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     return finishProvenDestroy(destroying);
   };
 
+  const recordStaleBuildDestroy = (record: WorkerEnvironmentRecord) => {
+    // Attached sessions need the build cause after teardown so placement reconciliation can
+    // persist an actionable terminal reason instead of inferring from destroyed environment state.
+    return record.state === "attached"
+      ? store.requestDestroy({
+          environmentId: record.environmentId,
+          state: record.state,
+          terminalState: "failed",
+          lastError: STALE_WORKER_BUILD_REASON,
+        })
+      : record;
+  };
+
   const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
     let record = initialRecord;
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
@@ -492,7 +527,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         // A stale node environment cannot be upgraded in place because its credential and
         // placement ownership bind the old build. Retire it; reprovisioning reuses the installed
         // content-addressed bundle without another transfer.
-        await finishDestroy(record, provider).catch(() => undefined);
+        await finishDestroy(recordStaleBuildDestroy(record), provider).catch(() => undefined);
       }
       return;
     }
@@ -505,7 +540,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         // A new Gateway build rejects the old worker at admission. This is expected lifecycle
         // teardown, not a bootstrap failure. `leaseId` above came from this record, so provider
         // inspection and destruction share the same durable lease identity.
-        await finishDestroy(record, provider).catch(() => undefined);
+        await finishDestroy(recordStaleBuildDestroy(record), provider).catch(() => undefined);
       }
       return;
     }
@@ -558,11 +593,15 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const createWithProfile = async (
     profileId: string,
     idempotencyKey: string,
-    inherited?: {
-      providerId: string;
-      profileSnapshot: WorkerProfile;
-    },
+    createOptions: {
+      inherited?: {
+        providerId: string;
+        profileSnapshot: WorkerProfile;
+      };
+      machineClass?: string;
+    } = {},
   ) => {
+    const { inherited, machineClass } = createOptions;
     let stopping = options.isStopping();
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
@@ -583,7 +622,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           existing.profileId !== normalizedProfileId ||
           (inherited !== undefined &&
             (existing.providerId !== inherited.providerId ||
-              !isDeepStrictEqual(existing.profileSnapshot, inherited.profileSnapshot)))
+              !isDeepStrictEqual(existing.profileSnapshot, {
+                ...inherited.profileSnapshot,
+                ...(machineClass === undefined ? {} : { machineClass }),
+              }))) ||
+          (inherited === undefined && existing.profileSnapshot.machineClass !== machineClass)
         ) {
           throw serviceError("invalid_profile", "Idempotency key belongs to another profile");
         }
@@ -608,7 +651,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         if (resolvedProviderId !== providerId) {
           throw serviceError("invalid_profile", "Inherited worker provider identity changed");
         }
-        profileSnapshot = requireWorkerProfile(inherited.profileSnapshot);
+        profileSnapshot = requireWorkerProfile({
+          ...inherited.profileSnapshot,
+          ...(machineClass === undefined ? {} : { machineClass }),
+        });
       } else {
         const profiles = options.getConfig().cloudWorkers?.profiles;
         if (!profiles || !Object.hasOwn(profiles, normalizedProfileId)) {
@@ -624,6 +670,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         profileSnapshot = requireWorkerProfile({
           install: profile.install ?? "bundle",
           settings,
+          ...(machineClass === undefined ? {} : { machineClass }),
         });
       }
       const intent = store.createIntent({
@@ -679,6 +726,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     createWithProfile,
     destroy,
     identityResolverFor,
+    listMachineOptions,
     providerFor,
     reconcileRecord,
   };

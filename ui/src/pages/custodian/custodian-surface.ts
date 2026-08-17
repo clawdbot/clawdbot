@@ -24,6 +24,9 @@ class CustodianSurface extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) newAgentIntent = false;
   @property({ attribute: false }) showChannelOnboardingNudge = false;
+  @property({ attribute: false }) channelOnboardingError: string | null = null;
+  @property({ attribute: false }) channelOnboardingRetrying = false;
+  @property({ attribute: false }) onRetryChannelOnboarding: () => void = () => undefined;
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) historyContent: TemplateResult | typeof nothing = nothing;
 
@@ -143,12 +146,18 @@ class CustodianSurface extends OpenClawLightDomElement {
           : ""}"
       >
         <div class="custodian__messages" aria-live="polite">
-          ${this.showChannelOnboardingNudge
-            ? eventNudgeState.renderCustodianChannelOnboardingNudge({
-                onOpenChannels: () => store.openChannelsFromOnboarding(),
+          ${this.channelOnboardingError
+            ? eventNudgeState.renderCustodianChannelOnboardingError({
+                retrying: this.channelOnboardingRetrying,
+                onRetry: this.onRetryChannelOnboarding,
                 onDismiss: () => store.dismissChannelOnboardingNudge(),
               })
-            : nothing}
+            : this.showChannelOnboardingNudge
+              ? eventNudgeState.renderCustodianChannelOnboardingNudge({
+                  onOpenChannels: () => store.openChannelsFromOnboarding(),
+                  onDismiss: () => store.dismissChannelOnboardingNudge(),
+                })
+              : nothing}
           ${!this.onboarding && store.eventNudge && !store.eventNudgePending
             ? eventNudgeState.renderCustodianEventNudge({
                 nudge: store.eventNudge,

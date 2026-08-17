@@ -106,7 +106,6 @@ describe("buildSlackProgressCardBlocks", () => {
         state,
         title: "Implementing",
         lines: [toolLine("run tests")],
-        receiptSummary: "🛠️ 1 tool call · ⏱️ 8s",
         diffStat: { files: 2, added: 1, removed: 1 },
         sessionUrl: "https://team.openclaw.ai/openclaw/chat/main",
       });
@@ -115,9 +114,10 @@ describe("buildSlackProgressCardBlocks", () => {
         type: "section",
         text: { type: "mrkdwn", text: `${icon} *Implementing*` },
       });
+      // Finished cards keep the diff stat only: no tool-call/elapsed receipt.
       expect(blocks).toContainEqual({
         type: "context",
-        elements: [{ type: "mrkdwn", text: "🛠️ 1 tool call · ⏱️ 8s · 📝 2 files +1 −1" }],
+        elements: [{ type: "mrkdwn", text: "📝 2 files +1 −1" }],
       });
       expect(blocks.at(-1)).toEqual({
         type: "actions",

@@ -12,9 +12,83 @@ import {
   threadProps,
 } from "./chat-transcript.test-support.ts";
 
+function requireElement(container: ParentNode, selector: string): HTMLElement {
+  const element = container.querySelector<HTMLElement>(selector);
+  if (!element) {
+    throw new Error(`expected ${selector}`);
+  }
+  return element;
+}
+
+function requireClosest(element: Element, selector: string): HTMLElement {
+  const closest = element.closest<HTMLElement>(selector);
+  if (!closest) {
+    throw new Error(`expected closest ${selector}`);
+  }
+  return closest;
+}
+
+function touchPointerUp(element: Element): void {
+  const event = new Event("pointerup", { bubbles: true });
+  Object.defineProperty(event, "pointerType", { value: "touch" });
+  element.dispatchEvent(event);
+}
+
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("reveals touched metadata across stored and live groups within one transcript", async () => {
+    const firstTranscript = createTestTranscript();
+    const secondTranscript = createTestTranscript();
+    const firstContainer = document.body.appendChild(document.createElement("div"));
+    const secondContainer = document.body.appendChild(document.createElement("div"));
+    const firstProps = {
+      ...threadProps("pane-touch-first", "agent:main:first", [
+        { role: "user", content: "Stored message", timestamp: 1_000 },
+      ]),
+      stream: "Live reply",
+      streamStartedAt: 2_000,
+    };
+    const secondProps = threadProps("pane-touch-second", "agent:main:second", [
+      { role: "assistant", content: "Other transcript", timestamp: 3_000 },
+    ]);
+    render(renderChatThread(firstProps, firstTranscript), firstContainer);
+    render(renderChatThread(secondProps, secondTranscript), secondContainer);
+    firstTranscript.hostConnected();
+    secondTranscript.hostConnected();
+    firstTranscript.hostUpdated();
+    secondTranscript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const storedGroup = requireElement(firstContainer, ".chat-group.user");
+    const storedBubble = requireElement(storedGroup, ".chat-bubble");
+    const streamBubble = requireElement(firstContainer, ".chat-bubble.streaming");
+    const streamGroup = requireClosest(streamBubble, ".chat-group--with-footer");
+    const secondGroup = requireElement(secondContainer, ".chat-group.assistant");
+
+    storedBubble.dispatchEvent(new Event("pointerup", { bubbles: true }));
+    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
+
+    touchPointerUp(storedBubble);
+    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(streamBubble);
+    expect(storedGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
+    expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
+    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+    expect(streamGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(requireElement(secondGroup, ".chat-copy-btn"));
+    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(true);
+
+    touchPointerUp(requireElement(secondGroup, ".chat-bubble"));
+    expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
+    firstTranscript.hostDisconnected();
+    secondTranscript.hostDisconnected();
+  });
 
   it("resolves persisted replies to their source and highlights it on click", async () => {
     const transcript = createTestTranscript();

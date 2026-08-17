@@ -88,6 +88,23 @@ describe("worker provider registry", () => {
     );
   });
 
+  it("rejects a non-function optional machine-options hook", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      listMachineOptions: ["standard"],
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: "worker provider registration listMachineOptions must be a function",
+      }),
+    );
+  });
+
   it("rejects a non-boolean provision-before-installation declaration", () => {
     const pluginRegistry = createTestRegistry();
     const provider = {

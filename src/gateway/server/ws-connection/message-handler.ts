@@ -32,13 +32,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
-import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
-import {
-  isLocalishHost,
-  isLoopbackAddress,
-  isTrustedProxyAddress,
-  resolveClientIp,
-} from "../../net.js";
+import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
@@ -77,12 +71,11 @@ function claimsWorkerConnectionIdentity(value: unknown): boolean {
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
     socket,
-    upgradeReq,
+    ingressAttribution,
     connId,
     remoteAddr,
     endpoint,
     forwardedFor,
-    realIp,
     requestHost,
     requestOrigin,
     requestUserAgent,
@@ -114,30 +107,24 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const configSnapshot = getRuntimeConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
   const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
-  const clientIp = resolveClientIp({
-    remoteAddr,
-    forwardedFor,
-    realIp,
-    trustedProxies,
-    allowRealIpFallback,
-  });
+  const clientIp = ingressAttribution.clientIp;
   const peerLabel = endpoint ?? remoteAddr ?? "n/a";
 
-  // If proxy headers are present but the remote address isn't trusted, don't treat
-  // the connection as local. This prevents auth bypass when running behind a reverse
-  // proxy without proper configuration - the proxy's loopback connection would otherwise
-  // cause all external requests to be treated as trusted local clients.
-  const hasProxyHeaders = hasForwardedRequestHeaders(upgradeReq);
-  const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
-  const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
+  const hasProxyHeaders =
+    ingressAttribution.kind === "trusted-proxy" ||
+    ingressAttribution.kind === "tailscale-serve" ||
+    ingressAttribution.kind === "tailscale-funnel";
+  const remoteIsTrustedProxy =
+    ingressAttribution.kind === "trusted-proxy" ||
+    ingressAttribution.kind === "tailscale-serve" ||
+    ingressAttribution.kind === "tailscale-funnel";
   const hostIsLocalish = isLocalishHost(requestHost);
-  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
-  const reportedClientIp =
-    isLocalClient || hasUntrustedProxyHeaders
-      ? undefined
-      : clientIp && !isLoopbackAddress(clientIp)
-        ? clientIp
-        : undefined;
+  const isLocalClient = ingressAttribution.kind === "direct-local";
+  const reportedClientIp = isLocalClient
+    ? undefined
+    : clientIp && !isLoopbackAddress(clientIp)
+      ? clientIp
+      : undefined;
   const reportedClientIpSource = resolveNodePairingClientIpSource({
     reportedClientIp,
     hasProxyHeaders,
@@ -145,13 +132,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     remoteIsLoopback: isLoopbackAddress(remoteAddr),
   });
 
-  if (hasUntrustedProxyHeaders) {
-    logWsControl.warn(
-      "Proxy headers detected from untrusted address. " +
-        "Connection will not be treated as local. " +
-        "Configure gateway.trustedProxies to restore local client detection behind your proxy.",
-    );
-  }
   if (!hostIsLocalish && isLoopbackAddress(remoteAddr) && !hasProxyHeaders) {
     logWsControl.warn(
       "Loopback connection with non-local Host header. " +
@@ -167,7 +147,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   });
   const browserSecurity = resolveHandshakeBrowserSecurityContext({
     requestOrigin,
-    clientIp,
+    clientIp: ingressAttribution.rateLimit.subject.key,
     rateLimiter,
     browserRateLimiter,
   });

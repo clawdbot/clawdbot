@@ -180,6 +180,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     inputProvenance: attempt.inputProvenance,
     trustedInternalHandoff: attempt.trustedInternalHandoff,
     scheduledToolPolicy: attempt.scheduledToolPolicy,
+    pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
   });
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,

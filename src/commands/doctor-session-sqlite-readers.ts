@@ -14,10 +14,12 @@ import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+
+type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
 type ReadOnlySqliteSessionSummary = {
   entry: SessionEntry;
@@ -472,6 +474,9 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
 }
 
 export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
+  if (target.sqlitePath) {
+    return resolveOpenClawAgentSqlitePath({ agentId: target.agentId, path: target.sqlitePath });
+  }
   const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
   });
@@ -499,9 +504,7 @@ function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
   }
 }
 
-function* iterateJsonlLinesSync(
-  filePath: string,
-): Generator<{ final: boolean; lineNumber: number; text: string }> {
+function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: number; text: string }> {
   const fd = fs.openSync(filePath, "r");
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
@@ -520,14 +523,14 @@ function* iterateJsonlLinesSync(
         lineNumber += 1;
         const text = part.trim();
         if (text) {
-          yield { final: false, lineNumber, text };
+          yield { lineNumber, text };
         }
       }
     }
     carry += decoder.decode();
     const text = carry.trim();
     if (text) {
-      yield { final: true, lineNumber: lineNumber + 1, text };
+      yield { lineNumber: lineNumber + 1, text };
     }
   } catch (err) {
     throw new Error(`${filePath}:${lineNumber + 1}: ${String(err)}`, { cause: err });
@@ -546,15 +549,8 @@ function sqliteNumber(value: unknown): number {
   return 0;
 }
 
-function parseJsonlLine(line: { final: boolean; lineNumber: number; text: string }): unknown {
-  try {
-    return JSON.parse(line.text);
-  } catch (error) {
-    if (line.final) {
-      return undefined;
-    }
-    throw error;
-  }
+function parseJsonlLine(line: { text: string }): unknown {
+  return JSON.parse(line.text);
 }
 
 // Schema-tolerant session enumeration for transcript-label migration (avoids post-ship columns).

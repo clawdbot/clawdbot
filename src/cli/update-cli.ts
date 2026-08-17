@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { isJsonOutputModeActive } from "./json-output-mode.js";
 import type {
   UpdateCommandOptions,
   UpdateFinalizeOptions,
@@ -26,6 +27,14 @@ export type {
 
 function inheritedUpdateJson(command?: Command): boolean {
   return Boolean(inheritOptionFromParent<boolean>(command, "json"));
+}
+
+function handleUpdateCommandError(error: unknown): void {
+  if (isJsonOutputModeActive(process.argv)) {
+    throw error;
+  }
+  defaultRuntime.error(formatErrorMessage(error));
+  defaultRuntime.exit(1);
 }
 
 function inheritedUpdateTimeout(
@@ -67,10 +76,11 @@ function rejectUnsupportedInheritedUpdateDryRun(command: Command): boolean {
     return false;
   }
 
-  defaultRuntime.error(
-    `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
+  handleUpdateCommandError(
+    new Error(
+      `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
+    ),
   );
-  defaultRuntime.exit(1);
   return true;
 }
 
@@ -119,8 +129,7 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
             normalizeCommanderClawHubRiskOption(opts) || inheritedUpdateClawHubRisk(actionCommand),
         });
       } catch (err) {
-        defaultRuntime.error(formatErrorMessage(err));
-        defaultRuntime.exit(1);
+        handleUpdateCommandError(err);
       }
     });
 }
@@ -210,8 +219,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
         });
       } catch (err) {
-        defaultRuntime.error(formatErrorMessage(err));
-        defaultRuntime.exit(1);
+        handleUpdateCommandError(err);
       }
     });
 
@@ -236,8 +244,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           timeout: inheritedUpdateTimeout(opts, command),
         });
       } catch (err) {
-        defaultRuntime.error(formatErrorMessage(err));
-        defaultRuntime.exit(1);
+        handleUpdateCommandError(err);
       }
     });
 
@@ -266,8 +273,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           timeout: inheritedUpdateTimeout(opts, command),
         });
       } catch (err) {
-        defaultRuntime.error(formatErrorMessage(err));
-        defaultRuntime.exit(1);
+        handleUpdateCommandError(err);
       }
     });
 }

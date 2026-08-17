@@ -476,7 +476,7 @@ export function createSessionsSendTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const message = readToolStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
-      const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { cfg, mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
       let requesterAgentId: string;
       try {
@@ -656,6 +656,7 @@ export function createSessionsSendTool(opts?: {
           resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         visibility: sessionVisibility,
         a2aPolicy,
       }).check({ key: resolvedSession.key });
@@ -871,9 +872,9 @@ export function createSessionsSendTool(opts?: {
           : resolvedKey;
       const access = await resolveSessionToolAccess({
         action: "send",
-        defaultAgentId: requesterAgentId,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         targetAgentId,
         targetSessionKey: resolvedKey,
         authorizationTargetSessionKey: authorizationTargetKey,

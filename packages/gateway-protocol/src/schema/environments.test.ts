@@ -198,7 +198,21 @@ describe("worker environment protocol schemas", () => {
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            trust: "disposable",
+            machines: [
+              {
+                id: "standard",
+                label: "Standard",
+                description: "Cheap smoke checks and small repos",
+                default: true,
+              },
+            ],
+          },
+        ],
       }),
     ).toBe(true);
     expect(
@@ -211,6 +225,18 @@ describe("worker environment protocol schemas", () => {
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
         profiles: [{ id: "aws", providerId: "crabbox", trust: "temporary" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            machines: [{ id: "standard", label: "Standard", cpu: 32 }],
+          },
+        ],
       }),
     ).toBe(false);
   });

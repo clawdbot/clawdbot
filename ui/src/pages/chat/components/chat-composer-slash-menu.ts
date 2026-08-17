@@ -9,7 +9,6 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { exportChatMarkdown } from "../export.ts";
 import { commitComposerDraft, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -261,10 +260,6 @@ export function getActiveSlashMenuOptionLabel(state: ChatComposerState): string 
 
 function renderSlashIcon(name: string) {
   return icons[name as IconName] ?? icons.terminal;
-}
-
-export function exportMarkdown(props: Pick<ChatComposerProps, "messages" | "assistantName">): void {
-  exportChatMarkdown(props.messages, props.assistantName);
 }
 
 export function renderSlashMenu(

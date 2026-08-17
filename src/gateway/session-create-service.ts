@@ -72,6 +72,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import {
+  type GatewaySessionTitleModelSelection,
   type PreparedGatewaySessionLifecycle,
   type PrepareGatewaySessionLifecycle,
   rollbackGatewaySessionPreparation,
@@ -94,6 +95,46 @@ type TrustedCatalogSessionTarget = {
 const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
+
+export function resolveSessionCreateModelSelection(
+  cfg: OpenClawConfig,
+  agentId: string,
+  input: string | { model: string; agentRuntime?: string } | undefined,
+  parentEntry?: SessionEntry,
+): GatewaySessionTitleModelSelection | null {
+  const model = normalizeOptionalString(typeof input === "string" ? input : input?.model);
+  if (!model) {
+    const inherited = inheritSessionSelection(parentEntry);
+    return {
+      providerOverride: inherited.providerOverride,
+      modelOverride: inherited.modelOverride,
+      agentRuntimeOverride: inherited.agentRuntimeOverride,
+      authProfileOverride: inherited.authProfileOverride,
+    };
+  }
+  const defaults = resolveDefaultModelForAgent({ cfg, agentId });
+  // Reuse patch policy with the config-owned catalog projection. Persisted creation
+  // remains the sole live-catalog availability validator.
+  const resolved = resolveSessionPatchModelSelection({
+    cfg,
+    catalog: [],
+    raw: model,
+    defaultProvider: defaults.provider,
+    defaultModel: defaults.model,
+  });
+  if (!resolved.ok) {
+    return null;
+  }
+  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(
+    typeof input === "string" ? undefined : input?.agentRuntime,
+  );
+  return {
+    providerOverride: resolved.provider,
+    modelOverride: resolved.model,
+    ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
+    ...(resolved.profile ? { authProfileOverride: resolved.profile } : {}),
+  };
+}
 
 async function existingModelSelectionWouldChange(params: {
   agentId: string;
@@ -229,8 +270,6 @@ export async function createGatewaySession(params: {
   agentId?: string;
   label?: string;
   category?: string;
-  /** Trusted model-generated title, persisted with a newly created dashboard session. */
-  generatedDisplayName?: string;
   model?: string;
   thinkingLevel?: string;
   /** Registry identity recorded only when this request creates a logical session node. */
@@ -293,7 +332,6 @@ export async function createGatewaySession(params: {
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
-  const generatedDisplayName = normalizeOptionalString(params.generatedDisplayName);
   const projectId = normalizeOptionalString(params.projectId);
   const explicitAgentId = normalizeOptionalString(params.agentId);
   const explicitKeyAgentId = parseAgentSessionKey(requestedKey)?.agentId;
@@ -813,12 +851,19 @@ export async function createGatewaySession(params: {
     const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
     }).entry;
+    const titleModelSelection = resolveSessionCreateModelSelection(
+      params.cfg,
+      target.agentId,
+      params.catalogTarget ?? params.model,
+      currentParentSessionEntry,
+    );
     const preparationResult = params.prepareLifecycle
       ? await params.prepareLifecycle({
           agentId: target.agentId,
           entry: currentTargetEntry,
           key: target.canonicalKey,
           storePath: target.storePath,
+          titleModelSelection,
         })
       : undefined;
     if (preparationResult && !preparationResult.ok) {
@@ -1027,7 +1072,6 @@ export async function createGatewaySession(params: {
           ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
           ...(projectId && createdNewEntry ? { projectId } : {}),
-          ...(generatedDisplayName && createdNewEntry ? { displayName: generatedDisplayName } : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,

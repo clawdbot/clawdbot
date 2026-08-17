@@ -22,6 +22,7 @@ vi.mock("../message/send.js", async (importOriginal) => {
   };
 });
 
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { deliverInboundReplyWithMessageSendContextCore } from "./durable-delivery.js";
 
@@ -33,6 +34,8 @@ type SendDurableMessageBatchRequest = {
   durability?: string;
   requireUnknownSendReconciliation?: boolean;
   gatewayClientScopes?: readonly string[];
+  runId?: string;
+  executionIdentityToken?: unknown;
 };
 
 type DeliverySupportRequest = {
@@ -110,12 +113,14 @@ describe("durable inbound reply delivery", () => {
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {
+    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-exact");
     await deliverInboundReplyWithMessageSendContextCore({
       cfg: {},
       channel: "telegram",
       agentId: "main",
       info: { kind: "final" },
       payload: { text: "final" },
+      executionIdentityToken,
       ctxPayload: ctxPayload({
         OriginatingTo: "chat-1",
       }),
@@ -128,6 +133,10 @@ describe("durable inbound reply delivery", () => {
     });
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
     expect(latestSendDurableMessageBatchRequest().durability).toBe("best_effort");
+    expect(latestSendDurableMessageBatchRequest()).toMatchObject({
+      runId: "run-exact",
+      executionIdentityToken,
+    });
     expect(latestSendDurableMessageBatchRequest().requireUnknownSendReconciliation).toBeUndefined();
   });
 

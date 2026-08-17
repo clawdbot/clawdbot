@@ -230,16 +230,12 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onReasoningEnd: turn.reasoningLane.stream
               ? () => {
                   const queued = enqueueDraftEvent(turn, async () => {
-                    turn.progressSummary.closeReasoningBurst();
                     turn.splitReasoningOnNextStream = turn.reasoningLane.hasStreamedMessage;
                     turn.progressCompositor.reset();
                   });
                   return queued.then(() => false);
                 }
-              : () => {
-                  turn.progressSummary.closeReasoningBurst();
-                  return false;
-                },
+              : () => false,
             onQueuedFollowupAdmitted: () => {
               beginDraftQueuedFollowup(turn);
               turn.finalAnswerDeliveryStarted = false;

@@ -101,7 +101,7 @@ export class TerminalOpenTimeoutError extends Error {
  *  tab label, uploads, or a replay. Fail here so the panel reports an unusable
  *  gateway instead of surfacing a downstream TypeError as its only content. */
 export class TerminalOpenUnusableSessionError extends Error {
-  constructor(field: string) {
+  constructor(readonly field: string) {
     super(`terminal session response is missing ${field}`);
     this.name = "TerminalOpenUnusableSessionError";
   }

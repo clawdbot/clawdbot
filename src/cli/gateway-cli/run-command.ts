@@ -1,5 +1,5 @@
 // Gateway run command option registration and lazy handoff to runtime startup.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import type { GatewayRunOpts } from "./run-options.js";
 import { resolveGatewayRunOptions } from "./run-options.js";
 import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -33,11 +33,7 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
       "--tailscale <mode>",
       `Tailscale exposure mode (${formatModeChoices(GATEWAY_TAILSCALE_MODES)})`,
     )
-    .option(
-      "--tailscale-reset-on-exit",
-      "Reset Tailscale serve/funnel configuration on shutdown",
-      false,
-    )
+    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
     .option(
       "--allow-unconfigured",
       "Allow gateway start without enforcing gateway.mode=local in config (does not repair config)",
