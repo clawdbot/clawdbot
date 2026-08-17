@@ -413,7 +413,7 @@ describe("runMessageAction core send routing", () => {
     expect(firstMockArg(sendText, "send text").text).toBe("hello world");
   });
 
-  it("maps structured speech fields to TTS facts before core outbound delivery", async () => {
+  it("preserves structured speech through response prefixes when automatic TTS is off", async () => {
     const sendMedia = vi.fn().mockResolvedValue({
       channel: "testchat",
       messageId: "voice-1",
@@ -446,10 +446,11 @@ describe("runMessageAction core send routing", () => {
         channels: {
           testchat: {
             enabled: true,
+            responsePrefix: "[Nexus]",
           },
         },
         tts: {
-          auto: "tagged",
+          auto: "off",
         },
       } as OpenClawConfig,
       action: "send",
@@ -471,7 +472,7 @@ describe("runMessageAction core send routing", () => {
         kind: "final",
         channel: "testchat",
         payload: expect.objectContaining({
-          text: "Visible greeting",
+          text: "[Nexus] Visible greeting",
           audioAsVoice: true,
         }),
       }),

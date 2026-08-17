@@ -3,7 +3,11 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
-import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
@@ -413,7 +417,10 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendPayload = {
       ...sendPayload,
       message: prefixedMessage,
-      payload: { ...sendPayload.payload, text: prefixedMessage },
+      payload: copyReplyPayloadMetadata(sendPayload.payload, {
+        ...sendPayload.payload,
+        text: prefixedMessage,
+      }),
     };
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
