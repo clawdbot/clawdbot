@@ -280,7 +280,7 @@ extensions/cohere/provider-catalog.ts	3
 extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	3
 extensions/copilot-proxy/index.ts	1
-extensions/copilot/harness.ts	9
+extensions/copilot/harness.ts	8
 extensions/copilot/src/attempt-config.ts	16
 extensions/copilot/src/attempt-execution.ts	4
 extensions/copilot/src/attempt-finalize.ts	5
