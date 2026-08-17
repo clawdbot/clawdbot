@@ -68,6 +68,9 @@ function managedSessionListAgentId(entry: ManagedSessionList): string | undefine
 }
 
 function isPrimarySessionListQuery(options: SessionListScope): boolean {
+  if (options.includeDerivedTitles === false || options.includeLastMessage === false) {
+    return false;
+  }
   const query = normalizeManagedSessionListQuery(options);
   return (
     query.archived === undefined &&
