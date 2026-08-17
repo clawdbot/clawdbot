@@ -185,7 +185,6 @@
 
 .chat-thread .chat-bubble .chat-text :where(table) {
   width: max-content;
-  min-width: 100%;
   margin: 0;
   border: 0;
   border-collapse: collapse;
