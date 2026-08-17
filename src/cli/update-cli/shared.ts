@@ -246,12 +246,17 @@ export async function runUpdateStep(params: {
   };
 }
 
+type GitCheckoutResult = {
+  checkoutDir: string;
+  step: UpdateStepResult | null;
+};
+
 async function cloneGitCheckoutTransactionally(params: {
   dir: string;
   timeoutMs: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
-}): Promise<UpdateStepResult> {
+}): Promise<GitCheckoutResult> {
   const parentDir = path.dirname(params.dir);
   await fs.mkdir(parentDir, { recursive: true });
   const canonicalParentDir = await fs.realpath(parentDir);
@@ -272,7 +277,7 @@ async function cloneGitCheckoutTransactionally(params: {
       progress: params.progress,
     });
     if (result.exitCode !== 0) {
-      return result;
+      return { checkoutDir: targetDir, step: result };
     }
 
     if (!preserveDir) {
@@ -283,7 +288,7 @@ async function cloneGitCheckoutTransactionally(params: {
           throw error;
         }
         await fs.rename(stagingDir, targetDir);
-        return result;
+        return { checkoutDir: targetDir, step: result };
       }
     }
 
@@ -332,7 +337,7 @@ async function cloneGitCheckoutTransactionally(params: {
       }
       throw publishError.value;
     }
-    return result;
+    return { checkoutDir: targetDir, step: result };
   } finally {
     if (cleanupStaging) {
       await fs.rm(stagingDir, { recursive: true, force: true });
@@ -346,7 +351,7 @@ export async function ensureGitCheckout(params: {
   timeoutMs: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
-}): Promise<UpdateStepResult | null> {
+}): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
   if (!dirExists) {
@@ -378,7 +383,7 @@ export async function ensureGitCheckout(params: {
     throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
   }
 
-  return null;
+  return { checkoutDir: await fs.realpath(params.dir), step: null };
 }
 
 /** Detect the package manager that owns a global/package OpenClaw install. */

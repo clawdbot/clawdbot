@@ -133,18 +133,20 @@ export async function updateGitInstall(params: {
   allowGatewayServiceRepair: boolean;
   allowGatewayActivation: boolean;
 }): Promise<UpdateRunResult> {
-  const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
+  const requestedUpdateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const installEnv = await createGlobalInstallEnv();
 
-  const cloneStep = params.switchToGit
+  const checkout = params.switchToGit
     ? await ensureGitCheckout({
-        dir: updateRoot,
+        dir: requestedUpdateRoot,
         env: installEnv,
         timeoutMs: effectiveTimeout,
         progress: params.progress,
       })
     : null;
+  const cloneStep = checkout?.step ?? null;
+  const updateRoot = checkout?.checkoutDir ?? requestedUpdateRoot;
 
   if (cloneStep && cloneStep.exitCode !== 0) {
     const result: UpdateRunResult = {

@@ -5286,6 +5286,50 @@ describe("update-cli", () => {
     expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
   });
 
+  it.runIf(process.platform !== "win32")(
+    "continues package-to-Git updates from the published checkout after its alias is retargeted",
+    async () => {
+      const root = await createTrackedTempDir("openclaw-update-git-alias-");
+      const packageRoot = path.join(root, "package", "openclaw");
+      const targetRoot = path.join(root, "checkout-target");
+      const replacementRoot = path.join(root, "checkout-replacement");
+      const checkoutAlias = path.join(root, "checkout-alias");
+      await Promise.all([fs.mkdir(targetRoot), fs.mkdir(replacementRoot)]);
+      await fs.symlink(targetRoot, checkoutAlias, "dir");
+      mockPackageInstallStatus(packageRoot);
+      mockFileBackedPathExists();
+      mockNoopPostUpdatePluginConvergence();
+      vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
+        expect(options?.cwd).toBe(targetRoot);
+        return makeOkUpdateResult({ mode: "git", root: targetRoot });
+      });
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+        if (argv[0] === "git" && argv[1] === "clone") {
+          const stagingDir = requireValue(argv.at(-1), "Git clone staging directory");
+          await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
+          await fs.writeFile(
+            path.join(stagingDir, "package.json"),
+            JSON.stringify({ name: "openclaw", version: "2026.8.17" }),
+            "utf8",
+          );
+          await fs.unlink(checkoutAlias);
+          await fs.symlink(replacementRoot, checkoutAlias, "dir");
+        }
+        return commandResult();
+      });
+
+      await withEnvAsync({ OPENCLAW_GIT_DIR: checkoutAlias }, async () => {
+        await updateCommand({ channel: "dev", yes: true, restart: false });
+      });
+
+      const installCall = packageInstallCommandCall();
+      expect(installCall?.[0]).toContain(targetRoot);
+      expect(installCall?.[0]).not.toContain(checkoutAlias);
+      expect(installCall?.[1].cwd).toBe(targetRoot);
+      await expect(fs.readdir(replacementRoot)).resolves.toEqual([]);
+    },
+  );
+
   it("does not stop or restart a managed gateway owned by another git checkout", async () => {
     const otherRoot = await createTrackedTempDir("openclaw-update-other-service-root-");
     const otherEntrypoint = path.join(otherRoot, "dist", "index.js");

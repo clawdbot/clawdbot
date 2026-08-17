@@ -151,7 +151,7 @@ describe("update CLI shared helpers", () => {
 
       await expect(
         ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-      ).resolves.toMatchObject({ exitCode: 0 });
+      ).resolves.toMatchObject({ checkoutDir, step: { exitCode: 0 } });
 
       await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
         "complete\n",
@@ -185,7 +185,7 @@ describe("update CLI shared helpers", () => {
 
       await expect(
         ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-      ).resolves.toMatchObject({ exitCode: 42 });
+      ).resolves.toMatchObject({ checkoutDir, step: { exitCode: 42 } });
 
       await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.readdir(base)).resolves.toEqual([]);
@@ -233,12 +233,12 @@ describe("update CLI shared helpers", () => {
 
       await expect(
         ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-      ).resolves.toMatchObject({ exitCode: 42 });
+      ).resolves.toMatchObject({ checkoutDir, step: { exitCode: 42 } });
       await expect(fs.readdir(checkoutDir)).resolves.toEqual([]);
 
       await expect(
         ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-      ).resolves.toMatchObject({ exitCode: 0 });
+      ).resolves.toMatchObject({ checkoutDir, step: { exitCode: 0 } });
       await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
         "complete\n",
       );
@@ -264,7 +264,7 @@ describe("update CLI shared helpers", () => {
 
         await expect(
           ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-        ).resolves.toMatchObject({ exitCode: 0 });
+        ).resolves.toMatchObject({ checkoutDir: targetDir, step: { exitCode: 0 } });
 
         expect((await fs.lstat(checkoutDir)).isSymbolicLink()).toBe(true);
         expect((await fs.lstat(targetDir)).isSymbolicLink()).toBe(false);
@@ -297,7 +297,7 @@ describe("update CLI shared helpers", () => {
 
         await expect(
           ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-        ).resolves.toMatchObject({ exitCode: 0 });
+        ).resolves.toMatchObject({ checkoutDir: targetDir, step: { exitCode: 0 } });
 
         await expect(fs.readFile(path.join(targetDir, "checkout.marker"), "utf8")).resolves.toBe(
           "complete\n",
