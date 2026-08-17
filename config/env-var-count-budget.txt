@@ -1,5 +1,5 @@
 # Distinct OPENCLAW_* names in production source under src, packages, and extensions.
 # Ratchet: lower this number when cleanup removes names; never raise it without owner approval.
 # Worker bundle installation no longer injects OPENCLAW_STATE_DIR into a remote npm process.
-# OPENCLAW_VERSION remains a supported runtime override after compile-time define retirement.
-502
+# The internal Node-version check no longer contributes a false OPENCLAW_* name.
+501
