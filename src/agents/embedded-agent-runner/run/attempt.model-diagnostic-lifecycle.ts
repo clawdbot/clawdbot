@@ -53,6 +53,17 @@ export type ModelCallDiagnosticContext = {
   ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
   suppressPluginHooks?: boolean;
+  /**
+   * The already-resolved idle-timeout policy for this stream (see
+   * `resolveLlmIdleTimeoutMs`), in milliseconds. `0` means the caller
+   * resolved a local/self-hosted no-gap opt-out — the diagnostic ceiling
+   * reported for stuck-session recovery must reflect that opt-out too, or
+   * recovery falls back to the generic threshold and aborts a legitimately
+   * silent-but-progressing local model call (#125147). Omit when the caller
+   * has not resolved this policy; the per-call `model.requestTimeoutMs`
+   * field is used instead.
+   */
+  streamIdleTimeoutMs?: number;
 };
 
 export type ModelCallEventBase = Omit<

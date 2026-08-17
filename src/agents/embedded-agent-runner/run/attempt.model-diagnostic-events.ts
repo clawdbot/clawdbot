@@ -1,4 +1,7 @@
-import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  clampTimerTimeoutMs,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
@@ -188,13 +191,30 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   ctx: ModelCallDiagnosticContext,
 ): StreamFn {
   return ((model, streamContext, options) => {
+    // `ctx.streamIdleTimeoutMs` carries the already-resolved idle-timeout
+    // policy from `resolveLlmIdleTimeoutMs` (explicit provider timeout, run
+    // budget, or the local/self-hosted no-gap opt-out), so prefer it over the
+    // raw per-call `model.requestTimeoutMs` field. Without this, a genuinely
+    // local model that legitimately opted out of stream-gap policing
+    // (`idleTimeoutMs === 0`) still reported no diagnostic ceiling, and stuck-
+    // session recovery fell back to the generic threshold and aborted a
+    // silent-but-progressing local model call (#125147).
+    const resolvedRequestTimeoutMs =
+      ctx.streamIdleTimeoutMs === 0
+        ? MAX_TIMER_TIMEOUT_MS
+        : typeof ctx.streamIdleTimeoutMs === "number" &&
+            Number.isFinite(ctx.streamIdleTimeoutMs) &&
+            ctx.streamIdleTimeoutMs > 0
+          ? clampTimerTimeoutMs(ctx.streamIdleTimeoutMs)
+          : undefined;
     const configuredRequestTimeoutMs = isRecord(model) ? model.requestTimeoutMs : undefined;
     const requestTimeoutMs =
-      typeof configuredRequestTimeoutMs === "number" &&
+      resolvedRequestTimeoutMs ??
+      (typeof configuredRequestTimeoutMs === "number" &&
       Number.isFinite(configuredRequestTimeoutMs) &&
       configuredRequestTimeoutMs > 0
         ? clampTimerTimeoutMs(configuredRequestTimeoutMs)
-        : undefined;
+        : undefined);
     const lifecycle = createModelLifecycle({
       ctx,
       options,

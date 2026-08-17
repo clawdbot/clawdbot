@@ -1,5 +1,6 @@
-// Diagnostic logger tests cover event emission, metrics, and support output.
 import fs from "node:fs";
+// Diagnostic logger tests cover event emission, metrics, and support output.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1212,6 +1213,50 @@ describe("stuck session diagnostics threshold", () => {
       "ageMs",
       "stateGeneration",
     ]);
+  });
+
+  it("does not abort a silent local model call whose no-gap stream policy was propagated to diagnostic recovery (#125147)", async () => {
+    // Regression for the subagent-spawn parity bug: a genuinely local model
+    // (e.g. Ollama over loopback) resolves `resolveLlmIdleTimeoutMs` to `0`
+    // (no stream-gap watchdog) because it can legitimately stay silent for
+    // many minutes during prompt evaluation. `attempt-stream.ts` now carries
+    // that resolved policy into the diagnostic model-call-started event as an
+    // effectively unlimited request-timeout ceiling (see
+    // attempt.model-diagnostic-events.ts). Diagnostic recovery must honor
+    // that ceiling instead of falling back to the generic stuck-session
+    // threshold and aborting a still-progressing local model call.
+    const recoverStuckSession = vi.fn();
+    const ref = { sessionId: "local-no-gap-session", sessionKey: "agent:jin:subagent:local" };
+    const runId = "local-no-gap-run";
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      },
+    );
+    logSessionStateChange({ ...ref, state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-1",
+        provider: "ollama",
+        model: "qwen3.5:9b-q8_0",
+      },
+      owner.generation,
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Well past the generic stuck-session abort threshold (60s) and past the
+    // previously observed real-world stall (~6.5 minutes, #125147) — the
+    // local no-gap policy must keep this recovery-ineligible.
+    vi.advanceTimersByTime(15 * 60_000);
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("recovers stale model calls without active embedded-run ownership", async () => {

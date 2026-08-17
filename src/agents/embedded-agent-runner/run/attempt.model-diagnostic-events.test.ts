@@ -230,6 +230,91 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expect(requestTimeouts).toEqual([60_000, undefined, 90_000, MAX_TIMER_TIMEOUT_MS, undefined]);
   });
 
+  it("propagates the resolved local no-gap stream policy as the diagnostic ceiling (#125147)", async () => {
+    // `streamIdleTimeoutMs: 0` is what `resolveLlmIdleTimeoutMs` returns for a
+    // genuinely local/self-hosted model that opted out of stream-gap
+    // policing. Diagnostic recovery must see that opt-out as an unlimited
+    // ceiling, not silently fall back to the generic stuck-session threshold
+    // the way the raw per-call `model.requestTimeoutMs` field did.
+    let callSequence = 0;
+    const requestTimeouts: Array<number | undefined> = [];
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() =>
+        (async function* () {
+          yield { type: "text", text: "ok" };
+        })()) as unknown as StreamFn,
+      {
+        runId: "run-local-no-gap",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "ollama",
+        model: "qwen3.5:9b-q8_0",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => `call-${++callSequence}`,
+        ownerGeneration: Object.freeze({}),
+        streamIdleTimeoutMs: 0,
+      },
+    );
+
+    await collectModelCallEvents(
+      async () => {
+        // Even though the raw per-call model config carries no timeout, the
+        // resolved local no-gap policy on ctx must still be honored.
+        await drain(await wrapped({} as never, {} as never, {} as never));
+      },
+      (event, metadata) => {
+        if (event.type === "model.call.started") {
+          const lifecycle = resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata);
+          requestTimeouts.push(
+            lifecycle?.phase === "started" ? lifecycle.requestTimeoutMs : undefined,
+          );
+        }
+      },
+    );
+
+    expect(requestTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+  });
+
+  it("prefers the resolved streamIdleTimeoutMs policy over an explicit per-call requestTimeoutMs", async () => {
+    let callSequence = 0;
+    const requestTimeouts: Array<number | undefined> = [];
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() =>
+        (async function* () {
+          yield { type: "text", text: "ok" };
+        })()) as unknown as StreamFn,
+      {
+        runId: "run-resolved-policy",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => `call-${++callSequence}`,
+        ownerGeneration: Object.freeze({}),
+        streamIdleTimeoutMs: 45_000,
+      },
+    );
+
+    await collectModelCallEvents(
+      async () => {
+        await drain(
+          await wrapped({ requestTimeoutMs: 300_000 } as never, {} as never, {} as never),
+        );
+      },
+      (event, metadata) => {
+        if (event.type === "model.call.started") {
+          const lifecycle = resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata);
+          requestTimeouts.push(
+            lifecycle?.phase === "started" ? lifecycle.requestTimeoutMs : undefined,
+          );
+        }
+      },
+    );
+
+    expect(requestTimeouts).toEqual([45_000]);
+  });
+
   it("captures output and completes when callers only await stream.result()", async () => {
     const assistant = {
       role: "assistant",

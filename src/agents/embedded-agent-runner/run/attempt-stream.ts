@@ -377,6 +377,11 @@ export function installEmbeddedAttemptStreamGuards(input: {
     model: attempt.modelId,
     api: attempt.model.api,
     transport: input.effectiveAgentTransport,
+    // Carry the resolved stream-gap policy (including the local/self-hosted
+    // no-gap opt-out, `idleTimeoutMs === 0`) into diagnostic recovery so a
+    // subagent spawn on the same local model does not get a stricter
+    // liveness ceiling than the stream layer already granted it (#125147).
+    streamIdleTimeoutMs: idleTimeoutMs,
     ...(attempt.contextWindowInfo?.tokens
       ? { contextTokenBudget: attempt.contextWindowInfo.tokens }
       : {}),
