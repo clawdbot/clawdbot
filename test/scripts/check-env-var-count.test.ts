@@ -152,8 +152,8 @@ describe("check-env-var-count", () => {
   it.each([
     [501, 502],
     [502, 503],
-  ])("allows only the owner-approved %i to %i budget increase", (baseBudget, nextBudget) => {
-    const root = tempDirs.make("openclaw-env-count-approved-grow-");
+  ])("rejects the retired temporary %i to %i budget increase", (baseBudget, nextBudget) => {
+    const root = tempDirs.make("openclaw-env-count-retired-grow-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     const names = Array.from({ length: nextBudget + 1 }, (_, index) => `OPENCLAW_TEST_${index}`);
@@ -169,10 +169,6 @@ describe("check-env-var-count", () => {
 
     fs.writeFileSync(path.join(root, "src/runtime.ts"), names.slice(0, nextBudget).join("\n"));
     fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), `${nextBudget}\n`);
-    expect(() => main(["--base", "HEAD"], root)).not.toThrow();
-
-    fs.writeFileSync(path.join(root, "src/runtime.ts"), names.join("\n"));
-    fs.writeFileSync(path.join(root, "config/env-var-count-budget.txt"), `${nextBudget + 1}\n`);
     expect(() => main(["--base", "HEAD"], root)).toThrow(/budget grew/u);
   });
 
