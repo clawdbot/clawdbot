@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -23,6 +24,29 @@ export type MessageReplyTarget = {
 };
 
 const MAX_JSON_AUTOPARSE_CHARS = 20_000;
+const initializedTableViewports = new WeakSet<HTMLElement>();
+
+function syncMarkdownTableOverflow(root?: Element) {
+  root?.querySelectorAll<HTMLElement>(".chat-markdown-table__viewport").forEach((viewport) => {
+    const shell = viewport.parentElement;
+    if (!shell) {
+      return;
+    }
+    const sync = () => {
+      const remaining = viewport.scrollWidth - viewport.clientWidth;
+      const hasOverflow = remaining > 1;
+      shell.classList.toggle("has-overflow", hasOverflow);
+      shell.classList.toggle("is-scrolled-start", hasOverflow && viewport.scrollLeft > 1);
+      shell.classList.toggle("is-scrolled-end", hasOverflow && viewport.scrollLeft < remaining - 1);
+    };
+    if (!initializedTableViewports.has(viewport)) {
+      initializedTableViewports.add(viewport);
+      viewport.addEventListener("scroll", sync, { passive: true });
+      new ResizeObserver(sync).observe(viewport);
+    }
+    sync();
+  });
+}
 
 /**
  * Detect whether a trimmed string is a JSON object or array.
@@ -299,17 +323,24 @@ export function renderMarkdownText(
 ) {
   const wrapTables = (value: string) =>
     value
-      .replaceAll("<table>", '<div class="chat-markdown-table"><table>')
-      .replaceAll("</table>", "</table></div>");
+      .replaceAll(
+        "<table>",
+        '<div class="chat-markdown-table"><div class="chat-markdown-table__viewport"><table>',
+      )
+      .replaceAll("</table>", "</table></div></div>");
   if (isStreaming) {
     return html`
-      <div class="chat-text" dir="${detectTextDirection(markdown)}">
+      <div
+        ${ref(syncMarkdownTableOverflow)}
+        class="chat-text"
+        dir="${detectTextDirection(markdown)}"
+      >
         ${unsafeHTML(wrapTables(toStreamingMarkdownHtml(markdown, markdownRenderOptions)))}
       </div>
     `;
   }
   return html`
-    <div class="chat-text" dir="${detectTextDirection(markdown)}">
+    <div ${ref(syncMarkdownTableOverflow)} class="chat-text" dir="${detectTextDirection(markdown)}">
       ${unsafeHTML(wrapTables(toSanitizedMarkdownHtml(markdown, markdownRenderOptions)))}
     </div>
   `;

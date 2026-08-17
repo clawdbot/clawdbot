@@ -169,22 +169,41 @@
 /* Transcript tables use horizontal structure instead of a nested card surface.
    Local cover gradients reveal only the edge that still has scrollable content. */
 .chat-thread .chat-bubble .chat-markdown-table {
+  position: relative;
   width: 100%;
   margin-block: 1.25em;
+}
+
+.chat-thread .chat-bubble .chat-markdown-table__viewport {
+  width: 100%;
   overflow-x: auto;
-  background:
-    linear-gradient(to right, var(--bg) 30%, transparent) left / 32px 100% local,
-    linear-gradient(to left, var(--bg) 30%, transparent) right / 32px 100% local,
-    linear-gradient(to right, color-mix(in srgb, var(--bg) 8%, transparent), transparent) left / 32px
-      100% scroll,
-    linear-gradient(to left, color-mix(in srgb, var(--text) 14%, transparent), transparent) right /
-      32px 100% scroll;
-  background-repeat: no-repeat;
   scrollbar-width: thin;
+}
+
+.chat-thread .chat-bubble .chat-markdown-table::before,
+.chat-thread .chat-bubble .chat-markdown-table::after {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  width: 32px;
+  pointer-events: none;
+  content: "";
+}
+
+.chat-thread .chat-bubble .chat-markdown-table.is-scrolled-start::before {
+  left: 0;
+  background: linear-gradient(to right, var(--bg), transparent);
+}
+
+.chat-thread .chat-bubble .chat-markdown-table.is-scrolled-end::after {
+  right: 0;
+  background: linear-gradient(to left, var(--bg), transparent);
 }
 
 .chat-thread .chat-bubble .chat-text :where(table) {
   width: max-content;
+  min-width: 100%;
   margin: 0;
   border: 0;
   border-collapse: collapse;
