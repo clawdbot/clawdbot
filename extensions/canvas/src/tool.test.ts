@@ -41,7 +41,14 @@ const mocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
   imageResultFromFile: vi.fn<
     typeof import("openclaw/plugin-sdk/channel-actions").imageResultFromFile
-  >(async (params) => ({ content: [], details: params })),
+  >(async (params) => {
+    const details = params.details ?? {};
+    const media = details.media as Record<string, unknown> | undefined;
+    return {
+      content: [],
+      details: { path: params.path, ...details, media: { ...media, mediaUrl: params.path } },
+    };
+  }),
   listNodes: vi.fn(async () => []),
   resolveNodeIdFromList: vi.fn(() => "node-1"),
   saveMediaBuffer: vi.fn<typeof import("openclaw/plugin-sdk/media-store").saveMediaBuffer>(
@@ -338,10 +345,10 @@ describe("Canvas tool", () => {
       path?: string;
       media?: { mediaUrl?: string; outbound?: boolean };
     };
-    expect(details.path).toBe(savedPath);
-    expect(details.media).toEqual({ mediaUrl: savedPath, outbound: false });
+    expect(details).not.toHaveProperty("path");
+    expect(details.media).toEqual({ outbound: false });
+    expect(details.media).not.toHaveProperty("mediaUrl");
     expect(result.details).toMatchObject({ node: "node-1", format: "png" });
-    expect(details.path).not.toMatch(/openclaw-canvas-snapshot-/);
     expect(result.content).toContainEqual(
       expect.objectContaining({ type: "image", mimeType: "image/png" }),
     );
