@@ -4,14 +4,7 @@ import {
   requiresClaudeMandatoryAdaptiveThinking,
 } from "@openclaw/llm-core";
 import { normalizeOpenAIReasoningEffort } from "./providers/openai-reasoning-effort.js";
-import type {
-  Api,
-  Model,
-  ModelThinkingLevel,
-  OpenAICompletionsCompat,
-  OpenAIResponsesCompat,
-  Usage,
-} from "./types.js";
+import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
@@ -52,13 +45,23 @@ function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
     : model.thinkingLevelMap;
 }
 
+type OpenAIReasoningCompat = {
+  supportsReasoningEffort?: boolean;
+  supportedReasoningEfforts?: string[];
+  reasoningEffortMap?: Record<string, string>;
+};
+
 function getCompatReasoningConfig<TApi extends Api>(
   model: Model<TApi>,
-): OpenAICompletionsCompat | OpenAIResponsesCompat | undefined {
+): OpenAIReasoningCompat | undefined {
   if (model.api !== "openai-completions" && model.api !== "openai-responses") {
     return undefined;
   }
-  return model.compat as OpenAICompletionsCompat | OpenAIResponsesCompat | undefined;
+  const compat = model.compat;
+  if (!compat || typeof compat !== "object" || !("supportsReasoningEffort" in compat)) {
+    return undefined;
+  }
+  return compat;
 }
 
 function normalizeReasoningEffort(value: unknown): string {
@@ -81,8 +84,7 @@ function supportsCompatExtendedThinkingLevel<TApi extends Api>(
       .filter((effort) => effort.length > 0),
   );
   const compatEffortMap = compat?.reasoningEffortMap;
-  const hasCompatMapping =
-    compatEffortMap !== undefined && Object.prototype.hasOwnProperty.call(compatEffortMap, level);
+  const hasCompatMapping = compatEffortMap !== undefined && Object.hasOwn(compatEffortMap, level);
   const mappedValue = hasCompatMapping ? compatEffortMap[level] : thinkingLevelMapValue;
   if (mappedValue === null) {
     return false;

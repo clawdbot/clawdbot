@@ -28,6 +28,7 @@ import type {
   AssistantMessage,
   Context,
   Model,
+  ModelThinkingLevel,
   SimpleStreamOptions,
   StreamOptions,
   Usage,
@@ -166,20 +167,23 @@ export function applyResponsesServiceTierPricing(
 
 function resolveResponsesApiReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
-  reasoning: ResponsesReasoningEffort,
+  reasoning: ModelThinkingLevel,
 ): string | undefined {
-  const compat = model.api === "openai-responses" ? model.compat : undefined;
-  if (compat?.supportsReasoningEffort === false) {
+  const compat =
+    model.api === "openai-responses" && model.compat && typeof model.compat === "object"
+      ? model.compat
+      : undefined;
+  if (compat && "supportsReasoningEffort" in compat && compat.supportsReasoningEffort === false) {
     return undefined;
   }
   if (model.thinkingLevelMap?.[reasoning] === null) {
     return undefined;
   }
-  return (
-    compat?.reasoningEffortMap?.[reasoning] ??
-    model.thinkingLevelMap?.[reasoning] ??
-    reasoning
-  );
+  const compatMapped =
+    compat && "reasoningEffortMap" in compat
+      ? compat.reasoningEffortMap?.[reasoning]
+      : undefined;
+  return compatMapped ?? model.thinkingLevelMap?.[reasoning] ?? reasoning;
 }
 
 export function resolveResponsesReasoningEffort<TApi extends Api>(
