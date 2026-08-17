@@ -28,9 +28,14 @@ describe("classic onboarding process", () => {
       env: {
         ...process.env,
         HOME: home,
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        NODE_ENV: undefined,
+        NODE_OPTIONS: undefined,
+        OPENCLAW_NO_RESPAWN: "1",
         OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
         NO_COLOR: "1",
         TERM: "xterm-256color",
+        VITEST: undefined,
       },
     });
     let output = "";
@@ -55,7 +60,7 @@ describe("classic onboarding process", () => {
     });
 
     await expect(exit).resolves.toMatchObject({ exitCode: 1 });
-    expect(sentEof).toBe(true);
+    expect(sentEof, stripAnsi(output)).toBe(true);
     expect(stripAnsi(output)).not.toContain("unsettled top-level await");
   }, 70_000);
 });

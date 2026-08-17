@@ -489,7 +489,9 @@ describe("createClackPrompter", () => {
     process.stdin.emit("end");
 
     await expect(prompt).resolves.toBe(true);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(finalize).toHaveBeenCalledOnce();
     expect(restoreRawMode).toHaveBeenCalledOnce();
     expect(writeNewline).toHaveBeenCalledOnce();
