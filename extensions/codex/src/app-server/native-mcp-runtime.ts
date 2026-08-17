@@ -81,14 +81,18 @@ export function createCodexNativeMcpRuntime(params: {
         ]),
       ),
       tools: loaded.flatMap((status) =>
-        statusTools(status).map((tool) => ({
-          serverName: status.name,
-          safeServerName: status.name,
-          toolName: String(tool.name),
-          // SAFETY: Codex status schemas are JSON objects; fallback supplies the required shape.
-          inputSchema: (asOptionalRecord(tool.inputSchema) ?? { type: "object" }) as never,
-          fallbackDescription: normalizeOptionalString(tool.description) ?? String(tool.name),
-        })),
+        statusTools(status).map((tool) => {
+          const inputSchema = (
+            asOptionalRecord(tool.inputSchema) ?? { type: "object" }
+          ) as never; // SAFETY: Codex status schemas are JSON objects.
+          return {
+            serverName: status.name,
+            safeServerName: status.name,
+            toolName: String(tool.name),
+            inputSchema,
+            fallbackDescription: normalizeOptionalString(tool.description) ?? String(tool.name),
+          };
+        }),
       ),
     };
     return catalog;
@@ -115,6 +119,9 @@ export function createCodexNativeMcpRuntime(params: {
           "Codex native MCP tool calls are unavailable after an indeterminate cancellation",
         );
       }
+      const requestArguments = (
+        asOptionalRecord(input) ?? {}
+      ) as JsonObject; // SAFETY: MCP tool arguments are JSON objects.
       try {
         return (await request(
           "mcpServer/tool/call",
@@ -122,8 +129,7 @@ export function createCodexNativeMcpRuntime(params: {
             threadId: params.threadId,
             server: serverName,
             tool: toolName,
-            // SAFETY: MCP tool arguments are JSON values normalized to an object at this boundary.
-            arguments: (asOptionalRecord(input) ?? {}) as JsonObject,
+            arguments: requestArguments,
           },
           options?.signal,
         )) as never; // SAFETY: Codex returns the MCP CallToolResult JSON payload unchanged.
@@ -142,8 +148,9 @@ export function createCodexNativeMcpRuntime(params: {
       const status = (await loadStatuses(options?.signal)).find(
         (entry) => entry.name === serverName,
       );
-      // SAFETY: Full Codex status entries use the MCP Tool wire shape expected by this runtime.
-      return { tools: status ? statusTools(status) : [] } as never;
+      return {
+        tools: status ? statusTools(status) : [],
+      } as never; // SAFETY: Codex status tools use the MCP Tool wire shape.
     },
     readResource: async (serverName, uri, options) =>
       await request(
@@ -165,8 +172,9 @@ export function createCodexNativeMcpRuntime(params: {
       const status = (await loadStatuses(options?.signal)).find(
         (entry) => entry.name === serverName,
       );
-      // SAFETY: Codex status templates use the MCP ResourceTemplate wire shape expected here.
-      return { resourceTemplates: status?.resourceTemplates ?? [] } as never;
+      return {
+        resourceTemplates: status?.resourceTemplates ?? [],
+      } as never; // SAFETY: Codex templates use the MCP ResourceTemplate wire shape.
     },
     dispose: async () => {},
   };
