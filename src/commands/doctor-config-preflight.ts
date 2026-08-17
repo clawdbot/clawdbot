@@ -104,6 +104,7 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
     // EEXIST means a config already lives at the target — nothing to migrate.
     // Any other failure (EACCES, ENOSPC) must surface: doctor would otherwise
     // proceed as a fresh install while the operator's legacy config exists.
+    // SAFETY: fs.copyFile rejections are Node errno errors; code is optional-read only.
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
       throw new Error(
         `Failed to migrate legacy config ${legacyPath} -> ${targetPath}: ${formatErrorMessage(err)}`,
