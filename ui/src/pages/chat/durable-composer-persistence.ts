@@ -189,7 +189,6 @@ export async function durableComposerDraftMatches(
 export class DurableChatComposerPersistence {
   private restoreGeneration = 0;
   private restoredScopeKey = "";
-  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly onStorageError: () => void,
@@ -214,7 +213,9 @@ export class DurableChatComposerPersistence {
         this.onConflict();
       }
     };
-    this.writeChain = this.writeChain.then(run, run);
+    // Start every CAS write before page teardown. IndexedDB readwrite ordering and
+    // draft revisions serialize snapshots without delaying attachment writes behind text.
+    void run();
   }
 
   retire(scope: DurableComposerDraftScope, minimumRevision: number) {
@@ -226,7 +227,7 @@ export class DurableChatComposerPersistence {
         reportDurableComposerStorageError(scope, this.onStorageError);
       }
     };
-    this.writeChain = this.writeChain.then(run, run);
+    void run();
   }
 
   restore(
