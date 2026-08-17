@@ -14,5 +14,8 @@ export function resolveControlUiSessionLinkBase(
   if (!origin) {
     return undefined;
   }
-  return `${origin}${normalizeControlUiBasePath(cfg?.gateway?.controlUi?.basePath)}`;
+  const sessionLinkBase = `${origin}${normalizeControlUiBasePath(cfg?.gateway?.controlUi?.basePath)}`;
+  // Model-context budget: bound every model-visible injection at its producer.
+  // Omit oversized bases because truncation would produce incorrect URLs.
+  return sessionLinkBase.length <= 200 ? sessionLinkBase : undefined;
 }
