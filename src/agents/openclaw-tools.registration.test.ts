@@ -181,7 +181,7 @@ describe("openclaw-tools update_plan gating", () => {
       wrapBeforeToolCallHook: false,
     });
     const guidance =
-      "When pointing the user at a session, cite its Control UI URL: main session -> `http://127.0.0.1:18789/control/chat/<agentId>`; any other display session key -> `http://127.0.0.1:18789/control/chat/` + key without leading `agent:`, with `:` replaced by `/`.";
+      "When pointing the user at a session, cite its Control UI URL: main session -> `http://127.0.0.1:18789/control/chat/<agentId>`; any other display session key -> `http://127.0.0.1:18789/control/chat/<agentId>/~key/` + key minus `agent:<agentId>:`, with `:` replaced by `/`.";
 
     for (const name of ["sessions_list", "sessions_history", "sessions_search"]) {
       expect(expectToolNamed(tools, name).description).toContain(guidance);
