@@ -326,9 +326,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.heartbeat.timeoutSeconds":
     "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
   "agents.defaults.systemAgent":
-    "Target settings for ambient OpenClaw system-agent and Custodian inference.",
+    "Target settings for ambient OpenClaw system-agent and Custodian inference plus selected unscoped operator reads.",
   "agents.defaults.systemAgent.agentId":
-    "Agent whose model and credentials own ambient system-agent and Custodian consults. Delegated consults still use their requesting agent.",
+    "Agent whose model and credentials own ambient system-agent and Custodian consults. Also used when models.list, models.authStatus, skills.status, or doctor.memory.status omits agentId; explicit request agentId always wins.",
   "agents.defaults.authInheritance":
     "Upgrade compatibility owner for the inherited credential store until credentials are relocated per agent.",
   "agents.defaults.authInheritance.agentId":

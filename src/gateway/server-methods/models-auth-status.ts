@@ -6,6 +6,7 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { tryResolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -606,9 +607,16 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   "models.authStatus": async ({ params, respond, context }) => {
     const now = Date.now();
     const refreshRequested = Boolean(params.refresh);
+    const resolveScope = (cfg: OpenClawConfig) =>
+      resolveModelAuthAgentScope(
+        cfg,
+        params.agentId === undefined || params.agentId === ""
+          ? tryResolveSystemAgentTargetAgentId(cfg)
+          : params.agentId,
+      );
     try {
       let cfg = context.getRuntimeConfig();
-      let scope = resolveModelAuthAgentScope(cfg, params.agentId);
+      let scope = resolveScope(cfg);
       if (!scope.ok) {
         respond(false, undefined, modelAuthAgentScopeError(scope));
         return;
@@ -616,7 +624,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       if (refreshRequested) {
         await refreshModelAuthStatusRuntimeState();
         cfg = context.getRuntimeConfig();
-        scope = resolveModelAuthAgentScope(cfg, params.agentId);
+        scope = resolveScope(cfg);
         if (!scope.ok) {
           respond(false, undefined, modelAuthAgentScopeError(scope));
           return;
