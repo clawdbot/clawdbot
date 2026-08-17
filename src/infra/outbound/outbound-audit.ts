@@ -306,13 +306,8 @@ function resolveResultIdentifiers(
 } {
   const last = results.at(-1);
   const conversationId =
-    firstIdentifier(
-      last?.conversationId,
-      last?.chatId,
-      last?.channelId,
-      last?.roomId,
-      last?.toJid,
-    ) ?? resolveOutboundTargetFacts(context).conversationId;
+    firstIdentifier(last?.target?.id, last?.toJid) ??
+    resolveOutboundTargetFacts(context).conversationId;
   const messageId = firstIdentifier(
     last?.messageId,
     last?.receipt?.primaryPlatformMessageId,
