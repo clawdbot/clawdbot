@@ -34,7 +34,7 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === SNAPSHOT_INVALIDATION_STORAGE_KEY && event.newValue !== null) {
       // The cross-tab signal carries no session identifiers; peers safely drop all memory state.
-      void notifySnapshotInvalidation({}).catch((error) => {
+      void notifySnapshotInvalidation({}).catch((error: unknown) => {
         console.error("[chat-snapshot-cache] cross-tab invalidation failed", error);
       });
     }
