@@ -8,9 +8,10 @@ type SessionEventRefreshCoordinatorOptions = {
 
 /** Canonical bounded event refresh policy shared by session-list owners. */
 export function createSessionEventRefreshCoordinator({
-  active,
+  active: initialActive,
   refresh,
 }: SessionEventRefreshCoordinatorOptions) {
+  let active = initialActive;
   let timer: ReturnType<typeof setTimeout> | 0 = 0;
   let deadline = 0;
   // Hidden/page-exit lifecycle holds one authoritative refresh bit. Resume
