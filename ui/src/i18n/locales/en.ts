@@ -160,6 +160,12 @@ export const en: TranslationMap = {
     issue: "issue",
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, by {author}",
   },
+  sessionPreview: {
+    loading: "Loading session details…",
+    unavailable: "Session preview unavailable",
+    archived: "Archived",
+    ariaLabel: "Session: {title}",
+  },
   channels: {
     lastError: "Last error",
     refreshingStaleSnapshot:
@@ -5071,6 +5077,16 @@ export const en: TranslationMap = {
     resumeInNewSession: "Resume in new session",
     resumingSession: "Resuming…",
     systemNotice: {
+      guardian: {
+        approvedSummary: "Guardian approved {action}.",
+        deniedLabel: "Guardian denied",
+        deniedSummary: "{action} · risk: {risk}\n\n{rationale}",
+        warningLabel: "Guardian warning",
+        warningFallback: "Guardian stopped the requested action.",
+        requestedAction: "Requested action",
+        unknownRisk: "unknown",
+        noRationale: "No rationale was provided.",
+      },
       restartRecovery: {
         label: "System · restart recovery",
         summary:
@@ -5326,6 +5342,34 @@ export const en: TranslationMap = {
       resetReasoning: "Reset to default ({level})",
       useDefaultReasoning: "Use default reasoning ({level})",
       fastResponsesAria: "Fast responses: {state}",
+    },
+    permissionControls: {
+      label: "Permissions",
+      help: "Choose how this session handles files, commands, and escalation reviews.",
+      default: "Default",
+      defaultDescription: "Follow the agent's configured policy.",
+      rootLabel: "Root",
+      sessionRoot: "Session root: {root}",
+      fullRequiresAdmin: "Full access requires operator.admin access.",
+      updateFailed: "Failed to update permissions: {error}",
+      modes: {
+        "read-only": {
+          label: "Read only",
+          description: "Read within the session root; writes and commands are blocked.",
+        },
+        guarded: {
+          label: "Guarded",
+          description: "A human reviews requests beyond the session root.",
+        },
+        workspace: {
+          label: "Workspace",
+          description: "An AI reviewer checks requests beyond the session root.",
+        },
+        full: {
+          label: "Full access",
+          description: "No reviewer; files and commands are unrestricted.",
+        },
+      },
     },
     rail: {
       title: "Session companion",

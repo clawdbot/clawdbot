@@ -13,7 +13,6 @@ import type {
   describeImagesWithModel,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { resolveBundledStaticCatalogModel } from "../embedded-agent-runner/model.static-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
@@ -52,7 +51,7 @@ type ResolveImageCompressionPolicy = (params: {
   imageCount: number;
   agentDir?: string;
   workspaceDir?: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) => Promise<ImageCompressionPolicy>;
 
 type ImageToolProviderDeps = {

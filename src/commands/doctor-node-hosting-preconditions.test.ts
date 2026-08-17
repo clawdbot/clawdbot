@@ -81,7 +81,7 @@ describe("node-hosting preconditions", () => {
     });
 
     expect(findings.find((finding) => finding.requirement === "machine-client-auth")?.fixHint).toBe(
-      "Switch gateway.auth.mode to token and configure gateway.auth.token as a SecretRef so machine clients can authenticate as devices. Keep trusted-proxy only if machine clients use a clean loopback/direct gateway.auth.password path. Cloudflare Access service tokens are the alternative for Access-fronted gateways, but node-host support for CF-Access-Client-Id / CF-Access-Client-Secret is not implemented yet.",
+      "Switch gateway.auth.mode to token and configure gateway.auth.token as a SecretRef so machine clients can authenticate as devices. Keep trusted-proxy only if machine clients use a clean loopback/direct gateway.auth.password path. For Access-fronted gateways, configure the node gateway.cloudflareAccess.clientId / clientSecret SecretInputs or set CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET before openclaw connect.",
     );
     expect(findings.find((finding) => finding.requirement === "node-onboarding-url")).toMatchObject(
       {

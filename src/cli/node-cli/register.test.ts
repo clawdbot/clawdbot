@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../../pairing/setup-code.js";
 import { registerNodeCli } from "./register.js";
 
+const PAIR_TLS_FINGERPRINT = "ab".repeat(32);
+const EXPLICIT_TLS_FINGERPRINT = "cd".repeat(32);
+const SAVED_TLS_FINGERPRINT = "ef".repeat(32);
+
 type LoadNodeHostConfig = typeof import("../../node-host/config.js").loadNodeHostConfig;
 
 const daemonMocks = vi.hoisted(() => ({
@@ -147,7 +151,7 @@ describe("registerNodeCli", () => {
     const setupCode = encodePairingSetupCode({
       url: "wss://gateway.example:8443/openclaw-gw",
       bootstrapToken: "bootstrap-123",
-      tlsFingerprint: "sha256:pair-leaf",
+      tlsFingerprint: `sha256:${PAIR_TLS_FINGERPRINT.toUpperCase()}`,
     });
 
     await createProgram().parseAsync(["node", "run", "--pair", `oc-pair://${setupCode}`], {
@@ -160,14 +164,14 @@ describe("registerNodeCli", () => {
         gatewayPort: 8443,
         gatewayContextPath: "/openclaw-gw",
         gatewayTls: true,
-        gatewayTlsFingerprint: "sha256:pair-leaf",
+        gatewayTlsFingerprint: PAIR_TLS_FINGERPRINT,
         gatewayCandidates: [
           {
             host: "gateway.example",
             port: 8443,
             contextPath: "/openclaw-gw",
             tls: true,
-            tlsFingerprint: "sha256:pair-leaf",
+            tlsFingerprint: PAIR_TLS_FINGERPRINT,
           },
         ],
         gatewayBootstrapToken: "bootstrap-123",
@@ -180,7 +184,7 @@ describe("registerNodeCli", () => {
     const setupCode = encodePairingSetupCode({
       url: "wss://paired.example:8443",
       bootstrapToken: "bootstrap-123",
-      tlsFingerprint: "sha256:pair-leaf",
+      tlsFingerprint: `sha256:${PAIR_TLS_FINGERPRINT}`,
     });
 
     await createProgram().parseAsync(
@@ -194,7 +198,7 @@ describe("registerNodeCli", () => {
         "--port",
         "19000",
         "--tls-fingerprint",
-        "sha256:explicit-leaf",
+        `sha256:${EXPLICIT_TLS_FINGERPRINT}`,
       ],
       { from: "user" },
     );
@@ -204,7 +208,7 @@ describe("registerNodeCli", () => {
         gatewayHost: "explicit.example",
         gatewayPort: 19000,
         gatewayTls: true,
-        gatewayTlsFingerprint: "sha256:explicit-leaf",
+        gatewayTlsFingerprint: EXPLICIT_TLS_FINGERPRINT,
         gatewayCandidates: undefined,
         gatewayBootstrapToken: "bootstrap-123",
       }),
@@ -234,7 +238,7 @@ describe("registerNodeCli", () => {
         host: "10.0.0.2",
         port: 19001,
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: SAVED_TLS_FINGERPRINT,
         contextPath: "/saved",
       },
     });
@@ -246,7 +250,7 @@ describe("registerNodeCli", () => {
         gatewayHost: "10.0.0.2",
         gatewayPort: 19001,
         gatewayTls: true,
-        gatewayTlsFingerprint: "saved-fingerprint",
+        gatewayTlsFingerprint: SAVED_TLS_FINGERPRINT,
         gatewayContextPath: "/saved",
       }),
     );
@@ -263,7 +267,7 @@ describe("registerNodeCli", () => {
         host: "10.0.0.2",
         port: 19001,
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: SAVED_TLS_FINGERPRINT,
         contextPath: "/saved",
       },
     });
@@ -287,7 +291,7 @@ describe("registerNodeCli", () => {
         host: "10.0.0.2",
         port: 19001,
         tls: true,
-        tlsFingerprint: "old-fingerprint",
+        tlsFingerprint: SAVED_TLS_FINGERPRINT,
       },
     });
 
@@ -295,7 +299,7 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.runNodeHost).toHaveBeenLastCalledWith(
       expect.objectContaining({
         gatewayTls: true,
-        gatewayTlsFingerprint: "old-fingerprint",
+        gatewayTlsFingerprint: SAVED_TLS_FINGERPRINT,
       }),
     );
 
@@ -317,7 +321,7 @@ describe("registerNodeCli", () => {
         host: "10.0.0.2",
         port: 19001,
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: SAVED_TLS_FINGERPRINT,
       },
     });
 
@@ -333,13 +337,25 @@ describe("registerNodeCli", () => {
 
   it("rejects a TLS fingerprint with an explicit plaintext selection", async () => {
     await createProgram().parseAsync(
-      ["node", "run", "--no-tls", "--tls-fingerprint", "sha256:fingerprint"],
+      ["node", "run", "--no-tls", "--tls-fingerprint", PAIR_TLS_FINGERPRINT],
       { from: "user" },
     );
 
     expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
     expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
       "--no-tls cannot be combined with --tls-fingerprint",
+    );
+    expect(daemonMocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects an invalid --tls-fingerprint before starting the node host", async () => {
+    await createProgram().parseAsync(["node", "run", "--tls-fingerprint", "sha256:abc123"], {
+      from: "user",
+    });
+
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid TLS fingerprint"),
     );
     expect(daemonMocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
   });

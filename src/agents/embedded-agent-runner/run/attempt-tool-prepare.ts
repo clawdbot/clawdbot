@@ -18,6 +18,10 @@ import {
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import type { SandboxContext } from "../../sandbox/types.js";
+import {
+  resolveSessionPermissionExecMode,
+  type PreparedSessionPermissionPolicy,
+} from "../../tool-fs-policy.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import {
@@ -58,6 +62,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   runTrace: DiagnosticTraceContext;
   sandbox?: SandboxContext | null;
   sandboxSessionKey: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   sessionAgentId: string;
   skillUsagePaths: SkillUsagePaths;
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
@@ -222,10 +227,14 @@ export function prepareEmbeddedAttemptToolBase(params: {
           chatType: attempt.chatType,
           exec: {
             ...attempt.execOverrides,
+            ...(params.sessionPermissionPolicy
+              ? { mode: resolveSessionPermissionExecMode(params.sessionPermissionPolicy) }
+              : {}),
             config: attempt.config,
             elevated: attempt.bashElevated,
           },
           sandbox: params.sandbox,
+          sessionPermissionPolicy: params.sessionPermissionPolicy,
           messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
           agentAccountId: attempt.agentAccountId,
           messageTo: attempt.messageTo,

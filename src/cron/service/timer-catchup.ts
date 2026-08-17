@@ -32,9 +32,9 @@ import {
   type StartupDeferredJob,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
+import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import { createCompletedCronRunOutcomeDrain } from "./timer-outcome-finalization.js";
 import { collectRunnableJobs, hasMissedCronSlotSinceLastRun } from "./timer-runnable.js";
-import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-scheduler.js";
 import { resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
 
 function deferPendingBackoffMissedCronSlots(

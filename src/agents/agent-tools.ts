@@ -85,6 +85,7 @@ import {
 } from "./sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
+import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
@@ -218,6 +219,7 @@ type OpenClawCodingToolsOptions = {
   /** Task working directory for coding tools. Defaults to workspaceDir. */
   cwd?: string;
   workspaceDir?: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   /**
    * Workspace directory that spawned subagents should inherit.
    * When sandboxing uses a copied workspace (`ro` or `none`), workspaceDir is the
@@ -346,7 +348,7 @@ type OpenClawCodingToolsOptions = {
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
-  onYield?: (message: string) => Promise<void> | void;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
   /** Live observer called after wrapped tool outcomes are recorded. */
@@ -500,8 +502,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
+  const sessionPermissionPolicy = options?.sessionPermissionPolicy;
   const fsPolicy = createToolFsPolicy({
-    workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
+    workspaceOnly:
+      isMemoryFlushRun ||
+      (sessionPermissionPolicy ? sessionPermissionPolicy.mode !== "full" : fsConfig.workspaceOnly),
+    root: sessionPermissionPolicy?.root,
   });
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
@@ -509,6 +515,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const workspaceRoot = capabilityProfile.workspace.workspaceRoot;
   const runtimeRoot = capabilityProfile.workspace.runtimeRoot;
   const codingRoot = sandboxRoot ?? runtimeRoot;
+  const containmentRoot = sandboxRoot ?? fsPolicy.root ?? codingRoot;
   const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
   // Flush exposes one append-only target; its fallback records inherited taint after success.
   const memoryWriteProvenance = isMemoryFlushRun
@@ -536,11 +543,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly = fsPolicy.workspaceOnly;
+  const readOnly = sessionPermissionPolicy?.mode === "read-only";
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
-  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
+  const applyPatchWorkspaceOnly = sessionPermissionPolicy
+    ? sessionPermissionPolicy.mode !== "full"
+    : workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
+    !readOnly &&
     applyPatchConfig?.enabled !== false &&
     isApplyPatchAllowedForModel({
       modelProvider: options?.modelProvider,
@@ -554,9 +565,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec);
   const coreTools = createCoreCodingTools({
     codingRoot,
+    containmentRoot,
     includeBaseCodingTools,
     includeShellTools,
     workspaceOnly,
+    readOnly,
     sandbox,
     skillsSnapshot: options?.skillsSnapshot,
     modelContextWindowTokens: options?.modelContextWindowTokens,

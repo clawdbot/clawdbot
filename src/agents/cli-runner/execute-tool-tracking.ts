@@ -70,6 +70,7 @@ type ActiveCliTool = {
 export function createCliToolTracking(context: PreparedCliRunContext) {
   let gatewayCaptureKey: string | undefined;
   let yielded = false;
+  let yieldAcknowledgment: string | undefined;
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
   let inFlightUnclassifiedMcpRequests = 0;
@@ -336,8 +337,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       isMessagingToolDeliveryAction(normalizeCliMessagingToolName(toolName), toolArgs);
     beginMcpLoopbackToolCallCapture({
       captureKey,
-      onYield: () => {
+      onYield: (_message, acknowledgment) => {
         yielded = true;
+        yieldAcknowledgment = acknowledgment;
       },
       onRequestStart: () => {
         inFlightUnclassifiedMcpRequests += 1;
@@ -625,6 +627,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       return {
         ...output,
         ...(yielded ? { yielded: true as const } : {}),
+        ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),
         ...(current.didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
         ...(current.didDeliverSourceReplyViaMessageTool
           ? { didDeliverSourceReplyViaMessageTool: true }

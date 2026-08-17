@@ -113,6 +113,8 @@ export const en = {
       cacheFailed: "Failed to generate completion cache. Run `{command}` later.",
       enable: "Enable {shell} shell completion for {cli}?",
       installed: "Shell completion installed. {reloadHint}",
+      profileNotWritable:
+        "Shell completion was not changed: {profile} is not writable. Run `{command}` against a writable profile file.",
       reloadPowerShell: "Restart your shell or run: {command}",
       reloadShell: "Restart your shell or run: source {profile}",
       title: "Shell completion",

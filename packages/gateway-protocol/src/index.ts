@@ -14,10 +14,12 @@ export * from "./schema/ui-command.js";
 export * from "./schema/board.js";
 export {
   SessionCreatedActorSchema,
+  SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
   type SessionOwner,
+  type SessionPermissionMode,
   type SessionRow,
   type SessionRunStatus,
   type SessionToolOverrides,

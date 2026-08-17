@@ -279,10 +279,16 @@ function resolveBrowserBaseUrl(params: {
   return undefined;
 }
 
+const unavailableSystemProfiles = (unavailableReason: string) => ({
+  profiles: [],
+  unavailableReason,
+});
+
 /**
  * Read importable system profiles from the host control server. Discovery must
  * match where import runs (host-local), so it never uses a node proxy or the
- * sandbox base URL. Returns [] when host control is unavailable.
+ * sandbox base URL. Other profile sources remain useful when host discovery
+ * is unavailable, so failures become an explicit degradation fact.
  */
 async function readHostSystemProfiles(params: {
   allowHostControl?: boolean;
@@ -291,7 +297,9 @@ async function readHostSystemProfiles(params: {
   signal?: AbortSignal;
 }) {
   if (params.allowHostControl === false) {
-    return [];
+    return unavailableSystemProfiles(
+      "Host system profile discovery is disabled by sandbox policy; enable host control to discover importable system profiles.",
+    );
   }
   let hostBaseUrl: string | undefined;
   try {
@@ -301,14 +309,24 @@ async function readHostSystemProfiles(params: {
       allowHostControl: params.allowHostControl,
     });
   } catch {
-    return [];
+    return unavailableSystemProfiles(
+      'Host browser control is unavailable; enable it and retry action=profiles target="host".',
+    );
   }
-  return await browserToolDeps
-    .browserSystemProfiles(hostBaseUrl, { timeoutMs: params.timeoutMs, signal: params.signal })
-    .catch(() => {
-      params.signal?.throwIfAborted();
-      return [];
-    });
+  try {
+    return {
+      profiles: await browserToolDeps.browserSystemProfiles(hostBaseUrl, {
+        timeoutMs: params.timeoutMs,
+        signal: params.signal,
+      }),
+      unavailableReason: undefined,
+    };
+  } catch {
+    params.signal?.throwIfAborted();
+    return unavailableSystemProfiles(
+      'Host system profile discovery failed; retry action=profiles target="host" after host browser control is available.',
+    );
+  }
 }
 
 function shouldPreferHostForProfile(profileName: string | undefined) {
@@ -552,12 +570,13 @@ export function createBrowserTool(opts?: {
           // Importable system profiles are host-local (import runs on the host),
           // so read them from the host regardless of the profiles action target;
           // never let a node proxy or sandbox describe the wrong Chrome profiles.
-          const systemProfiles = await readHostSystemProfiles({
-            allowHostControl: opts?.allowHostControl,
-            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-            timeoutMs: toolTimeoutMs,
-            signal,
-          });
+          const { profiles: systemProfiles, unavailableReason: systemProfilesUnavailable } =
+            await readHostSystemProfiles({
+              allowHostControl: opts?.allowHostControl,
+              sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+              timeoutMs: toolTimeoutMs,
+              signal,
+            });
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "GET",
@@ -567,6 +586,7 @@ export function createBrowserTool(opts?: {
             return jsonResult({
               ...(result && typeof result === "object" ? result : { profiles: result }),
               systemProfiles,
+              ...(systemProfilesUnavailable ? { systemProfilesUnavailable } : {}),
             });
           }
           return jsonResult({
@@ -575,6 +595,7 @@ export function createBrowserTool(opts?: {
               signal,
             }),
             systemProfiles,
+            ...(systemProfilesUnavailable ? { systemProfilesUnavailable } : {}),
           });
         }
         case "importprofile": {
@@ -650,7 +671,7 @@ export function createBrowserTool(opts?: {
           sessionTabs.touch(
             readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
           );
-          return jsonResult(proxyRequest ? result : { ok: true });
+          return jsonResult(result);
         }
         case "close": {
           const targetId = readStringParam(params, "targetId");
@@ -674,26 +695,23 @@ export function createBrowserTool(opts?: {
             );
             return jsonResult(result);
           }
-          if (targetId) {
-            await browserToolDeps.browserCloseTab(baseUrl, targetId, {
-              profile,
-              timeoutMs: toolTimeoutMs,
-              signal,
-            });
-            sessionTabs.untrack(targetId);
-          } else {
-            const result = await browserToolDeps.browserAct(
-              baseUrl,
-              { kind: "close" },
-              {
+          const result = targetId
+            ? await browserToolDeps.browserCloseTab(baseUrl, targetId, {
                 profile,
                 timeoutMs: toolTimeoutMs,
                 signal,
-              },
-            );
-            sessionTabs.untrack(readStringValue(result.targetId));
-          }
-          return jsonResult({ ok: true });
+              })
+            : await browserToolDeps.browserAct(
+                baseUrl,
+                { kind: "close" },
+                {
+                  profile,
+                  timeoutMs: toolTimeoutMs,
+                  signal,
+                },
+              );
+          sessionTabs.untrack(readStringValue(result.targetId) ?? targetId);
+          return jsonResult(result);
         }
         case "snapshot":
           return await executeSnapshotAction({

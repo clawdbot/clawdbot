@@ -114,7 +114,7 @@ function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TI
     .option("--json", "Output JSON", false);
 }
 
-async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
+async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
     sharedStateMode: "read-only",
@@ -513,7 +513,7 @@ async function writeSupportExportFromCli(opts: {
         deep: false,
       });
     },
-    readHealthSnapshot: async () => await callGatewayCli("health", rpc),
+    readHealthSnapshot: async () => await callGatewayReadOnlyCli("health", rpc),
   });
   if (opts.json) {
     defaultRuntime.writeJson(result);
@@ -589,7 +589,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
                 : opts;
             const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(callOpts, command);
             const params = parseGatewayCallParams(String(opts.params ?? "{}"));
-            const result = await callGatewayCli(method, rpcOpts, params);
+            const result = await callGatewayReadOnlyCli(method, rpcOpts, params);
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);
               return;
@@ -624,7 +624,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
                 waitSeconds: opts.wait,
                 json: Boolean(rpcOpts.json),
               },
-              { callGateway: callGatewayCli, runtime: defaultRuntime },
+              { callGateway: callGatewayReadOnlyCli, runtime: defaultRuntime },
             );
           },
           "Gateway suspend failed",
@@ -645,7 +645,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
             await runGatewayResume(
               { rpcOpts, suspensionId: String(suspensionId), json: Boolean(rpcOpts.json) },
-              { callGateway: callGatewayCli, runtime: defaultRuntime },
+              { callGateway: callGatewayReadOnlyCli, runtime: defaultRuntime },
             );
           },
           "Gateway resume failed",
@@ -672,7 +672,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             if (agentId && opts.allAgents) {
               throw new Error("Use --agent or --all-agents, not both");
             }
-            const summary = (await callGatewayCli("usage.cost", rpcOpts, {
+            const summary = (await callGatewayReadOnlyCli("usage.cost", rpcOpts, {
               days,
               ...(agentId ? { agentId } : {}),
               ...(opts.allAgents ? { agentScope: "all" } : {}),
@@ -703,14 +703,14 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
             let result: unknown;
             try {
-              result = await callGatewayCli("health", rpcOpts);
+              result = await callGatewayReadOnlyCli("health", rpcOpts);
             } catch (error) {
-              const { emitReachableGatewayAuthDiagnostic, readBestEffortHealthConfig } = await (
+              const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } = await (
                 deps.loadGatewayHealthModule ?? loadGatewayHealthModule
               )();
               const handled = await emitReachableGatewayAuthDiagnostic({
                 error,
-                config: rpcOpts.config ?? (await readBestEffortHealthConfig()),
+                config: rpcOpts.config ?? (await readNonObservingHealthConfig()),
                 runtime: defaultRuntime,
                 timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
                 token: rpcOpts.token,
@@ -817,7 +817,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
               return;
             }
 
-            const result = await callGatewayCli("diagnostics.stability", rpcOpts, {
+            const result = await callGatewayReadOnlyCli("diagnostics.stability", rpcOpts, {
               limit: query.limit,
               ...(query.type ? { type: query.type } : {}),
               ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),

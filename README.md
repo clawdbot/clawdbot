@@ -46,8 +46,17 @@ script contract, Docker, Nix, and other deployment paths.
 
 ## Quick start
 
+On a fresh install, the installer scripts start onboarding automatically.
+Complete the wizard they open. If you installed the package directly with npm,
+pnpm, or Bun, run:
+
 ```bash
 openclaw onboard --install-daemon
+```
+
+After onboarding:
+
+```bash
 openclaw gateway status
 openclaw dashboard
 ```

@@ -2085,6 +2085,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => expect(mockState.messageReceivedCalls).toHaveLength(1));
     expect(readPersistedUserMessages()).toHaveLength(1);
     expect(readPersistedUserMessages()[0]?.content).toBe("hello");
+    expect(readPersistedUserMessages()[0]?.["__openclaw"]).toMatchObject({
+      steerTargetRunId: "active-run",
+    });
+    const userUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) => userUpdateMessage(update)?.role === "user",
+    );
+    expect(userUpdates).toHaveLength(2);
+    expect(userUpdateMessage(userUpdates[0])).not.toHaveProperty("__openclaw.steerTargetRunId");
+    expect(userUpdateMessage(userUpdates[1])).toHaveProperty(
+      "__openclaw.steerTargetRunId",
+      "active-run",
+    );
     expect(queueMessage).toHaveBeenCalledWith(
       "hello",
       expect.objectContaining({
@@ -2102,6 +2114,43 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
     expect(context.broadcast).toHaveBeenCalledOnce();
+  });
+
+  it("records the resolved run for accepted leaf-only steering", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-leaf-steer-provenance-");
+    const { send } = createChatRequestFixture();
+    const operation = replyRunRegistry.begin({
+      sessionKey: "agent:main:main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: null,
+    });
+    bindTestToolAuthority(operation);
+    operation.setPhase("running");
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-leaf-steer-provenance",
+        requestParams: { expectedLeafEntryId: null, queueMode: "steer" },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(readPersistedUserMessages()[0]?.["__openclaw"]).toMatchObject({
+      steerTargetRunId: "active-run",
+    });
   });
 
   it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
@@ -2281,6 +2330,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
     expect(mockState.lastMessageInjectionAttempted).toBe(true);
     expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(
+      (readPersistedUserMessages()[0]?.["__openclaw"] as Record<string, unknown> | undefined)
+        ?.steerTargetRunId,
+    ).toBeUndefined();
     const broadcasts = context.broadcast.mock.calls.map(
       ([, payload]) => payload as Record<string, unknown>,
     );
@@ -2397,9 +2450,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     bindTestToolAuthority(first);
     first.setPhase("running");
-    const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
       options?.onQueueAccepted?.(true);
-      return delivery.promise;
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+      return await delivery.promise;
     });
     first.attachBackend({
       kind: "embedded",
@@ -2413,6 +2467,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       requestParams: { expectedRunId: "active-run", queueMode: "steer" },
       waitFor: "none",
     });
+    await waitForAssertion(() => expect(readPersistedUserMessages()).toHaveLength(1));
+    expect(readPersistedUserMessages()[0]).not.toHaveProperty("__openclaw.steerTargetRunId");
     first.complete();
     const successorCancel = vi.fn();
     const successor = replyRunRegistry.begin({
@@ -2443,6 +2499,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(successor.result).toBeNull();
     expect(successorCancel).not.toHaveBeenCalled();
     expect(mockState.lastDispatchCtx).toBeUndefined();
+    const persistedUsers = readPersistedUserMessages();
+    expect(persistedUsers).toHaveLength(1);
+    expect(
+      (persistedUsers[0]?.["__openclaw"] as Record<string, unknown> | undefined)?.steerTargetRunId,
+    ).toBeUndefined();
     successor.complete();
   });
 
@@ -7402,6 +7463,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(typeof message?.timestamp).toBe("number");
     const persistedUser = readPersistedUserMessages()[0];
     expect(persistedUser?.content).toBe("quick command");
+    expect(
+      (persistedUser?.["__openclaw"] as Record<string, unknown> | undefined)?.steerTargetRunId,
+    ).toBeUndefined();
     expect(getTotalPendingReplies()).toBe(0);
   });
 

@@ -407,12 +407,6 @@ export function buildGatewayCronService(params: {
     requestedSessionKey?: string | null;
   }) => {
     const requested = paramsValue.requestedSessionKey?.trim();
-    if (!requested) {
-      return resolveAgentMainSessionKey({
-        cfg: paramsValue.runtimeConfig,
-        agentId: paramsValue.agentId,
-      });
-    }
     const candidate = toAgentStoreSessionKey({
       agentId: paramsValue.agentId,
       requestKey: requested,

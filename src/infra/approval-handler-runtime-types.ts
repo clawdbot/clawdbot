@@ -8,7 +8,6 @@ import type {
   PendingApprovalView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
 
@@ -235,7 +234,7 @@ export type ChannelApprovalNativeRuntimeAdapter<
   TBinding = unknown,
   TFinalPayload = unknown,
 > = {
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
   /**
    * Trusted legacy ownership override retained for compatibility.
    * @deprecated Omit this so core derives approval ownership from the request payload.
@@ -264,7 +263,7 @@ export type ChannelApprovalNativeRuntimeSpec<
   TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
   TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
 > = {
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
   /**
    * Trusted legacy ownership override retained for compatibility.
    * @deprecated Omit this so core derives approval ownership from the request payload.

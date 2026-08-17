@@ -2856,11 +2856,11 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
   });
 
-  it("records heartbeat response tool outcomes", async () => {
+  it("accepts heartbeat response tool outcomes", async () => {
     const bridge = createBridgeWithToolResult(
       HEARTBEAT_RESPONSE_TOOL_NAME,
-      textToolResult("Recorded.", {
-        status: "recorded",
+      textToolResult("Accepted.", {
+        status: "accepted",
         outcome: "needs_attention",
         notify: true,
         summary: "Build is blocked.",
@@ -2878,7 +2878,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: {},
     });
 
-    expect(result).toEqual(expectInputText("Recorded."));
+    expect(result).toEqual(expectInputText("Accepted."));
     expect(bridge.telemetry.heartbeatToolResponse).toEqual({
       outcome: "needs_attention",
       notify: true,

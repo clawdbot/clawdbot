@@ -17,6 +17,9 @@ import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { registerSignalExitBarrier } from "./signal-exit-barrier.js";
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+const PREFIXED_TLS_FINGERPRINT = `sha256:${TLS_FINGERPRINT.toUpperCase()}`;
+
 type RunMainModule = typeof import("./run-main.js");
 
 let runCli: RunMainModule["runCli"];
@@ -2835,7 +2838,7 @@ describe("runCli exit behavior", () => {
         "direct-token",
         "--password=direct-password",
         "--tls-fingerprint",
-        "sha256:direct",
+        PREFIXED_TLS_FINGERPRINT,
         "--deliver",
         "--message",
         "continue here",
@@ -2849,7 +2852,7 @@ describe("runCli exit behavior", () => {
         "--password",
         "direct-password",
         "--tls-fingerprint",
-        "sha256:direct",
+        PREFIXED_TLS_FINGERPRINT,
         "https://gateway.example/dashboard/main/movies-a1166b81",
         "--deliver",
         "--message",
@@ -2861,7 +2864,7 @@ describe("runCli exit behavior", () => {
       args: [
         "--token=direct-token",
         "--password=direct-password",
-        "--tls-fingerprint=sha256:direct",
+        `--tls-fingerprint=${PREFIXED_TLS_FINGERPRINT}`,
         "--message=continue here",
         "https://gateway.example/dashboard/main/movies-a1166b81",
         "--deliver",
@@ -2880,7 +2883,7 @@ describe("runCli exit behavior", () => {
     expect(runTuiCliActionMock).toHaveBeenCalledWith(target, {
       token: "direct-token",
       password: "direct-password",
-      tlsFingerprint: "sha256:direct",
+      tlsFingerprint: PREFIXED_TLS_FINGERPRINT,
       deliver: true,
       message: "continue here",
     });
@@ -3607,7 +3610,7 @@ describe("runCli exit behavior", () => {
         remote: {
           url: "wss://gateway.example/ws",
           token: "missing-inference-remote-auth",
-          tlsFingerprint: "sha256:remote",
+          tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
         },
       },
     };
@@ -3629,7 +3632,7 @@ describe("runCli exit behavior", () => {
       config: sourceConfig,
       gatewayUrl: "wss://gateway.example/ws",
       token: "missing-inference-remote-auth",
-      tlsFingerprint: "sha256:remote",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
     expect(runTuiMock).not.toHaveBeenCalled();
   });
@@ -3721,7 +3724,7 @@ describe("runCli exit behavior", () => {
     loadGatewayTlsRuntimeMock.mockResolvedValueOnce({
       enabled: true,
       required: true,
-      fingerprintSha256: "sha256:local-self-signed-fingerprint",
+      fingerprintSha256: TLS_FINGERPRINT,
     });
 
     await runBareCli();
@@ -3729,12 +3732,12 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "wss://127.0.0.1:18789",
       token: "configured-token",
-      tlsFingerprint: "sha256:local-self-signed-fingerprint",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
     expectBoundTui({
       url: "wss://127.0.0.1:18789",
       token: "configured-token",
-      tlsFingerprint: "sha256:local-self-signed-fingerprint",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
   });
 
@@ -4154,7 +4157,7 @@ describe("runCli exit behavior", () => {
         remote: {
           url: "wss://gateway.example.com:18789",
           token: "tls-remote-auth",
-          tlsFingerprint: "sha256:11:22:33:44",
+          tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
         },
       },
     });
@@ -4164,12 +4167,12 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "wss://gateway.example.com:18789",
       token: "tls-remote-auth",
-      tlsFingerprint: "sha256:11:22:33:44",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
     expectBoundTui({
       url: "wss://gateway.example.com:18789",
       token: "tls-remote-auth",
-      tlsFingerprint: "sha256:11:22:33:44",
+      tlsFingerprint: TLS_FINGERPRINT,
     });
   });
 

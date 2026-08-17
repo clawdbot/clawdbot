@@ -25,6 +25,7 @@ import {
   createSessionListEntryFilter,
   invalidateSessionSharingSnapshot,
 } from "../session-sharing.js";
+import { createControlUiHandlers } from "./control-ui.js";
 import { sessionReadHandlers } from "./sessions-read.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -208,6 +209,47 @@ describe("session sharing handlers", () => {
       const visible = await listFor(admin);
       expect(visible?.sessions?.some((session) => session.key === incognitoKey)).toBe(true);
       expect(visible?.path).not.toBe(before?.path);
+    });
+  });
+
+  it("never previews sessions hidden from sessions.list", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:dashboard:incognito-preview";
+      await upsertSessionEntryCore(
+        {
+          agentId: "main",
+          sessionKey,
+          storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+        },
+        {
+          sessionId: "session-incognito-preview",
+          updatedAt: 2,
+          incognito: true,
+          visibility: "shared",
+          createdActor: { type: "human", id: "owner@example.com" },
+        },
+      );
+      const previewFor = async (client: GatewayClient) => {
+        const responses: Parameters<RespondFn>[] = [];
+        await createControlUiHandlers()["controlUi.sessionPreview"]?.({
+          params: { sessionKey },
+          client,
+          context: context(vi.fn()),
+          respond: (...response: Parameters<RespondFn>) => responses.push(response),
+        } as never);
+        return responses[0]?.[1];
+      };
+
+      expect(await previewFor(identifiedClient("viewer@example.com"))).toEqual({
+        status: "unavailable",
+      });
+      const admin = soloClient();
+      admin.connect.scopes = ["operator.admin"];
+      expect(await previewFor(admin)).toMatchObject({
+        status: "ok",
+        sessionKey,
+        agentId: "main",
+      });
     });
   });
 

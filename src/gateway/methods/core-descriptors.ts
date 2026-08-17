@@ -392,6 +392,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   ["controlUi.sessionPullRequests.subscribe", "control-ui", "operator.read", "2026.7"],
+  ["controlUi.sessionPreview", "control-ui", "operator.read", "2026.8"],
   [
     "gateway.suspend.prepare",
     "suspend",

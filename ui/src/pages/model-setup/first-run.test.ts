@@ -164,6 +164,99 @@ describe("model setup first-run redirect", () => {
     ).toEqual(result);
   });
 
+  it("retries one transient detection failure without duplicating either attempt", async () => {
+    const result = {
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/workspace",
+      setupComplete: false,
+    };
+    let rejectFirst!: (error: Error) => void;
+    const request = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectFirst = reject;
+          }),
+      )
+      .mockResolvedValueOnce(result);
+    const client = { request } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const snapshot = {
+      phase: "connected" as const,
+      client,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.setup.detect"] },
+      },
+    };
+    const replace = vi.fn();
+    const context = {
+      gateway: {
+        snapshot,
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
+      replace,
+    } as unknown as ApplicationContext<RouteId>;
+
+    await startRedirect(context);
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    expect(request).toHaveBeenCalledOnce();
+
+    rejectFirst(new Error("temporary gateway failure"));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+  });
+
+  it("stops after the same connection rejects detection twice", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const client = { request } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const snapshot = {
+      phase: "connected" as const,
+      client,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.setup.detect"] },
+      },
+    };
+    const context = {
+      gateway: {
+        snapshot,
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
+      replace: vi.fn(),
+    } as unknown as ApplicationContext<RouteId>;
+
+    await startRedirect(context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("does not redirect after the operator leaves the default landing", async () => {
     const result = {
       candidates: [],

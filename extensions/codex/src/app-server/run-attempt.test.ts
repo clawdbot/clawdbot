@@ -4194,14 +4194,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
-  it("applies stored session permissions to resumed harness turns", async () => {
+  it("applies the session permission mode and root to resumed harness turns", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
+    const nestedCwd = path.join(workspaceDir, "packages", "app");
+    await fs.mkdir(nestedCwd, { recursive: true });
+    await writeExistingBinding(sessionFile, workspaceDir);
     const harness = createResumeHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const params = createParams(sessionFile, workspaceDir);
+    params.cwd = nestedCwd;
+    params.permissionMode = "full";
+    params.sessionRoot = workspaceDir;
+    const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "guardian" } },
     });
     await harness.waitForMethod("turn/start");
@@ -4211,8 +4214,12 @@ describe("runCodexAppServerAttempt", () => {
       ?.params as Record<string, unknown> | undefined;
     const turnParams = harness.requests.find((request) => request.method === "turn/start")
       ?.params as Record<string, unknown> | undefined;
+    expect(resumeParams?.cwd).toBe(nestedCwd);
+    expect(resumeParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
     expect(resumeParams?.approvalPolicy).toBe("never");
     expect(resumeParams?.sandbox).toBe("danger-full-access");
+    expect(turnParams?.cwd).toBe(nestedCwd);
+    expect(turnParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
     expect(turnParams?.approvalPolicy).toBe("never");
     expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });

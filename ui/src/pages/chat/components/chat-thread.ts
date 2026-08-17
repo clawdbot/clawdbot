@@ -1,11 +1,18 @@
 // Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
+import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
+import {
+  markdownSessionHref,
+  markdownSessionLinkFromEvent,
+  markdownSessionLinkFromKeyboardEvent,
+} from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
@@ -118,6 +125,16 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
+        const sessionTarget =
+          markdownSessionLinkFromKeyboardEvent(event) ??
+          (event.key === "Enter"
+            ? markdownSessionHref(event, sessionRefFromPath, props.basePath)
+            : null);
+        if (sessionTarget) {
+          event.preventDefault();
+          props.onOpenSessionLink?.(sessionTarget);
+          return;
+        }
         props.onHistoryIntent?.(event);
       }}
       @touchstart=${props.onHistoryIntent
@@ -128,11 +145,19 @@ function renderTranscriptShell(
         : null}
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
-      @click=${(event: Event) => {
+      @click=${(event: MouseEvent) => {
         handleMarkdownCodeBlockCopy(event);
         const target = markdownFileLinkFromEvent(event);
         if (target) {
           props.onOpenWorkspaceFile?.(target);
+          return;
+        }
+        const sessionTarget =
+          markdownSessionLinkFromEvent(event) ??
+          markdownSessionHref(event, sessionRefFromPath, props.basePath);
+        if (sessionTarget && shouldHandleNavigationClick(event)) {
+          event.preventDefault();
+          props.onOpenSessionLink?.(sessionTarget);
         }
       }}
       @contextmenu=${(event: MouseEvent) => handleTranscriptContextMenu(event, props)}

@@ -211,6 +211,7 @@ export function projectChatTranscript(
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
+    guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
     stream: displayStream,
     streamStartedAt: props.streamStartedAt,

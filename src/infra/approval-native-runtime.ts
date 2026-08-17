@@ -25,7 +25,6 @@ import {
   type ExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntimeAdapter,
 } from "./exec-approval-channel-runtime.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
 
@@ -192,9 +191,7 @@ export function createChannelNativeApprovalRuntime<
   >,
 ): ExecApprovalChannelRuntime<TRequest, TResolved> {
   const nowMs = adapter.nowMs ?? Date.now;
-  const handledEventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(
-    adapter.eventKinds ?? ["exec"],
-  );
+  const handledEventKinds = new Set<ChannelApprovalKind>(adapter.eventKinds ?? ["exec"]);
   const gatewayRuntime = getGatewayNativeApprovalRuntime();
   const createRouteReporter =
     gatewayRuntime?.routeCoordinator.createReporter ?? createApprovalNativeRouteReporter;

@@ -1033,6 +1033,19 @@ describe("resolveModel", () => {
   });
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
+    const metadataSnapshot = { plugins: [] } as never;
+    const preparedModelRuntime = {
+      agentDir: "/tmp/agent",
+      activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
+      config: {},
+      authModes: {},
+      metadataSnapshot,
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+    } satisfies PreparedModelRuntimeSnapshot;
     resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
       provider: "google",
       id: "gemini-3.1-pro-preview",
@@ -1053,6 +1066,7 @@ describe("resolveModel", () => {
       undefined,
       {
         allowBundledStaticCatalogFallback: true,
+        preparedModelRuntime,
         runtimeHooks: createRuntimeHooks(),
         skipAgentDiscovery: true,
       },
@@ -1073,12 +1087,14 @@ describe("resolveModel", () => {
       cfg: undefined,
       workspaceDir: undefined,
       includeRuntimeDiscovery: true,
+      metadataSnapshot,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "google",
       modelId: "gemini-3.1-pro-preview",
       cfg: undefined,
       workspaceDir: undefined,
+      metadataSnapshot,
     });
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();

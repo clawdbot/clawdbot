@@ -150,9 +150,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const coreTools = createCoreCodingTools({
     codingRoot: params.cwd,
+    containmentRoot: params.cwd,
     includeBaseCodingTools: true,
     includeShellTools: true,
     workspaceOnly: false,
+    readOnly: false,
     modelContextWindowTokens: model.contextWindow,
     imageSanitization: {},
     applyPatchEnabled: isApplyPatchAllowedForModel({

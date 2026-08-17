@@ -55,6 +55,19 @@ describe("tool display details", () => {
     expect(formatToolDetail(display)).toBe("path /tmp/screenshot.png, prompt Inspect the error");
   });
 
+  it("keeps sessions_yield private context out of tool status", () => {
+    const display = resolveToolDisplay({
+      name: "sessions_yield",
+      args: {
+        message: "private resume context",
+        acknowledgment: "Public waiting status",
+      },
+    });
+
+    expect(formatToolSummary(display)).toBe("⏸️ Yield");
+    expect(formatToolDetail(display)).toBeUndefined();
+  });
+
   it("puts the camera PTZ operation before its node and device", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

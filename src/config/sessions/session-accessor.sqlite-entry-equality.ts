@@ -1,5 +1,10 @@
 import type { SessionEntry } from "./types.js";
 
+type SqliteLifecycleTargetSnapshot = {
+  primary: { entry: SessionEntry; key: string } | undefined;
+  rows: Array<{ entry: SessionEntry; sessionKey: string }>;
+};
+
 export function sqliteSessionEntriesEqual(
   left: SessionEntry | undefined,
   right: SessionEntry | undefined,
@@ -33,5 +38,16 @@ export function sqliteSessionSnapshotRowsEqual(
         row.sessionKey === right[index]?.sessionKey &&
         sqliteSessionEntriesEqual(row.entry, right[index]?.entry),
     )
+  );
+}
+
+export function sqliteLifecycleTargetSnapshotsEqual(
+  expected: SqliteLifecycleTargetSnapshot,
+  current: SqliteLifecycleTargetSnapshot,
+): boolean {
+  return (
+    expected.primary?.key === current.primary?.key &&
+    sqliteSessionEntriesEqual(expected.primary?.entry, current.primary?.entry) &&
+    sqliteSessionSnapshotRowsEqual(expected.rows, current.rows)
   );
 }

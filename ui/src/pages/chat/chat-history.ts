@@ -1,7 +1,4 @@
-import {
-  readSessionMessageIdentity,
-  readSessionMessageSequence,
-} from "@openclaw/gateway-client/browser";
+import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -70,17 +67,25 @@ import {
 } from "./session-message-cache.ts";
 import { retirePersistedSteeredChips } from "./steer-lifecycle.ts";
 import {
+  latestPersistedSteerBoundary,
+  markChatStreamAfterBoundary,
+  resolveCumulativeAssistantTail,
+} from "./stream-causal-boundary.ts";
+import {
   clearToolStreamSegments,
   currentLiveToolCallIds,
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
   maybeResetToolStream,
-  persistedCurrentToolStreamIds,
-  prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
+import {
+  pruneHistoryReplacedStreamSegments,
+  prunePersistedToolStreamMessages,
+} from "./stream-segment-pruning.ts";
 import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
+import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
 import { handleAgentEvent, normalizePlanSnapshot, type PlanStatus } from "./tool-stream.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
@@ -242,7 +247,6 @@ export function materializeVisibleAssistantStreamMessages(
     requirePersistedTool?: boolean;
     replacementMessages?: unknown[];
     persistCommentary?: boolean;
-    keyedStartIndex?: number;
   } = {},
 ): unknown[] {
   return materializeVisibleStreamState(messages, state, {
@@ -328,79 +332,7 @@ function resolveInFlightAssistantTail(
   ) {
     return null;
   }
-
-  // A steered user turn can follow an assistant from the still-active run.
-  // Persisted run identity, not the latest user boundary, owns that prefix.
-  const ownedPrefixIndex = messages.findIndex((message) => {
-    const identity = readSessionMessageIdentity(message);
-    const persistedText = identity?.runId === runId ? extractText(message) : null;
-    return (
-      identity?.role === "assistant" &&
-      Boolean(
-        persistedText &&
-        (bufferedText.startsWith(persistedText) || persistedText.startsWith(bufferedText)),
-      )
-    );
-  });
-  let turnStart = ownedPrefixIndex === -1 ? 0 : ownedPrefixIndex;
-  if (ownedPrefixIndex === -1) {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (
-        message &&
-        typeof message === "object" &&
-        normalizeLowercaseStringOrEmpty((message as Record<string, unknown>).role) === "user"
-      ) {
-        turnStart = index + 1;
-        break;
-      }
-    }
-  }
-
-  let persistedPrefixLength = 0;
-  for (let index = turnStart; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const identity = readSessionMessageIdentity(message);
-    if (identity?.role !== "assistant" || (identity.runId && identity.runId !== runId)) {
-      continue;
-    }
-
-    const persistedText = extractText(message);
-    if (!persistedText) {
-      continue;
-    }
-    // One tool-using turn may persist several assistant segments; the Gateway
-    // buffer includes them all, so matching only its newest row duplicates text.
-    const remainingText = bufferedText.slice(persistedPrefixLength);
-    if (remainingText.startsWith(persistedText)) {
-      persistedPrefixLength += persistedText.length;
-      continue;
-    }
-    // History can persist past a live delta while its request is pending.
-    // That older cumulative buffer is already rendered by the persisted row.
-    if (persistedText.startsWith(remainingText)) {
-      return null;
-    }
-    const whitespace = /^\s+/u.exec(remainingText)?.[0];
-    if (persistedPrefixLength > 0 && whitespace) {
-      const remainingAfterWhitespace = remainingText.slice(whitespace.length);
-      if (remainingAfterWhitespace.startsWith(persistedText)) {
-        persistedPrefixLength += whitespace.length + persistedText.length;
-        continue;
-      }
-      if (persistedText.startsWith(remainingAfterWhitespace)) {
-        return null;
-      }
-    }
-    if (persistedPrefixLength > 0) {
-      break;
-    }
-  }
-
-  const tail = bufferedText.slice(persistedPrefixLength);
+  const tail = resolveCumulativeAssistantTail(messages, bufferedText, runId);
   return tail && !isHiddenAssistantStreamText(tail) ? tail : null;
 }
 
@@ -1631,7 +1563,7 @@ async function loadChatHistoryUncached(
     state.chatQueueModeOverride = res.sessionInfo?.queueMode;
     state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
     const planStatusBeforeStreamReset = state.planStatus ?? null;
-    const activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
+    let activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
@@ -1645,6 +1577,9 @@ async function loadChatHistoryUncached(
         state,
         streamReconciliation,
       );
+      if (pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation)) {
+        activeStreamBeforeReset = state.chatStream;
+      }
       const liveToolIds = currentLiveToolCallIds(state);
       if (state.chatRunId && (hasVisibleStream || liveToolIds.length > 0)) {
         state.chatRunStartup = { state: "activity", runId: state.chatRunId };
@@ -1761,6 +1696,14 @@ async function loadChatHistoryUncached(
       const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
       state.chatStream = tail;
       state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
+      const persistedBoundary = latestPersistedSteerBoundary(state.chatMessages, inFlightRunId);
+      if (tail && persistedBoundary) {
+        markChatStreamAfterBoundary(state, {
+          runId: inFlightRunId,
+          boundaryRunId: persistedBoundary.runId,
+          timestamp: state.chatStreamStartedAt,
+        });
+      }
       state.chatRunStartup = { state: "activity", runId: inFlightRunId };
       // Disconnect cleanup intentionally removes transient activity rows while
       // retaining the owned run. Replay fills that gap; per-identity sequence

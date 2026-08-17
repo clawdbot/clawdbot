@@ -362,11 +362,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return html`
       <openclaw-tooltip-provider>
         <openclaw-github-link-hovercard-provider .client=${gatewaySnapshot.client}>
-          ${gatewayUrlConfirmation}
-          <openclaw-app-shell
-            .runtime=${runtime}
-            .onboarding=${this.onboarding}
-          ></openclaw-app-shell>
+          <openclaw-session-link-hovercard-provider
+            .client=${gatewaySnapshot.client}
+            .context=${context}
+          >
+            ${gatewayUrlConfirmation}
+            <openclaw-app-shell
+              .runtime=${runtime}
+              .onboarding=${this.onboarding}
+            ></openclaw-app-shell>
+          </openclaw-session-link-hovercard-provider>
         </openclaw-github-link-hovercard-provider>
       </openclaw-tooltip-provider>
     `;

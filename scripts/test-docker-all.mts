@@ -149,21 +149,28 @@ const IS_MAIN = (() => {
 
 function dockerAllUsage() {
   return [
-    "Usage: node scripts/test-docker-all.mjs [--plan-json | --prepare-only=<manifest>]",
+    "Usage: node scripts/test-docker-all.mjs [--plan-json | --prepare-only=<manifest> | --prepare-plugin-registry]",
     "",
     "Options:",
-    "  --plan-json    Print the resolved Docker E2E plan as JSON and exit.",
-    "  --prepare-only Prepare one immutable candidate manifest and exit.",
-    "  -h, --help     Show this help.",
+    "  --plan-json              Print the resolved Docker E2E plan as JSON and exit.",
+    "  --prepare-only=<manifest> Prepare one immutable candidate manifest and exit.",
+    "  --prepare-plugin-registry Prepare only the selected lanes' plugin registry.",
+    "  -h, --help               Show this help.",
     "",
     "Lane selection and scheduler settings are configured with OPENCLAW_DOCKER_ALL_* env vars.",
   ].join("\n");
 }
 
 export function parseDockerAllCliArgs(argv: readonly string[]) {
-  const options: { help: boolean; planJson: boolean; prepareOnly?: string } = {
+  const options: {
+    help: boolean;
+    planJson: boolean;
+    prepareOnly?: string;
+    preparePluginRegistry: boolean;
+  } = {
     help: false,
     planJson: false,
+    preparePluginRegistry: false,
   };
   for (const arg of argv) {
     if (arg === "--plan-json") {
@@ -173,19 +180,26 @@ export function parseDockerAllCliArgs(argv: readonly string[]) {
       if (!options.prepareOnly) {
         throw new Error(`--prepare-only requires a manifest path\n\n${dockerAllUsage()}`);
       }
+    } else if (arg === "--prepare-plugin-registry") {
+      options.preparePluginRegistry = true;
     } else if (arg === "--help" || arg === "-h") {
       options.help = true;
     } else {
       throw new Error(`unknown argument: ${arg}\n\n${dockerAllUsage()}`);
     }
   }
-  assert(!(options.planJson && options.prepareOnly), "conflicting plan/prep options");
+  assert(
+    [options.planJson, Boolean(options.prepareOnly), options.preparePluginRegistry].filter(Boolean)
+      .length <= 1,
+    "conflicting plan/prep options",
+  );
   return options;
 }
 
 let cliOptions: ReturnType<typeof parseDockerAllCliArgs> = {
   help: false,
   planJson: false,
+  preparePluginRegistry: false,
 };
 if (IS_MAIN) {
   try {
@@ -1207,7 +1221,7 @@ async function prepareOpenClawPackage(baseEnv: NodeJS.ProcessEnv, logDir: string
   console.log(`==> OpenClaw package: ${baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ}`);
 }
 
-function preparePrepublishPluginRegistry(
+export function preparePrepublishPluginRegistry(
   plan: DockerCandidatePlan,
   logDir: string,
   sourceSha: string,
@@ -1834,6 +1848,19 @@ async function main() {
   const omittedUnsupportedLanes =
     omittedUnsupportedLaneNames.length > 0 ? omittedUnsupportedLaneNames : undefined;
 
+  if (cliOptions.preparePluginRegistry) {
+    if (!plan.needs.prepublishPluginRegistry) {
+      throw new Error("selected Docker lanes do not require a prepublish plugin registry");
+    }
+    const registry = preparePrepublishPluginRegistry(
+      plan,
+      logDir,
+      gitOutput(ROOT_DIR, ["rev-parse", "HEAD"]),
+      rootPackageVersion(ROOT_DIR),
+    );
+    process.stdout.write(`${JSON.stringify(registry)}\n`);
+    return;
+  }
   if (planJson) {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
     return;
