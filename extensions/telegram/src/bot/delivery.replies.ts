@@ -24,6 +24,7 @@ import {
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { createDirectAcceptedFencedMediaWarnLatch } from "openclaw/plugin-sdk/reply-payload";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -186,6 +187,8 @@ async function deliverTextReply(params: {
   recordMessageId: (messageId: number) => void;
   quoteOnlyOnFirstChunk?: boolean;
   onPlatformSendDispatch?: () => Promise<void>;
+  /** After each accepted Bot API text chunk (#41966 fenced MEDIA diagnostic). */
+  onAcceptedVisibleText?: (plainText: string) => void;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.text));
@@ -238,6 +241,7 @@ async function deliverTextReply(params: {
               firstDeliveredMessageId ??= messageId;
               params.recordMessageId(messageId);
               await params.progress.promptContext?.accept({ messageId, text: plainText });
+              params.onAcceptedVisibleText?.(plainText);
             });
           },
         },
@@ -291,6 +295,7 @@ async function deliverMediaReply(params: {
   recordMessageId: (messageId: number) => void;
   textMode?: "html";
   onPlatformSendDispatch?: () => Promise<void>;
+  onAcceptedVisibleText?: (plainText: string) => void;
 }): Promise<{ firstDeliveredMessageId?: number; visibleFallbackText?: string }> {
   let firstDeliveredMessageId: number | undefined;
   let visibleFallbackText: string | undefined;
@@ -352,6 +357,10 @@ async function deliverMediaReply(params: {
     params.recordMessageId(message.message_id);
     await recordPromptContextMessage(message, delivery.deliveredCaption);
     markDelivered(params.progress);
+    // Caption-bearing accepted media send can retain fenced MEDIA identity (#41966).
+    if (options.plainCaption?.trim() && !delivery.captionRemoved) {
+      params.onAcceptedVisibleText?.(options.plainCaption);
+    }
   };
   const throwMediaPartial = (error: unknown): never => {
     throw mergeTelegramPartialDeliveryError(error, {
@@ -459,6 +468,7 @@ async function deliverMediaReply(params: {
           recordMessageId: params.recordMessageId,
           quoteOnlyOnFirstChunk: true,
           onPlatformSendDispatch: params.onPlatformSendDispatch,
+          onAcceptedVisibleText: params.onAcceptedVisibleText,
         });
 
       await params.onVoiceRecording?.();
@@ -555,6 +565,7 @@ async function deliverMediaReply(params: {
           progress: params.progress,
           recordMessageId: params.recordMessageId,
           onPlatformSendDispatch: params.onPlatformSendDispatch,
+          onAcceptedVisibleText: params.onAcceptedVisibleText,
         });
         if (followUpMessageId === undefined) {
           visibleFallbackText = firstDeliveredCaption ?? "";
@@ -875,6 +886,17 @@ export async function deliverReplies(params: {
     let contentForSentHook =
       reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
 
+    // #41966: Telegram Bot API direct path does not use deliverTextOrMediaReply.
+    // Latch fenced MEDIA diagnostics only after accepted visible Bot API sends.
+    const fencedMediaWarn = createDirectAcceptedFencedMediaWarnLatch({
+      payload: reply,
+      cfg: params.cfg,
+      surface: "telegram",
+    });
+    const onAcceptedVisibleText = (plainText: string) => {
+      fencedMediaWarn.afterAcceptedVisibleText(plainText);
+    };
+
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const replyMarkup = buildInlineKeyboard(
@@ -924,6 +946,7 @@ export async function deliverReplies(params: {
           progress,
           recordMessageId,
           onPlatformSendDispatch: params.onPlatformSendDispatch,
+          onAcceptedVisibleText,
         });
       } else if (mediaList.length > 0) {
         const mediaDelivery = await deliverMediaReply({
@@ -952,6 +975,7 @@ export async function deliverReplies(params: {
           progress,
           recordMessageId,
           onPlatformSendDispatch: params.onPlatformSendDispatch,
+          onAcceptedVisibleText,
           ...(params.textMode ? { textMode: params.textMode } : {}),
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;

@@ -171,7 +171,7 @@ export function resolveTextChunksWithFallback(text: string, chunks: readonly str
 }
 
 /** Latch fenced-MEDIA diagnostics to accepted visible direct-delivery text (#41966). */
-function createDirectAcceptedFencedMediaWarnLatch(params: {
+export function createDirectAcceptedFencedMediaWarnLatch(params: {
   payload: object;
   cfg?: unknown;
   surface?: string;
