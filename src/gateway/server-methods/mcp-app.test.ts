@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/mcp-ui-resource.js", () => ({
+  MCP_APP_VIEW_OPERATION_MIN_TIMEOUT_MS: 10 * 60_000,
   getMcpAppViewLease: mocks.getMcpAppViewLease,
   getMcpAppViewLeaseForSession: mocks.getMcpAppViewLeaseForSession,
   acquireMcpAppViewRequest: mocks.acquireMcpAppViewRequest,
