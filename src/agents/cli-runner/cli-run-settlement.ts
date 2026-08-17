@@ -254,7 +254,7 @@ export async function settlePreparedCliRun(params: {
  * and surfaced approval prompts — via the generic MCP loopback tool-call result (see
  * execute-tool-tracking.ts), mirroring the embedded runner's hasYieldContinuationEvidence.
  */
-export function hasCliYieldContinuationEvidence(output: CliOutput): boolean {
+function hasCliYieldContinuationEvidence(output: CliOutput): boolean {
   return (
     hasCommittedMessagingToolDeliveryEvidence(output) ||
     hasAcceptedSessionSpawn(output.acceptedSessionSpawns) ||

@@ -6,7 +6,9 @@ import {
   restoreCliRunnerTestDeps,
   setCliRunnerTestDeps,
 } from "../cli-runner.js";
-import { hasCliYieldContinuationEvidence } from "./cli-run-settlement.js";
+import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
+import { YIELD_DIAGNOSTIC_TEXT } from "../embedded-agent-runner/run/incomplete-turn-resolution.js";
+import { buildCliRunResult } from "./cli-run-settlement.js";
 
 describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
@@ -134,20 +136,48 @@ describe("isCliBindingFlushed", () => {
   });
 });
 
-describe("hasCliYieldContinuationEvidence", () => {
+describe("buildCliRunResult yield diagnostic", () => {
+  const context = buildPreparedCliRunContext();
+  const baseParams = {
+    context,
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+  };
   const baseOutput: CliOutput = { text: "" };
 
-  it("has no continuation evidence for a bare yielded output", () => {
-    expect(hasCliYieldContinuationEvidence(baseOutput)).toBe(false);
+  function buildResultPayloads(output: CliOutput) {
+    return buildCliRunResult({ ...baseParams, output }).payloads;
+  }
+
+  it("appends the diagnostic for a bare yielded output with no continuation evidence", () => {
+    expect(buildResultPayloads({ ...baseOutput, yielded: true })).toEqual([
+      { text: YIELD_DIAGNOSTIC_TEXT },
+    ]);
+  });
+
+  it("appends the diagnostic after narrated assistant text when there is no continuation evidence", () => {
+    // Regression: the narrated-text case is the one ClawSweeper flagged as untested —
+    // a yield with visible narrated output but no continuation evidence must still get
+    // the recovery warning appended after that text, not silently suppress it.
+    expect(
+      buildResultPayloads({ ...baseOutput, text: "I'll fix this now...", yielded: true }),
+    ).toEqual([{ text: "I'll fix this now..." }, { text: YIELD_DIAGNOSTIC_TEXT }]);
+  });
+
+  it("does not append the diagnostic when the turn did not yield", () => {
+    expect(buildResultPayloads({ ...baseOutput, text: "done" })).toEqual([{ text: "done" }]);
   });
 
   it("recognizes committed messaging delivery as continuation evidence", () => {
     expect(
-      hasCliYieldContinuationEvidence({
+      buildResultPayloads({
         ...baseOutput,
+        yielded: true,
         messagingToolSentTexts: ["done"],
       }),
-    ).toBe(true);
+    ).toBeUndefined();
   });
 
   it("recognizes an accepted subagent spawn as continuation evidence", () => {
@@ -155,77 +185,85 @@ describe("hasCliYieldContinuationEvidence", () => {
     // spawn (no messaging tool involved at all) must not show the no-continuation
     // diagnostic, since the spawn's completion will resume the session later.
     expect(
-      hasCliYieldContinuationEvidence({
+      buildResultPayloads({
         ...baseOutput,
+        yielded: true,
         acceptedSessionSpawns: [{ runId: "run-1", childSessionKey: "agent:main:sub-1" }],
       }),
-    ).toBe(true);
+    ).toBeUndefined();
   });
 
   it("does not count an empty accepted-spawns array as continuation evidence", () => {
     expect(
-      hasCliYieldContinuationEvidence({
+      buildResultPayloads({
         ...baseOutput,
+        yielded: true,
         acceptedSessionSpawns: [],
       }),
-    ).toBe(false);
+    ).toEqual([{ text: YIELD_DIAGNOSTIC_TEXT }]);
   });
 
   it("recognizes a successful cron add as continuation evidence", () => {
     expect(
-      hasCliYieldContinuationEvidence({
+      buildResultPayloads({
         ...baseOutput,
+        yielded: true,
         successfulCronAdds: 1,
       }),
-    ).toBe(true);
+    ).toBeUndefined();
   });
 
   it("does not count a zero cron-add count as continuation evidence", () => {
     expect(
-      hasCliYieldContinuationEvidence({
+      buildResultPayloads({
         ...baseOutput,
+        yielded: true,
         successfulCronAdds: 0,
       }),
-    ).toBe(false);
+    ).toEqual([{ text: YIELD_DIAGNOSTIC_TEXT }]);
   });
 
   it("recognizes an async-started tool as continuation evidence", () => {
     // Regression: ClawSweeper flagged that a CLI yield right after an async-start (no
     // messaging/spawn/cron involved) still showed the no-continuation diagnostic.
     expect(
-      hasCliYieldContinuationEvidence({
+      buildResultPayloads({
         ...baseOutput,
+        yielded: true,
         hadAsyncStartedTool: true,
       }),
-    ).toBe(true);
+    ).toBeUndefined();
   });
 
   it("does not count hadAsyncStartedTool=false as continuation evidence", () => {
     expect(
-      hasCliYieldContinuationEvidence({
+      buildResultPayloads({
         ...baseOutput,
+        yielded: true,
         hadAsyncStartedTool: false,
       }),
-    ).toBe(false);
+    ).toEqual([{ text: YIELD_DIAGNOSTIC_TEXT }]);
   });
 
   it("recognizes a surfaced approval prompt as continuation evidence", () => {
     // Regression: ClawSweeper flagged that a CLI yield right after an approval-pending or
     // approval-unavailable tool result still showed the no-continuation diagnostic.
     expect(
-      hasCliYieldContinuationEvidence({
+      buildResultPayloads({
         ...baseOutput,
+        yielded: true,
         hadPendingApprovalTool: true,
       }),
-    ).toBe(true);
+    ).toBeUndefined();
   });
 
   it("does not count hadPendingApprovalTool=false as continuation evidence", () => {
     expect(
-      hasCliYieldContinuationEvidence({
+      buildResultPayloads({
         ...baseOutput,
+        yielded: true,
         hadPendingApprovalTool: false,
       }),
-    ).toBe(false);
+    ).toEqual([{ text: YIELD_DIAGNOSTIC_TEXT }]);
   });
 });

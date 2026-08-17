@@ -5,7 +5,10 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
-import { TRUNCATED_REPLY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
+import {
+  TRUNCATED_REPLY_NOTICE_TEXT,
+  YIELD_DIAGNOSTIC_TEXT,
+} from "./incomplete-turn-resolution.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import {
   copyAttemptDeliveryState,
@@ -669,6 +672,41 @@ describe("terminal resolution", () => {
       return;
     }
     expect(resolved.result.payloads).toEqual([{ text: "Chart attached" }]);
+  });
+
+  it("appends the yield diagnostic after narrated assistant text with no continuation evidence", async () => {
+    // Regression: ClawSweeper flagged that only the empty-payload yield diagnostic case
+    // had direct coverage — a yield with visible narrated text ("I'll fix this now...")
+    // but no continuation evidence must still get the recovery warning appended after
+    // that text, not silently read as in-progress work that will never resume.
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "end_turn",
+      content: [{ type: "text", text: "I'll fix this now..." }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      yieldDetected: true,
+      assistantTexts: ["I'll fix this now..."],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        payloadsWithToolMedia: [{ text: "I'll fix this now..." }],
+      }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([
+      { text: "I'll fix this now..." },
+      { text: YIELD_DIAGNOSTIC_TEXT },
+    ]);
+    expect(resolved.result.meta.yielded).toBe(true);
   });
 
   it("still reports an incomplete turn when the output budget ends with no text", async () => {
