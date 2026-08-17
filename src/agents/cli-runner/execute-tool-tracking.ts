@@ -31,10 +31,12 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
 import {
+  didShellCronAddSucceed,
   isAsyncStartedToolResult,
   isCronAddAction,
   isPendingApprovalToolResult,
 } from "../embedded-agent-subscribe.handlers.tools.results.js";
+import { isExecToolName } from "../embedded-agent-subscribe.handlers.tools.start.js";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
@@ -468,7 +470,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           if (acceptedSpawn) {
             acceptedSessionSpawns.push(acceptedSpawn);
           }
-          if (isAutomationsToolName(call.toolName) && isCronAddAction(call.args)) {
+          if (
+            (isAutomationsToolName(call.toolName) && isCronAddAction(call.args)) ||
+            (isExecToolName(call.toolName) && didShellCronAddSucceed(call.args, call.result))
+          ) {
             successfulCronAdds += 1;
           }
           if (isAsyncStartedToolResult(call.result)) {
