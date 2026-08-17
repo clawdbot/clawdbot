@@ -208,16 +208,6 @@ async function readUsageStats(agentDir: string) {
   return ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
 }
 
-function expectFailureCount(
-  usageStats: Record<string, Record<string, unknown> | undefined>,
-  profileId: string,
-  reason: AuthProfileFailureReason,
-  expected: number,
-) {
-  const failureCounts = usageStats[profileId]?.failureCounts as Record<string, unknown> | undefined;
-  expect(failureCounts?.[reason]).toBe(expected);
-}
-
 async function writeMultiProfileAuthStore(
   agentDir: string,
   options?: { openAiProfileCount?: 2 | 3 },
@@ -550,7 +540,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
+  it("falls back after overloaded primary failure without poisoning profile health", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryOverloadedThenFallbackSuccess();
@@ -568,8 +558,8 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
 
       const usageStats = await readUsageStats(agentDir);
-      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expectFailureCount(usageStats, "openai:p1", "overloaded", 1);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p1"]?.failureCounts?.overloaded).toBeUndefined();
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
       expectOpenAiThenGroqAttemptOrder();
@@ -756,7 +746,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("persists overloaded cooldown across turns while still allowing one probe and fallback", async () => {
+  it("keeps overloaded failures provider-scoped across turns while continuing fallback", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryOverloadedThenFallbackSuccess();
@@ -787,14 +777,14 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expectOpenAiThenGroqAttemptOrder({ expectOpenAiAuthProfileId: "openai:p1" });
 
       const usageStats = await readUsageStats(agentDir);
-      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expectFailureCount(usageStats, "openai:p1", "overloaded", 2);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p1"]?.failureCounts?.overloaded).toBeUndefined();
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
-  it("keeps bare service-unavailable failures in the timeout lane without persisting cooldown", async () => {
+  it("classifies bare service-unavailable failures as overloaded without cooling the profile", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryErrorThenFallbackSuccess("LLM error: service unavailable");
@@ -807,7 +797,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       });
 
       expect(result.provider).toBe("groq");
-      expect(result.attempts[0]?.reason).toBe("timeout");
+      expect(result.attempts[0]?.reason).toBe("overloaded");
 
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();

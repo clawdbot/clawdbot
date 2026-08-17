@@ -89,8 +89,20 @@ describe("worker environment service", () => {
   it("owns and clears one periodic reconciliation timer", async () => {
     vi.useFakeTimers();
     const liveEvents = support.createLiveEvents();
-    const workerService = support.createService(support.createProvider(), { liveEvents });
+    const unsubscribeTurnClaimClosed = vi.fn();
+    const placementStore = {
+      readWorkerTurnClaim: vi.fn(),
+      validateWorkerTurn: vi.fn(() => false),
+      isWorkerTurnToolAuthorized: vi.fn(() => false),
+      updateAckCursors: vi.fn(),
+      registerTurnClaimClosedHandler: vi.fn(() => unsubscribeTurnClaimClosed),
+    };
+    const workerService = support.createService(support.createProvider(), {
+      liveEvents,
+      placementStore,
+    });
 
+    expect(placementStore.registerTurnClaimClosedHandler).toHaveBeenCalledOnce();
     workerService.start();
     workerService.start();
     expect(liveEvents.start).toHaveBeenCalledOnce();
@@ -98,6 +110,7 @@ describe("worker environment service", () => {
     await workerService.stop();
 
     expect(liveEvents.clear).toHaveBeenCalledTimes(2);
+    expect(unsubscribeTurnClaimClosed).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 

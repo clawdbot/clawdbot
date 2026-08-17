@@ -58,7 +58,9 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManagerCore: getMemorySearchManager,
 }));
 
-vi.mock("./doctor.memory-core-runtime.js", () => ({
+import { createDoctorHandlers } from "./doctor.js";
+
+const doctorHandlers = createDoctorHandlers({
   dedupeDreamDiaryEntries,
   loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
@@ -66,9 +68,7 @@ vi.mock("./doctor.memory-core-runtime.js", () => ({
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,
-}));
-
-import { doctorHandlers } from "./doctor.js";
+});
 
 const makeRuntimeContext = () => ({ getRuntimeConfig: () => getRuntimeConfig() });
 

@@ -99,10 +99,7 @@ describe("worker turn launcher reclaimed placement", () => {
           }),
         );
         createWorkerSessionPlacementGate(placements).updateAckCursors({
-          sessionId: SESSION_ID,
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runId,
+          claim: request.turnClaim,
           transcriptSeq: 2,
           liveSeq: 1,
         });
@@ -463,6 +460,40 @@ describe("worker turn launcher reclaimed placement", () => {
         runLocal,
       ),
     ).rejects.toThrow("Worker turn rejected in placement requested");
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+  });
+
+  it("projects a failed placement cause with current-build recovery guidance", async () => {
+    placements.startDispatch({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+    });
+    placements.fail({
+      sessionId: SESSION_ID,
+      recoveryError: "cloud worker disappeared: environment state destroyed",
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-failed",
+        },
+        turn("run-failed"),
+        runLocal,
+      ),
+    ).rejects.toThrow(
+      "Worker turn rejected in placement failed: cloud worker disappeared: environment state destroyed; redispatch the session so its worker can bootstrap the current build before retrying.",
+    );
     expect(runLocal).not.toHaveBeenCalled();
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });

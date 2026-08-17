@@ -28,6 +28,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
+import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import {
   recordSessionCreated,
   recordSubagentSpawned,
@@ -492,7 +493,7 @@ export async function spawnAcpDirect(
     async initialize() {
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
-        actor: { type: "agent", id: requesterInternalKey },
+        actor: { type: "agent", id: requesterAgentId },
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch
@@ -604,6 +605,13 @@ export async function spawnAcpDirect(
           ...(gatewayAttachments ? { attachments: gatewayAttachments } : {}),
         },
         timeoutMs: 10_000,
+      });
+      recordSessionParticipantBestEffort({
+        actor: { type: "agent", id: requesterAgentId },
+        agentId: targetAgentId,
+        sessionKey,
+        source: "agent",
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
       });
       const runId = readGatewayRunId(response) ?? childIdem;
       if (state.parentRelay && runId !== childIdem && parentSessionKey) {

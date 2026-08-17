@@ -240,6 +240,10 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | `systemPromptFileArg`    | `--append-system-prompt-file`                                                                                                                                                                                 |
 | `systemPromptMode`       | `append`                                                                                                                                                                                                      |
 
+On Claude Code 2.1.98 or newer, the bundled backend adds
+`--exclude-dynamic-system-prompt-sections` after its bounded Gateway-startup
+version probe. Older, unknown, or failed probes keep the established argv.
+
 The bundled Google plugin registers for `google-gemini-cli`:
 
 | Key                       | Value                                                                                  |

@@ -10,8 +10,9 @@ import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
+import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
 import { createDockPanelLayout } from "../dock-panel-layout.ts";
 import {
@@ -29,6 +30,7 @@ import type {
   PendingDesktopConnection,
 } from "./desktop-panel-connection.ts";
 import { desktopCredentialRequirement } from "./desktop-panel-credentials.ts";
+import { DesktopPanelEmbeddedController } from "./desktop-panel-embedded-controller.ts";
 import { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { desktopPanelLauncherStyles } from "./desktop-panel-launcher-styles.ts";
 import { type DesktopPanelState, renderDesktopPanelRecovery } from "./desktop-panel-state.ts";
@@ -60,6 +62,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) documentSource: string | null = null;
   @property({ attribute: false }) documentSession: string | null = null;
   @property({ type: Boolean }) documentControl = false;
+  /** Hosted by the chat side panel, which owns visibility and geometry. */
+  @property({ type: Boolean }) embedded = false;
   @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
 
   /** Browser tests replace the transport without opening a real RFB socket. */
@@ -87,6 +91,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private launchOperationId = 0;
   private controlTakeoverRecoveryUsed = false;
   private documentSourceResolved = false;
+  private readonly embeddedPanel = new DesktopPanelEmbeddedController(this);
   private readonly mobileKeyboard = new DesktopMobileKeyboard({
     connection: () => this.connection,
     controlling: () => this.controlling,
@@ -109,11 +114,14 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     desktopPanelLauncherStyles,
     desktopPanelStyles,
     desktopDocumentStyles,
+    scrollbarShadowStyles,
   ];
 
   override connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    if (!this.embedded) {
+      window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    }
     this.dockLayout.setSuppressed(this.suppressed);
     if (this.documentMode && this.available) {
       void this.refreshEnvironments();
@@ -123,6 +131,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   override disconnectedCallback(): void {
+    this.embeddedPanel.clearRefresh();
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.disconnectConnection();
     this.credentials = undefined;
@@ -130,6 +139,13 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   override updated(changed: Map<string, unknown>): void {
+    if (changed.has("embedded")) {
+      if (this.embedded) {
+        window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      } else {
+        window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      }
+    }
     if (changed.has("suppressed")) {
       const restored = this.dockLayout.setSuppressed(this.suppressed);
       if (this.suppressed) {
@@ -154,6 +170,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       } else {
         void this.refreshEnvironments();
       }
+    } else if (this.embedded && gatewayAvailabilityChanged) {
+      this.embeddedPanel.handleAvailabilityChange();
     } else if (gatewayAvailabilityChanged) {
       if (!this.available && this.dockLayout.open) {
         this.dockLayout.hideWithoutPersisting();
@@ -173,6 +191,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as DesktopPanelToggleDetail)
         : null;
+    if (this.embeddedPanel.handleToggle(detail)) {
+      return;
+    }
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dockLayout.setDock(detail.dock, false);
     }
@@ -199,7 +220,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.dockLayout.setOpen(false);
   }
 
-  private returnToPicker(): void {
+  returnToPicker(): void {
     this.disconnectConnection();
     this.clearLaunchState();
     this.state = "picker";
@@ -227,7 +248,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.launchErrorText = null;
   }
 
-  private async refreshEnvironments(expectedOperationId?: number): Promise<boolean> {
+  async refreshEnvironments(expectedOperationId?: number): Promise<boolean> {
     const client = this.client;
     if (!client || !this.available) {
       return false;
@@ -315,7 +336,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     void this.refreshEnvironments();
   }
 
-  private async connectRequestedEnvironment(environmentId: string): Promise<void> {
+  async connectRequestedEnvironment(environmentId: string): Promise<void> {
     this.returnToPicker();
     this.environmentId = environmentId;
     this.state = "connecting";
@@ -456,7 +477,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         onSecurityFailure: (detail) => {
           if (pending.operationId === this.operationId) {
             this.errorText = t("desktop.errors.securityFailed", {
-              reason: detail.reason ?? t("desktop.unknownReason"),
+              reason: formatUiExternalText(detail.reason, t("desktop.unknownReason")),
             });
           }
         },
@@ -525,7 +546,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       };
       this.state = "credentials";
       this.errorText = t("desktop.errors.securityFailed", {
-        reason: reason || t("desktop.unknownReason"),
+        reason: formatUiExternalText(reason, t("desktop.unknownReason")),
       });
       return;
     }
@@ -544,7 +565,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     this.state = "disconnected";
     this.disconnectedReason =
-      reason || (code ? t("desktop.closeCode", { code: String(code) }) : null);
+      formatUiExternalText(reason, code ? t("desktop.closeCode", { code: String(code) }) : "") ||
+      null;
   }
 
   private async launchApp(app: DesktopAppId): Promise<void> {
@@ -659,24 +681,32 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         onClose: () => this.onDocumentClose?.(),
       });
     }
-    if (!this.dockLayout.open) {
+    if (!this.embedded && !this.dockLayout.open) {
       return nothing;
     }
     const dock = this.dockLayout.dock;
-    const style = this.fullscreenMode.active
+    const style = this.embedded
       ? ""
-      : dock === "bottom"
-        ? `height:${this.dockLayout.height}px`
-        : `width:${this.dockLayout.width}px`;
+      : this.fullscreenMode.active
+        ? ""
+        : dock === "bottom"
+          ? `height:${this.dockLayout.height}px`
+          : `width:${this.dockLayout.width}px`;
     return html`
-      <section class="bp bp--${dock}" style=${style} aria-label=${t("desktop.title")}>
-        ${this.dockLayout.renderResizer("bp", t("desktop.resize"))}
-        ${renderDesktopPanelHeader({
-          dock,
-          fullscreenControl: this.fullscreenMode.renderButton(),
-          onDock: (nextDock) => this.dockLayout.setDock(nextDock),
-          onClose: () => this.closePanel(),
-        })}
+      <section
+        class="bp bp--${this.embedded ? "embedded" : dock}"
+        style=${style}
+        aria-label=${t("desktop.title")}
+      >
+        ${this.embedded ? nothing : this.dockLayout.renderResizer("bp", t("desktop.resize"))}
+        ${this.embedded
+          ? nothing
+          : renderDesktopPanelHeader({
+              dock,
+              fullscreenControl: this.fullscreenMode.renderButton(),
+              onDock: (nextDock) => this.dockLayout.setDock(nextDock),
+              onClose: () => this.closePanel(),
+            })}
         <div class="desktop-content">
           ${notice}
           ${this.state === "picker"

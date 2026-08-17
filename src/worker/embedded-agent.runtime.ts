@@ -27,7 +27,7 @@ import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
+import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
@@ -92,6 +92,7 @@ type RunWorkerEmbeddedTurnParams = {
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerToolName[];
   browser?: WorkerBrowserLaunchDescriptor;
+  browserRuntime?: WorkerBrowserRuntime;
   signal?: AbortSignal;
 };
 
@@ -149,9 +150,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const coreTools = createCoreCodingTools({
     codingRoot: params.cwd,
+    containmentRoot: params.cwd,
     includeBaseCodingTools: true,
     includeShellTools: true,
     workspaceOnly: false,
+    readOnly: false,
     modelContextWindowTokens: model.contextWindow,
     imageSanitization: {},
     applyPatchEnabled: isApplyPatchAllowedForModel({
@@ -182,6 +185,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         sessionKey: params.sessionKey,
         stateDir: params.stateDir,
         workspaceDir: params.cwd,
+        ...(params.browserRuntime ? { runtime: params.browserRuntime } : {}),
       })
     : undefined;
   const { session } = await (async () => {

@@ -1,12 +1,15 @@
+import type { WorkerTunnelStatus } from "@openclaw/gateway-protocol";
+import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-reconcile.js";
 
-export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
+export type { WorkerTunnelStatus };
 
 export class WorkerTunnelOwnerDisconnectedError extends Error {
   constructor() {
@@ -23,6 +26,15 @@ export class WorkerRunnerUnavailableError extends Error {
       "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
     );
     this.name = "WorkerRunnerUnavailableError";
+  }
+}
+
+export class WorkerRunnerCapacityError extends Error {
+  readonly code = NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE;
+
+  constructor() {
+    super("device worker capacity remained full");
+    this.name = "WorkerRunnerCapacityError";
   }
 }
 
@@ -89,7 +101,7 @@ export type WorkerWorkspaceQuiescence = {
 
 type WorkerTurnLaunchRequest = {
   plan: WorkerLaunchPlan;
-  placementGeneration: number;
+  turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;

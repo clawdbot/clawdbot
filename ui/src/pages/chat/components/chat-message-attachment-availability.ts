@@ -1,4 +1,5 @@
 import { t } from "../../../i18n/index.ts";
+import { formatUiExternalText } from "../../../lib/format-error.ts";
 import {
   buildAssistantAttachmentUrl,
   isLocalAssistantAttachmentSource,
@@ -204,7 +205,7 @@ export function resolveAssistantAttachmentAvailability(
           return availability;
         }
         const unavailable = createUnavailableAssistantAttachment(
-          payload?.reason?.trim() || t("chat.attachments.unavailable"),
+          formatUiExternalText(payload?.reason, t("chat.attachments.unavailable")),
           resource.retryAttempted,
         );
         setAssistantAttachmentAvailability(resource, unavailable);

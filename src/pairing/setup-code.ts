@@ -13,6 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
@@ -36,7 +37,6 @@ import {
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import {
   resolveTailnetHostWithRunner,
-  resolveTailscaleServeGatewayUrlsWithRunner,
   resolveTailscalePublishedHost,
 } from "../shared/tailscale-status.js";
 
@@ -360,14 +360,7 @@ async function resolveGatewayUrl(
     const publishedHost = resolveTailscalePublishedHost({
       tailscaleMode,
       tailnetHost: host,
-      serviceName: cfg.gateway?.tailscale?.serviceName,
     });
-    if (!publishedHost) {
-      return {
-        error:
-          "Tailscale Serve serviceName is configured, but Service MagicDNS could not be derived.",
-      };
-    }
     return { url: `wss://${publishedHost}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
@@ -465,7 +458,10 @@ export function decodePairingSetupCode(
     }
   }
 
-  const tlsFingerprint = normalizeOptionalString(decoded.tlsFingerprint);
+  const tlsFingerprint =
+    typeof decoded.tlsFingerprint === "string"
+      ? normalizeTlsFingerprint(decoded.tlsFingerprint)
+      : undefined;
   if (decoded.tlsFingerprint !== undefined && !tlsFingerprint) {
     throw new Error("Invalid pairing setup payload.");
   }
@@ -519,19 +515,7 @@ export async function resolvePairingSetupFromConfig(
     return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
-  const urls = [urlResult.url];
-  if (urlResult.source === "gateway.bind=lan") {
-    const serveUrls = await resolveTailscaleServeGatewayUrlsWithRunner(
-      resolveGatewayPort(cfgForAuth, env),
-      options.runCommandWithTimeout,
-    );
-    for (const serveUrl of serveUrls) {
-      if (!validateMobilePairingUrl(serveUrl, "tailscale serve status")) {
-        urls.push(serveUrl);
-      }
-    }
-  }
-  const uniqueUrls = [...new Set(urls)].slice(0, PAIRING_SETUP_MAX_URLS);
+  const uniqueUrls = [urlResult.url];
   const requestedBootstrapProfile =
     options.bootstrapProfile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE;
   const accessDowngraded =
@@ -545,18 +529,22 @@ export async function resolvePairingSetupFromConfig(
   const issuedBootstrapProfile = accessDowngraded
     ? PAIRING_SETUP_BOOTSTRAP_PROFILE
     : requestedBootstrapProfile;
+  const directGatewayTlsFingerprintRaw =
+    urlResult.url.startsWith("wss://") && urlResult.source?.startsWith("gateway.bind=")
+      ? (options.localTlsFingerprint ?? (await options.loadLocalTlsFingerprint?.()))
+      : urlResult.url.startsWith("wss://") && urlResult.source === "gateway.remote.url"
+        ? cfgForAuth.gateway?.remote?.tlsFingerprint
+        : undefined;
+  const directGatewayTlsFingerprint = directGatewayTlsFingerprintRaw
+    ? normalizeTlsFingerprint(directGatewayTlsFingerprintRaw)
+    : undefined;
+  if (directGatewayTlsFingerprintRaw !== undefined && !directGatewayTlsFingerprint) {
+    return { ok: false, error: "Gateway TLS fingerprint is invalid." };
+  }
   const issued = await issueDevicePairSetupBootstrapToken({
     baseDir: options.pairingBaseDir,
     profile: issuedBootstrapProfile,
   });
-
-  const directGatewayTlsFingerprint =
-    urlResult.url.startsWith("wss://") && urlResult.source?.startsWith("gateway.bind=")
-      ? (normalizeOptionalString(options.localTlsFingerprint) ??
-        (await options.loadLocalTlsFingerprint?.()))
-      : urlResult.url.startsWith("wss://") && urlResult.source === "gateway.remote.url"
-        ? normalizeOptionalString(cfgForAuth.gateway?.remote?.tlsFingerprint)
-        : undefined;
 
   return {
     ok: true,

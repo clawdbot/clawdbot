@@ -61,6 +61,7 @@ export {
 } from "../infra/diagnostic-events.js";
 export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+export { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
@@ -101,12 +102,6 @@ export {
   restoreRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
-export {
-  clearMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
-  restoreRegisteredMemoryEmbeddingProviders,
-  type RegisteredMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { PluginHookRegistration } from "../plugins/hook-types.js";
 export type { RuntimeEnv } from "../runtime.js";

@@ -85,11 +85,16 @@ export function registerAgentsCommands(program: Command): void {
     .description("List configured agents")
     .option("--json", "Output JSON instead of text", false)
     .option("--bindings", "Include routing bindings", false)
+    .option("--tree", "Render agent creation hierarchy", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
         const agentsListCommand = await loadAgentsListCommand();
         await agentsListCommand(
-          { json: Boolean(opts.json), bindings: Boolean(opts.bindings) },
+          {
+            json: Boolean(opts.json),
+            bindings: Boolean(opts.bindings),
+            tree: Boolean(opts.tree),
+          },
           runtime,
         );
       });
@@ -179,6 +184,13 @@ export function registerAgentsCommands(program: Command): void {
           "nonInteractive",
           "json",
         ]);
+        const hasAutomationFlags = hasExplicitOptions(command, [
+          "workspace",
+          "model",
+          "agentDir",
+          "bind",
+          "nonInteractive",
+        ]);
         const agentsAddCommand = await loadAgentsAddCommand();
         await agentsAddCommand(
           {
@@ -191,7 +203,7 @@ export function registerAgentsCommands(program: Command): void {
             json: Boolean(opts.json),
           },
           runtime,
-          { hasFlags },
+          { hasFlags, hasAutomationFlags },
         );
       });
     });

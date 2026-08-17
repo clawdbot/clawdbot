@@ -64,7 +64,7 @@ describe("telegramOutbound presentation", () => {
     expect(result).toEqual({
       channel: "telegram",
       messageId: "tg-presentation-buttons",
-      chatId: "12345",
+      target: { kind: "chat", id: "12345" },
     });
   });
 

@@ -8,8 +8,8 @@ import {
   type MarkdownIR,
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
+  renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
-import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-chunking";
 
 // Escape special characters for Slack mrkdwn format.
 // Preserve Slack's angle-bracket tokens so mentions and links stay intact.

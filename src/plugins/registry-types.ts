@@ -1,5 +1,5 @@
 /** Shared registration types that make up the in-memory plugin registry. */
-import type { AgentHarness } from "../agents/harness/types.js";
+import type { AgentHarness, AgentHarnessNativeCompaction } from "../agents/harness/types.js";
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
@@ -43,7 +43,6 @@ import type { PluginKind } from "./plugin-kind.types.js";
 import type {
   ContextEngineRegistration,
   MemoryCorpusSupplementRegistration,
-  MemoryEmbeddingProviderAdapter,
   MemoryPluginCapabilityRegistration,
   MemoryPromptPreparationRegistration,
   MemoryPromptSupplementRegistration,
@@ -253,8 +252,6 @@ type PluginWebFetchProviderRegistration = PluginOwnedProviderRegistration<WebFet
 type PluginWebSearchProviderRegistration = PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
 type PluginMigrationProviderRegistration = PluginOwnedProviderRegistration<MigrationProviderPlugin>;
-type PluginMemoryEmbeddingProviderRegistration =
-  PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
 type PluginCodexAppServerExtensionFactoryRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -282,6 +279,7 @@ type PluginAgentHarnessRegistration = {
   pluginId: string;
   pluginName?: string;
   harness: AgentHarness;
+  nativeCompaction?: AgentHarnessNativeCompaction;
   source: string;
   rootDir?: string;
 };
@@ -526,7 +524,6 @@ export type PluginRecord = {
   webSearchProviderIds: string[];
   migrationProviderIds: string[];
   contextEngineIds?: string[];
-  memoryEmbeddingProviderIds: string[];
   agentHarnessIds: string[];
   cliCommands: string[];
   services: string[];
@@ -572,7 +569,6 @@ export type PluginRegistry = {
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
-  memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   pluginRuntimeArtifacts: Map<string, ResolvedPluginRuntimeArtifact>;
   compactionProviders: RegisteredCompactionProvider[];

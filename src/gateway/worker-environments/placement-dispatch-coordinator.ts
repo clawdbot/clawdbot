@@ -83,6 +83,13 @@ export function coordinateWorkerPlacementDispatch(
       operation: ReturnType<WorkerPlacementDispatchService["dispatch"]>;
     }
   >();
+  const moveInFlight = new Map<
+    string,
+    {
+      request: Parameters<WorkerPlacementDispatchService["move"]>[0];
+      operation: ReturnType<WorkerPlacementDispatchService["move"]>;
+    }
+  >();
   return {
     dispatch: async (request, onTransition) => {
       const inFlight = dispatchInFlight.get(request.sessionId);
@@ -92,7 +99,9 @@ export function coordinateWorkerPlacementDispatch(
           inFlight.request.agentId !== request.agentId ||
           inFlight.request.profileId !== request.profileId ||
           inFlight.request.executionMode !== request.executionMode ||
+          inFlight.request.idempotencyKey !== request.idempotencyKey ||
           inFlight.request.deviceId !== request.deviceId ||
+          inFlight.request.machineClass !== request.machineClass ||
           !isDeepStrictEqual(inFlight.request.inheritedProfile, request.inheritedProfile)
         ) {
           throw new Error(`Session ${request.sessionKey} is already dispatching another request`);
@@ -113,6 +122,24 @@ export function coordinateWorkerPlacementDispatch(
       runExclusivePlacementOperation(() =>
         service.forceDestroyEnvironment(environmentId, onCleanupError),
       ),
+    move: async (request, onTransition) => {
+      const inFlight = moveInFlight.get(request.sessionId);
+      if (inFlight) {
+        if (!isDeepStrictEqual(inFlight.request, request)) {
+          throw new Error(`Session ${request.sessionKey} is already moving to another target`);
+        }
+        return await inFlight.operation;
+      }
+      const operation = runExclusivePlacementOperation(() => service.move(request, onTransition));
+      moveInFlight.set(request.sessionId, { request, operation });
+      try {
+        return await operation;
+      } finally {
+        if (moveInFlight.get(request.sessionId)?.operation === operation) {
+          moveInFlight.delete(request.sessionId);
+        }
+      }
+    },
     reclaim: async (request) => await runPlacementOperation(() => service.reclaim(request)),
     reconcile: () => runReconciliation(service.reconcile),
     reconcileActive: (environmentId) =>

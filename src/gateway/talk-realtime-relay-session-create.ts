@@ -195,13 +195,13 @@ export function createTalkRealtimeRelaySession(
     createBridge: (request: Parameters<typeof params.provider.createBridge>[0]) =>
       params.provider.createBridge({
         ...request,
-        ...(relayAgentId ? { agentId: relayAgentId } : {}),
         runAgentConsult,
       }),
   };
   const bridge = harness.createBridge({
     provider: relayProvider,
     cfg: params.cfg,
+    agentId: relayAgentId,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,

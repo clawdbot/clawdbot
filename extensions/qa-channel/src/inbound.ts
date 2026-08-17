@@ -8,11 +8,8 @@ import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  getAgentScopedMediaLocalRoots,
-  saveMediaBuffer,
-  saveMediaSource,
-} from "openclaw/plugin-sdk/media-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,

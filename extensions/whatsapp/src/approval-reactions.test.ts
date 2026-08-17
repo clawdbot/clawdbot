@@ -6,6 +6,7 @@ import {
   registerWhatsAppApprovalReactionTarget,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
+import * as whatsappRuntime from "./runtime.js";
 import { resolveEquivalentWhatsAppDirectChatJids } from "./text-runtime.js";
 
 type LidLookup = NonNullable<
@@ -148,6 +149,39 @@ describe("WhatsApp approval reactions", () => {
       approvalKind: "exec",
       decision: "deny",
     });
+  });
+
+  it("rejects persisted targets containing an invalid approval decision", async () => {
+    const runtime = vi.spyOn(whatsappRuntime, "getOptionalWhatsAppRuntime").mockReturnValue({
+      state: {
+        openKeyedStore: () => ({
+          register: async () => {},
+          lookup: async () => ({
+            version: 1,
+            target: {
+              approvalId: "exec-corrupt",
+              approvalKind: "exec",
+              allowedDecisions: ["allow-once", "invalid"],
+            },
+          }),
+          delete: async () => false,
+        }),
+      },
+    } as never);
+    try {
+      clearWhatsAppApprovalReactionTargetsForTest();
+      await expect(
+        resolveWhatsAppApprovalReactionTargetWithPersistence({
+          accountId: "default",
+          remoteJid: "15551230000@s.whatsapp.net",
+          messageId: "corrupt-message",
+          reactionKey: "👍",
+        }),
+      ).resolves.toBeNull();
+    } finally {
+      clearWhatsAppApprovalReactionTargetsForTest();
+      runtime.mockRestore();
+    }
   });
 
   it("authorizes group reactions using the participant, not the group chat", async () => {

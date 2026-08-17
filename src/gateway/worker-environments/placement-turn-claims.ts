@@ -13,7 +13,7 @@ import {
   type WorkerSessionTurnClaim,
   type WorkerSessionTurnOwner,
 } from "./placement-record.js";
-import { ensureLocal, find, getRequired, query, transitionValues } from "./placement-row-codec.js";
+import { ensureLocal, find, getRequired, query } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
@@ -26,13 +26,10 @@ import {
   signalWorkerTurnClaimClosed,
   waitersFor,
 } from "./placement-turn-claim-events.js";
-export {
-  registerWorkerTurnClaimClosedHandler,
-  signalWorkerTurnClaimClosed,
-} from "./placement-turn-claim-events.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import {
   clearWorkerWorkspacePendingResult,
+  hasCurrentWorkspaceResultClaim,
   hasAcceptedWorkerWorkspacePendingResult,
   hasWorkerWorkspacePendingResult,
   insertWorkerWorkspacePendingResult,
@@ -41,6 +38,10 @@ import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-reconcile.js";
+export {
+  registerWorkerTurnClaimClosedHandler,
+  signalWorkerTurnClaimClosed,
+} from "./placement-turn-claim-events.js";
 
 type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
   owner: WorkerSessionTurnOwner;
@@ -63,6 +64,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     db: DatabaseSync,
     input: WorkerTurnClaimInput,
     updatedAtMs: number,
+    options: { allowDraining?: boolean } = {},
   ): WorkerSessionTurnClaim => {
     const identity = normalizeIdentity(input);
     const claimId = required(input.claimId, "turn claim id");
@@ -91,7 +93,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       const localPlacement = current.state === "local" && owner.environmentId === undefined;
       const remotePlacement =
         current.executionMode === "remote-exec" &&
-        current.state === "active" &&
+        (current.state === "active" || (options.allowDraining && current.state === "draining")) &&
         owner.environmentId === current.environmentId &&
         owner.ownerEpoch === current.activeOwnerEpoch;
       if (!localPlacement && !remotePlacement) {
@@ -101,7 +103,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       }
     } else if (
       current.executionMode !== "worker-turn" ||
-      current.state !== "active" ||
+      (current.state !== "active" && !(options.allowDraining && current.state === "draining")) ||
       current.environmentId !== owner.environmentId ||
       current.activeOwnerEpoch !== owner.ownerEpoch
     ) {
@@ -149,7 +151,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       // transaction leaves startup recovery enough state to finish or abandon it.
       return write((db) => {
         const updatedAtMs = now();
-        const claim = claimTurnInDatabase(db, input, updatedAtMs);
+        const claim = claimTurnInDatabase(db, input, updatedAtMs, { allowDraining: true });
         insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
         return claim;
       });
@@ -199,7 +201,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
 
     completeWorkspaceResultAndReleaseTurn(
       claim: WorkerSessionTurnClaim,
-      options: { reclaim?: boolean } = {},
     ): WorkerSessionPlacementRecord {
       const sessionId = required(claim.sessionId, "session id");
       const claimId = required(claim.claimId, "turn claim id");
@@ -212,21 +213,20 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           throw new Error(`Session ${sessionId} cloud workspace result was not accepted`);
         }
         const current = getRequired(db, sessionId);
-        if (!resolvePlacementTurnEnvironment(current, claim)) {
+        const environment = resolvePlacementTurnEnvironment(current, claim);
+        if (!environment && !hasCurrentWorkspaceResultClaim(db, claim)) {
           throw new Error(`Session ${sessionId} workspace result owner changed before release`);
         }
         assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
         clearWorkerTurnToolState(db, { sessionId, claimId });
-        const values = options.reclaim
-          ? transitionValues(current, "reclaimed", {}, now())
-          : {
-              turn_claim_owner: null,
-              turn_claim_id: null,
-              turn_claim_run_id: null,
-              turn_claim_generation: null,
-              turn_claim_owner_epoch: null,
-              updated_at_ms: now(),
-            };
+        const values = {
+          turn_claim_owner: null,
+          turn_claim_id: null,
+          turn_claim_run_id: null,
+          turn_claim_generation: null,
+          turn_claim_owner_epoch: null,
+          updated_at_ms: now(),
+        };
         clearWorkerWorkspacePendingResult(db, sessionId);
         const result = executeSqliteQuerySync(
           db,
@@ -236,8 +236,8 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             .where("session_id", "=", sessionId)
             .where("state", "=", current.state)
             .where("transition_generation", "=", current.generation)
-            .where("turn_claim_id", "=", claimId)
-            .where("turn_claim_run_id", "=", runId),
+            .where("turn_claim_id", current.turnClaim ? "=" : "is", current.turnClaim && claimId)
+            .where("turn_claim_run_id", current.turnClaim ? "=" : "is", current.turnClaim && runId),
         );
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Session ${sessionId} workspace result changed during release`);
@@ -494,13 +494,11 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       return write((db) => {
         const current = getRequired(db, sessionId);
         const environment = resolvePlacementTurnEnvironment(current, input.claim);
-        if (!environment) {
+        if (!environment && !hasCurrentWorkspaceResultClaim(db, input.claim)) {
           throw new Error(`Cannot advance stale worker workspace for session ${sessionId}`);
         }
-        const { environmentId, ownerEpoch } = environment;
-        if (!isCurrentPlacementTurnClaim(current, input.claim)) {
-          throw new Error(`Cannot advance stale worker workspace for session ${sessionId}`);
-        }
+        const environmentId = environment?.environmentId ?? current.environmentId!;
+        const ownerEpoch = environment?.ownerEpoch ?? current.activeOwnerEpoch!;
         const reconciliation = executeSqliteQuerySync(
           db,
           workspaceJournalQuery(db)
@@ -528,14 +526,30 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             .where("transition_generation", "=", current.generation)
             .where("environment_id", "=", environmentId)
             .where("active_owner_epoch", "=", ownerEpoch)
-            .where("turn_claim_owner", "=", input.claim.owner.kind)
-            .where("turn_claim_id", "=", claimId)
-            .where("turn_claim_run_id", "=", runId)
-            .where("turn_claim_generation", "=", placementGeneration)
+            .where(
+              "turn_claim_owner",
+              current.turnClaim ? "=" : "is",
+              current.turnClaim?.owner ?? null,
+            )
+            .where(
+              "turn_claim_id",
+              current.turnClaim ? "=" : "is",
+              current.turnClaim ? claimId : null,
+            )
+            .where(
+              "turn_claim_run_id",
+              current.turnClaim ? "=" : "is",
+              current.turnClaim ? runId : null,
+            )
+            .where(
+              "turn_claim_generation",
+              current.turnClaim ? "=" : "is",
+              current.turnClaim ? placementGeneration : null,
+            )
             .where(
               "turn_claim_owner_epoch",
-              input.claim.owner.kind === "worker" ? "=" : "is",
-              input.claim.owner.kind === "worker" ? ownerEpoch : null,
+              current.turnClaim?.owner === "worker" ? "=" : "is",
+              current.turnClaim?.ownerEpoch ?? null,
             ),
         );
         if (result.numAffectedRows !== 1n) {

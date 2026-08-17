@@ -344,7 +344,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "heartbeat_respond",
     label: "heartbeat_respond",
-    description: "Record heartbeat outcomes",
+    description: "Accept heartbeat outcomes for post-turn handling",
     sectionId: "automation",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -447,8 +447,8 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "image",
-    label: "image",
+    id: "view_image",
+    label: "view_image",
     description: "Image understanding",
     sectionId: "media",
     profiles: ["coding"],

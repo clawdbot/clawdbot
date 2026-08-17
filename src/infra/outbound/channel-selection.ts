@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // tool context fallback, or configured plugin accounts.
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type OfficialExternalPluginRepairHint,
@@ -231,7 +232,7 @@ export async function resolveMessageChannelSelection(params: {
         };
       }
       if (!isDeliverableMessageChannel(normalized)) {
-        throw new Error(`Unknown channel: ${normalized}`);
+        throw new Error(formatUnknownChannelMessage({ channel: normalized }));
       }
       const repairHint = isConfiguredChannel(params.cfg, normalized)
         ? resolveMissingOfficialExternalChannelPluginRepairHint({

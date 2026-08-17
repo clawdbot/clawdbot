@@ -1,7 +1,8 @@
 // Voice Call tests cover response generator plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "../api.js";
 import { VoiceCallConfigSchema } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { generateVoiceResponse } from "./response-generator.js";
 
 type TestSessionEntry = {
@@ -109,13 +110,13 @@ function createAgentRuntime(
       run: (signal: AbortSignal) => Promise<unknown>,
     ) => await run(new AbortController().signal),
   );
-  const resolveAgentDir = vi.fn((_cfg: CoreConfig, agentId: string) => {
+  const resolveAgentDir = vi.fn((_cfg: OpenClawConfig, agentId: string) => {
     return `/tmp/openclaw/agents/${agentId}`;
   });
-  const resolveAgentWorkspaceDir = vi.fn((_cfg: CoreConfig, agentId: string) => {
+  const resolveAgentWorkspaceDir = vi.fn((_cfg: OpenClawConfig, agentId: string) => {
     return `/tmp/openclaw/workspace/${agentId}`;
   });
-  const resolveAgentIdentity = vi.fn((_cfg: CoreConfig, agentId: string) => ({
+  const resolveAgentIdentity = vi.fn((_cfg: OpenClawConfig, agentId: string) => ({
     name: `${agentId} tester`,
   }));
   const resolveStorePath = vi.fn((_store: string | undefined, params: { agentId?: string }) => {
@@ -150,7 +151,7 @@ function createAgentRuntime(
       runWithWorkAdmission,
       resolveSessionFilePath,
     },
-  } as unknown as CoreAgentDeps;
+  } as unknown as OpenClawPluginApi["runtime"]["agent"];
 
   return {
     runtime,
@@ -192,7 +193,7 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
 async function runGenerateVoiceResponse(
   payloads: Array<Record<string, unknown>>,
   overrides?: {
-    runtime?: CoreAgentDeps;
+    runtime?: OpenClawPluginApi["runtime"]["agent"];
     transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
     onEarlyText?: (text: string) => Promise<boolean>;
   },
@@ -200,7 +201,7 @@ async function runGenerateVoiceResponse(
   const voiceConfig = VoiceCallConfigSchema.parse({
     responseTimeoutMs: 5000,
   });
-  const coreConfig = {} as CoreConfig;
+  const coreConfig = {} as OpenClawConfig;
   const runtime = overrides?.runtime ?? createAgentRuntime(payloads).runtime;
 
   const result = await generateVoiceResponse({
@@ -531,7 +532,7 @@ describe("generateVoiceResponse", () => {
 
     const result = await generateVoiceResponse({
       voiceConfig,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
       from: "+15550001111",
@@ -580,7 +581,7 @@ describe("generateVoiceResponse", () => {
 
     const result = await generateVoiceResponse({
       voiceConfig,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
       from: "+15550001111",
@@ -626,7 +627,7 @@ describe("generateVoiceResponse", () => {
 
     const result = await generateVoiceResponse({
       voiceConfig,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
       sessionKey,
@@ -657,7 +658,7 @@ describe("generateVoiceResponse", () => {
 
     const result = await generateVoiceResponse({
       voiceConfig,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
       sessionKey: "voice:call:call-123",
@@ -687,7 +688,7 @@ describe("generateVoiceResponse", () => {
 
     await generateVoiceResponse({
       voiceConfig,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
       sessionKey: "meet-room-1",
@@ -713,7 +714,7 @@ describe("generateVoiceResponse", () => {
     const generate = (sessionKey: string) =>
       generateVoiceResponse({
         voiceConfig,
-        coreConfig: {} as CoreConfig,
+        coreConfig: {} as OpenClawConfig,
         agentRuntime: runtime,
         callId: "call-123",
         sessionKey,
@@ -773,7 +774,7 @@ describe("generateVoiceResponse", () => {
       resolveStorePath,
       sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Default agent."}' }]);
-    const coreConfig = {} as CoreConfig;
+    const coreConfig = {} as OpenClawConfig;
 
     await generateVoiceResponse({
       voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
@@ -818,7 +819,7 @@ describe("generateVoiceResponse", () => {
       resolveStorePath,
       sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
-    const coreConfig = {} as CoreConfig;
+    const coreConfig = {} as OpenClawConfig;
 
     const result = await generateVoiceResponse({
       voiceConfig: VoiceCallConfigSchema.parse({
@@ -864,7 +865,7 @@ describe("generateVoiceResponse", () => {
 
     await generateVoiceResponse({
       voiceConfig: VoiceCallConfigSchema.parse({ agentId: "voice", responseTimeoutMs: 5000 }),
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: runtime,
       callId: "call-123",
       agentId: "support",
@@ -887,14 +888,13 @@ describe("generateVoiceResponse", () => {
     ]);
     const coreConfig = {
       agents: {
-        list: [
-          {
-            id: "voice",
+        entries: {
+          voice: {
             tools: { allow: [] },
           },
-        ],
+        },
       },
-    } as CoreConfig;
+    } as OpenClawConfig;
 
     const result = await generateVoiceResponse({
       voiceConfig: VoiceCallConfigSchema.parse({

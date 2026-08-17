@@ -175,7 +175,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           nextState.heartbeatRunner.updateConfig(nextConfig);
           // Heartbeat cadence lives in system-owned cron monitor jobs;
           // reconverge them against the new config in the background.
-          void nextState.cronState.reconcileHeartbeatJobs?.(nextConfig).catch((error: unknown) => {
+          void nextState.cronState.reconcileHeartbeatJobs(nextConfig).catch((error: unknown) => {
             params.logReload.warn(`heartbeat monitor reconvergence failed: ${String(error)}`);
           });
         }
@@ -201,8 +201,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             await state.cronState.cron.stopAndDrain();
           } else {
             state.cronState.cron.stop();
-            state.cronState.stopExitWatchers?.();
-            await state.cronState.stopStreamWatchers?.();
+            state.cronState.stopExitWatchers();
+            await state.cronState.stopStreamWatchers();
           }
           startGatewayCronWithLogging({
             cronState: nextState.cronState,
@@ -211,8 +211,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             config: nextConfig,
             afterStart: async () => {
               await Promise.all([
-                nextState.cronState.reconcileExitWatchers?.(),
-                nextState.cronState.reconcileStreamWatchers?.(),
+                nextState.cronState.reconcileExitWatchers(),
+                nextState.cronState.reconcileStreamWatchers(),
               ]);
             },
             logCron: params.logCron,

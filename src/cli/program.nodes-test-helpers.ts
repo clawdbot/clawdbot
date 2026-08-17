@@ -14,3 +14,21 @@ export function createIosNodeListResponse(ts: number = Date.now()) {
     nodes: [IOS_NODE],
   };
 }
+
+/** Render one captured runtime.log argument without stringifying objects as [object Object]. */
+export function formatRuntimeLogCallArg(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (value == null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable]";
+  }
+}

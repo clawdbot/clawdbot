@@ -462,6 +462,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     const auth = await requireOpenAIRealtimePlatformAuth({
       configuredApiKey: this.config.apiKey,
       cfg: this.config.cfg,
+      agentId: this.config.agentId,
     });
     return this.resolveApiKeyConnectionParams(auth.value, model);
   }

@@ -441,7 +441,7 @@ export function createReadToolDefinition(
   return {
     name: "read",
     label: "read",
-    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Large/full file: continue offset/limit.`,
+    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Large/full file: continue offset/limit.`,
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files instead of cat or sed."],
     parameters: readSchema,

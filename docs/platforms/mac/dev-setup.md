@@ -55,12 +55,17 @@ matching user-space CLI and runtime before starting the Gateway wizard.
 
 For manual development recovery, install the matching CLI yourself:
 
+The npm command below is for npm 12 or npm 11.16+. On npm 11.12 and earlier,
+omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
+
 ```bash
-npm install -g openclaw@<version>
+npm install -g openclaw@<version> --allow-scripts=openclaw
 ```
 
-`pnpm add -g openclaw@<version>` and `bun add -g openclaw@<version>` also
-work. Node remains the recommended runtime for the Gateway itself.
+`pnpm add -g --allow-build=openclaw openclaw@<version>` and
+`bun add -g --trust openclaw@<version>` also work. Bun's `--trust` allows the
+OpenClaw lifecycle scripts for that install. Node remains the recommended
+runtime for the Gateway itself.
 
 ## Troubleshooting
 

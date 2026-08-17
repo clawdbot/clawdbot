@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginRuntime } from "./runtime/types.js";
 import { importSessionCatalogHistory } from "./session-catalog-history-import.js";
+import { listSessionCatalogEntries } from "./session-catalog.js";
 
 const transcript = vi.hoisted(() => ({
   messages: [] as Array<Record<string, unknown>>,
@@ -84,6 +87,47 @@ function messageText(message: Record<string, unknown>): string | undefined {
     ? String(content.text)
     : undefined;
 }
+
+describe("listSessionCatalogEntries", () => {
+  it("scans the retained compatibility owner first", () => {
+    const config = retainLegacyDefaultAgentId(
+      {
+        agents: { list: [{ id: "alpha" }, { id: "beta" }] },
+      } as OpenClawConfig,
+      "beta",
+    );
+    const listSessionEntries = vi.fn((_params: { agentId: string }) => []);
+    const runtime = {
+      agent: { session: { listSessionEntries } },
+    } as unknown as PluginRuntime;
+
+    expect(listSessionCatalogEntries({ config, runtime })).toEqual([]);
+    expect(listSessionEntries.mock.calls.map(([params]) => params.agentId)).toEqual([
+      "beta",
+      "alpha",
+    ]);
+  });
+
+  it("requires and scopes an owner under explicit multi-agent ownership", () => {
+    const config = {
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "alpha" }, { id: "beta" }],
+      },
+    } as OpenClawConfig;
+    const listSessionEntries = vi.fn(() => []);
+    const runtime = {
+      agent: { session: { listSessionEntries } },
+    } as unknown as PluginRuntime;
+
+    expect(() => listSessionCatalogEntries({ config, runtime })).toThrow(
+      "session agent resolution has no explicit owner",
+    );
+    expect(listSessionCatalogEntries({ agentId: "beta", config, runtime })).toEqual([]);
+    expect(listSessionEntries).toHaveBeenCalledOnce();
+    expect(listSessionEntries).toHaveBeenCalledWith({ agentId: "beta", readOnly: true });
+  });
+});
 
 describe("importSessionCatalogHistory", () => {
   beforeEach(() => {

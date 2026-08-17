@@ -35,6 +35,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  isDiagnosticEmbeddedRunOwnerClosed,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   resolveRunStaleThresholdMs,
@@ -1181,9 +1182,14 @@ export function setActiveEmbeddedRun(
     }
     return;
   }
+  if (handle.diagnosticOwner && isDiagnosticEmbeddedRunOwnerClosed(handle.diagnosticOwner)) {
+    handle.abort("restart");
+    return;
+  }
   const previousHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   const wasActive = previousHandle !== undefined;
   if (previousHandle) {
+    previousHandle.closeDiagnostics?.();
     clearEmbeddedRunAbortability(previousHandle, { retainFinalizing: true });
   }
   clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
@@ -1202,7 +1208,12 @@ export function setActiveEmbeddedRun(
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
-  markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: handle.runId });
+  markDiagnosticEmbeddedRunStarted({
+    sessionId,
+    sessionKey,
+    runId: handle.runId,
+    owner: handle.diagnosticOwner,
+  });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
@@ -1227,6 +1238,7 @@ export function clearActiveEmbeddedRun(
 ) {
   const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (activeHandle === handle) {
+    handle.closeDiagnostics?.();
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     clearEmbeddedRunAbortability(handle, { retainFinalizing: true });
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
@@ -1239,7 +1251,9 @@ export function clearActiveEmbeddedRun(
       state: "idle",
       reason,
     });
-    markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
+    if (!handle.diagnosticOwner) {
+      markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
+    }
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }
@@ -1260,13 +1274,16 @@ function forceClearEmbeddedAgentRun(
   let cleared = false;
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (handle && handle === expectedHandle) {
+    handle.closeDiagnostics?.();
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     clearEmbeddedRunAbortability(handle);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     clearActiveRunSessionFiles(sessionId);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
-    markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
+    if (!handle.diagnosticOwner) {
+      markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
+    }
     notifyEmbeddedRunEnded(sessionId, handle);
     cleared = true;
   }

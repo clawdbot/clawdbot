@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
@@ -20,7 +21,6 @@ import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
   | "embeddingProviders"
-  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -32,7 +32,6 @@ type CapabilityProviderRegistryKey =
 
 type CapabilityContractKey =
   | "embeddingProviders"
-  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -42,11 +41,8 @@ type CapabilityContractKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
-type ProviderFor<K extends CapabilityProviderRegistryKey> = PluginRegistry[K][number] extends {
-  provider: infer T;
-}
-  ? T
-  : never;
+export type CapabilityProviderFor<K extends CapabilityProviderRegistryKey> =
+  PluginRegistry[K][number]["provider"];
 type CapabilityPluginResolution = {
   runtimePluginIds: string[];
   bundledCompatPluginIds: string[];
@@ -54,7 +50,6 @@ type CapabilityPluginResolution = {
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
   embeddingProviders: "embeddingProviders",
-  memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
   realtimeTranscriptionProviders: "realtimeTranscriptionProviders",
   realtimeVoiceProviders: "realtimeVoiceProviders",
@@ -149,24 +144,29 @@ function createCapabilityProviderLoadOptions(params: {
 function findProviderById<K extends CapabilityProviderRegistryKey>(
   entries: PluginRegistry[K],
   providerId: string,
-): ProviderFor<K> | undefined {
+): CapabilityProviderFor<K> | undefined {
   const normalizedProviderId = normalizeCapabilityProviderId(providerId);
   if (!normalizedProviderId) {
     return undefined;
   }
-  const providerEntries = entries as unknown as Array<{
-    provider: ProviderFor<K> & { id?: unknown; aliases?: unknown };
-  }>;
-  for (const entry of providerEntries) {
+  for (const entry of entries) {
+    const provider: unknown = entry.provider;
+    if (!isRecord(provider)) {
+      continue;
+    }
     if (
-      typeof entry.provider.id === "string" &&
-      normalizeCapabilityProviderId(entry.provider.id) === normalizedProviderId
+      typeof provider.id === "string" &&
+      normalizeCapabilityProviderId(provider.id) === normalizedProviderId
     ) {
-      return entry.provider;
+      return entry.provider as CapabilityProviderFor<K>;
     }
   }
-  for (const entry of providerEntries) {
-    const aliases = Array.isArray(entry.provider.aliases) ? entry.provider.aliases : [];
+  for (const entry of entries) {
+    const provider: unknown = entry.provider;
+    if (!isRecord(provider)) {
+      continue;
+    }
+    const aliases = Array.isArray(provider.aliases) ? provider.aliases : [];
     if (
       aliases.some(
         (alias) =>
@@ -174,7 +174,7 @@ function findProviderById<K extends CapabilityProviderRegistryKey>(
           normalizeCapabilityProviderId(alias) === normalizedProviderId,
       )
     ) {
-      return entry.provider;
+      return entry.provider as CapabilityProviderFor<K>;
     }
   }
   return undefined;
@@ -183,12 +183,12 @@ function findProviderById<K extends CapabilityProviderRegistryKey>(
 function mergeCapabilityProviders<K extends CapabilityProviderRegistryKey>(
   left: PluginRegistry[K],
   right: PluginRegistry[K],
-): ProviderFor<K>[] {
-  const merged = new Map<string, ProviderFor<K>>();
-  const unnamed: ProviderFor<K>[] = [];
+): CapabilityProviderFor<K>[] {
+  const merged = new Map<string, CapabilityProviderFor<K>>();
+  const unnamed: CapabilityProviderFor<K>[] = [];
   const addEntries = (entries: PluginRegistry[K]) => {
     for (const entry of entries) {
-      const provider = entry.provider as ProviderFor<K> & { id?: string };
+      const provider = entry.provider as CapabilityProviderFor<K> & { id?: string };
       if (!provider.id) {
         unnamed.push(provider);
         continue;
@@ -363,10 +363,10 @@ function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderReg
     params.key !== "realtimeVoiceProviders" &&
     params.key !== "mediaUnderstandingProviders"
   ) {
-    return [] as unknown as PluginRegistry[K];
+    return [];
   }
   if (params.requested.size === 0) {
-    return [] as unknown as PluginRegistry[K];
+    return [];
   }
   return params.entries.filter((entry) => {
     const provider = entry.provider as { id?: unknown; aliases?: unknown };
@@ -495,7 +495,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   key: K;
   providerId: string;
   cfg?: OpenClawConfig;
-}): ProviderFor<K> | undefined {
+}): CapabilityProviderFor<K> | undefined {
   if (shouldSkipCapabilityResolution(params)) {
     return undefined;
   }
@@ -549,7 +549,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   cfg?: OpenClawConfig;
-}): ProviderFor<K>[] {
+}): CapabilityProviderFor<K>[] {
   if (shouldSkipCapabilityResolution(params)) {
     return [];
   }
@@ -571,14 +571,14 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
           }),
         )
       : undefined;
-  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
+  if (activeProviders.length > 0) {
     if (!missingRequestedProviders && !shouldMergeManifestProvidersWhenActive(params.key)) {
-      return activeProviders.map((entry) => entry.provider) as ProviderFor<K>[];
+      return activeProviders.map((entry) => entry.provider) as CapabilityProviderFor<K>[];
     }
     if (missingRequestedProviders) {
       removeActiveProviderIds(missingRequestedProviders, activeProviders);
       if (missingRequestedProviders.size === 0) {
-        return activeProviders.map((entry) => entry.provider) as ProviderFor<K>[];
+        return activeProviders.map((entry) => entry.provider) as CapabilityProviderFor<K>[];
       }
     }
   }
@@ -622,25 +622,22 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     loadOptions,
     requested: requestedProviderFilter,
   });
-  if (params.key !== "memoryEmbeddingProviders") {
-    const requestedLoadedProviders = requestedProviderFilter
+  const requestedLoadedProviders = requestedProviderFilter
+    ? filterLoadedProvidersForRequestedConfig({
+        key: params.key,
+        requested: requestedProviderFilter,
+        entries: loadedProviders,
+      })
+    : loadedProviders;
+  const mergeLoadedProviders =
+    activeProviders.length > 0 && missingRequestedProviders
       ? filterLoadedProvidersForRequestedConfig({
           key: params.key,
-          requested: requestedProviderFilter,
-          entries: loadedProviders,
+          requested: missingRequestedProviders,
+          entries: requestedLoadedProviders,
         })
-      : loadedProviders;
-    const mergeLoadedProviders =
-      activeProviders.length > 0 && missingRequestedProviders
-        ? filterLoadedProvidersForRequestedConfig({
-            key: params.key,
-            requested: missingRequestedProviders,
-            entries: requestedLoadedProviders,
-          })
-        : requestedLoadedProviders;
-    return mergeCapabilityProviders(activeProviders, mergeLoadedProviders);
-  }
-  return mergeCapabilityProviders(activeProviders, loadedProviders);
+      : requestedLoadedProviders;
+  return mergeCapabilityProviders(activeProviders, mergeLoadedProviders);
 }
 
 export function prepareMediaCapabilityProviders(params: {
@@ -650,7 +647,7 @@ export function prepareMediaCapabilityProviders(params: {
 }) {
   const providers = <K extends CapabilityProviderRegistryKey>(
     key: K,
-  ): readonly ProviderFor<K>[] | undefined => {
+  ): readonly CapabilityProviderFor<K>[] | undefined => {
     if (shouldSkipCapabilityResolution({ key, cfg: params.cfg })) {
       return [];
     }
@@ -687,7 +684,7 @@ export function prepareMediaCapabilityProviders(params: {
     }
     return Object.freeze(
       availableEntries.map((entry) => entry.provider),
-    ) as readonly ProviderFor<K>[];
+    ) as readonly CapabilityProviderFor<K>[];
   };
   return Object.freeze({
     mediaUnderstandingProviders: providers("mediaUnderstandingProviders"),

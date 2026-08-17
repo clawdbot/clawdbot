@@ -4,7 +4,6 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatContextTokenCapacity } from "../../../lib/format.ts";
 import {
   renderChatModelPickerOption,
   renderChatModelPickerTargetOption,
@@ -301,9 +300,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   ]
     .filter(Boolean)
     .join(" · ");
-  const triggerMeta = activeModelOption?.contextWindow
-    ? formatContextTokenCapacity(activeModelOption.contextWindow)
-    : "";
   const providerGroups = new Map<string, ChatModelPickerOption[]>();
   for (const option of params.modelOptions) {
     const existing = providerGroups.get(option.provider);
@@ -422,9 +418,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         <span class="chat-controls__inline-select-label">
           ${params.triggerStatusLabel ?? params.triggerModelLabel}
         </span>
-        ${params.triggerStatusLabel || !triggerMeta
-          ? nothing
-          : html`<span class="chat-controls__trigger-meta">${triggerMeta}</span>`}
       </summary>
       <wa-popup data-anchored-overlay>
         <div

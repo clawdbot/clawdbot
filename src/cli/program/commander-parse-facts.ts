@@ -2,6 +2,11 @@
 import type { Command, Option } from "commander";
 
 const activeErrorCommandByRoot = new WeakMap<Command, Command>();
+const lazyCommands = new WeakSet<Command>();
+
+export function markCommanderLazyCommand(command: Command): void {
+  lazyCommands.add(command);
+}
 
 function getCommandHierarchy(command: Command): Command[] {
   const hierarchy: Command[] = [];
@@ -84,6 +89,30 @@ function getRootCommand(command: Command): Command {
   return root;
 }
 
+/** Classify a possible child token only after Commander owns its active command node. */
+export function getCommanderSubcommandFact(
+  command: Command,
+  args: readonly string[],
+): { kind: "defer" } | { kind: "unknown"; name: string } | undefined {
+  const firstArgument = command.args[0];
+  const matchesChild = command.commands.some(
+    (child) => child.name() === firstArgument || child.aliases().includes(firstArgument ?? ""),
+  );
+  if (
+    command.registeredArguments.length > 0 ||
+    firstArgument === undefined ||
+    firstArgument.startsWith("-") ||
+    matchesChild
+  ) {
+    return undefined;
+  }
+  const helpRequested = args.includes("-h") || args.includes("--help");
+  if (helpRequested && lazyCommands.has(command)) {
+    return { kind: "defer" };
+  }
+  return command.commands.length > 0 ? { kind: "unknown", name: firstArgument } : undefined;
+}
+
 /** Scope the exact Commander node synchronously emitting an error. */
 export function setCommanderErrorCommand(command: Command): () => void {
   const root = getRootCommand(command);
@@ -102,4 +131,15 @@ export function setCommanderErrorCommand(command: Command): () => void {
 export function getCommanderErrorCommandPath(program: Command): string[] | undefined {
   const command = activeErrorCommandByRoot.get(getRootCommand(program));
   return command ? getCommanderCommandPath(command) : undefined;
+}
+
+/** Return visible children of the non-root command synchronously emitting a parse error. */
+export function getCommanderErrorCommandNames(program: Command): string[] | undefined {
+  const command = activeErrorCommandByRoot.get(getRootCommand(program));
+  return command && getCommanderCommandPath(command).length
+    ? command
+        .createHelp()
+        .visibleCommands(command)
+        .flatMap((child) => child.aliases().concat(child.name()))
+    : undefined;
 }

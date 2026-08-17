@@ -1,6 +1,7 @@
 // Control UI tests cover markdown link rendering: autolinking, file links, and link marks.
-import { describe, expect, it } from "vitest";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { describe, expect, it, vi } from "vitest";
+import { shortestFileLabels } from "./file-kind.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
@@ -424,6 +425,63 @@ describe("toSanitizedMarkdownHtml links", () => {
       ]);
     });
 
+    it("keeps labels correct and distinct across thousands of paths", () => {
+      // A model-controlled message can reference thousands of distinct files.
+      // The regression this guards against is quadratic label derivation, so
+      // this pairs an all-unique-basename set (no repeated suffix growth)
+      // with a colliding-basename set (forced suffix growth) at the same
+      // cardinality; both must resolve correctly, not just quickly.
+      const distinctPaths = Array.from(
+        { length: 4000 },
+        (_, i) => `src/pkg${i % 50}/mod${i}/file${i}.ts`,
+      );
+      const distinctLabels = shortestFileLabels(distinctPaths);
+      expect(distinctLabels.size).toBe(distinctPaths.length);
+      for (const path of distinctPaths) {
+        expect(distinctLabels.get(path)).toBe(path.slice(path.lastIndexOf("/") + 1));
+      }
+
+      const collidingPaths = Array.from({ length: 4000 }, (_, i) => `pkg${i}/shared/index.ts`);
+      const collidingLabels = shortestFileLabels(collidingPaths);
+      expect(collidingLabels.size).toBe(collidingPaths.length);
+      expect(new Set(collidingLabels.values()).size).toBe(collidingPaths.length);
+      for (const path of collidingPaths) {
+        expect(collidingLabels.get(path)).toBe(path);
+      }
+    });
+
+    it("keeps per-path lookup cost linear as path count grows (performance contract)", () => {
+      // Wall-clock timing flakes under CI load, so this asserts the actual
+      // performance contract structurally: count every Map#get call made while
+      // shortestFileLabels runs. The trie makes a fixed number of child
+      // lookups per path segment (one per segment on insert, one per resolved
+      // suffix depth on lookup), so total lookups scale with path count, not
+      // its square. The pre-fix full-list rescan (#124230) re-read every other
+      // path's segments inside `unique.some(...)` at every depth, which cost
+      // O(n^2) lookups for this same all-unique-basename shape -- 8x the paths
+      // there costs ~64x the lookups, far outside the linear band asserted
+      // below, so a regression back to that scan fails this test every run.
+      const countMapLookups = (pathCount: number): number => {
+        const paths = Array.from(
+          { length: pathCount },
+          (_, i) => `src/pkg${i % 50}/mod${i}/file${i}.ts`,
+        );
+        const getSpy = vi.spyOn(Map.prototype, "get");
+        try {
+          shortestFileLabels(paths);
+          return getSpy.mock.calls.length;
+        } finally {
+          getSpy.mockRestore();
+        }
+      };
+
+      const small = countMapLookups(500);
+      const large = countMapLookups(4000); // 8x the paths
+
+      expect(large).toBeGreaterThan(small * 4);
+      expect(large).toBeLessThan(small * 16);
+    });
+
     it.each([
       ["README.md", "markdown"],
       ["package.json", "package"],
@@ -453,6 +511,66 @@ describe("toSanitizedMarkdownHtml links", () => {
         expect(link.dataset.filePath).not.toMatch(/[\s()?]/);
       }
       expect(fragment.textContent).toContain(input);
+    });
+  });
+
+  describe("session links", () => {
+    const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+
+    it("links structural keys only when enabled", () => {
+      const disabled = htmlFragment(toSanitizedMarkdownHtml(`Open ${sessionKey}`));
+      expect(disabled.querySelector("a[data-session-key]")).toBeNull();
+
+      const enabled = htmlFragment(
+        toSanitizedMarkdownHtml(`Open ${sessionKey}`, { sessionLinks: true }),
+      );
+      const link = enabled.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      expect(link?.dataset.sessionKey).toBe(sessionKey);
+      expect(link?.textContent).toBe(sessionKey);
+      expect(link?.getAttribute("role")).toBe("link");
+      expect(link?.getAttribute("tabindex")).toBe("0");
+      expect(link?.hasAttribute("href")).toBe(false);
+    });
+
+    it.each([
+      ["plain text", `Open ${sessionKey}`],
+      ["inline code", `Open \`${sessionKey}\``],
+    ])("linkifies keys in %s", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      expect(link?.dataset.sessionKey).toBe(sessionKey);
+      expect(link?.textContent).toBe(sessionKey);
+    });
+
+    it.each([
+      ["an empty prefix", "agent:"],
+      ["a missing rest segment", "agent:x"],
+      ["an empty middle segment", "agent:x::y"],
+      ["a URL query value", `https://example.test/?session=${sessionKey}`],
+      ["a fenced code block", `\`\`\`text\n${sessionKey}\n\`\`\``],
+    ])("does not link %s", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      expect(fragment.querySelector("a[data-session-key]")).toBeNull();
+    });
+
+    it("keeps punctuation outside the link and rejects embedded word matches", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(`(${sessionKey}), x${sessionKey}`, { sessionLinks: true }),
+      );
+      const links = fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link");
+      expect(links).toHaveLength(1);
+      expect(links[0]?.textContent).toBe(sessionKey);
+      expect(fragment.textContent).toBe(`(${sessionKey}), x${sessionKey}\n`);
+    });
+
+    it("stays deterministic across streaming tail renders", () => {
+      const options = { sessionLinks: true } as const;
+      const first = htmlFragment(toStreamingMarkdownHtml(`Open ${sessionKey}`, options));
+      const extended = htmlFragment(
+        toStreamingMarkdownHtml(`Open ${sessionKey} and continue`, options),
+      );
+      expect(first.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
+      expect(extended.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
     });
   });
 
@@ -507,6 +625,23 @@ describe("toSanitizedMarkdownHtml links", () => {
         "a-very-long-organization-name/a-very-long-repository-name#3434",
       );
       expect(link?.classList.contains("markdown-bare-url")).toBe(true);
+    });
+
+    it.each([
+      ["a files-tab path", "https://github.com/openclaw/openclaw/pull/3434/files"],
+      ["a commits path", "https://github.com/openclaw/openclaw/pull/3434/commits"],
+      [
+        "an issue comment fragment",
+        "https://github.com/openclaw/openclaw/issues/3434#issuecomment-1",
+      ],
+      ["a review comment query", "https://github.com/openclaw/openclaw/pull/3434?tab=files"],
+      ["a diff anchor", "https://github.com/openclaw/openclaw/pull/3434/files#diff-abc123"],
+    ])("keeps the specific destination visible for %s", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.classList.contains("markdown-github-link")).toBe(true);
+      expect(link?.textContent).toBe(input);
+      expect(link?.getAttribute("href")).toBe(input);
     });
 
     it.each([

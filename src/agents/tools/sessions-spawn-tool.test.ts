@@ -10,12 +10,12 @@ import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "../subagents/swarm/swarm-code-mode.js";
-import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
+  const inProcessCreationMock = vi.fn();
   const getSubagentDeliveryBacklogPressureMock = vi.fn(() => ({
     suspended: 0,
     blocked: false,
@@ -25,6 +25,7 @@ const hoisted = vi.hoisted(() => {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
     registerSubagentRunMock,
+    inProcessCreationMock,
     getSubagentDeliveryBacklogPressureMock,
     runSubagentProgressMock,
   };
@@ -44,6 +45,15 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
   registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
   getSubagentDeliveryBacklogPressure: () => hoisted.getSubagentDeliveryBacklogPressureMock(),
 }));
+
+vi.mock("./in-process-gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./in-process-gateway.js")>();
+  return {
+    ...actual,
+    callInProcessGatewayToolWithCreation: (...args: unknown[]) =>
+      hoisted.inProcessCreationMock(...args),
+  };
+});
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
@@ -74,6 +84,7 @@ describe("sessions_spawn tool", () => {
       runId: "run-acp",
     });
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.inProcessCreationMock.mockReset();
     hoisted.getSubagentDeliveryBacklogPressureMock
       .mockReset()
       .mockReturnValue({ suspended: 0, blocked: false });
@@ -425,6 +436,8 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain("when the user asks to create/open a thread");
     expect(tool.description).toContain('no `mode="run"`');
     expect(tool.description).toContain("inherits the caller tool-policy ceiling");
+    expect(tool.description).toContain("session URL on the first line");
+    expect(tool.description).toContain("`Owner: <label>` on the second line");
     expect(tool.description).toContain("`tools.sessions.visibility`");
     expect(schema.properties?.runtime?.description).toContain("visible=true");
     expect(schema.properties?.mode?.description).toContain("Omit with visible=true");
@@ -828,6 +841,8 @@ describe("sessions_spawn tool", () => {
       });
 
       expect(result.details).toMatchObject({ status: "accepted" });
+      expect(result.details).toMatchObject({ owner: { type: "agent", id: "main" } });
+      expect(result.details).not.toHaveProperty("sessionUrl");
       expect(callGateway).toHaveBeenCalledWith("sessions.create", expect.objectContaining({ cwd }));
     });
   });
@@ -892,18 +907,20 @@ describe("sessions_spawn tool", () => {
   });
 
   it("creates visible sessions while carrying inherited tool restrictions forward", async () => {
-    const callGateway = vi.fn(async () => ({
+    hoisted.inProcessCreationMock.mockResolvedValue({
       key: "agent:main:dashboard:restricted-child",
       runStarted: true,
       runId: "run-visible-restricted",
-    })) as InProcessGatewayCaller;
+    });
     const registerRun = vi.fn();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      config: { agents: { list: [{ id: "main" }] } },
+      config: {
+        agents: { list: [{ id: "main", identity: { name: "Roboclaw" } }] },
+        gateway: { publicOrigin: "https://openclaw.example", controlUi: { basePath: "/control" } },
+      },
       inheritedToolAllowlist: ["read", "sessions_spawn"],
       inheritedToolDenylist: ["exec"],
-      callGateway,
       registerRun,
       countActiveRuns: () => 0,
     });
@@ -918,8 +935,10 @@ describe("sessions_spawn tool", () => {
       status: "accepted",
       childSessionKey: "agent:main:dashboard:restricted-child",
       runId: "run-visible-restricted",
+      sessionUrl: "https://openclaw.example/control/chat/main/dashboard/restricted-child",
+      owner: { type: "agent", id: "main", label: "Roboclaw" },
     });
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
       "sessions.create",
       expect.objectContaining({
         agentId: "main",
@@ -927,6 +946,17 @@ describe("sessions_spawn tool", () => {
         parentSessionKey: "agent:main:main",
         spawnDepth: 1,
       }),
+      {
+        via: "spawn",
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: "agent:main:main",
+        completionOwnerSessionKey: "agent:main:main",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
     );
     expect(registerRun).toHaveBeenCalledWith(
       expect.objectContaining({

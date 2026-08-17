@@ -518,7 +518,7 @@ describe("telegram user Crabbox proof log polling", () => {
         mode: "password",
         password: { id: "OPENCLAW_GATEWAY_PASSWORD", source: "env" },
       },
-      tailscale: { mode: "funnel", resetOnExit: true },
+      tailscale: { mode: "funnel" },
     });
     expect(config.mcp.servers.fixture).toEqual({
       args: ["/repo/scripts/e2e/mcp-app-conformance-server.mjs"],

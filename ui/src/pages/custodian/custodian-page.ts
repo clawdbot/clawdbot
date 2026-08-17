@@ -39,17 +39,11 @@ export class CustodianPage extends OpenClawLightDomElement {
   private subscribedStore: CustodianSessionStore | null = null;
   private storeCleanup: (() => void) | null = null;
   private channelsSource: ApplicationContext["channels"] | null = null;
-  private channelRefreshRequested = false;
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.channels,
     (channels) => {
       this.channelsSource = channels;
-      this.channelRefreshRequested = false;
-      const stop = channels.subscribe((channelState) => {
-        if (!channelState.connected) {
-          // Disconnect invalidates an in-flight refresh; reconnect must be able to retry.
-          this.channelRefreshRequested = false;
-        }
+      const stop = channels.subscribe(() => {
         this.ensureOnboardingChannelStatus();
         this.requestUpdate();
       });
@@ -95,7 +89,7 @@ export class CustodianPage extends OpenClawLightDomElement {
 
   private ensureOnboardingChannelStatus(): void {
     const channels = this.channelsSource;
-    if (!this.onboarding || !channels || this.channelRefreshRequested) {
+    if (!this.onboarding || this.store.channelOnboardingNudgeClosed || !channels) {
       return;
     }
     const channelState = channels.state;
@@ -107,7 +101,6 @@ export class CustodianPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    this.channelRefreshRequested = true;
     void channels.refresh(false);
   }
 
@@ -199,10 +192,18 @@ export class CustodianPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    const channelSnapshot = this.channelsSource?.state.channelsSnapshot ?? null;
+    const channelState = this.channelsSource?.state;
+    const channelSnapshot = channelState?.channelsSnapshot ?? null;
+    const channelStatusError =
+      this.onboarding && !this.store.channelOnboardingNudgeClosed && channelState?.connected
+        ? (channelState?.channelsError ?? null)
+        : null;
     const showChannelOnboardingNudge =
       this.onboarding &&
       !this.store.channelOnboardingNudgeClosed &&
+      channelState?.connected &&
+      !channelState.channelsLoading &&
+      channelStatusError === null &&
       channelSnapshot !== null &&
       channelSnapshot.partial !== true &&
       !channelSnapshotHasActiveChannel(channelSnapshot);
@@ -272,6 +273,9 @@ export class CustodianPage extends OpenClawLightDomElement {
           .onboarding=${this.onboarding}
           .newAgentIntent=${this.newAgentIntent}
           .showChannelOnboardingNudge=${showChannelOnboardingNudge}
+          .channelOnboardingError=${channelStatusError}
+          .channelOnboardingRetrying=${channelState?.channelsLoading ?? false}
+          .onRetryChannelOnboarding=${() => void this.channelsSource?.refresh(false)}
           .historyContent=${historyContent}
         ></openclaw-custodian-surface>
       </section>
