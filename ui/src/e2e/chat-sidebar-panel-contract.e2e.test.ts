@@ -291,6 +291,27 @@ suite.define(() => {
     expect(await companionMenu.count()).toBe(1);
     expect(await contentActions.locator(":scope > button").count()).toBe(0);
 
+    const tabPadding = await page
+      .locator(".side-panel__header .tabstrip-tab[active]")
+      .evaluate((tab) => {
+        const tabBase = tab.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
+        const leadingGlyph = tab.querySelector<HTMLElement>(".tabstrip-tab__icon svg");
+        const close = tab.nextElementSibling;
+        const trailingGlyph = close?.querySelector<HTMLElement>("svg");
+        if (!(close instanceof HTMLElement) || !tabBase || !leadingGlyph || !trailingGlyph) {
+          throw new Error("Active side-panel tab must render both edge glyphs");
+        }
+        const tabBounds = tabBase.getBoundingClientRect();
+        const closeBounds = close.getBoundingClientRect();
+        const leadingBounds = leadingGlyph.getBoundingClientRect();
+        const trailingBounds = trailingGlyph.getBoundingClientRect();
+        return {
+          leading: leadingBounds.left - tabBounds.left,
+          trailing: closeBounds.right - trailingBounds.right,
+        };
+      });
+    expect(tabPadding.trailing).toBeCloseTo(tabPadding.leading, 0);
+
     await page.locator(".side-panel-type-menu__trigger").click();
     await page.locator(".side-panel-type-menu__item").filter({ hasText: "Discussion" }).click();
     const discussionAction = contentActions.locator(

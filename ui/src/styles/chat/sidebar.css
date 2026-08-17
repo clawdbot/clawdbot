@@ -427,7 +427,7 @@ openclaw-chat-sidebar-region,
   align-items: center;
   justify-content: flex-start;
   gap: 7px;
-  padding: 0 8px;
+  padding: 0 0 0 8px;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -510,10 +510,10 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header .tabstrip-tab__close {
-  width: 16px;
-  min-width: 16px;
+  width: 28px;
+  min-width: 28px;
   height: 28px;
-  flex: 0 0 16px;
+  flex: 0 0 28px;
   align-self: center;
   margin: 0;
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
