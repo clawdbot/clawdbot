@@ -419,6 +419,12 @@ export const streamOpenAICompletions: StreamFunction<
         finishTextBlock();
       };
       const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
+        if (!output.openclawDelivery?.textPhaseRequiresTerminal) {
+          output.openclawDelivery = {
+            ...output.openclawDelivery,
+            textPhaseRequiresTerminal: true,
+          };
+        }
         if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
           reasoningTagTextPartitioner.markStrict();
         }

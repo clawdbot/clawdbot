@@ -361,6 +361,12 @@ export async function processCompletionsStream(
     currentBlock = null;
   };
   const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
+    if (!output.openclawDelivery?.textPhaseRequiresTerminal) {
+      output.openclawDelivery = {
+        ...output.openclawDelivery,
+        textPhaseRequiresTerminal: true,
+      };
+    }
     if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
       reasoningTagTextPartitioner.markStrict();
     }

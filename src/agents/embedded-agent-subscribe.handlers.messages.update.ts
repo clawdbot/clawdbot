@@ -205,6 +205,9 @@ export function handleMessageUpdate(
     evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
   const isPhasePendingCompletionsText =
     !deliveryPhase && isOpenAiCompletionsAssistantMessage(partialAssistant);
+  const isPhasePendingReasoningCompletionsText =
+    isPhasePendingCompletionsText &&
+    partialAssistant.openclawDelivery?.textPhaseRequiresTerminal === true;
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -288,7 +291,9 @@ export function handleMessageUpdate(
     }
   }
 
-  if (skipLiveStream) {
+  // A completions stream cannot classify text interrupted by later reasoning
+  // until terminal. Keep that text out of live reply lanes until its phase resolves.
+  if (skipLiveStream || isPhasePendingReasoningCompletionsText) {
     return;
   }
 

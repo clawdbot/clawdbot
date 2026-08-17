@@ -315,6 +315,31 @@ function postedText(onBlockReply: ReturnType<typeof vi.fn>): string {
 }
 
 describe("Chat Completions pre-tool narration", () => {
+  it("withholds reasoning-associated unphased text from live partial replies", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onPartialReply = vi.fn();
+    subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-completions-reasoning-pending",
+      onPartialReply,
+    });
+
+    const message = {
+      role: "assistant",
+      api: "openai-completions",
+      openclawDelivery: { textPhaseRequiresTerminal: true },
+      content: [{ type: "text", text: "Interim text." }],
+    } as unknown as AssistantMessage;
+    emit({ type: "message_start", message });
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Interim text." },
+    });
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
   it("withholds pre-tool narration from durable text_end block replies", () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
@@ -362,10 +387,12 @@ describe("Chat Completions pre-tool narration", () => {
   it("delivers permanently unphased ordinary text in prefix-before-suffix order", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
     subscribeEmbeddedAgentSession({
       session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
       runId: "run-completions-answer",
       onBlockReply,
+      onPartialReply,
       blockReplyBreak: "text_end",
       blockReplyChunking: { minChars: 4, maxChars: 200 },
     });
@@ -384,6 +411,7 @@ describe("Chat Completions pre-tool narration", () => {
     emit({ type: "message_end", message: completionsAssistant("prefix suffix") });
 
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalled());
+    expect(onPartialReply).toHaveBeenCalledWith(expect.objectContaining({ text: "prefix" }));
     expect(postedText(onBlockReply)).toContain("prefix suffix");
   });
 

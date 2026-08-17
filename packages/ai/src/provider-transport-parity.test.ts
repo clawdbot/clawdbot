@@ -294,6 +294,7 @@ async function observeStream(stream: AssistantMessageEventStreamLike): Promise<{
       "model",
       "responseId",
       "responseModel",
+      "openclawDelivery",
       "usage",
       "stopReason",
       "diagnostics",
@@ -585,6 +586,9 @@ describe("provider and transport observable parity fixtures", () => {
           textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
         },
       ]);
+      expect(hiddenReasoningResult.terminal.openclawDelivery).toEqual({
+        textPhaseRequiresTerminal: true,
+      });
 
       const trailingReasoningResult = await runOpenAi(
         implementation,
