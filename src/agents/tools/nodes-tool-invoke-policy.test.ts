@@ -39,8 +39,13 @@ describe("generic node invoke policy", () => {
     {
       name: "node-hosted MCP",
       command: "mcp.tools.call.v1",
-      descriptors: [],
-      expectedTool: "node-hosted MCP",
+      descriptors: [
+        {
+          nodeId: "node-1",
+          descriptor: { name: "docs_search", command: "mcp.tools.call.v1" },
+        },
+      ],
+      rawToolName: "docs_search",
     },
     {
       name: "node-published plugin tool",
@@ -48,14 +53,20 @@ describe("generic node invoke policy", () => {
       descriptors: [
         { nodeId: "node-1", descriptor: { name: "remote_secret", command: "remote.secret" } },
       ],
-      expectedTool: "remote_secret",
+      rawToolName: "remote_secret",
     },
   ])("blocks raw $name commands in favor of policy-filtered tools", async (testCase) => {
     mocks.listConnectedNodePluginTools.mockReturnValue(testCase.descriptors);
 
-    await expect(invoke(testCase.command)).rejects.toThrow(
-      `use the dedicated ${testCase.expectedTool} tool`,
+    const error = await invoke(testCase.command).then(
+      () => undefined,
+      (cause: unknown) => cause,
     );
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain(
+      "use the matching dedicated agent tool if available; otherwise this command is disabled by tool policy",
+    );
+    expect(String(error)).not.toContain(testCase.rawToolName);
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
@@ -80,7 +91,7 @@ describe("generic node invoke policy", () => {
     ]);
 
     await expect(execute("device_status", {})).rejects.toThrow(
-      "use the dedicated remote_status tool",
+      "use the matching dedicated agent tool if available; otherwise this command is disabled by tool policy",
     );
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
