@@ -21,7 +21,6 @@ import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveTerminalThemeMode } from "./app-root.ts";
 import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
-import { findInlineApproval } from "./approval-presentation.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
@@ -275,6 +274,15 @@ export function renderApplicationShell(host: ShellViewHost) {
   const custodianPanelAvailable =
     gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
   const activeRoute = host.routeState.routeId ?? "chat";
+  // Chat has an offline outbox, New Session keeps a local draft, and Appearance
+  // persists local preference intent for replay. Their server actions are
+  // independently gated; other pages cannot submit useful disconnected work.
+  const pageActionsBlocked =
+    gatewaySnapshot.phase === "reload-required" ||
+    (!gatewayConnected &&
+      activeRoute !== "chat" &&
+      activeRoute !== "new-session" &&
+      activeRoute !== "appearance");
   // Plugin tabs share one route; the search picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
@@ -347,9 +355,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = isSessionRouteId(activeRoute) || activeRoute === "new-session";
   const custodianRoute = activeRoute === "custodian";
-  const inlineApproval = isSessionRouteId(activeRoute)
-    ? findInlineApproval(overlaySnapshot.approvalQueue, host.activeSessionKey)
-    : null;
   if (!settingsTakeover) {
     Object.assign(host.navigationSidebar, {
       basePath: context.basePath,
@@ -599,7 +604,14 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: () => host.refreshControlUi(),
           onHoldUpdate: () => context.overlays.holdUpdate(),
         })}
+        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+          ? html`<div class="connection-action-block" role="status" aria-live="polite">
+              ${t("connection.actionsUnavailable")}
+            </div>`
+          : nothing}
         <openclaw-router-outlet
+          ?inert=${pageActionsBlocked}
+          aria-disabled=${pageActionsBlocked ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}
@@ -649,7 +661,6 @@ export function renderApplicationShell(host: ShellViewHost) {
               busy: overlaySnapshot.approvalBusy,
               errors: overlaySnapshot.approvalErrors,
               nowMs: overlaySnapshot.approvalNowMs,
-              inlineApprovalId: inlineApproval?.id ?? null,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<typeof context.overlays.decideApproval>[0],

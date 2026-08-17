@@ -690,11 +690,7 @@ export function createSessionWorkspaceProps(
   ) {
     loadWorkspace(state, workspace);
   }
-  const canOpenDiff =
-    isGatewayMethodAdvertised(state, "sessions.diff") === true &&
-    Boolean(state.client) &&
-    workspace.list?.sessionKey === state.sessionKey &&
-    workspace.list.gitCheckout !== false;
+  const diffContent = resolveSessionDiffSidebarContent(state);
   return {
     collapsed: options?.expanded === true ? false : workspace.collapsed,
     sessionKey: state.sessionKey,
@@ -734,10 +730,20 @@ export function createSessionWorkspaceProps(
       }, 160);
     },
     onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
-    onOpenDiff: canOpenDiff
-      ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
-      : undefined,
+    onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
+}
+
+export function resolveSessionDiffSidebarContent(
+  state: SessionWorkspaceHost,
+): SidebarContent | null {
+  const workspace = getWorkspaceState(state);
+  const canOpenDiff =
+    isGatewayMethodAdvertised(state, "sessions.diff") === true &&
+    Boolean(state.client) &&
+    workspace.list?.sessionKey === state.sessionKey &&
+    workspace.list.gitCheckout !== false;
+  return canOpenDiff ? buildSessionDiffSidebarContent(state) : null;
 }
 
 /** Sidebar payload whose loader refetches sessions.diff for the pane's session. */

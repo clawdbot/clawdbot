@@ -291,7 +291,9 @@ export function createApplicationOverlays(
         updateRunning: false,
       };
       updateCampaignPoller.stop();
-      if (!next.client) {
+      if (next.phase === "reload-required") {
+        snapshot = { ...snapshot, controlUiRefreshRequired: true };
+      } else if (!next.client) {
         connectedEpoch = 0;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
       } else if (next.hello) {
@@ -561,14 +563,15 @@ export function createApplicationOverlays(
         ? promptState.execApprovalQueue.find((entry) => entry.id === approvalId)
         : promptState.execApprovalQueue[0];
       const client = gateway.snapshot.client;
-      if (
-        !active ||
-        !client ||
-        promptState.execApprovalBusy ||
-        disposed ||
-        gateway.snapshot.phase !== "connected" ||
-        !readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals
-      ) {
+      if (!active || promptState.execApprovalBusy || disposed) {
+        return;
+      }
+      if (!client || gateway.snapshot.phase !== "connected") {
+        promptState.execApprovalErrors.set(active.id, t("sessionsView.actionRequiresConnection"));
+        publish();
+        return;
+      }
+      if (!readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals) {
         return;
       }
       promptState.execApprovalBusy = true;

@@ -19,6 +19,14 @@ type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "act
 
 const PREVIOUS_RESULT_RECONCILING_MESSAGE =
   "The previous cloud turn's workspace result is still reconciling; it retries automatically — try again shortly.";
+const CURRENT_WORKER_BUILD_REMEDIATION =
+  "redispatch the session so its worker can bootstrap the current build before retrying.";
+
+function withCurrentWorkerBuildRemediation(reason: string): string {
+  return reason.endsWith(CURRENT_WORKER_BUILD_REMEDIATION)
+    ? reason
+    : `${reason}; ${CURRENT_WORKER_BUILD_REMEDIATION}`;
+}
 
 function required(value: string | undefined, field: string): string {
   const normalized = value?.trim();
@@ -107,7 +115,7 @@ export function requireActivePlacement(
 ): ActiveWorkerPlacement {
   const failureDetail =
     placement.state === "failed"
-      ? `: ${placement.terminalReason ?? placement.recoveryError}; redispatch the session so its worker can bootstrap the current build before retrying.`
+      ? `: ${withCurrentWorkerBuildRemediation(placement.terminalReason ?? placement.recoveryError)}`
       : "";
   if (
     placement.state !== "active" ||

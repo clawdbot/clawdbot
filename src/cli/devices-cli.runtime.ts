@@ -24,8 +24,10 @@ import { isLoopbackHost } from "../gateway/net.js";
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
+} from "../infra/device-pairing-approval.js";
+import { summarizeDeviceTokens } from "../infra/device-pairing-tokens.js";
+import {
   listDevicePairing,
-  summarizeDeviceTokens,
   type PairedDevice as InfraPairedDevice,
 } from "../infra/device-pairing.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";

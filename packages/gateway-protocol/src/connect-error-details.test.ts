@@ -45,10 +45,13 @@ describe("readConnectErrorDetailCode", () => {
 });
 
 describe("readControlUiBuildMismatchId", () => {
-  it("returns a bounded reload target", () => {
+  it.each([
+    ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+  ])("returns a bounded reload target for %s", (code) => {
     expect(
       readControlUiBuildMismatchId({
-        code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+        code,
         gatewayBuildId: "gateway-build",
         reloadRequired: true,
       }),

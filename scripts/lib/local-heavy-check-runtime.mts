@@ -60,6 +60,16 @@ export function resolveLocalHeavyCheckEnv(env: Env = process.env) {
   };
 }
 
+/** Mark every nested heavy-check wrapper as covered by one parent-held lock. */
+export function withLocalHeavyCheckLockHeld(env: Env): Env {
+  return {
+    ...env,
+    OPENCLAW_OXLINT_SKIP_LOCK: "1",
+    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+    OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+  };
+}
+
 /** Resolve a repo tool from this worktree or the primary checkout's installed toolchain. */
 export function resolveRepoToolBinPath(
   toolName: string,

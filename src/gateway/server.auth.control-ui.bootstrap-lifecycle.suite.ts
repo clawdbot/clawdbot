@@ -21,8 +21,8 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
     const { issueDevicePairSetupBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { approveBootstrapDevicePairing, requestDevicePairing } =
-      await import("../infra/device-pairing.js");
+    const { approveBootstrapDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { requestDevicePairing } = await import("../infra/device-pairing.js");
     const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
@@ -222,7 +222,8 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
 
   test("does not consume bootstrap token when node reconcile fails before hello-ok", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
     const reconcileModule = await import("./node-connect-reconcile.js");
     const reconcileSpy = vi
       .spyOn(reconcileModule, "reconcileNodePairingOnConnect")
@@ -301,7 +302,8 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
 
   test("requires approval for bootstrap-auth role upgrades on already-paired devices", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { server, port, prevToken } = await startControlUiServer("secret");

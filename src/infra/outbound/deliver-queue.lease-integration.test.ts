@@ -13,8 +13,7 @@ import {
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
-import { claimDeliveryPlatformSendAttempt } from "./delivery-queue-storage.js";
-import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
+import { claimDeliveryPlatformSendAttempt, enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
   installDeliveryQueueTmpDirHooks,
   readQueuedEntry,

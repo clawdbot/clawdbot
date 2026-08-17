@@ -60,6 +60,21 @@ afterEach(() => {
 });
 
 describe("Control UI refresh nudge", () => {
+  it("flags a terminal build rejection without requiring a hello", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "reload-required",
+      hello: null,
+    });
+
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+    overlays.dispose();
+  });
+
   it("does not flag an independently built configured UI root", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);
@@ -507,6 +522,26 @@ describe("application approval overlays", () => {
       "Approval failed: gateway unavailable",
     );
     expect(overlays.snapshot.approvalBusy).toBe(false);
+    overlays.dispose();
+  });
+
+  it("surfaces a connection error when a rendered approval races a disconnect", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.emitApproval("approval-disconnected", 1_000);
+
+    // The rendered modal can dispatch its click before Lit consumes the
+    // Gateway snapshot notification that removes the stale card.
+    harness.replaceSnapshotWithoutPublishing({ phase: "reconnecting" });
+    await overlays.decideApproval("allow-once", "approval-disconnected");
+
+    expect(overlays.snapshot.approvalErrors.get("approval-disconnected")).toBe(
+      "Connect to the Gateway to change sessions.",
+    );
+    expect(request).not.toHaveBeenCalledWith("exec.approval.resolve", expect.anything());
     overlays.dispose();
   });
 

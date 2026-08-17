@@ -441,22 +441,29 @@ export function createApplicationGateway(
           void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
         }
         const startupPending =
-          !everConnected && willRetry && isRetryableGatewayStartupUnavailableError(error);
+          mismatchedBuildId === null &&
+          !everConnected &&
+          willRetry &&
+          isRetryableGatewayStartupUnavailableError(error);
         if (startupPending && snapshot.phase === "starting") {
           return;
         }
+        const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
         setSnapshot({
           ...snapshot,
           client: nextClient,
-          phase: startupPending
-            ? "starting"
-            : everConnected
-              ? willRetry
-                ? "reconnecting"
-                : "offline"
-              : willRetry
-                ? "connecting"
-                : "stopped",
+          phase:
+            mismatchedBuildId !== null
+              ? "reload-required"
+              : startupPending
+                ? "starting"
+                : everConnected
+                  ? willRetry
+                    ? "reconnecting"
+                    : "offline"
+                  : willRetry
+                    ? "connecting"
+                    : "stopped",
           hello: null,
           canvasPluginSurfaceUrl: null,
           selfUser: null,
@@ -465,9 +472,7 @@ export function createApplicationGateway(
             : error?.message
               ? formatUiError(error.message)
               : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
-          lastErrorCode: startupPending
-            ? null
-            : (resolveGatewayErrorDetailCode(error) ?? error?.code ?? null),
+          lastErrorCode: startupPending ? null : lastErrorCode,
         });
       },
       onGap: ({ expected, received }) => {

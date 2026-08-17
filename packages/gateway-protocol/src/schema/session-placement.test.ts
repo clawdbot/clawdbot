@@ -5,6 +5,7 @@ import {
   SessionPlacementStateSchema,
   validateSessionsDispatchParams,
   validateSessionsReclaimParams,
+  validateSessionsReclaimResult,
 } from "../index.js";
 
 const placementStates = [
@@ -48,6 +49,7 @@ describe("session dispatch protocol schemas", () => {
         key: "agent:main:dispatch",
         agentId: "main",
         profileId: "development",
+        machineClass: "beast",
       }),
     ).toBe(true);
     expect(
@@ -67,6 +69,27 @@ describe("session dispatch protocol schemas", () => {
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",
+        deviceId: "device-1",
+        machineClass: "beast",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        profileId: "development",
+        machineClass: "",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        profileId: "development",
+        machineClass: "x".repeat(129),
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
         profileId: "development",
         task: "run remotely",
       }),
@@ -80,6 +103,33 @@ describe("session dispatch protocol schemas", () => {
     expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", profileId: "dev" })).toBe(
       false,
     );
+  });
+
+  it("accepts exactly the reclaim owner's terminal outcomes", () => {
+    const result = {
+      ok: true,
+      key: "agent:main:dispatch",
+      sessionId: "session-dispatch",
+    };
+
+    expect(
+      validateSessionsReclaimResult({
+        ...result,
+        placement: { state: "local", ...basePlacement },
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsReclaimResult({
+        ...result,
+        placement: { state: "reclaimed", ...basePlacement },
+      }),
+    ).toBe(true);
+    for (const placement of [
+      { state: "requested", ...basePlacement },
+      { state: "active", ...basePlacement, ...workerOwnedFields },
+    ]) {
+      expect(validateSessionsReclaimResult({ ...result, placement })).toBe(false);
+    }
   });
 
   it("keeps placement states closed", () => {

@@ -175,13 +175,14 @@ describe("config io paths", () => {
         expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
       );
       expect(snapshot.warnings).toContainEqual({
-        path: "",
+        path: "agents.defaults.contextTokens",
         message: "Removed agents.defaults.contextTokens.",
       });
       expect(snapshot.warnings).toContainEqual({
-        path: "",
+        path: "agents.defaults.contextTokens",
         message: expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
       });
+      expect(snapshot.warnings).not.toContainEqual(expect.objectContaining({ path: "" }));
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
     });
   });
@@ -248,11 +249,13 @@ describe("config io paths", () => {
       load();
       expect(logger.warn).toHaveBeenCalledTimes(3);
 
+      // A null root is invalid config (throws) and, like the invalid-port
+      // step above, preserves the logged-warning fingerprint.
       await fs.writeFile(configPath, "null");
-      load();
+      expect(load).toThrow();
       await writeRemovedPlugin("google-gemini-cli-auth");
       load();
-      expect(logger.warn).toHaveBeenCalledTimes(4);
+      expect(logger.warn).toHaveBeenCalledTimes(3);
     });
   });
 

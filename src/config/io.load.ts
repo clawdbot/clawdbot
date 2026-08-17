@@ -79,38 +79,24 @@ export function loadConfigFromContext(
       );
     }
     for (const diagnostic of [
-      ...contextBudgetMigration.changes,
-      ...contextBudgetMigration.warnings,
+      ...contextBudgetMigration.changes.map(({ message }) => message),
+      ...contextBudgetMigration.warnings.map(({ message }) => message),
       ...rosterMigration.diagnostics,
     ]) {
       deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }
     warnOnConfigMiskeys(validationConfigRaw, deps.logger);
-    if (typeof validationConfigRaw !== "object" || validationConfigRaw === null) {
-      loggedConfigWarningFingerprints.delete(configPath);
-      context.observeLoadConfigSnapshot(
-        createConfigFileSnapshot({
-          path: configPath,
-          exists: true,
-          raw: snapshotRaw,
-          parsed: snapshotParsed,
-          sourceConfig: {},
-          valid: true,
-          runtimeConfig: {},
-          hash,
-          issues: [],
-          warnings: [],
-          legacyIssues: [],
-        }),
-      );
-      return {};
-    }
-    const duplicates = findDuplicateAgentDirs(validationConfigRaw as OpenClawConfig, {
-      env: deps.env,
-      homedir: deps.homedir,
-    });
-    if (duplicates.length > 0) {
-      throw new DuplicateAgentDirError(duplicates);
+    // A scalar/null root (truncated or clobbered file) must fail validation
+    // below like any invalid config — never load as an empty config marked
+    // valid, which would run with defaults and poison lastKnownGood.
+    if (typeof validationConfigRaw === "object" && validationConfigRaw !== null) {
+      const duplicates = findDuplicateAgentDirs(validationConfigRaw as OpenClawConfig, {
+        env: deps.env,
+        homedir: deps.homedir,
+      });
+      if (duplicates.length > 0) {
+        throw new DuplicateAgentDirError(duplicates);
+      }
     }
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
       effectiveConfigRaw,

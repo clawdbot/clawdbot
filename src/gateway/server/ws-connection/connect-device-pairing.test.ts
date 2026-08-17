@@ -6,7 +6,8 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { replaceConfigFile } from "../../../config/config.js";
 import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
-import { ensureDeviceToken, getPairedDevice } from "../../../infra/device-pairing.js";
+import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
+import { getPairedDevice } from "../../../infra/device-pairing.js";
 import {
   loadDeviceIdentity,
   openTrackedWs,

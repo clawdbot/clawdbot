@@ -1,6 +1,5 @@
 // Covers config audit reporting for files, paths, and values.
-import fs from "node:fs";
-import { promises as fsPromises } from "node:fs";
+import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";

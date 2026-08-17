@@ -383,16 +383,39 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
 
-Codex app-server also honors an optional `codex` block on each server. This is
-OpenClaw projection metadata for Codex app-server threads only; it does not
-change ACP sessions, generic Codex harness config, or other runtime adapters.
-Use non-empty `codex.agents` to project a server only into specific OpenClaw
-agent ids. Empty, blank, or invalid agent lists are rejected by config
-validation and omitted by the runtime projection path instead of becoming
-global. Use `codex.defaultToolsApprovalMode` (`auto`, `prompt`, or `approve`)
-to emit Codex's native `default_tools_approval_mode` for a trusted server.
-OpenClaw strips the `codex` metadata before handing the native `mcp_servers`
-config to Codex.
+### Codex tool approvals
+
+Codex app-server approval-gates tools that have no MCP safety annotations when
+the server uses the default `auto` mode. Interactive turns can approve those
+calls in the Control UI. For a server you trust, set the mode while adding it:
+
+```bash
+openclaw mcp add memory \
+  --command npx \
+  --arg -y \
+  --arg @modelcontextprotocol/server-memory \
+  --approval approve
+```
+
+For an existing saved server, update only its approval mode:
+
+```bash
+openclaw mcp configure memory --approval approve
+```
+
+The flag writes `codex.defaultToolsApprovalMode`, which accepts `auto`,
+`prompt`, or `approve`. `approve` bypasses per-call approval for every tool on
+that server, so use it only for trusted servers. `mcp probe` and `mcp doctor
+--probe` warn when a server remains in `auto` mode and none of its tools has
+safety annotations.
+
+The optional `codex` block is OpenClaw projection metadata for Codex app-server
+threads only; it does not change ACP sessions, generic Codex harness config, or
+other runtime adapters. Use non-empty `codex.agents` to project a server only
+into specific OpenClaw agent ids. Empty, blank, or invalid agent lists are
+rejected by config validation and omitted by the runtime projection path
+instead of becoming global. OpenClaw strips the `codex` metadata before handing
+the native `mcp_servers` config to Codex.
 
 ### Saved MCP server definitions
 
@@ -419,9 +442,9 @@ Notes:
 - `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
 - `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
 - `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
-- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags.
+- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
 - `set` expects one JSON object value on the command line.
-- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
+- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
 - `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
@@ -590,6 +613,8 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
         "docs": {
           "launch": "streamable-http https://mcp.example.com/mcp",
           "tools": 2,
+          "codexApprovalMode": "auto",
+          "approvalHint": "tools have no safety annotations; calls will require interactive approval",
           "resources": true,
           "listChanged": {
             "tools": true,
@@ -603,7 +628,7 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
     }
     ```
 
-    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
+    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. Each server includes its effective `codexApprovalMode`; `approvalHint` appears when that mode is `auto` and the discovered tools have no safety annotations. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
 
   </Accordion>
 </AccordionGroup>
@@ -634,6 +659,9 @@ Example config shape:
         "toolFilter": {
           "include": ["search_*"],
           "exclude": ["admin_*"]
+        },
+        "codex": {
+          "defaultToolsApprovalMode": "approve"
         }
       }
     }

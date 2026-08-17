@@ -157,6 +157,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  protected override firstUpdated(): void {
+    if (this.runtime) {
+      globalThis.dispatchEvent(new Event("openclaw-control-ui-rendered"));
+    }
+  }
+
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
     const sourceChanged = gateway !== this.loginGatewaySource;
     if (sourceChanged) {
@@ -298,8 +304,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
         </openclaw-tooltip-provider>
       `;
     }
-    const showLoginGate =
-      !gatewayConnected && (this.loginGatePinned || gatewaySnapshot.phase !== "reconnecting");
+    const shellOwnsRecovery =
+      gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
+    const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
     if (showLoginGate) {
       return html`
         <openclaw-tooltip-provider>

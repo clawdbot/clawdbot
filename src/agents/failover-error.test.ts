@@ -829,10 +829,16 @@ describe("failover-error", () => {
       ).toBe(true);
     });
 
-    it("returns true for direct and nested runner availability failures", () => {
-      const unavailable = new Error("The device runner is offline");
-      unavailable.name = "WorkerRunnerUnavailableError";
-      for (const error of [unavailable, new Error("worker turn failed", { cause: unavailable })]) {
+    it.each([
+      ["availability", "WorkerRunnerUnavailableError", "The device runner is offline"],
+      ["capacity", "WorkerRunnerCapacityError", "device worker capacity remained full"],
+    ])("returns true for direct and nested runner %s failures", (_label, name, message) => {
+      const coordination = new Error(message);
+      coordination.name = name;
+      for (const error of [
+        coordination,
+        new Error("worker turn failed", { cause: coordination }),
+      ]) {
         expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
         expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
       }

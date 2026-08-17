@@ -24,8 +24,8 @@ import {
   loadPluginManifestRegistryCore,
   type PluginManifestRecord,
   type PluginManifestRegistry,
+  type BundledChannelConfigCollector,
 } from "./manifest-registry.js";
-import type { BundledChannelConfigCollector } from "./manifest-registry.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,

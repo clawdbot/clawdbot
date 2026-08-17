@@ -60,6 +60,7 @@ import {
 } from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
+  createRememberSessionKeyWriter,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
   writeTuiLastSessionKey,
@@ -1043,16 +1044,14 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     });
   };
 
-  const rememberCurrentSessionKey = (sessionKey: string) => {
-    const trimmed = sessionKey.trim();
-    if (!trimmed || trimmed === "unknown") {
-      return;
-    }
-    void writeTuiLastSessionKey({
-      scopeKey: buildLastSessionScopeKeyFor(trimmed),
-      sessionKey: trimmed,
-    }).catch(() => undefined);
-  };
+  const rememberCurrentSessionKey = createRememberSessionKeyWriter({
+    buildScopeKey: buildLastSessionScopeKeyFor,
+    reportFailure: (message) => {
+      chatLog.addSystem(`session memory write failed: ${message}`);
+      tui.requestRender();
+    },
+    write: writeTuiLastSessionKey,
+  });
 
   const restoreRememberedSession = async (expectedConnectionGeneration: number) => {
     if (initialSessionInput || rememberedSessionApplied) {

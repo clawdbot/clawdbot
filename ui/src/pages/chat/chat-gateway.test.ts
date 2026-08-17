@@ -19,6 +19,7 @@ import {
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
+    chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],

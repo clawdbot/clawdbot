@@ -9,8 +9,12 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
   const hostRequest = globalThis.__openclawHostRequest;
+  const hostCancelRequest = globalThis.__openclawHostCancelRequest;
   delete globalThis.__openclawHostRequest;
+  delete globalThis.__openclawHostCancelRequest;
   const bridgeSequences = new Map();
+  const timers = new Map();
+  let nextTimerId = 0;
 
   function safe(value) {
     if (value === undefined) return null;
@@ -33,15 +37,47 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     return typeof encoded === "string" ? encoded : String(value);
   }
 
-  function request(method, args) {
+  function beginRequest(method, args) {
     const methodName = String(method);
     const sequence = (bridgeSequences.get(methodName) ?? 0) + 1;
     bridgeSequences.set(methodName, sequence);
     const bridgeId = "bridge:" + methodName + ":" + String(sequence);
     const id = String(hostRequest(methodName, JSON.stringify(safe(args ?? [])), bridgeId));
-    return new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
     });
+    return { id, promise };
+  }
+
+  function request(method, args) {
+    return beginRequest(method, args).promise;
+  }
+
+  function scheduleTimer(callback, delay, args) {
+    if (typeof callback !== "function") {
+      throw new TypeError("setTimeout callback must be a function");
+    }
+    const numericDelay = Number(delay);
+    const delayMs = Number.isFinite(numericDelay) ? Math.max(0, Math.floor(numericDelay)) : 0;
+    const timerId = ++nextTimerId;
+    const timerRequest = beginRequest("sleep", [delayMs]);
+    timers.set(timerId, timerRequest.id);
+    void timerRequest.promise.then(() => {
+      if (!timers.delete(timerId)) return;
+      callback(...args);
+    });
+    return timerId;
+  }
+
+  function cancelTimer(timerId) {
+    const requestId = timers.get(Number(timerId));
+    if (!requestId) return;
+    timers.delete(Number(timerId));
+    hostCancelRequest(requestId);
+    const entry = pending.get(requestId);
+    if (!entry) return;
+    pending.delete(requestId);
+    entry.resolve(null);
   }
 
   ${CODE_MODE_SWARM_CONTROLLER_SOURCE}
@@ -227,6 +263,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     nodes: { value: nodes, enumerable: true },
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     skills: { value: skills, enumerable: true },
+    setTimeout: { value: (callback, delay, ...args) => scheduleTimer(callback, delay, args), enumerable: true },
+    clearTimeout: { value: cancelTimer, enumerable: true },
     tools: { value: Object.freeze(baseTools), enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
     json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },

@@ -159,6 +159,8 @@ const rootEntries = [
   "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   "src/agents/prepared-model-catalog.worker.ts!",
+  // Spawned through computed sibling URLs by the service-child host and relay.
+  "src/process/supervisor/{service-child-relay,service-child-group-anchor}.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
@@ -812,6 +814,8 @@ const config = {
       "web/vite.config.ts!",
       // Imported directly from the GitHub Actions smoke-plan script.
       "src/ci-smoke-plan.ts!",
+      // Imported directly from the GitHub Actions evidence workflow.
+      "src/profile-evidence-sharding.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),

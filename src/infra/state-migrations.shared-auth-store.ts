@@ -599,6 +599,7 @@ export async function migrateSharedAuthStore(params: {
         now,
       });
       const sourceCleaned = cleanupSourceRows({ env, sourcePath: params.detected.sourcePath });
+      const relocatedRows = rows.store !== null || rows.state !== null || sourceCleaned;
       finalizeMigration({
         env,
         sourcePath: params.detected.sourcePath,
@@ -608,13 +609,15 @@ export async function migrateSharedAuthStore(params: {
       });
       return {
         changes: [
-          ...(ownershipFlipped ? ["Relocated shared auth profiles into shared SQLite state."] : []),
+          ...(ownershipFlipped && relocatedRows
+            ? ["Relocated shared auth profiles into shared SQLite state."]
+            : []),
           ...(sourceCleaned && !ownershipFlipped
             ? ["Completed legacy shared auth row cleanup."]
             : []),
         ],
         warnings: [],
-        ...(ownershipFlipped
+        ...(ownershipFlipped && rows.store !== null
           ? {
               notices: ["The main agent no longer owns shared credentials and can now be deleted."],
             }

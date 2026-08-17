@@ -33,6 +33,7 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
+  withLocalHeavyCheckLockHeld,
 } from "./lib/local-heavy-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
@@ -113,6 +114,7 @@ const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+const RATCHET_BASE_OWNER_PATH = "scripts/lib/ratchet-base.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
@@ -155,13 +157,7 @@ if (!isDirectRun()) {
 }
 
 export function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
-  const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
-  return {
-    ...resolvedBaseEnv,
-    OPENCLAW_OXLINT_SKIP_LOCK: "1",
-    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-    OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
-  };
+  return withLocalHeavyCheckLockHeld(resolveLocalHeavyCheckEnv(baseEnv));
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
@@ -627,10 +623,12 @@ export function createChangedCheckPlan(
     ]);
   }
   if (
-    result.paths.some((filePath) =>
-      /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mts$)/u.test(
-        filePath,
-      ),
+    result.paths.some(
+      (filePath) =>
+        filePath === RATCHET_BASE_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mts$)/u.test(
+          filePath,
+        ),
     )
   ) {
     add("max-lines suppression ratchet", [
@@ -641,10 +639,12 @@ export function createChangedCheckPlan(
     ]);
   }
   if (
-    result.paths.some((filePath) =>
-      /^(?:src\/|ui\/src\/|packages\/|extensions\/|config\/assertion-safety-baseline\.txt$|scripts\/check-assertion-safety-ratchet\.mts$|scripts\/lib\/type-assertion-guard-scope\.mjs$|scripts\/oxlint-boundary-guards\.mjs$)/u.test(
-        filePath,
-      ),
+    result.paths.some(
+      (filePath) =>
+        filePath === RATCHET_BASE_OWNER_PATH ||
+        /^(?:src\/|ui\/src\/|packages\/|extensions\/|config\/assertion-safety-baseline\.txt$|scripts\/check-assertion-safety-ratchet\.mts$|scripts\/lib\/type-assertion-guard-scope\.mjs$|scripts\/oxlint-boundary-guards\.mjs$)/u.test(
+          filePath,
+        ),
     )
   ) {
     add("assertion SAFETY comment ratchet", [

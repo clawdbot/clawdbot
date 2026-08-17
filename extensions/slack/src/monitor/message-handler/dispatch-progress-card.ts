@@ -94,10 +94,7 @@ export function createSlackDraftProgressCardRuntime(params: {
             toolCalls: params.progressReceipt.toolCalls,
             elapsedSeconds: params.progressReceipt.elapsedSeconds,
           }
-        : {
-            receiptSummary: params.progressReceipt.buildSummaryLine(),
-            sessionUrl: resolveSessionUrl(),
-          }),
+        : { sessionUrl: resolveSessionUrl() }),
     });
   };
 

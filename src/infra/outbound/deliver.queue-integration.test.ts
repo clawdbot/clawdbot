@@ -22,8 +22,8 @@ import {
   claimDeliveryPlatformSendAttempt,
   loadPendingDeliveries,
   reserveDeliveryAttempt,
+  enqueueDeliveryOnce,
 } from "./delivery-queue-storage.js";
-import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,

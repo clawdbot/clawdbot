@@ -440,14 +440,12 @@ describe("runNodeDaemonStatus", () => {
     error.name = "ServiceManagerError";
     mocks.service.isLoaded.mockRejectedValue(error);
 
-    await runNodeDaemonStatus({ json: true });
+    await expect(runNodeDaemonStatus({ json: true })).rejects.toThrow(
+      "Node service check failed: systemd unavailable",
+    );
 
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-      error: expect.stringContaining("Node service check failed: systemd unavailable"),
-    });
-    expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain(error.name);
-    expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain(secret);
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
     expect(mocks.runtime.error).not.toHaveBeenCalled();
   });
 

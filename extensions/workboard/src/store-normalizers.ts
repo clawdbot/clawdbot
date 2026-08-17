@@ -264,7 +264,9 @@ export function normalizeBoundedString(
     return fallback;
   }
   if (normalized.length > maxLength) {
-    throw new Error(`${fieldName} must be ${maxLength} characters or fewer.`);
+    throw new Error(
+      `${fieldName} must be ${maxLength} characters or fewer (got ${normalized.length}).`,
+    );
   }
   return normalized;
 }

@@ -60,6 +60,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -4528,7 +4529,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-agent-returned-error-");
     const errorMessage = agentStarted
       ? "LLM idle timeout (120s): no response from model"
-      : "Worker must bootstrap the current build before continuing";
+      : STALE_WORKER_BUILD_REASON;
     mockState.triggerAgentRunStart = agentStarted;
     mockState.dispatchedReplies = [
       {

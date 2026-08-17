@@ -4,7 +4,7 @@ import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-k
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
-import { isReservedSystemAgentId } from "./agent-id.js";
+import { isReservedSystemAgentId, SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
 import { redactSystemAgentConfig } from "./config-redaction.js";
 import {
@@ -413,6 +413,7 @@ export async function executeSystemAgentOperation(
             return await createAgentForOperation({
               name: operation.agentId,
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
+              provenance: { createdVia: "agent", creatorAgentId: SYSTEM_AGENT_ID },
             });
           });
           if (result.status === "error") {

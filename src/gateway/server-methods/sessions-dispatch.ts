@@ -10,7 +10,7 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provider.js";
+import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
@@ -39,11 +39,12 @@ function respondInvalidWorkerSession(respond: RespondFn, message: string): void 
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
 
-async function resolveWorkerSessionTarget(params: {
+function resolveWorkerSessionTarget(params: {
   key: string;
   agentId?: string;
   profileId?: string;
   deviceId?: string;
+  machineClass?: string;
   context: GatewayRequestContext;
   respond: RespondFn;
 }) {
@@ -53,41 +54,15 @@ async function resolveWorkerSessionTarget(params: {
     params.respond(false, undefined, requestedAgent.error);
     return undefined;
   }
-  const profileId = normalizeOptionalString(params.profileId);
-  const deviceId = normalizeOptionalString(params.deviceId);
-  let dispatchTarget:
-    | {
-        profileId: string;
-        deviceId?: undefined;
-        inheritedProfile?: undefined;
-      }
-    | {
-        profileId: string;
-        deviceId: string;
-        inheritedProfile: {
-          providerId: typeof DEVICE_WORKER_PROVIDER_ID;
-          profileSnapshot: { install: "bundle"; settings: { device: string } };
-        };
-      }
-    | undefined;
-  if (profileId && !Object.hasOwn(cfg.cloudWorkers?.profiles ?? {}, profileId)) {
-    respondInvalidWorkerSession(
-      params.respond,
-      `cloud worker profile is not configured: ${profileId}`,
-    );
+  const destination = resolveWorkerPlacementDestination({
+    cfg,
+    profileId: params.profileId,
+    deviceId: params.deviceId,
+    machineClass: params.machineClass,
+  });
+  if (!destination.ok) {
+    respondInvalidWorkerSession(params.respond, destination.error);
     return undefined;
-  }
-  if (profileId) {
-    dispatchTarget = { profileId };
-  } else if (deviceId) {
-    dispatchTarget = {
-      profileId: `device:${deviceId}`,
-      deviceId,
-      inheritedProfile: {
-        providerId: DEVICE_WORKER_PROVIDER_ID,
-        profileSnapshot: { install: "bundle", settings: { device: deviceId } },
-      },
-    };
   }
   const target = loadAccessorSessionEntryForGatewayTarget({
     key: params.key,
@@ -100,7 +75,7 @@ async function resolveWorkerSessionTarget(params: {
     respondInvalidWorkerSession(params.respond, `session not found: ${params.key}`);
     return undefined;
   }
-  return { cfg, target, entry, sessionId, dispatchTarget };
+  return { cfg, target, entry, sessionId, dispatchTarget: destination.value };
 }
 
 function hasManagedSessionWorktree(params: {
@@ -173,11 +148,12 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       respondInvalidWorkerSession(respond, "cloud worker dispatch is not configured");
       return;
     }
-    const resolved = await resolveWorkerSessionTarget({
+    const resolved = resolveWorkerSessionTarget({
       key,
       agentId: params.agentId,
       profileId: params.profileId,
       deviceId: params.deviceId,
+      machineClass: params.machineClass,
       context,
       respond,
     });
@@ -280,7 +256,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       respondInvalidWorkerSession(respond, "cloud worker stop is not configured");
       return;
     }
-    const resolved = await resolveWorkerSessionTarget({
+    const resolved = resolveWorkerSessionTarget({
       key,
       agentId: params.agentId,
       context,

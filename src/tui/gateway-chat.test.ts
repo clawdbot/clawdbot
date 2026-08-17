@@ -104,12 +104,16 @@ describe("GatewayChatClient", () => {
       expect(connectError.details).toEqual({ code: "PAIRING_REQUIRED", requestId: "pair-1" });
       expect(onDisconnected).not.toHaveBeenCalled();
 
+      // The close above ended that socket's cycle, so the next attempt's
+      // failure is a new socket and must be reported, not deduped forever.
       const retryError = new Error("retry failed");
       options.onConnectError?.(retryError);
-      expect(onConnectError).toHaveBeenCalledOnce();
+      expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
+      options.onConnectError?.(new Error("duplicate within the retry socket"));
+      expect(onConnectError).toHaveBeenCalledTimes(2);
       options.onHelloOk?.({});
       options.onConnectError?.(retryError);
-      expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
+      expect(onConnectError).toHaveBeenNthCalledWith(3, retryError);
 
       options.onHelloOk?.({});
       onDisconnected.mockClear();

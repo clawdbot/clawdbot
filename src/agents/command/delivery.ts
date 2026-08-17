@@ -111,6 +111,9 @@ type AgentCommandDeliveryResult = {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
+  didSendDeterministicApprovalPrompt?: true;
+  acceptedSessionSpawns?: NonNullable<RunResult["acceptedSessionSpawns"]>;
+  successfulCronAdds?: number;
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
 };
@@ -209,6 +212,11 @@ function buildDeliveryResult(params: {
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
 }): AgentCommandDeliveryResult {
+  const successfulCronAdds = params.result.successfulCronAdds;
+  const hasSuccessfulCronAdds =
+    typeof successfulCronAdds === "number" &&
+    Number.isFinite(successfulCronAdds) &&
+    successfulCronAdds > 0;
   return {
     payloads: params.payloads,
     meta: params.meta,
@@ -222,6 +230,13 @@ function buildDeliveryResult(params: {
     ...(hasNonEmptyArray(params.result.messagingToolSentTargets)
       ? { messagingToolSentTargets: params.result.messagingToolSentTargets }
       : {}),
+    ...(params.result.didSendDeterministicApprovalPrompt === true
+      ? { didSendDeterministicApprovalPrompt: true }
+      : {}),
+    ...(hasNonEmptyArray(params.result.acceptedSessionSpawns)
+      ? { acceptedSessionSpawns: params.result.acceptedSessionSpawns }
+      : {}),
+    ...(hasSuccessfulCronAdds ? { successfulCronAdds } : {}),
     ...(params.deliverySucceeded !== undefined
       ? { deliverySucceeded: params.deliverySucceeded }
       : {}),
