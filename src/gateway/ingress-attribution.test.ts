@@ -14,15 +14,17 @@ function request(params?: {
 }): IncomingMessage {
   return {
     socket: { remoteAddress: params?.remoteAddress ?? "127.0.0.1" },
-    headers: params?.forwardedFor
-      ? {
-          "x-forwarded-for": params.forwardedFor,
-          "x-forwarded-proto": "https",
-          "x-forwarded-host": "gateway.tailnet.ts.net",
-          ...(params.funnel ? { "tailscale-funnel-request": "?1" } : {}),
-          ...(params.login ? { "tailscale-user-login": params.login } : {}),
-        }
-      : {},
+    headers: {
+      ...(params?.forwardedFor
+        ? {
+            "x-forwarded-for": params.forwardedFor,
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "gateway.tailnet.ts.net",
+          }
+        : {}),
+      ...(params?.funnel ? { "tailscale-funnel-request": "?1" } : {}),
+      ...(params?.login ? { "tailscale-user-login": params.login } : {}),
+    },
   } as IncomingMessage;
 }
 
@@ -47,17 +49,43 @@ describe("gateway ingress attribution", () => {
     });
   });
 
-  it("rejects externally managed Funnel headers on an ordinary trusted-proxy listener", async () => {
-    const attribution = prepareGatewayIngressAttribution({
-      req: request({ forwardedFor: "203.0.113.10", funnel: true }),
-      trustedProxies: ["127.0.0.1"],
-    });
+  it.each([
+    ["Serve identity", { login: "alice@example.com" }, {}],
+    ["Funnel marker", { funnel: true }, { externalTailscaleExposure: "funnel" }],
+  ])(
+    "attributes externally managed Tailscale %s as an ordinary trusted proxy",
+    async (_name, headers, expected) => {
+      const attribution = prepareGatewayIngressAttribution({
+        req: request({ forwardedFor: "203.0.113.10", ...headers }),
+        trustedProxies: ["127.0.0.1"],
+      });
 
-    expect(attribution).toMatchObject({
-      kind: "unattributable-proxy",
-      reason: "proxy_attribution_required",
-    });
-  });
+      expect(attribution).toMatchObject({
+        kind: "trusted-proxy",
+        clientIp: "203.0.113.10",
+        rateLimit: { subject: { key: "203.0.113.10" } },
+        ...expected,
+      });
+    },
+  );
+
+  it.each([
+    ["missing", undefined],
+    ["loopback", "127.0.0.1"],
+  ])(
+    "rejects trusted Tailscale headers with a %s forwarded client",
+    async (_name, forwardedFor) => {
+      const attribution = prepareGatewayIngressAttribution({
+        req: request({ forwardedFor, login: "alice@example.com" }),
+        trustedProxies: ["127.0.0.1"],
+      });
+
+      expect(attribution).toMatchObject({
+        kind: "unattributable-proxy",
+        reason: "proxy_attribution_required",
+      });
+    },
+  );
 
   it("attributes managed Serve by listener provenance and verifies its identity lazily", async () => {
     const req = request({ forwardedFor: "100.64.0.10", login: "alice@example.com" });

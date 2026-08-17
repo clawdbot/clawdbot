@@ -143,6 +143,8 @@ describe("method scope resolution", () => {
     ["secrets.store.list", ["operator.admin"]],
     ["secrets.store.set", ["operator.admin"]],
     ["secrets.store.delete", ["operator.admin"]],
+    ["tools.github.status", ["operator.read"]],
+    ["tools.github.configure", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],

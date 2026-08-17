@@ -31,13 +31,14 @@ type ReadOnlySqliteSessionEntriesResult =
   | { exists: true; ok: true; summaries: ReadOnlySqliteSessionSummary[] }
   | { error: unknown; exists: true; ok: false };
 
-type ReadOnlySqliteExactSessionEntryResult =
-  | { entry?: ReadOnlySqliteSessionSummary; ok: true }
-  | { error: unknown; ok: false };
+export type ReadOnlySqliteValidationSnapshot = {
+  entriesBySessionKey: ReadonlyMap<string, SessionEntry>;
+  transcriptEventCountsBySessionId: ReadonlyMap<string, number>;
+};
 
-type ReadOnlySqliteTranscriptEventCountResult =
-  | { events: number; exists: boolean; ok: true }
-  | { error: unknown; exists: true; ok: false };
+type ReadOnlySqliteValidationSnapshotResult =
+  | { ok: true; snapshot: ReadOnlySqliteValidationSnapshot }
+  | { error: unknown; ok: false };
 
 type ReadOnlySqliteDbStatsResult =
   | {
@@ -291,18 +292,51 @@ export function readSqliteEntryCount(target: SessionStoreTarget): number {
   return result.ok ? result.summaries.length : 0;
 }
 
-export function readOnlySqliteExactSessionEntry(
+export function readOnlySqliteValidationSnapshot(
   target: SessionStoreTarget,
-  sessionKey: string,
-): ReadOnlySqliteExactSessionEntryResult {
-  const result = readOnlySqliteSessionEntries(target);
-  if (!result.ok) {
-    return { error: result.error, ok: false };
+): ReadOnlySqliteValidationSnapshotResult {
+  const sqlitePath = resolveTargetSqlitePath(target);
+  if (!fs.existsSync(sqlitePath)) {
+    return {
+      ok: true,
+      snapshot: {
+        entriesBySessionKey: new Map(),
+        transcriptEventCountsBySessionId: new Map(),
+      },
+    };
   }
-  return {
-    entry: result.summaries.find((summary) => summary.sessionKey === sessionKey),
-    ok: true,
-  };
+  let database: DatabaseSync | undefined;
+  try {
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    const summaries = readOnlySqliteSessionEntriesFromDatabase(database);
+    const hasTranscriptEvents = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("transcript_events");
+    const transcriptRows = hasTranscriptEvents
+      ? (database
+          .prepare(
+            "SELECT session_id, COUNT(*) AS count FROM transcript_events GROUP BY session_id",
+          )
+          .all() as Array<{ count?: unknown; session_id?: unknown }>)
+      : [];
+    return {
+      ok: true,
+      snapshot: {
+        entriesBySessionKey: new Map(summaries.map(({ entry, sessionKey }) => [sessionKey, entry])),
+        transcriptEventCountsBySessionId: new Map(
+          transcriptRows.flatMap((row) =>
+            typeof row.session_id === "string" && typeof row.count === "number"
+              ? [[row.session_id, row.count] as const]
+              : [],
+          ),
+        ),
+      },
+    };
+  } catch (error) {
+    return { error, ok: false };
+  } finally {
+    database?.close();
+  }
 }
 
 export function readOnlySqliteSessionEntries(
@@ -315,34 +349,10 @@ export function readOnlySqliteSessionEntries(
   let database: DatabaseSync | undefined;
   try {
     database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const nodeTable = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("session_nodes");
-    const legacyEntryTable = nodeTable
-      ? undefined
-      : database
-          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-          .get("session_entries");
-    if (!nodeTable && !legacyEntryTable) {
-      return { exists: true, ok: true, summaries: [] };
-    }
-    const rows = database
-      .prepare(
-        nodeTable
-          ? "SELECT session_key, entry_json FROM session_nodes ORDER BY session_key ASC"
-          : "SELECT session_key, entry_json FROM session_entries ORDER BY session_key ASC",
-      )
-      .all() as Array<{ entry_json?: unknown; session_key?: unknown }>;
     return {
       exists: true,
       ok: true,
-      summaries: rows.flatMap((row) => {
-        if (typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
-          return [];
-        }
-        const entry = parseSqliteSessionEntry(row.entry_json);
-        return entry ? [{ entry, sessionKey: row.session_key }] : [];
-      }),
+      summaries: readOnlySqliteSessionEntriesFromDatabase(database),
     };
   } catch (error) {
     return { error, exists: true, ok: false };
@@ -351,37 +361,34 @@ export function readOnlySqliteSessionEntries(
   }
 }
 
-export function readOnlySqliteTranscriptEventCount(
-  target: SessionStoreTarget,
-  sessionId: string,
-): ReadOnlySqliteTranscriptEventCountResult {
-  const sqlitePath = resolveTargetSqlitePath(target);
-  if (!fs.existsSync(sqlitePath)) {
-    return { events: 0, exists: false, ok: true };
+function readOnlySqliteSessionEntriesFromDatabase(
+  database: DatabaseSync,
+): ReadOnlySqliteSessionSummary[] {
+  const nodeTable = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("session_nodes");
+  const legacyEntryTable = nodeTable
+    ? undefined
+    : database
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get("session_entries");
+  if (!nodeTable && !legacyEntryTable) {
+    return [];
   }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const table = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("transcript_events");
-    if (!table) {
-      return { events: 0, exists: true, ok: true };
+  const rows = database
+    .prepare(
+      nodeTable
+        ? "SELECT session_key, entry_json FROM session_nodes ORDER BY session_key ASC"
+        : "SELECT session_key, entry_json FROM session_entries ORDER BY session_key ASC",
+    )
+    .all() as Array<{ entry_json?: unknown; session_key?: unknown }>;
+  return rows.flatMap((row) => {
+    if (typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
+      return [];
     }
-    const row = database
-      .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
-      .get(sessionId) as { count?: unknown } | undefined;
-    const count = row?.count;
-    return {
-      events: typeof count === "number" && Number.isFinite(count) ? count : 0,
-      exists: true,
-      ok: true,
-    };
-  } catch (error) {
-    return { error, exists: true, ok: false };
-  } finally {
-    database?.close();
-  }
+    const entry = parseSqliteSessionEntry(row.entry_json);
+    return entry ? [{ entry, sessionKey: row.session_key }] : [];
+  });
 }
 
 export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqliteDbStatsResult {

@@ -136,6 +136,7 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         id: "crabbox",
         provision: async () => ({
           leaseId: "cloud-lease",
@@ -203,6 +204,7 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
         id: "device",
         provision: async () => ({
           leaseId: "device-lease",

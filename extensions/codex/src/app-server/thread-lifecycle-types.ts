@@ -57,6 +57,8 @@ export type CodexStartOrResumeThreadParams = {
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
+  shellEnvironment?: Readonly<Record<string, string>>;
+  disableLoginShell?: boolean;
   finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,

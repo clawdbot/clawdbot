@@ -589,6 +589,8 @@ enum class GatewayMethod(
   SessionsAssignOwner("sessions.assignOwner"),
   ProgressCardGet("progressCard.get"),
   ProgressCardPut("progressCard.put"),
+  ToolsGithubStatus("tools.github.status"),
+  ToolsGithubConfigure("tools.github.configure"),
 }
 
 enum class GatewayEvent(
