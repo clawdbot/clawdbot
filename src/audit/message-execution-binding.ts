@@ -121,7 +121,7 @@ export function confirmMessageExecutionBinding(
   return row ? { contextId: token.contextId, executionId: token.executionId } : undefined;
 }
 
-export function recordTerminalMessageExecutionBinding(
+function recordTerminalMessageExecutionBinding(
   db: DatabaseSync,
   params: MessageExecutionBinding & { eventId: string; runId: string },
 ): void {
