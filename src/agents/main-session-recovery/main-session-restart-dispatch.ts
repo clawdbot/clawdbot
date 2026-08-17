@@ -46,8 +46,8 @@ const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
   "Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. Continue from the existing " +
-    "transcript and finish the interrupted response. Treat any interrupted tool call without " +
-    `a successful matching result as having an unknown outcome. ${TOOL_FAILURE_INSTRUCTION}`,
+    "transcript and finish the interrupted response. Treat a tool result marked interrupted or " +
+    `missing as having an unknown outcome. ${TOOL_FAILURE_INSTRUCTION}`,
 );
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";

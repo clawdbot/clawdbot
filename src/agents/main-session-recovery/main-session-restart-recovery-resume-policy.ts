@@ -343,14 +343,12 @@ function requiresRestartSafeToolResult(message: unknown): boolean {
     return false;
   }
   const record = message as Record<string, unknown>;
-  if (record.isError === true) {
-    return !isAgentToolReplaySafe({ name: normalizeOptionalString(record.toolName) });
-  }
   const details = record.details;
   if (!details || typeof details !== "object") {
     return false;
   }
-  return (details as { status?: unknown }).status === "approval-pending";
+  const status = details as { reason?: unknown; status?: unknown };
+  return status.reason === "missing_tool_result" || status.status === "approval-pending";
 }
 
 type MainSessionResumePolicy =
