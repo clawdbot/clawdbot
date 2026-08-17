@@ -9,6 +9,8 @@ import {
   workboardCardMatchesLifecycleLink,
   workboardCardSessionLookupKey,
 } from "./session-link.js";
+import { cardSessionKey } from "./store-card-helpers.js";
+import { DEFAULT_WORKBOARD_DISPATCH_OWNER } from "./store-constants.js";
 import type { WorkboardStore } from "./store.js";
 
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
@@ -44,6 +46,22 @@ type WorkboardLifecycleMatchHandler = (input: {
   cards: readonly WorkboardCard[];
   sessionKey?: string;
 }) => Promise<void>;
+
+function needsWorkboardLifecycleReconciliation(card: WorkboardCard): boolean {
+  if (card.metadata?.archivedAt) {
+    return false;
+  }
+  // A running claim can own an accepted session even when persisting its link failed.
+  // Keep those cards, and stale cleanup, in the missed-event recovery sweep.
+  return Boolean(
+    card.sessionKey ||
+    card.runId ||
+    card.execution ||
+    card.status === "running" ||
+    card.metadata?.claim ||
+    card.metadata?.stale,
+  );
+}
 
 const LIFECYCLE_TARGETS = {
   running: { card: "running", execution: "running" },
@@ -189,11 +207,20 @@ async function syncWorkboardLifecycleSessions(params: {
 }): Promise<number> {
   const now = params.now ?? Date.now();
   const sessionsByKey = new Map<string, WorkboardLifecycleSession>();
+  const sessionsByWorkboardSuffix = new Map<string, WorkboardLifecycleSession>();
+  const ambiguousWorkboardSuffixes = new Set<string>();
   for (const session of params.sessions) {
     sessionsByKey.set(session.key, session);
     const suffixIndex = session.key.lastIndexOf(":subagent:workboard-");
     if (suffixIndex >= 0) {
-      sessionsByKey.set(session.key.slice(suffixIndex + 1), session);
+      const suffix = session.key.slice(suffixIndex + 1);
+      const existing = sessionsByWorkboardSuffix.get(suffix);
+      if (existing && existing.key !== session.key) {
+        sessionsByWorkboardSuffix.delete(suffix);
+        ambiguousWorkboardSuffixes.add(suffix);
+      } else if (!ambiguousWorkboardSuffixes.has(suffix)) {
+        sessionsByWorkboardSuffix.set(suffix, session);
+      }
     }
   }
   let count = 0;
@@ -201,7 +228,22 @@ async function syncWorkboardLifecycleSessions(params: {
     if (card.metadata?.archivedAt) {
       continue;
     }
-    const session = sessionsByKey.get(workboardCardSessionLookupKey(card));
+    const lookupKey = workboardCardSessionLookupKey(card);
+    const suffixIndex = lookupKey.lastIndexOf("subagent:workboard-");
+    const linkedSessionKey = cardSessionKey(card);
+    const canUseAgentlessFallback =
+      linkedSessionKey?.startsWith("subagent:workboard-") === true ||
+      (!linkedSessionKey &&
+        (!card.agentId ||
+          (card.agentId === DEFAULT_WORKBOARD_DISPATCH_OWNER &&
+            card.metadata?.claim?.ownerId === DEFAULT_WORKBOARD_DISPATCH_OWNER)));
+    // Persisted links and explicit agent targets stay authoritative. The unique
+    // suffix fallback recovers a run accepted before its link could be persisted.
+    const session =
+      sessionsByKey.get(lookupKey) ??
+      (canUseAgentlessFallback && suffixIndex >= 0
+        ? sessionsByWorkboardSuffix.get(lookupKey.slice(suffixIndex))
+        : undefined);
     const observation = session
       ? lifecycleFromSession(session, now)
       : params.complete
@@ -250,8 +292,9 @@ export async function readWorkboardLifecycleSessions(
     "sessions.list",
     {
       limit: WORKBOARD_SESSION_SWEEP_LIMIT,
-      includeGlobal: true,
-      includeUnknown: true,
+      configuredAgentsOnly: true,
+      includeGlobal: false,
+      includeUnknown: false,
     },
     { scopes: ["operator.read"] },
   );
@@ -263,9 +306,8 @@ export async function readWorkboardLifecycleSessions(
       const session = normalizeSession(value);
       return session ? [session] : [];
     }),
-    // sessions.list has no hasMore/cursor field; it honors `limit` unclamped, so a
-    // short page proves the snapshot is complete. A full page may be truncated —
-    // treat it as incomplete so absent sessions are never inferred as "missing".
+    // A short page proves the snapshot is complete. Keep full pages conservative
+    // so absent sessions are never inferred as "missing" when the page is truncated.
     complete: payload.sessions.length < WORKBOARD_SESSION_SWEEP_LIMIT,
   };
 }
@@ -283,6 +325,13 @@ export function createWorkboardLifecycleService(params: {
       const owner = ++generation;
       const reconcile = async () => {
         try {
+          const cards = await params.store.list();
+          if (
+            generation !== owner ||
+            !cards.some((card) => needsWorkboardLifecycleReconciliation(card))
+          ) {
+            return;
+          }
           const snapshot = await params.readSessions();
           if (generation === owner) {
             await syncWorkboardLifecycleSessions({

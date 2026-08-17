@@ -673,7 +673,7 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
   const rootStateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
   const stateDir = path.join(rootStateDir, "configured-list-regression");
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    testState.agentsConfig = { ownership: "explicit", list: [{ id: "ops" }] };
+    testState.agentsConfig = { ownership: "explicit", list: [{ id: "ops" }, { id: "research" }] };
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
     const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
     const configJson = '{"acp":{"defaultAgent":"claude","allowedAgents":["gemini"]}}';
@@ -684,6 +684,7 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
 
     const acpStorePath = path.join(agentsDir, "claude", "sessions", "sessions.json");
     const childStorePath = path.join(agentsDir, "codex", "sessions", "sessions.json");
+    const researchStorePath = path.join(agentsDir, "research", "sessions", "sessions.json");
     const diskOnlyStorePath = path.join(agentsDir, "local", "sessions", "sessions.json");
     const mainKey = "agent:ops:main";
     const acpKey = "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7";
@@ -700,7 +701,16 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     await writeSessionStore({
       storePath: path.join(agentsDir, "ops", "sessions", "sessions.json"),
       agentId: "ops",
-      entries: { main: { sessionId: "sess-main", updatedAt: 20 } },
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: 20 },
+        global: { sessionId: "sess-global", updatedAt: 19 },
+        unknown: { sessionId: "sess-unknown", updatedAt: 18 },
+      },
+    });
+    await writeSessionStore({
+      storePath: researchStorePath,
+      agentId: "research",
+      entries: { main: { sessionId: "sess-research", updatedAt: 21 } },
     });
     await writeSessionStore({
       storePath: acpStorePath,
@@ -724,6 +734,16 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     });
     const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
     try {
+      await expect(
+        directSessionHandlerReq("sessions.list", {
+          includeGlobal: true,
+          includeUnknown: true,
+          configuredAgentsOnly: true,
+        }),
+      ).rejects.toThrow(
+        'Multiple agents are configured, but session key "global" has no explicit owner.',
+      );
+
       const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
         "sessions.list",
         { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
@@ -733,6 +753,7 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
         acpKey,
         parentChildKey,
         spawnedChildKey,
+        "agent:research:main",
         mainKey,
       ]);
       expect(enumerateAgentDirs).not.toHaveBeenCalled();
@@ -746,6 +767,7 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
         acpKey,
         parentChildKey,
         spawnedChildKey,
+        "agent:research:main",
         mainKey,
         "agent:local:main",
       ]);
