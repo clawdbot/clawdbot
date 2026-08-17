@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { WorkerProvider } from "../../plugins/types.js";
 import { admitWorkerConnection } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
@@ -8,6 +9,101 @@ import * as support from "./service.test-support.js";
 
 describe("node worker provider provisioning", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("supplies replay-safe enrollment only to providers that require it", async () => {
+    const prepareNodeEnrollment = vi.fn(async (record) => {
+      const enrolled = support.testState.store.ensureNodeEnrollment(record.environmentId);
+      if (!enrolled.nodeSetupId) {
+        throw new Error("expected persisted cloud enrollment ownership");
+      }
+      return {
+        mode: "connect" as const,
+        setupCode: "setup-code",
+        setupId: enrolled.nodeSetupId,
+        openclawVersion: "2026.8.1",
+        packageSpecs: ["openclaw@2026.8.1"],
+        displayName: "Cloud worker test",
+        waitForDeviceId: async () => "cloud-device-1",
+      };
+    });
+    const retireNodeEnrollment = vi.fn(async () => {});
+    const provision = vi.fn<WorkerProvider["provision"]>(
+      async (_profile, _operationId, options) => {
+        await expect(options?.beginNodeEnrollment?.()).resolves.toMatchObject({
+          mode: "connect",
+          setupId: expect.any(String),
+        });
+        return {
+          leaseId: "cloud-lease-1",
+          node: { deviceId: "cloud-device-1" },
+          sharedHost: false,
+        };
+      },
+    );
+    const workerService = support.createService(
+      support.createProvider({
+        provisionBeforeInstallation: true,
+        requiresNodeEnrollment: true,
+        provision,
+      }),
+      {
+        prepareNodeEnrollment,
+        retireNodeEnrollment,
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+      },
+    );
+
+    const environment = await workerService.create("development", "request-cloud-node");
+    expect(environment).toMatchObject({
+      state: "ready",
+      nodeSetupId: expect.any(String),
+      nodeDeviceId: "cloud-device-1",
+      sharedHost: false,
+    });
+    expect(prepareNodeEnrollment).toHaveBeenCalledOnce();
+    expect(provision).toHaveBeenCalledOnce();
+
+    await expect(workerService.destroy(environment.environmentId)).resolves.toMatchObject({
+      state: "destroyed",
+    });
+    expect(retireNodeEnrollment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeSetupId: environment.nodeSetupId,
+        nodeDeviceId: "cloud-device-1",
+        state: "destroying",
+      }),
+    );
+  });
+
+  it("keeps paired-device roles when a node lease has no cloud enrollment owner", async () => {
+    const retireNodeEnrollment = vi.fn(async () => {});
+    const workerService = support.createService(
+      support.createProvider({
+        provisionBeforeInstallation: true,
+        provision: async () => ({
+          leaseId: "device-lease-1",
+          node: { deviceId: "paired-device-1" },
+          sharedHost: true,
+        }),
+      }),
+      {
+        retireNodeEnrollment,
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+      },
+    );
+
+    const environment = await workerService.create("development", "request-paired-device");
+    expect(environment).toMatchObject({
+      state: "ready",
+      nodeSetupId: null,
+      nodeDeviceId: "paired-device-1",
+    });
+
+    await expect(workerService.destroy(environment.environmentId)).resolves.toMatchObject({
+      state: "destroyed",
+    });
+    expect(retireNodeEnrollment).not.toHaveBeenCalled();
+  });
 
   it("commits an installed Gateway bundle receipt and credential for a node lease", async () => {
     const workerBuild = structuredClone(support.BOOTSTRAP_RECEIPT);
@@ -33,6 +129,7 @@ describe("node worker provider provisioning", () => {
     expect(result).toMatchObject({
       state: "ready",
       leaseId: "device-lease-1",
+      nodeDeviceId: "device-1",
       sshEndpoint: null,
       bootstrapReceipt: { ...workerBuild, installKind: "bundle" },
       sharedHost: true,

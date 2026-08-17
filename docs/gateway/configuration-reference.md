@@ -1081,8 +1081,11 @@ Validation and safety notes:
 
 **Endpoints:**
 
-- `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
+- `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat", agentId?, sessionKey? }`
+  - `sessionKey` is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`) and must match `hooks.allowedSessionKeyPrefixes` when configured.
+  - A supplied `agentId` must name a configured agent.
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, sessionMode?, wakeMode?, deliver?, channel?, to?, accountId?, model?, thinking?, timeoutSeconds? }`
+  - A supplied `agentId` must name a configured agent.
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
   - `sessionMode` is `"isolated"` by default. `"persistent"` reuses the resolved session and requires an explicit request `sessionKey`, `hooks.allowRequestSessionKey=true`, and non-empty `hooks.allowedSessionKeyPrefixes`.
   - Direct announce delivery requires both a concrete `channel` and `to`; supplying only one fails before the run is scheduled.
@@ -1102,10 +1105,10 @@ Validation and safety notes:
 - `transform` can point to a JS/TS module returning a hook action.
   - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
   - Keep `hooks.transformsDir` under `~/.openclaw/hooks/transforms`; workspace skill directories are rejected. If `openclaw doctor` reports this path as invalid, move the transform module into the hooks transforms directory or remove `hooks.transformsDir`.
-- `agentId` routes to a specific agent; unknown IDs fall back to the default agent.
+- Mapping `agentId` routes to a specific agent; unknown mapping IDs retain the legacy fallback to the default agent. Direct `/hooks/wake` and `/hooks/agent` request IDs must name a configured agent.
 - `allowedAgentIds`: restricts effective agent routing, including the default-agent path when `agentId` is omitted (`*` or omitted = allow all, `[]` = deny all).
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
-- `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
+- `allowRequestSessionKey`: allow `/hooks/wake` and `/hooks/agent` callers, plus template-driven mappings, to set `sessionKey` (default: `false`).
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
 - `sessionMode`: mapping session behavior (`"isolated"` by default or `"persistent"`). Persistent mappings must resolve a stable key from `sessionKey` or `hooks.defaultSessionKey`; template-derived keys retain the request-key and prefix checks.
 - `deliver: true` sends the final reply to a channel; mapped hooks may use `channel: "last"`.

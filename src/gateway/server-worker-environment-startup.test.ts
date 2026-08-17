@@ -75,6 +75,7 @@ describe("gateway worker environment startup", () => {
           to: "ready",
           patch: {
             leaseId: "device-lease",
+            nodeDeviceId: DEVICE_ID,
             sshEndpoint: null,
             sharedHost: true,
             bootstrapReceipt: {

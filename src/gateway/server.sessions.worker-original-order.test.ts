@@ -333,6 +333,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
   const events = runner.events;
   const provider: WorkerProvider = {
     id: "ordered-fallback",
+    supportedExecutionModes: ["worker-turn"],
     provision: async () => {
       events.push("provider:provision");
       return { leaseId: "lease-original-order", ssh: SSH_ENDPOINT };

@@ -68,6 +68,35 @@ describe("worker environment service", () => {
     });
   });
 
+  it("requires explicit placement modes before provider allocation", async () => {
+    const provision = vi.fn(support.createProvider().provision);
+    const provider = support.createProvider({ supportedExecutionModes: undefined, provision });
+    const workerService = support.createService(provider);
+
+    await expect(
+      workerService.create("development", "mode-configured", undefined, "remote-exec"),
+    ).rejects.toMatchObject({ code: "invalid_profile" });
+    await expect(
+      workerService.createFromProfileSnapshot(
+        {
+          profileId: "development",
+          providerId: provider.id,
+          profileSnapshot: { install: "bundle", settings: { region: "test" } },
+        },
+        "mode-inherited",
+        undefined,
+        "worker-turn",
+      ),
+    ).rejects.toMatchObject({ code: "invalid_profile" });
+    expect(provision).not.toHaveBeenCalled();
+    expect(support.testState.store.list()).toEqual([]);
+
+    await expect(workerService.create("development", "lifecycle-only")).resolves.toMatchObject({
+      state: "ready",
+    });
+    expect(provision).toHaveBeenCalledOnce();
+  });
+
   it("delegates configured machine options to the profile provider", async () => {
     const listMachineOptions = vi.fn(() => [{ id: "standard", label: "Standard", default: true }]);
     const workerService = support.createService(support.createProvider({ listMachineOptions }));
