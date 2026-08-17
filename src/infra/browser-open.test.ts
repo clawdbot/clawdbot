@@ -114,6 +114,9 @@ describe("resolveBrowserOpenCommand", () => {
     vi.stubEnv("WSL_INTEROP", "");
     vi.stubEnv("WSL_DISTRO_NAME", "");
     vi.stubEnv("WSLENV", "");
+    vi.stubEnv("SSH_CLIENT", "");
+    vi.stubEnv("SSH_CONNECTION", "");
+    vi.stubEnv("SSH_TTY", "");
 
     await expect(resolveBrowserOpenCommand()).resolves.toEqual({
       argv: null,
