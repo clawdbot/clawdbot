@@ -79,8 +79,9 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         }
         // Stale tail of an item we already abandoned on a barge-in: our request
         // and the provider's in-flight generation can race, so more deltas for
-        // that exact item_id can still arrive after we stopped playing it. Re-adopting it here as if
-        // it were a new item would restart clock/byte accounting mid-item
+        // that exact item_id can still arrive after we stopped playing it.
+        // Re-adopting it here as if it were a new item would restart
+        // clock/byte accounting mid-item
         // and could produce a second truncate whose audio_end_ms looks
         // small and plausible but is actually counted from the truncation
         // point rather than the item's real start.
@@ -171,31 +172,24 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         const detail = readRealtimeErrorDetail(event.error);
         const rejectedEventId = readRealtimeErrorEventId(event.error);
         if (rejectedEventId && rejectedEventId === this.manualTruncateEventId) {
-          // A rejected conversation.item.truncate (e.g. "Audio content of
-          // Xms is already shorter than Yms") previously fell through to
-          // the generic onError branch below with no state repair. By that
-          // point handleBargeIn had already optimistically cleared
-          // lastAssistantItemId/responseStartTimestamp/marks, so there was
-          // nothing left to retry - but responseCancelInFlight, if this
-          // barge-in also sent response.cancel, is cleared ONLY by a
-          // response.cancelled event or a rejection whose detail exactly
-          // matches OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR. A
-          // truncate rejection matches neither, so responseCancelInFlight
-          // could be left permanently true, which makes every future
-          // requestResponseCreate() queue as "pending" forever and the
-          // conversation never produces another assistant turn. Release it
-          // here so a truncate rejection can never strand the session.
+          // A rejected conversation.item.truncate (e.g. "Audio content of Xms is
+          // already shorter than Yms") is reported and clears only its own
+          // pending-request state. By this point handleBargeIn has already
+          // cleared lastAssistantItemId/responseStartTimestamp/marks, so there
+          // is nothing to retry.
+          //
+          // It deliberately does NOT release responseCancelInFlight, even though
+          // the same barge-in usually sent response.cancel too: the provider
+          // answers that cancel separately, and a truncate error can arrive
+          // first. Releasing here makes handleBargeIn's !responseCancelInFlight
+          // guard believe no cancel is outstanding, so a further barge-in sends
+          // a second response.cancel for a cancel the provider has not answered
+          // yet. That flag is owned by the cancel's own completion
+          // (response.cancelled -> releaseResponseState) or its own rejection
+          // (the NO_ACTIVE_RESPONSE branch below, matched on
+          // manualResponseCancelEventId).
           this.manualTruncateEventId = null;
           this.config.onError?.(new Error(detail));
-          if (this.responseCancelInFlight) {
-            this.responseCancelInFlight = false;
-            this.manualResponseCancelEventId = null;
-            if (this.responseCreatePending) {
-              this.flushPendingResponseCreate();
-            } else {
-              this.restoreAutoRespondAfterManualResponse();
-            }
-          }
           return;
         }
         if (rejectedEventId && rejectedEventId === this.standaloneSpeechEventId) {

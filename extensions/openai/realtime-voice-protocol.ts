@@ -557,7 +557,14 @@ export abstract class OpenAIRealtimeProtocol {
       this.oldestOutstandingMarkSequence = sequence;
     }
     this.latestOutstandingMarkSequence = sequence;
-    this.markAudioByteOffsets.set(sequence, this.deliveredAudioBytesForCurrentItem);
+    // Only worth recording for a transport that can acknowledge: without an
+    // onMark consumer nothing ever calls acknowledgeMark, so every audio delta
+    // would add an entry no one can ever retire. Those transports fall back to
+    // the delivered-byte clamp, which is what they had before this accounting
+    // existed.
+    if (this.config.onMark) {
+      this.markAudioByteOffsets.set(sequence, this.deliveredAudioBytesForCurrentItem);
+    }
     const markName = `audio-${sequence}`;
     this.config.onMark?.(markName);
   }

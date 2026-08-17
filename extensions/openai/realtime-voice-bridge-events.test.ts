@@ -444,6 +444,50 @@ describe("OpenAI realtime voice bridge events", () => {
     });
   });
 
+  it("leaves the cancel in flight when a truncate rejection arrives before it is answered", async () => {
+    // A barge-in sends response.cancel and conversation.item.truncate together and
+    // the truncate error can come back first. responseCancelInFlight and the
+    // cancel's event id belong to the cancel: releasing them on someone else's
+    // rejection drops the identity its own answer is matched on, and lets a later
+    // barge-in send a second response.cancel while the first is still outstanding.
+    const onError = vi.fn();
+    const bridge = createNativeBridge({
+      onError,
+      onMark: () => bridge.acknowledgeMark(),
+    });
+    const socket = await connectReadyBridge(bridge);
+    bridge.setMediaTimestamp(0);
+    emitAssistantPlayback(socket, { audio: Buffer.alloc(2016, 0x41) });
+    bridge.setMediaTimestamp(300);
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+    const truncate = parseSent(socket).findLast(
+      (event) => event.type === "conversation.item.truncate",
+    );
+    expect(truncate?.event_id).toBeTruthy();
+    const cancelsAfterFirstBargeIn = parseSent(socket).filter(
+      (event) => event.type === "response.cancel",
+    ).length;
+    expect(cancelsAfterFirstBargeIn).toBe(1);
+
+    emitServerEvent(socket, {
+      type: "error",
+      error: {
+        event_id: truncate?.event_id,
+        message: "Audio content of 600ms is already shorter than 65301ms",
+      },
+    });
+    expect(onError).toHaveBeenCalled();
+
+    // The first cancel is still unanswered, so a further barge-in must not issue
+    // a second one.
+    emitAssistantPlayback(socket, { audio: Buffer.alloc(2016, 0x41), itemId: "item_2" });
+    bridge.setMediaTimestamp(900);
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+    expect(parseSent(socket).filter((event) => event.type === "response.cancel").length).toBe(1);
+  });
+
   it("drops the in-flight tail of an item abandoned below the minimum window", async () => {
     // response.cancel is asynchronous, so the provider can still emit deltas for
     // the item we just stopped playing. Forwarding them would restart playback
