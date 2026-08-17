@@ -6,6 +6,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { dispatchGatewayMethodInProcess, setFallbackGatewayContext } from "../server-plugins.js";
 import {
   resolveSessionMutationAuthorization,
   resolveSessionSharingRole,
@@ -84,6 +85,64 @@ async function invoke(params: {
 }
 
 describe("sessions.assignOwner", () => {
+  it("records the trusted in-process agent tool caller as the assigning agent", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:handoff";
+      await upsertSessionEntryCore(
+        { agentId: "main", env: state.env, sessionKey },
+        {
+          sessionId: "session-handoff",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", id: "profile-creator" },
+        },
+      );
+      const cfg = {
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: "research", identity: { name: "Research" } },
+          ],
+        },
+      } as OpenClawConfig;
+      const requestContext = context(cfg);
+      const clearContext = setFallbackGatewayContext(requestContext);
+
+      try {
+        await expect(
+          dispatchGatewayMethodInProcess(
+            "sessions.assignOwner",
+            { key: sessionKey, owner: { type: "agent", id: "research" } },
+            {
+              forceSyntheticClient: true,
+              agentToolCaller: {
+                agentId: "main",
+                sessionKey: "agent:main:discord:direct:colin",
+              },
+              syntheticScopes: ["operator.write"],
+            },
+          ),
+        ).resolves.toMatchObject({
+          ok: true,
+          key: sessionKey,
+          owner: {
+            actor: { type: "agent", id: "research", label: "Research" },
+            assignedBy: { type: "agent", id: "main" },
+          },
+        });
+      } finally {
+        clearContext();
+      }
+
+      expect(
+        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
+      ).toMatchObject({
+        actor: { type: "agent", id: "research" },
+        assignedBy: { type: "agent", id: "main" },
+      });
+    });
+  });
+
   it("lets a write-scoped viewer assign a shared session without changing sharing authority", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:handoff";
@@ -187,6 +246,41 @@ describe("sessions.assignOwner", () => {
       expect(unidentified.responses[0]?.[2]).toMatchObject({
         code: "FORBIDDEN",
         message: "sessions.assignOwner requires an identified caller",
+      });
+
+      const nonSyntheticInternal = await invoke({
+        cfg,
+        client: {
+          ...client(),
+          internal: {
+            agentToolCaller: {
+              agentId: "main",
+              sessionKey: "agent:main:discord:direct:colin",
+            },
+          },
+        },
+        request,
+      });
+      expect(nonSyntheticInternal.responses[0]?.[2]).toMatchObject({
+        code: "FORBIDDEN",
+        message: "sessions.assignOwner requires an identified caller",
+      });
+
+      const smuggled = await invoke({
+        cfg,
+        client: client(),
+        request: {
+          key: sessionKey,
+          owner: { type: "human", id: "profile-next" },
+          agentToolCaller: {
+            agentId: "main",
+            sessionKey: "agent:main:discord:direct:colin",
+          },
+        },
+      });
+      expect(smuggled.responses[0]?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("unexpected property 'agentToolCaller'"),
       });
 
       await upsertSessionEntryCore(

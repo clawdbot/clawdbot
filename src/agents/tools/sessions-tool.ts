@@ -22,7 +22,7 @@ import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -225,14 +225,16 @@ async function resolvePatchTarget(
   cfg: OpenClawConfig;
   isRequesterSession: boolean;
   key: string;
+  requesterAgentId: string;
+  requesterSessionKey: string;
 }> {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
-  const requesterAgentId = resolveSessionAgentIds({
+  const requesterAgentId = resolveSessionAgentId({
     config: context.cfg,
     sessionKey: context.effectiveRequesterKey,
     agentId: opts.requesterAgentIdOverride,
-  }).sessionAgentId;
+  });
   const normalizedRawKey = rawKey.trim();
   const isCurrentSession = normalizedRawKey === "current";
   const isConfiguredMainAlias =
@@ -306,6 +308,8 @@ async function resolvePatchTarget(
     cfg: context.cfg,
     isRequesterSession,
     key: resolved.key,
+    requesterAgentId,
+    requesterSessionKey: context.effectiveRequesterKey,
   };
 }
 
@@ -385,16 +389,20 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         if ((ownerType !== "human" && ownerType !== "agent") || !ownerId) {
           throw new ToolInputError("assign_owner requires ownerType and ownerId");
         }
-        const { agentId, key } = await resolvePatchTarget(
+        const { agentId, key, requesterAgentId, requesterSessionKey } = await resolvePatchTarget(
           { ...opts, config: opts.config ?? getRuntimeConfig() },
           normalizeOptionalString(readToolStringParam(params, "sessionKey")),
           gatewayRequest,
         );
         const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
-        const result = await callGateway<SessionsAssignOwnerResult>("sessions.assignOwner", {
-          key,
-          ...agentScope,
-          owner: { type: ownerType, id: ownerId },
+        const result = await gatewayRequest<SessionsAssignOwnerResult>({
+          method: "sessions.assignOwner",
+          params: {
+            key,
+            ...agentScope,
+            owner: { type: ownerType, id: ownerId },
+          },
+          agentToolCaller: { agentId: requesterAgentId, sessionKey: requesterSessionKey },
         });
         return jsonResult({
           status: "updated",

@@ -108,9 +108,14 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const runtimeAgentId = normalizeOptionalString(client?.internal?.agentRuntimeIdentity?.agentId);
+    const agentToolCallerId =
+      client?.internal?.syntheticClient === true
+        ? normalizeOptionalString(client.internal.agentToolCaller?.agentId)
+        : undefined;
+    const trustedAgentId = runtimeAgentId ?? agentToolCallerId;
     const humanActor = gatewayClientSessionCreator(client);
-    const assignedBy = runtimeAgentId
-      ? ({ type: "agent", id: runtimeAgentId } as const)
+    const assignedBy = trustedAgentId
+      ? ({ type: "agent", id: trustedAgentId } as const)
       : humanActor
         ? ({ type: "human", id: humanActor.id } as const)
         : null;

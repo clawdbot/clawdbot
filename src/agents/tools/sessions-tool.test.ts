@@ -226,6 +226,7 @@ describe("sessions tool", () => {
         key: "agent:main:main",
         owner: { type: "human", id: "profile-colin" },
       },
+      agentToolCaller: { agentId: "main", sessionKey: "agent:main:main" },
     });
     expect(result).toMatchObject({
       content: [
