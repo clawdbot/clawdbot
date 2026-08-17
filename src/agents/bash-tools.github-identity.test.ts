@@ -23,7 +23,9 @@ function prepare(
   prepared?: {
     credentialScrubEnv: Readonly<Record<string, string>>;
     localIdentityEnv: Readonly<Record<string, string>>;
+    managedLocalIdentity?: boolean;
   },
+  includeStoreSecrets = true,
 ) {
   return resolvePreparedExecEnvironment({
     execParams: { command: "gh api user" },
@@ -38,20 +40,24 @@ function prepare(
         }
       : {}),
     defaultPathPrepend: [],
-    storeSecretEnv: { GH_TOKEN: "store-sentinel", GITHUB_TOKEN: "store-sentinel" },
+    storeSecretEnv: includeStoreSecrets
+      ? { GH_TOKEN: "store-sentinel", GITHUB_TOKEN: "store-sentinel" }
+      : undefined,
     credentialScrubEnv: prepared?.credentialScrubEnv,
     localIdentityEnv: prepared?.localIdentityEnv,
+    managedLocalIdentity: prepared?.managedLocalIdentity,
     warnings: [],
   });
 }
 
 describe("exec GitHub identity", () => {
-  it("does not restore ambient service tokens and applies managed identity only to local gateway exec", () => {
+  it("blanks ambient service tokens and applies managed identity only to local gateway exec", () => {
     setTestEnvValue("GH_TOKEN", "ambient-token");
     setTestEnvValue("GITHUB_TOKEN", "ambient-fallback");
     const prepared = {
       credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
       localIdentityEnv: { GH_CONFIG_DIR: "/private/managed-gh", GIT_AUTHOR_NAME: "Managed" },
+      managedLocalIdentity: true,
     };
     for (const host of ["gateway", "node", "sandbox"] as const) {
       const result = prepare(host, prepared);
@@ -70,6 +76,50 @@ describe("exec GitHub identity", () => {
       }
     }
   });
+
+  it("preserves ambient service tokens for unconfigured local gateway exec", () => {
+    setTestEnvValue("GH_TOKEN", "ambient-token");
+    setTestEnvValue("GITHUB_TOKEN", "ambient-fallback");
+    const prepared = prepareGitHubToolEnvironment({ config: {}, agentId: "main" });
+
+    for (const host of ["gateway", "node", "sandbox"] as const) {
+      const result = prepare(host, prepared, false);
+      expect(result.env.GH_TOKEN).toBe(host === "gateway" ? "ambient-token" : undefined);
+      expect(result.env.GITHUB_TOKEN).toBe(host === "gateway" ? "ambient-fallback" : undefined);
+      expect(result.requestedEnv).toBeUndefined();
+    }
+  });
+
+  it.each([
+    { previewName: "GH_TOKEN", otherName: "GITHUB_TOKEN" },
+    { previewName: "GITHUB_TOKEN", otherName: "GH_TOKEN" },
+  ] as const)(
+    "scrubs only an explicitly owned $previewName preview variable",
+    ({ previewName, otherName }) => {
+      setTestEnvValue("GH_TOKEN", "ambient-token");
+      setTestEnvValue("GITHUB_TOKEN", "ambient-fallback");
+      const prepared = prepareGitHubToolEnvironment({
+        config: {},
+        sourceConfig: {
+          gateway: {
+            controlUi: {
+              github: {
+                token: { source: "env", provider: "default", id: previewName },
+              },
+            },
+          },
+        },
+        agentId: "main",
+      });
+
+      const result = prepare("gateway", prepared, false);
+
+      expect(result.env[previewName]).toBe("");
+      expect(result.env[otherName]).toBe(
+        otherName === "GH_TOKEN" ? "ambient-token" : "ambient-fallback",
+      );
+    },
+  );
 
   it.each([
     { identity: "native", managed: false },
@@ -98,6 +148,8 @@ describe("exec GitHub identity", () => {
       const result = prepare(host, prepared);
       expect(result.env.PREVIEW_SERVICE_TOKEN).toBe("");
       expect(result.requestedEnv?.PREVIEW_SERVICE_TOKEN).toBe("");
+      expect(result.env.GH_TOKEN).toBe(managed ? "" : "store-sentinel");
+      expect(result.env.GITHUB_TOKEN).toBe(managed ? "" : "store-sentinel");
     }
   });
 

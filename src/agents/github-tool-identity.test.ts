@@ -34,7 +34,7 @@ describe("GitHub tool identity", () => {
     processMocks.runCommandBuffered.mockResolvedValue(commandResult());
   });
 
-  it("clears native service tokens and gives an agent override complete precedence", async () => {
+  it("gives a managed agent override complete precedence", async () => {
     const stateDir = tempDirs.make("openclaw-github-state-");
     const config = {
       tools: {
@@ -121,8 +121,7 @@ describe("GitHub tool identity", () => {
       agentId: "main",
     });
     expect(envScrub.credentialScrubEnv).toEqual({
-      GH_TOKEN: "",
-      GITHUB_TOKEN: "",
+      ...(managed ? { GH_TOKEN: "", GITHUB_TOKEN: "" } : {}),
       PREVIEW_SERVICE_TOKEN: "",
     });
     expect(Object.keys(envScrub.localIdentityEnv).length).toBe(managed ? 1 : 0);
@@ -148,7 +147,7 @@ describe("GitHub tool identity", () => {
     expect(storeScrub.excludedStoreNames).toEqual(["PREVIEW_STORE_TOKEN"]);
   });
 
-  it("scrubs ambient credentials without treating native identity as managed", () => {
+  it("preserves ambient credentials for native identity", () => {
     const native = prepareGitHubToolEnvironment({
       config: {},
       agentId: "main",
@@ -162,27 +161,37 @@ describe("GitHub tool identity", () => {
     const ambient = prepareGitHubToolEnvironment({
       config: {},
       agentId: "main",
-      env: { GH_TOKEN: "test-token" },
+      env: { GH_TOKEN: "test-token", GITHUB_TOKEN: "fallback-token" },
     });
     expect(ambient).toMatchObject({
-      credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+      credentialScrubEnv: {},
       managedLocalIdentity: false,
     });
+  });
 
-    const previewEnvRef = prepareGitHubToolEnvironment({
-      config: {
+  it.each([
+    { source: "env", id: "PREVIEW_SERVICE_TOKEN", expected: { PREVIEW_SERVICE_TOKEN: "" } },
+    { source: "env", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
+    { source: "env", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
+    { source: "store", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
+    { source: "store", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
+  ] as const)("scrubs only the explicit $source preview ref $id", ({ source, id, expected }) => {
+    const prepared = prepareGitHubToolEnvironment({
+      config: {},
+      sourceConfig: {
         gateway: {
           controlUi: {
             github: {
-              token: { source: "env", provider: "default", id: "PREVIEW_SERVICE_TOKEN" },
+              token: { source, provider: "default", id },
             },
           },
         },
       },
       agentId: "main",
-      env: {},
+      env: { GH_TOKEN: "test-token", GITHUB_TOKEN: "fallback-token" },
     });
-    expect(previewEnvRef.credentialScrubEnv.PREVIEW_SERVICE_TOKEN).toBe("");
+    expect(prepared.credentialScrubEnv).toEqual(expected);
+    expect(prepared.excludedStoreNames).toEqual(source === "store" ? [id] : []);
   });
 
   it("fails closed when a configured managed profile is absent", async () => {
@@ -230,7 +239,7 @@ describe("GitHub tool identity", () => {
     expect(JSON.stringify(status)).not.toContain("stderr");
   });
 
-  it("probes native gh without ambient tokens and reads Git author in the selected workspace", async () => {
+  it("probes native gh with ambient token precedence and reads Git author in the workspace", async () => {
     const workspace = tempDirs.make("openclaw-github-workspace-");
     processMocks.runCommandBuffered.mockImplementation(async (argv: string[]) =>
       argv[0] === "gh"
@@ -241,11 +250,15 @@ describe("GitHub tool identity", () => {
     await resolveGitHubToolIdentityStatus({
       config: { agents: { defaults: { workspace } } },
       agentId: "main",
+      env: { GH_TOKEN: "native-primary", GITHUB_TOKEN: "native-fallback" },
     });
 
     const ghCall = processMocks.runCommandBuffered.mock.calls.find(([argv]) => argv[0] === "gh");
     const gitCall = processMocks.runCommandBuffered.mock.calls.find(([argv]) => argv[0] === "git");
-    expect(ghCall?.[1]?.env).toMatchObject({ GH_TOKEN: undefined, GITHUB_TOKEN: undefined });
+    expect(ghCall?.[1]?.env).toMatchObject({
+      GH_TOKEN: "native-primary",
+      GITHUB_TOKEN: "native-fallback",
+    });
     expect(gitCall?.[1]).toMatchObject({ cwd: workspace });
   });
 

@@ -241,14 +241,14 @@ describe("agent harness host capability", () => {
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
   });
 
-  it("clears ambient GitHub service tokens for a native local identity", async () => {
+  it("preserves ambient GitHub service tokens for a native local identity", async () => {
     vi.stubEnv("GH_TOKEN", "ambient-service-token");
     vi.stubEnv("GITHUB_TOKEN", "ambient-fallback-token");
     const { attempt } = await admittedAttempt("run-native-local-env", { config: {} });
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
 
     expect(host.capabilities.preparedEnvironment?.()).toEqual({
-      credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+      credentialScrubEnv: {},
       localIdentityEnv: {},
       managedLocalIdentity: false,
     });
@@ -279,7 +279,7 @@ describe("agent harness host capability", () => {
       const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
       const environment = host.capabilities.preparedEnvironment?.();
 
-      if (managed || source === "env") {
+      if (managed) {
         expect(environment?.credentialScrubEnv).toMatchObject({
           GH_TOKEN: "",
           GITHUB_TOKEN: "",

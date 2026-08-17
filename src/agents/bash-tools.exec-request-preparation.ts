@@ -371,6 +371,7 @@ export function resolvePreparedExecEnvironment(params: {
   secretEgressEnv?: Record<string, string>;
   credentialScrubEnv?: Readonly<Record<string, string>>;
   localIdentityEnv?: Readonly<Record<string, string>>;
+  managedLocalIdentity?: boolean;
   warnings: string[];
 }): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
   const inheritedBaseEnv = coerceEnv(process.env);
@@ -495,6 +496,16 @@ export function resolvePreparedExecEnvironment(params: {
     applyPathPrepend(env, params.defaultPathPrepend);
   }
 
+  if (params.host === "gateway" && params.managedLocalIdentity === false) {
+    // Native GitHub identity is the explicit exception to the generic host-secret filter.
+    // Exact service-owner scrubs below still win; non-local hosts receive neither value.
+    for (const name of ["GH_TOKEN", "GITHUB_TOKEN"] as const) {
+      const value = process.env[name];
+      if (typeof value === "string") {
+        env[name] = value;
+      }
+    }
+  }
   if (params.storeSecretEnv) {
     // Secret-kind entries are authenticated ciphertext, not active credentials.
     // Inject them after ordinary env filtering so names such as GH_TOKEN remain usable.

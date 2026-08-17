@@ -22,32 +22,7 @@ import {
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
-  it("clears ambient GitHub service tokens for a native local profile", async () => {
-    const sessionFile = path.join(tempDir, "native-local-process-env.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-native-local-process-env");
-    const params = createParams(sessionFile, workspaceDir);
-    params.hostCapabilities = Object.freeze({
-      ...params.hostCapabilities,
-      preparedEnvironment: () =>
-        Object.freeze({
-          credentialScrubEnv: Object.freeze({ GH_TOKEN: "", GITHUB_TOKEN: "" }),
-          localIdentityEnv: Object.freeze({}),
-          managedLocalIdentity: false,
-        }),
-    });
-    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
-
-    expect(connection.appServer.start.env).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-    expect(connection.shellEnvironment).toEqual({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-    expect(connection.disableLoginShell).toBe(true);
-  });
-
-  it("preserves native login-shell behavior when no credential overlay exists", async () => {
+  it("preserves native process environment and login-shell behavior for an empty overlay", async () => {
     const sessionFile = path.join(tempDir, "native-local-no-overlay.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-native-local-no-overlay");
     const params = createParams(sessionFile, workspaceDir);

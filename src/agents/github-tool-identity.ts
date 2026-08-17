@@ -136,15 +136,9 @@ export function prepareGitHubToolEnvironment(params: {
   const previewToken =
     params.sourceConfig?.gateway?.controlUi?.github?.token ??
     params.config.gateway?.controlUi?.github?.token;
-  const environment = params.env ?? process.env;
-  const previewUsesEnvironment = isSecretRef(previewToken) && previewToken.source === "env";
-  const credentialScrubEnv: Record<string, string> =
-    managedLocalIdentity ||
-    previewUsesEnvironment ||
-    readNonBlankString(environment.GH_TOKEN) ||
-    readNonBlankString(environment.GITHUB_TOKEN)
-      ? { GH_TOKEN: "", GITHUB_TOKEN: "" }
-      : {};
+  const credentialScrubEnv: Record<string, string> = managedLocalIdentity
+    ? { GH_TOKEN: "", GITHUB_TOKEN: "" }
+    : {};
   const excludedStoreNames: string[] = [];
   if (isSecretRef(previewToken)) {
     if (previewToken.source === "env" && isValidEnvSecretRefId(previewToken.id)) {
@@ -285,11 +279,10 @@ export async function resolveGitHubToolIdentityStatus(params: {
   const identity = resolveGitHubToolIdentity(params);
   const managed = identity.source !== "system-detected";
   const localIdentityEnv = localIdentityEnvironmentForIdentity(identity);
-  const probeEnv: NodeJS.ProcessEnv = {
-    GH_TOKEN: undefined,
-    GITHUB_TOKEN: undefined,
-    ...localIdentityEnv,
-  };
+  const nativeEnv = params.env ?? {};
+  const probeEnv: NodeJS.ProcessEnv = managed
+    ? { ...nativeEnv, GH_TOKEN: undefined, GITHUB_TOKEN: undefined, ...localIdentityEnv }
+    : nativeEnv;
   const profileAvailable = !managed || (await isPrivateManagedProfile(identity.profileDir));
   const workspaceDir = resolveAgentWorkspaceDir(params.config, params.agentId);
   const [probe, author] = await Promise.all([
