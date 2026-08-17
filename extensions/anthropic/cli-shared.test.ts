@@ -1072,3 +1072,16 @@ describe("normalizeClaudeBackendConfig", () => {
     expectDefaultDisallowedTools(backend.config.resumeArgs);
   });
 });
+
+describe("Claude CLI backend descriptor watchdog defaults (#125045)", () => {
+  it("does not ship stock watchdog defaults that disable resume-watchdog promotion", () => {
+    // The descriptor must not spread CLI_FRESH/RESUME_WATCHDOG_DEFAULTS into
+    // config.reliability.watchdog. Those copies are byte-identical to the
+    // fallback pickWatchdogProfile already uses, so shipping them only makes
+    // `configured` always truthy, which permanently disables the promotion
+    // gate (!configured) and pins resumed cron/explicit-timeout turns to the
+    // 180s resume no-output ceiling instead of the 600s fresh ceiling.
+    const { config } = buildAnthropicCliBackend();
+    expect(config.reliability?.watchdog).toBeUndefined();
+  });
+});

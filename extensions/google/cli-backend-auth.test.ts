@@ -1041,3 +1041,13 @@ describe("google gemini cli backend auth bridge", () => {
     expect(backend.prepareExecution).toBeTypeOf("function");
   });
 });
+
+describe("Gemini CLI backend descriptor watchdog defaults (#125045)", () => {
+  it("does not ship stock watchdog defaults that disable resume-watchdog promotion", () => {
+    // Same invariant as the Anthropic CLI backend: shipping byte-identical
+    // copies of the fallback defaults only makes `configured` truthy and
+    // disables the promotion gate in pickWatchdogProfile.
+    const { config } = buildGoogleGeminiCliBackend();
+    expect(config.reliability?.watchdog).toBeUndefined();
+  });
+});
