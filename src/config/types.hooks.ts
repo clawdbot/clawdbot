@@ -104,7 +104,7 @@ export type HooksConfig = {
    */
   defaultSessionKey?: string;
   /**
-   * Allow `sessionKey` from external `/hooks/agent` request payloads.
+   * Allow `sessionKey` from external `/hooks/agent` and `/hooks/wake` request payloads.
    * Default: false.
    */
   allowRequestSessionKey?: boolean;

@@ -108,6 +108,19 @@ export function mapSandboxSkillEntriesForPrompt(params: {
   });
 }
 
+export function createSandboxPromptEntryLoader(params: {
+  loadEntries: () => SkillEntry[];
+  skillsWorkspaceDir: string;
+  skillsPromptWorkspaceDir: string;
+}): () => SkillEntry[] {
+  return () =>
+    mapSandboxSkillEntriesForPrompt({
+      entries: params.loadEntries(),
+      skillsWorkspaceDir: params.skillsWorkspaceDir,
+      skillsPromptWorkspaceDir: params.skillsPromptWorkspaceDir,
+    }) ?? [];
+}
+
 export function mapSandboxSkillUsagePaths(params: {
   paths?: SkillUsagePath[];
   skillsWorkspaceDir: string;

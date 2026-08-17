@@ -1,4 +1,5 @@
 import fsp from "node:fs/promises";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
@@ -46,6 +47,7 @@ import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
+const COMMAND_RESULT_GRACE_MS = 5_000;
 const RETRY_DELAY_MS = 100;
 const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
 const RETRYABLE_TRANSPORT_CODES = new Set([
@@ -229,9 +231,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     generation: number,
     command: WorkerWorkspaceCommand & { resetWorkspace?: boolean },
   ): Promise<NodeWorkerWorkspaceExecResult> => {
-    const timeoutMs = command.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
-    const deadline = Date.now() + timeoutMs;
-    const signals = [entry.abortController.signal, AbortSignal.timeout(timeoutMs)];
+    const commandTimeoutMs = command.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    // Keep the subprocess deadline authoritative while allowing its terminal result to cross the
+    // node transport. Equal deadlines turn an ordinary process timeout into a transport failure.
+    const transportTimeoutMs =
+      addTimerTimeoutGraceMs(commandTimeoutMs, COMMAND_RESULT_GRACE_MS) ?? commandTimeoutMs;
+    const deadline = Date.now() + transportTimeoutMs;
+    const signals = [entry.abortController.signal, AbortSignal.timeout(transportTimeoutMs)];
     if (command.signal) {
       signals.push(command.signal);
     }
@@ -243,7 +249,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       generation,
       argv: [...command.argv],
       ...(command.input === undefined ? {} : { input: command.input }),
-      ...(command.timeoutMs === undefined ? {} : { timeoutMs: command.timeoutMs }),
+      timeoutMs: commandTimeoutMs,
       ...(command.resetWorkspace === undefined ? {} : { resetWorkspace: command.resetWorkspace }),
       ...(command.transfer === undefined ? {} : { transfer: command.transfer }),
     };

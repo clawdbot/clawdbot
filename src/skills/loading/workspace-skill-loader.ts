@@ -58,14 +58,14 @@ type LoadedSkillRecord = {
   syncDirName?: string;
 };
 
-function warnInvalidSkillFrontmatter(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
-  skillsLogger.warn("Skipping skill with invalid frontmatter.", {
+function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
+  skillsLogger.warn("Skipping invalid skill.", {
     source,
     filePath: diagnostic.path,
     error: diagnostic.message,
     consoleMessage:
-      `Skipping skill with invalid frontmatter: ` +
-      `file=${compactSkillPath(diagnostic.path)} error=${diagnostic.message}`,
+      `Skipping invalid skill: file=${compactSkillPath(diagnostic.path)} ` +
+      `error=${diagnostic.message}`,
   });
 }
 
@@ -111,7 +111,7 @@ function loadContainedSkillRecords(params: {
     dir: params.skillDir,
     source: params.source,
     maxBytes: params.maxSkillFileBytes,
-    onDiagnostic: (diagnostic) => warnInvalidSkillFrontmatter(params.source, diagnostic),
+    onDiagnostic: (diagnostic) => warnInvalidSkill(params.source, diagnostic),
   });
   const records = loaded.skills
     .map((skill) => ({
@@ -203,40 +203,6 @@ function setSyncSourceForPluginSkill(
   };
 }
 
-function isCandidateOversized(
-  candidate: CandidateSkillDir,
-  limits: ResolvedSkillDiscoveryLimits,
-  rootIsSkill: boolean,
-): boolean {
-  try {
-    const size = fs.statSync(candidate.skillMdRealPath).size;
-    if (size <= limits.maxSkillFileBytes) {
-      return false;
-    }
-    skillsLogger.warn(
-      rootIsSkill
-        ? "Skipping skills root due to oversized SKILL.md."
-        : "Skipping skill due to oversized SKILL.md.",
-      rootIsSkill
-        ? {
-            dir: candidate.skillDir,
-            filePath: path.join(candidate.skillDir, "SKILL.md"),
-            size,
-            maxSkillFileBytes: limits.maxSkillFileBytes,
-          }
-        : {
-            skill: candidate.name,
-            filePath: path.join(candidate.skillDir, "SKILL.md"),
-            size,
-            maxSkillFileBytes: limits.maxSkillFileBytes,
-          },
-    );
-    return true;
-  } catch {
-    return true;
-  }
-}
-
 function loadDiscoveredSkillRecords(params: {
   dir: string;
   source: string;
@@ -244,23 +210,27 @@ function loadDiscoveredSkillRecords(params: {
   allowedSymlinkTargetRealPaths: readonly string[];
 }): LoadedSkillRecord[] {
   const discovered = discoverSkillCandidates(params);
-  const loadedSkills: LoadedSkillRecord[] = [];
   const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
+  const loadCandidate = (candidate: CandidateSkillDir) =>
+    loadContainedSkillRecords({
+      skillDir: candidate.skillDir,
+      source: params.source,
+      maxSkillFileBytes: params.limits.maxSkillFileBytes,
+      canonicalSkillDir: canonicalSkillDirForSource(params.source, candidate.skillDirRealPath),
+    });
+  if (discovered.configuredRootCandidate) {
+    const rootRecords = loadCandidate(discovered.configuredRootCandidate);
+    if (rootRecords.length > 0) {
+      return rootRecords;
+    }
+  }
+
+  const loadedSkills: LoadedSkillRecord[] = [];
   for (const candidate of discovered.candidates) {
     if (!discovered.rootIsSkill && loadedSkills.length >= maxSkillsLoadedPerSource) {
       break;
     }
-    if (isCandidateOversized(candidate, params.limits, discovered.rootIsSkill)) {
-      continue;
-    }
-    loadedSkills.push(
-      ...loadContainedSkillRecords({
-        skillDir: candidate.skillDir,
-        source: params.source,
-        maxSkillFileBytes: params.limits.maxSkillFileBytes,
-        canonicalSkillDir: canonicalSkillDirForSource(params.source, candidate.skillDirRealPath),
-      }),
-    );
+    loadedSkills.push(...loadCandidate(candidate));
   }
   if (loadedSkills.length > maxSkillsLoadedPerSource && !discovered.rootIsSkill) {
     return loadedSkills
@@ -280,9 +250,6 @@ function loadGeneratedPluginSkillRecords(params: {
   const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
   const loadedSkills: LoadedSkillRecord[] = [];
   for (const candidate of candidates) {
-    if (isCandidateOversized(candidate, params.limits, false)) {
-      continue;
-    }
     const loadedRecords = loadContainedSkillRecords({
       skillDir: candidate.skillDir,
       source: params.source,
@@ -372,6 +339,24 @@ function loadSkillEntries(
   const mergeRecord = (record: LoadedSkillRecord) => {
     if (archivedSkillFiles?.has(canonicalizePath(record.skill.filePath))) {
       return;
+    }
+    const replaced = merged.get(record.skill.name);
+    if (
+      replaced &&
+      canonicalizePath(replaced.skill.filePath) !== canonicalizePath(record.skill.filePath)
+    ) {
+      const collisionName = record.skill.name.slice(0, 128);
+      skillsLogger.warn("Skill precedence collision resolved.", {
+        skill: collisionName,
+        winnerSource: record.skill.source,
+        loserSource: replaced.skill.source,
+        winnerPath: record.skill.filePath,
+        loserPath: replaced.skill.filePath,
+        consoleMessage:
+          `Skill precedence collision: skill="${collisionName}" ` +
+          `winner=${record.skill.source}:${compactSkillPath(record.skill.filePath)} ` +
+          `loser=${replaced.skill.source}:${compactSkillPath(replaced.skill.filePath)}`,
+      });
     }
     merged.set(record.skill.name, record);
   };

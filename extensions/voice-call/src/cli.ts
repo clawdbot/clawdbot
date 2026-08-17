@@ -19,7 +19,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
-import { getCallHistoryFromStore } from "./manager/store.js";
+import {
+  findCallMatchesInStore,
+  getCallHistoryFromStore,
+  loadActiveCallsFromStore,
+} from "./manager/store.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
@@ -716,15 +720,19 @@ export function registerVoiceCallCli(params: {
         writeStdoutJson(gateway.payload);
         return;
       }
-      const rt = await ensureRuntime();
+      // Status is a read-only command. Starting the telephony runtime here would
+      // bind the webhook port and keep this one-shot CLI process alive.
+      ensureHistoryStateRuntime();
+      const storePath = path.dirname(resolveDefaultStorePath(config));
       if (options.callId) {
-        const call = await rt.manager.getCallFromMemoryOrStore(options.callId);
+        const persisted = await findCallMatchesInStore(storePath, options.callId);
+        const call = persisted.byCallId ?? persisted.byProviderCallId;
         writeStdoutJson(call ?? { found: false });
         return;
       }
       writeStdoutJson({
         found: true,
-        calls: rt.manager.getActiveCalls(),
+        calls: Array.from(loadActiveCallsFromStore(storePath).activeCalls.values()),
       });
     });
 

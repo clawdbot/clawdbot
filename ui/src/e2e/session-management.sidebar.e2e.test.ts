@@ -76,7 +76,7 @@ suite.define(() => {
     }
   });
 
-  it("expands child sessions inline and opens a child chat", async () => {
+  it("expands and manages child sessions inline before opening a child chat", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";
@@ -168,7 +168,7 @@ suite.define(() => {
 
       const childRows = page.locator(".sidebar-recent-session--child");
       await expect.poll(() => childRows.count()).toBe(4);
-      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(0);
+      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(4);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
       await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
 
@@ -189,6 +189,29 @@ suite.define(() => {
       }
       await captureUiProof(page, "child-sessions-expanded.png");
       await captureUiProof(page, "child-sessions-run-state-precedence.png");
+
+      const completedChild = childRows.nth(1);
+      const childMenuButton = completedChild.getByRole("button", {
+        name: "Open session menu: Verify tests",
+        exact: true,
+      });
+      await completedChild.hover();
+      await expect.poll(() => actionOpacity(childMenuButton)).toBe("1");
+      await expect.poll(() => actionPointerEvents(childMenuButton)).toBe("auto");
+      await childMenuButton.click();
+      const childMenu = page.getByRole("menu", { name: "Actions for Verify tests" });
+      await childMenu.waitFor({ state: "visible" });
+      await page.getByRole("menuitem", { name: "Mark as unread" }).waitFor();
+      await page.getByRole("menuitem", { name: "Rename…" }).waitFor();
+      await page.getByRole("menuitem", { name: "Set icon" }).waitFor();
+      await page.getByRole("menuitem", { name: "Fork" }).waitFor();
+      await page.getByRole("menuitem", { name: "Archive session" }).waitFor();
+      await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
+      expect(await page.getByRole("menuitem", { name: "Pin session" }).count()).toBe(0);
+      expect(await page.getByRole("menuitem", { name: "Move to group" }).count()).toBe(0);
+      await captureUiProof(page, "child-session-menu.png");
+      await page.keyboard.press("Escape");
+      await childMenu.waitFor({ state: "detached" });
 
       await childRows.nth(1).getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));

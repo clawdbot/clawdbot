@@ -201,6 +201,9 @@ describe("sessions.dispatch", () => {
     const dispatch = vi.fn().mockRejectedValue(new Error("remote dispatch reached"));
     const respond = await invoke(
       makeContext({
+        workerEnvironmentService: {
+          supportsExecutionMode: () => true,
+        } as never,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
@@ -216,6 +219,37 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         code: ErrorCodes.UNAVAILABLE,
         message: "remote dispatch reached",
+      }),
+    );
+  });
+
+  it.each([
+    ["node-only", { supportsExecutionMode: () => false }],
+    ["undeclared", { supportsExecutionMode: undefined }],
+  ])("rejects remote-exec before allocation when the profile is %s", async (_name, service) => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        agentRuntimeOverride: "codex",
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerEnvironmentService: service as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "runtime codex requires an SSH-backed cloud worker provider",
       }),
     );
   });
@@ -377,13 +411,13 @@ describe("sessions.dispatch", () => {
       }),
       {
         expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
-        target: { kind: "profile", profileId: "test" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast" },
       },
     );
 
     expect(move).toHaveBeenCalledWith(
       expect.objectContaining({
-        target: { kind: "profile", profileId: "test" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast" },
       }),
       expect.any(Function),
     );

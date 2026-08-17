@@ -226,6 +226,7 @@ describe("GatewayChatClient", () => {
     });
     await client.loadHistory({ sessionKey: "global", agentId: "work", limit: 50 });
     await client.abortChat({ sessionKey: "global", agentId: "work", runId: "run-global-work" });
+    await client.listModels({ agentId: "work" });
 
     expect(request).toHaveBeenNthCalledWith(1, "chat.send", {
       sessionKey: "global",
@@ -246,6 +247,7 @@ describe("GatewayChatClient", () => {
       agentId: "work",
       runId: "run-global-work",
     });
+    expect(request).toHaveBeenNthCalledWith(4, "models.list", { agentId: "work" });
   });
 
   it("resolves a handoff key through the exact sessions.resolve wire contract", async () => {

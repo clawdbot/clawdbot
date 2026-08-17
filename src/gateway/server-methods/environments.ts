@@ -139,8 +139,22 @@ export function summarizeWorkerEnvironment(
 }
 async function listEnvironments(context: GatewayRequestContext): Promise<EnvironmentSummary[]> {
   const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
+  const managedCloudNodeIds = new Set(
+    listWorkerEnvironments(context).flatMap((environment) =>
+      environment.providerId !== "device" &&
+      environment.nodeDeviceId &&
+      environment.state !== "destroyed" &&
+      environment.state !== "failed" &&
+      environment.state !== "orphaned"
+        ? [environment.nodeDeviceId]
+        : [],
+    ),
+  );
+  const visibleDevices = devices.paired.filter(
+    (device) => !managedCloudNodeIds.has(device.deviceId),
+  );
   const currentPairingStates = new Map<string, { identity: string; generation?: string }>();
-  for (const device of devices.paired) {
+  for (const device of visibleDevices) {
     const state = resolveNodePairingState(device);
     if (state) {
       currentPairingStates.set(state.identity.nodeId, {
@@ -168,9 +182,9 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
     connectedNodes,
   );
   const catalog = createKnownNodeCatalog({
-    pairedDevices: devices.paired,
-    pairedNodes: nodes.paired,
-    connectedNodes,
+    pairedDevices: visibleDevices,
+    pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
+    connectedNodes: connectedNodes.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
     sessionHostNodeIds,
     workerBundleByNodeId,
     issuesByNodeId,

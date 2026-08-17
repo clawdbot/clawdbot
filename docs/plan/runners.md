@@ -26,9 +26,9 @@ advances a milestone.
 | 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                                                                                                          |
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901 |
 | 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037, #124356, #124590                                                                                                                                        |
-| 8   | Stop-and-continue moves                                    | not started | —                                                                                                                                                                         |
+| 8   | Stop-and-continue moves                                    | landed      | #125036                                                                                                                                                                   |
 | 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                                                                                                                                                                         |
-| 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                                                                                                                                                                         |
+| 10  | Cloud convergence (provisioners run `openclaw connect`)    | in progress | —                                                                                                                                                                         |
 
 Revision history: revision 1 (2026-08-08) established the session/runner
 vocabulary, the naming rulings, and the milestone skeleton after a
@@ -382,14 +382,16 @@ speak. Additions:
 
 ### Cloud convergence (milestone 10)
 
-A cloud provider's job collapses to: boot box, run
-`openclaw connect <one-shot code> --ephemeral` in setup. Ephemeral enrollment
-(industry: GitHub `--ephemeral`/JIT, Buildkite `--acquire-job`, Tailscale
-ephemeral keys) auto-deregisters after the run and auto-purges the node
-record when it goes offline. `destroy` = release lease. After soak, the SSH
-reverse-tunnel stack, `PreparedWorkerSsh`, and the rsync transport are
-deleted; cloud leases and paired machines become the same runner with
-different lifecycles.
+The bundled Crabbox provider now boots the box and runs
+`openclaw connect <setup code> --ephemeral` in an isolated per-lease state
+directory. The Gateway persists one replay-safe setup identity, atomically
+binds the authenticated device identity to the worker environment, pushes the
+current bundle through the node channel, and removes the node role after
+provider teardown. `destroy` = release lease plus pairing cleanup. Codex
+remote-exec fails before allocation because it still requires an SSH-backed
+provider. The remaining milestone work is soak proof and deletion of the
+replaced reverse-tunnel/rsync cloud carrier; distinct SSH sandbox contracts
+stay until their own replacements are proved.
 
 ## What the adversarial reviews killed or reshaped
 

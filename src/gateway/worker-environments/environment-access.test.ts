@@ -105,17 +105,14 @@ describe("worker environment service", () => {
     expect(tunnelManager.start).not.toHaveBeenCalled();
   });
 
-  it("starts a Gateway-bundle node tunnel without entering SSH", async () => {
+  it("selects a node tunnel from the persisted transport instead of provider id", async () => {
     const tunnelManager = {
       status: () => "stopped" as const,
       start: vi.fn(),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => {}),
     } as unknown as WorkerTunnelManager;
-    support.testState.config.cloudWorkers!.profiles!.development!.provider = "device";
-    support.testState.config.cloudWorkers!.profiles!.development!.settings = {
-      device: "device-1",
-    };
+    support.testState.config.cloudWorkers!.profiles!.development!.provider = "crabbox";
     const nodeHandle = {
       environmentId: "pending",
       ownerEpoch: 0,
@@ -139,9 +136,9 @@ describe("worker environment service", () => {
     };
     const workerService = support.createService(
       support.createProvider({
-        id: "device",
+        id: "crabbox",
         provision: async () => ({
-          leaseId: "device-lease",
+          leaseId: "cloud-lease",
           node: { deviceId: "device-1" },
         }),
       }),
@@ -151,7 +148,7 @@ describe("worker environment service", () => {
         ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       },
     );
-    const environment = await workerService.create("development", "device-tunnel-gate");
+    const environment = await workerService.create("development", "cloud-node-tunnel-gate");
     const credential = await workerService.attachSession({
       environmentId: environment.environmentId,
       ownerEpoch: environment.ownerEpoch,
