@@ -179,6 +179,13 @@ export type PluginManifestActivation = {
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
+/** Root CLI command metadata available before plugin code is imported. */
+export type PluginManifestCliCommand = {
+  name: string;
+  description: string;
+  hasSubcommands: boolean;
+};
+
 export type PluginManifestDefaultPlatform = NodeJS.Platform;
 
 export type PluginManifestSetupProvider = {
@@ -384,6 +391,8 @@ export type PluginManifest = {
    * config diagnostics before runtime loads.
    */
   commandAliases?: PluginManifestCommandAlias[];
+  /** Root commands advertised by help and activation planning before runtime loads. */
+  cliCommands?: PluginManifestCliCommand[];
   /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
   providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
@@ -525,11 +534,15 @@ export type PluginManifestCapabilityProviderMetadata = {
 
 export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
   optional?: boolean;
+  /** Built-in tool profiles that expose this plugin tool by default. */
+  profiles?: PluginManifestToolProfile[];
   /** Tool execution is safe to repeat after an incomplete model turn. */
   replaySafe?: boolean;
   /** Tool execution can change durable state and failed attempts must remain visible. */
   sideEffecting?: boolean;
 };
+
+export type PluginManifestToolProfile = "minimal" | "coding" | "messaging" | "full";
 
 export type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */

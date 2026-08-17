@@ -56,11 +56,13 @@ does not set this flag.
 Harnesses with an independently managed native surface can also declare
 `conversationToolPolicySafeDenyTools` using canonical OpenClaw tool names. Core
 preserves the native surface only when every expanded deny is a known core tool
-in that audited safe list. Finite allowlists, undeclared or unknown tool names,
-wildcards, and groups containing any undeclared name remain native-surface
-restrictions. Omit the list to retain the conservative behavior where every
-explicit restriction isolates the native surface. Because omissions fail
-closed, new tools cannot silently relax the policy boundary.
+in that audited safe list and passes the matching names in
+`params.pluginHarnessToolPolicySafeDeniedTools`. The harness must disable any
+native equivalents for those names. Finite allowlists, undeclared or unknown
+tool names, wildcards, and groups containing any undeclared name remain
+native-surface restrictions. Omit the list to retain the conservative behavior
+where every explicit restriction isolates the native surface. Because omissions
+fail closed, new tools cannot silently relax the policy boundary.
 
 Omit the declaration when any native capability can bypass those layers.
 OpenClaw then visibly rejects explicitly restricted turns before invoking the

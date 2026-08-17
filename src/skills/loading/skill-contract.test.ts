@@ -6,8 +6,8 @@ import {
   formatSkillsForPromptCore,
   resolveSkillDisplayName,
   type Skill,
+  formatSkillsCompactForPrompt as formatSkillsCompact,
 } from "./skill-contract.js";
-import { formatSkillsCompactForPrompt as formatSkillsCompact } from "./skill-contract.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
   return createCanonicalFixtureSkill({

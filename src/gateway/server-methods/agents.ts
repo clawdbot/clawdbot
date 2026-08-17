@@ -88,11 +88,12 @@ import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
 } from "../../state/agent-deletion-journal.js";
+import { listAgentProvenance } from "../../state/agent-provenance.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -170,7 +171,7 @@ function resolveAgentWorkspaceFileOrRespondError(
     cfg,
   );
   if (!agentId) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+    respondAgentNotFound(respond, String(rawAgentId));
     return null;
   }
   const rawName = params.name;
@@ -299,7 +300,11 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
 }
 
 function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
-  const agentId = normalizeAgentId(agentIdRaw);
+  const normalized = normalizeAgentIdStrict(agentIdRaw);
+  if (!normalized.ok) {
+    return null;
+  }
+  const agentId = normalized.value;
   const allowed = new Set(listAgentIds(cfg));
   if (!allowed.has(agentId)) {
     return null;
@@ -897,7 +902,26 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const result = listAgentsForGateway(cfg, modelCatalog, {
       includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
     });
-    respond(true, result, undefined);
+    const provenanceById = new Map(
+      listAgentProvenance().map((record) => [record.agentId, record] as const),
+    );
+    respond(
+      true,
+      {
+        ...result,
+        agents: result.agents.map((agent) => {
+          const provenance = provenanceById.get(agent.id);
+          return provenance
+            ? Object.assign({}, agent, {
+                createdVia: provenance.createdVia,
+                creatorAgentId: provenance.creatorAgentId,
+                createdAt: provenance.createdAtMs,
+              })
+            : agent;
+        }),
+      },
+      undefined,
+    );
   },
   "agents.create": async ({ params, respond }) => {
     if (!validateAgentsCreateParams(params)) {
@@ -935,7 +959,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const agentId = normalizeAgentId(params.agentId);
+    const normalized = normalizeAgentIdStrict(params.agentId);
+    if (!normalized.ok) {
+      respondAgentNotFound(respond, params.agentId);
+      return;
+    }
+    const agentId = normalized.value;
     if (!isConfiguredAgent(cfg, agentId)) {
       respondAgentNotFound(respond, agentId);
       return;
@@ -1029,7 +1058,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const agentId = normalizeAgentId(params.agentId);
+    const normalized = normalizeAgentIdStrict(params.agentId);
+    if (!normalized.ok) {
+      respondAgentNotFound(respond, params.agentId);
+      return;
+    }
+    const agentId = normalized.value;
     if (agentOwnsSharedAuthStore(cfg, agentId)) {
       respond(
         false,
@@ -1522,7 +1556,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const agentId = resolveAgentIdOrError(params.agentId, cfg);
     if (!agentId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      respondAgentNotFound(respond, params.agentId);
       return;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);

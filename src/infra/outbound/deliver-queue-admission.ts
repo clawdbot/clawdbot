@@ -11,8 +11,9 @@ import {
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
-import { loadPendingDelivery, type QueuedDelivery } from "./delivery-queue-storage.js";
 import {
+  loadPendingDelivery,
+  type QueuedDelivery,
   enqueueDelivery,
   enqueueDeliveryOnce,
   enqueuePreparedDeliveryOnce,

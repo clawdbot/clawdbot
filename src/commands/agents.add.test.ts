@@ -73,6 +73,9 @@ const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
 }));
+const terminalMocks = vi.hoisted(() => ({
+  isTerminalInteractive: vi.fn(() => true),
+}));
 const authChoiceMocks = vi.hoisted(() => ({
   applyAuthChoice: vi.fn(),
   warnIfModelConfigLooksOff: vi.fn(async () => {}),
@@ -91,7 +94,10 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../agents/agent-create.js", () => ({
+vi.mock("../agents/agent-create.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-create.js")>(
+    "../agents/agent-create.js",
+  )),
   checkAgentCreationGate: checkAgentCreationGateMock,
   createAgent: createAgentMock,
 }));
@@ -106,6 +112,11 @@ vi.mock("../plugins/install-record-commit.js", async () => ({
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardMocks.createClackPrompter,
+}));
+
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
+  isTerminalInteractive: terminalMocks.isTerminalInteractive,
 }));
 
 vi.mock("./auth-choice.js", () => ({
@@ -189,6 +200,7 @@ describe("agents add command", () => {
       },
     );
     wizardMocks.createClackPrompter.mockClear();
+    terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
     authChoiceMocks.applyAuthChoice.mockClear();
     authChoiceMocks.warnIfModelConfigLooksOff.mockClear();
     onboardChannelsMocks.setupChannels.mockClear();
@@ -249,6 +261,33 @@ describe("agents add command", () => {
     },
   );
 
+  it("rejects an unrepresentable positional name before targeting an existing agent", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { main: {} } } },
+      sourceConfig: { agents: { entries: { main: {} } } },
+    });
+    const prompter = {
+      intro: vi.fn(),
+      text: vi.fn(),
+      confirm: vi.fn(),
+      note: vi.fn(),
+      outro: vi.fn(),
+    };
+    wizardMocks.createClackPrompter.mockReturnValue(prompter);
+
+    await agentsAddCommand({ name: "агент✨" }, runtime);
+
+    expect(prompter.outro).toHaveBeenCalledWith(
+      'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
+    );
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.note).not.toHaveBeenCalled();
+    expect(checkAgentCreationGateMock).not.toHaveBeenCalled();
+    expect(createAgentMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
     "rejects reserved system-agent id %s from an interactive positional argument",
     async (name) => {
@@ -286,22 +325,51 @@ describe("agents add command", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
+  it.each([{ json: false }, { json: true }])(
+    "refuses the interactive wizard without a usable terminal (json=$json)",
+    async ({ json }) => {
+      readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+      terminalMocks.isTerminalInteractive.mockReturnValue(false);
+      wizardMocks.createClackPrompter.mockReturnValue({
+        intro: vi.fn(),
+        text: vi.fn().mockRejectedValue(new WizardCancelledError()),
+        confirm: vi.fn(),
+        note: vi.fn(),
+        outro: vi.fn(),
+      });
+
+      await agentsAddCommand({ json }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(wizardMocks.createClackPrompter).not.toHaveBeenCalled();
+      expect(createAgentMock).not.toHaveBeenCalled();
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the explicit agent target and skips catalog validation", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
       config: { agents: { list: [{ id: "main", default: true }] } },
       sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
     });
-    wizardMocks.createClackPrompter.mockReturnValue({
+    const prompter = {
       intro: vi.fn(),
       text: vi.fn().mockResolvedValueOnce("Jon").mockResolvedValueOnce("/tmp/openclaw-jon"),
       confirm: vi.fn().mockResolvedValue(false),
       note: vi.fn(),
       outro: vi.fn(),
-    });
+    };
+    wizardMocks.createClackPrompter.mockReturnValue(prompter);
 
     await agentsAddCommand({}, runtime);
 
+    expect(terminalMocks.isTerminalInteractive).toHaveBeenCalledOnce();
+    expect(prompter.intro).toHaveBeenCalledWith("Add OpenClaw agent");
     expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledOnce();
     expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledWith(
       expect.objectContaining({ agents: expect.any(Object) }),
@@ -444,16 +512,19 @@ describe("agents add command", () => {
   });
 
   describe("non-interactive config mutation", () => {
-    it("delegates creation to the canonical service", async () => {
+    it("creates with explicit non-interactive inputs without a usable terminal", async () => {
       readConfigFileSnapshotMock.mockResolvedValue({
         ...baseConfigSnapshot,
         config: { agents: { list: [{ id: "main", default: true }] } },
         sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
       });
+      terminalMocks.isTerminalInteractive.mockReturnValue(false);
 
-      await agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
-        hasFlags: true,
-      });
+      await agentsAddCommand(
+        { name: "Work", workspace: "/tmp/work", nonInteractive: true },
+        runtime,
+        { hasFlags: false },
+      );
 
       expect(createAgentMock).toHaveBeenCalledWith({
         name: "Work",

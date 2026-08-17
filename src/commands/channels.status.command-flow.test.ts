@@ -433,6 +433,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(announceRequest?.config?.secretResolved).toBe(true);
     expect(announceRequest?.activationSourceConfig?.secretResolved).toBe(false);
     const payload = JSON.parse(logs.at(-1) ?? "{}");
+    expect(errors).toEqual([]);
     expect(errors.join("\n")).not.toContain("user:pass");
     expect(errors.join("\n")).not.toContain("secret-token");
     expect(errors.join("\n")).not.toContain("fallback-user:fallback-pass");

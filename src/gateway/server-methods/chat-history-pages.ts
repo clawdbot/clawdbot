@@ -6,8 +6,8 @@ import {
   isHeartbeatHistoryTurnBoundaryMessage,
   projectChatDisplayMessages,
   projectRecentChatDisplayMessages,
+  augmentChatHistoryWithCanvasBlocks,
 } from "../chat-display-projection.js";
-import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.js";
 import {
   resolveChatHistoryWithCliSessionImports,
   resolveClaudeCliBindingSessionId,

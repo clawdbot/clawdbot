@@ -12,6 +12,7 @@ import {
   renderSessionUnreadBadge,
   type SessionGlyphContent,
 } from "./session-glyph.ts";
+import { resolveSessionIconGlyph } from "./session-icon-glyph-registry.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
 
@@ -87,6 +88,13 @@ function renderSessionTrailingState(
   `;
 }
 
+function renderPersistentSessionIcon(icon: string) {
+  const glyph = resolveSessionIconGlyph(icon);
+  return glyph
+    ? html`<span class="session-glyph__icon" aria-hidden="true">${glyph}</span>`
+    : html`<span class="session-glyph__emoji" aria-hidden="true">${icon}</span>`;
+}
+
 export function describeSessionTrailingState(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
@@ -134,9 +142,7 @@ export function renderSessionLeadingState(
       return {
         running,
         leadingIndicator: renderSessionGlyph({
-          content: html`<span class="session-glyph__emoji" aria-hidden="true"
-            >${session.icon}</span
-          >`,
+          content: renderPersistentSessionIcon(session.icon),
           running,
           badge: renderGlyphBadge(session, pullRequestState),
         }),
@@ -179,7 +185,7 @@ export function renderSessionLeadingState(
     return {
       running,
       leadingIndicator: renderSessionGlyph({
-        content: html`<span class="session-glyph__emoji" aria-hidden="true">${session.icon}</span>`,
+        content: renderPersistentSessionIcon(session.icon),
         running: false,
       }),
       trailingIndicator,

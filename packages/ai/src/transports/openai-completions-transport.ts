@@ -266,7 +266,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           signal: firstEventAbort.signal,
           abort: firstEventAbort.abort,
           hook: createOpenAIResponseHook(options?.onResponse, response, model),
-          onReady: () => stream.push({ type: "start", partial: output as never }),
+          onReady: () => stream.push({ type: "start", partial: output }),
         });
         await processCompletionsStream(hookedResponseStream, output, model, stream, {
           signal: options?.signal,

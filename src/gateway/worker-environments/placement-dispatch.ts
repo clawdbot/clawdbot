@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { formatNodeRunnerUpdateRequired } from "../../infra/node-runner-inventory.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
-import { resolveDeviceWorkerAvailability } from "./device-provider.js";
+import * as device from "./device-provider.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -13,6 +12,7 @@ import {
 } from "./placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import { placementTurnOwner } from "./placement-record.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementReclaimRequest,
@@ -60,6 +60,7 @@ type WorkerPlacementDispatchOptions = {
   runLocalBarrier: WorkerLocalDispatchBarrier;
   runActivationBarrier: WorkerActivationBarrier;
   runReclaimBarrier: WorkerPlacementReclaimBarrier;
+  onActivated?: (request: WorkerPlacementDispatchRequest) => void;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspacePath: (params: {
     sessionId: string;
@@ -165,15 +166,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
-      const deviceAvailability = request.deviceId
-        ? await resolveDeviceWorkerAvailability(environments, request.deviceId)
-        : undefined;
-      if (request.deviceId && !deviceAvailability?.available) {
-        throw new Error(
-          deviceAvailability?.issue
-            ? formatNodeRunnerUpdateRequired(request.deviceId, deviceAvailability.issue)
-            : `device worker requires a connected current node host; reconnect or reprovision: ${request.deviceId}`,
+      if (request.deviceId) {
+        const availability = await device.resolveDeviceWorkerAvailability(
+          environments,
+          request.deviceId,
         );
+        if (!availability.available) {
+          throw new Error(device.deviceUnavailableText(request.deviceId, availability));
+        }
       }
       const localPath = await options.resolveWorkspacePath(request);
       const idempotencyKey = `session-dispatch:${request.sessionId}:${placement.generation}`;
@@ -194,8 +194,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               profileSnapshot: request.inheritedProfile.profileSnapshot,
             },
             idempotencyKey,
+            request.machineClass,
           )
-        : await environments.create(request.profileId, idempotencyKey);
+        : await environments.create(request.profileId, idempotencyKey, request.machineClass);
       const provisioned = requireProvisionedEnvironment(environment, expectedEnvironmentId);
       environmentId = provisioned.environmentId;
       ownerEpoch = provisioned.ownerEpoch;
@@ -254,6 +255,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return activated;
         },
       });
+      try {
+        options.onActivated?.(request);
+      } catch {
+        // Maintenance scheduling cannot overturn a durable placement activation.
+      }
       return activePlacement;
     } catch (error) {
       try {
@@ -313,18 +319,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           agentId: current.agentId,
           claimId: reclaimClaimId,
           runId: reclaimClaimId,
-          owner:
-            current.executionMode === "remote-exec"
-              ? {
-                  kind: "local",
-                  environmentId: current.environmentId,
-                  ownerEpoch: current.activeOwnerEpoch,
-                }
-              : {
-                  kind: "worker",
-                  environmentId: current.environmentId,
-                  ownerEpoch: current.activeOwnerEpoch,
-                },
+          owner: placementTurnOwner(current),
         });
         const reclaimResultRef = workerWorkspaceResultRef(reclaimClaim.claimId);
         let manifestAccepted = false;

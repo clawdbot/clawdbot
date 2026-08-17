@@ -107,7 +107,9 @@ export function makeDispatchTestContext(
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: { profileId: string } | { deviceId: string } = { profileId: "test" },
+  target: { profileId: string; machineClass?: string } | { deviceId: string } = {
+    profileId: "test",
+  },
 ) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(

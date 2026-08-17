@@ -1343,7 +1343,11 @@ describe("skills cli commands", () => {
     await runCommand(["skills", "verify", "agentreceipt", "--global", "--agent", "main"]);
 
     expect(JSON.parse(runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: "Use either --global or --agent, not both.",
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: "Use either --global or --agent, not both.",
+      },
     });
     expect(runtimeErrors).toStrictEqual([]);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
@@ -1426,7 +1430,15 @@ describe("skills cli commands", () => {
     {
       label: "JSON",
       argv: ["skills", "info", "missing-skill", "--json"],
-      expected: JSON.stringify({ error: "not found", skill: "missing-skill" }, null, 2),
+      expected: JSON.stringify(
+        {
+          ok: false,
+          error: { type: "cli_error", message: 'Skill "missing-skill" not found.' },
+          skill: "missing-skill",
+        },
+        null,
+        2,
+      ),
     },
   ])("exits nonzero for missing skill info in $label mode", async ({ argv, expected }) => {
     vi.stubEnv("OPENCLAW_PROFILE", "");

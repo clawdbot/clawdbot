@@ -25,7 +25,7 @@ advances a milestone.
 | F   | Real-wire session boundary harness                         | landed      | #121212                                                                                                                                                                   |
 | 5   | Public worker ingress path                                 | landed      | #122578, #122643                                                                                                                                                          |
 | 6   | Node worker provider (device runners)                      | in progress | #122683, #122769, #122829, #122939, #123013, #123033, #122966, #123157, #123280, #123612, #123641, #123665, #123673, #123700, #123696, #123785, #123859, #123889, #123901 |
-| 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037                                                                                                                                                          |
+| 7   | Bundle push consent + runner updates                       | in progress | #123985, #124037, #124356, #124590                                                                                                                                        |
 | 8   | Stop-and-continue moves                                    | not started | —                                                                                                                                                                         |
 | 9   | Deletions (ssh sandbox, openshell, exec-host clones, …)    | not started | —                                                                                                                                                                         |
 | 10  | Cloud convergence (provisioners run `openclaw connect`)    | not started | —                                                                                                                                                                         |
@@ -231,11 +231,12 @@ Milestone 6 now has the public worker ingress, transport-neutral launch
 descriptor, durable node-host supervisor, private launch/status/cancel dialect,
 bounded terminal receipts, and the Gateway launch replay/poll/cancel adapter.
 A node publishes one atomic, reconnect-scoped private runner inventory with the
-supervisor dialect and current capacity. The temporary local build claim remains
-inventory metadata only; milestone 7 makes the durable Gateway bundle receipt
-the sole execution authority. Public node and environment projections expose
-only `sessionHost`; a read-scoped topology invalidation makes clients refetch
-without exposing build identity. Status and cancellation reacquire the current
+supervisor dialect, explicit local consent, and current capacity. Milestone 7
+removes the temporary local-package scanner and connect-time build claim; the
+durable Gateway bundle receipt is the sole execution authority. Public node and
+environment projections expose `sessionHost` plus a redacted installed/missing
+bundle status; a read-scoped topology invalidation makes clients refetch without
+exposing hashes, paths, or receipt details. Status and cancellation reacquire the current
 supervisor proof and use the durable launch identity so an upgrade cannot strand
 an existing worker. Node-local opt-in advertises capacity; default nodes remain
 non-hosts. The supervisor owns two atomic durable capacity slots, bounded
@@ -323,9 +324,13 @@ worker JavaScript dependency closure into one dedicated, hash-covered executable
 installs that exact Gateway artifact before device environments become ready,
 requires its durable receipt across attach, admission, placement, tunnel, and
 launch, retires stale environments for idempotent reprovisioning, and removes
-local-package execution. The remaining
-slice separates inventory consent/capacity from installed bundle status, exposes
-the installed version on the devices page, and bounds superseded node bundle GC.
+local-package execution. The cleanup that follows separates inventory consent and
+capacity from installed bundle state and deletes the obsolete local build scan.
+The retention slice (#124590) reuses the authoritative maintenance snapshot to
+prune superseded node bundles in bounded generation-acknowledged passes. The
+installed-status slice validates one retained hash on the node, keeps that fact
+reconnect-scoped and proof-bound in the Gateway, and shows the Gateway-owned
+version quietly on Devices or a remediation warning when the bundle is missing.
 
 ### Projects read model (milestone 4 foundation)
 

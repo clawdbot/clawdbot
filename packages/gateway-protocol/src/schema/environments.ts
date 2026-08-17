@@ -55,6 +55,11 @@ export const RuntimeTargetIssueSchema = closedObject({
   headlessReconnectCommand: Type.Literal("openclaw node restart"),
 });
 
+const NodeWorkerBundleStatusSchema = Type.Union([
+  closedObject({ status: Type.Literal("installed"), version: NonEmptyString }),
+  closedObject({ status: Type.Literal("missing") }),
+]);
+
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
   providerId: NonEmptyString,
@@ -79,6 +84,7 @@ function createEnvironmentSummarySchema() {
     status: EnvironmentStatusSchema,
     platform: Type.Optional(NonEmptyString),
     sessionHost: Type.Optional(Type.Boolean()),
+    workerBundle: Type.Optional(NodeWorkerBundleStatusSchema),
     lastConnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDisconnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastSeenAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -97,11 +103,26 @@ export const EnvironmentSummarySchema = createEnvironmentSummarySchema();
 /** Empty request payload for listing known environments. */
 export const EnvironmentsListParamsSchema = closedObject({});
 
+/** Provider-authored machine choice for one configured worker profile. */
+export const WorkerMachineOptionSchema = closedObject({
+  id: Type.String({ minLength: 1, maxLength: 128 }),
+  label: Type.String({ minLength: 1, maxLength: 128 }),
+  description: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  default: Type.Optional(Type.Boolean()),
+  // CPU, memory, and price stay absent until providers expose authoritative values.
+});
+
+export const WorkerMachineOptionsSchema = Type.Array(WorkerMachineOptionSchema, {
+  minItems: 1,
+  maxItems: 32,
+});
+
 /** Configured worker target exposed without provider settings or credentials. */
 const WorkerEnvironmentProfileSummarySchema = closedObject({
   id: NonEmptyString,
   providerId: NonEmptyString,
   trust: Type.Optional(EnvironmentTrustSchema),
+  machines: Type.Optional(WorkerMachineOptionsSchema),
 });
 
 /** List response containing all gateway-visible environment summaries. */
@@ -165,6 +186,7 @@ export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
 export type WorkerDesktopAppId = Static<typeof WorkerDesktopAppIdSchema>;
 export type RuntimeTargetIssue = Static<typeof RuntimeTargetIssueSchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
+export type WorkerMachineOption = Static<typeof WorkerMachineOptionSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
 export type EnvironmentsCreateResult = Static<typeof EnvironmentsCreateResultSchema>;

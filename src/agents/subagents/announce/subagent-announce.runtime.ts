@@ -4,12 +4,12 @@
  * Keeping these imports behind one module lets tests replace gateway/session
  * IO without changing the announce logic itself.
  */
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 export { getRuntimeConfig } from "../../../config/config.js";
 export {
   resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
 } from "../../../config/sessions.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 
 export function readSubagentSessionEntry(storePath: string, sessionKey: string) {
   return loadSessionEntry({ storePath, sessionKey });

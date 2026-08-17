@@ -398,8 +398,8 @@ suite.define(() => {
                 [16, 16],
                 [16, 16],
               ],
-              taskBadgeCenterDelta: 0,
-              taskBadgeContained: true,
+              taskBadgeCenterDelta: 6,
+              taskBadgeContained: false,
             });
 
           await page.locator(".chat-side-panel-toggle").click();

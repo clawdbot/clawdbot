@@ -29,6 +29,7 @@ export type McpLoopbackRequestContext = {
   cwd?: string;
   modelProvider?: string;
   modelId?: string;
+  modelHasVision?: boolean;
   messageProvider?: string;
   clientCaps?: string[];
   currentChannelId?: string;

@@ -349,8 +349,6 @@ type OpenClawCodingToolsOptions = {
   onYield?: (message: string) => Promise<void> | void;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
-  /** Lower routine policy-removal audits for diagnostic-only tool probes. */
-  toolPolicyAuditLogLevel?: "info" | "debug";
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Reads the sticky untrusted-content flag for the current user turn. */
@@ -431,6 +429,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,
       scheduledToolPolicy: options?.scheduledToolPolicy,
+      pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
     });
   const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;
 
@@ -907,7 +906,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       includeRuntimeToolPolicy: true,
       unavailableCoreToolReason,
     }),
-    auditLogLevel: options?.toolPolicyAuditLogLevel,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: options?.config,
       metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,

@@ -26,28 +26,31 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     if (placement.turnClaim) {
       return false;
     }
-    const retirement =
-      placement.state === "local" || placement.state === "reclaimed"
-        ? {
-            sessionId: placement.sessionId,
-            expectedState: placement.state,
-            expectedGeneration: placement.generation,
-          }
-        : placement.state === "failed" &&
-            isFailedWorkerPlacementEnvironmentGone({
-              environmentService: deps.environments,
-              placement,
-            })
-          ? {
-              sessionId: placement.sessionId,
-              expectedState: placement.state,
-              expectedGeneration: placement.generation,
-            }
-          : undefined;
-    if (!retirement) {
+    if (
+      placement.environmentId !== null &&
+      placement.state !== "reclaimed" &&
+      (placement.state !== "failed" ||
+        !isFailedWorkerPlacementEnvironmentGone({
+          environmentService: deps.environments,
+          placement,
+        }))
+    ) {
       return false;
     }
-    deps.placements.retireSessionPlacement(retirement);
+    // Dispatch binds environment intent before entering provisioning.
+    if (placement.state === "provisioning") {
+      return false;
+    }
+    deps.placements.retireSessionPlacement({
+      sessionId: placement.sessionId,
+      expectedState: placement.state,
+      expectedGeneration: placement.generation,
+    });
+    if (placement.state === "requested") {
+      deps.warn(
+        `Retired ownerless worker placement ${placement.sessionId} because its authoritative session is absent (${placement.state}@${placement.generation})`,
+      );
+    }
     return true;
   };
 

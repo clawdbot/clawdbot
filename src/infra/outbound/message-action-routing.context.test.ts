@@ -12,6 +12,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
 import {
   directChatConfig,
@@ -544,18 +545,22 @@ describe("runMessageAction context isolation", () => {
   });
 
   it("retains direct-operator target-kind validation", async () => {
-    await expect(
-      runMessageAction({
-        cfg: workspaceConfig,
-        action: "channel-info",
-        params: {
-          channel: "workspace",
-          channelId: "U12345678",
-        },
-        conversationReadOrigin: "direct-operator",
-        dryRun: true,
-      }),
-    ).rejects.toThrow('Channel id "U12345678" resolved to a user target.');
+    const failure = runMessageAction({
+      cfg: workspaceConfig,
+      action: "channel-info",
+      params: {
+        channel: "workspace",
+        channelId: "U12345678",
+      },
+      conversationReadOrigin: "direct-operator",
+      dryRun: true,
+    });
+    await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
+    await expect(failure).rejects.toMatchObject({
+      reasonCode: "message_target_invalid",
+      policyRef: "message-target:valid",
+    });
+    await expect(failure).rejects.toThrow('Channel id "U12345678" resolved to a user target.');
   });
 
   it("retains direct-operator cross-provider reads", async () => {

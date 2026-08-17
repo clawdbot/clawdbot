@@ -26,10 +26,6 @@
   word-break: break-word;
 }
 
-.chat-message-disclosure__preview {
-  white-space: pre-wrap;
-}
-
 .chat-message-disclosure__toggle {
   display: inline-flex;
   align-items: center;

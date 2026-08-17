@@ -11,6 +11,10 @@ import {
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  normalizeSessionIconValue,
+  SESSION_ICON_GLYPH_IDS,
+} from "../../packages/gateway-protocol/src/session-agent-status.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -60,7 +64,6 @@ import {
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
-  normalizeSessionIconValue,
   resolveActiveSessionAgentStatus,
   sanitizeSessionAgentStatusNote,
   sessionAgentStatusExpiresAt,
@@ -291,7 +294,9 @@ export async function projectSessionsPatchEntry(params: {
     } else if (raw !== undefined) {
       const icon = normalizeSessionIconValue(raw);
       if (!icon) {
-        return invalid("icon must be a single emoji");
+        return invalid(
+          `icon must be a single emoji or one of: ${SESSION_ICON_GLYPH_IDS.join(", ")}`,
+        );
       }
       next.icon = icon;
     }

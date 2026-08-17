@@ -155,7 +155,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (options.reconciliation === "background") {
         void reconciliation.catch((error: unknown) => {
           if (host.connection.isCurrent(scope)) {
-            host.publish({ ...host.readState(), error: String(error) }, "operation");
+            host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
           }
         });
       } else {
@@ -167,7 +167,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return result;
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       return null;
     }
@@ -191,7 +191,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return host.connection.isCurrent(scope) ? result : null;
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       return null;
     }
@@ -214,7 +214,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     let previousModelOverride: string | null | undefined;
     let modelPatchStarted = false;
     let modelPatchRevision = 0;
-    const modelPatchToken = Symbol();
+    const modelPatchToken = Symbol("session-model-patch");
     const ownsModelOverride = () => options.ownsModelOverride?.() !== false;
     const startModelPatch = () => {
       if (!managesModelOverride || modelPatchStarted || !ownsModelOverride()) {
@@ -234,7 +234,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       modelPatchRevision = pendingModelPatches.get(normalizedKey)?.revision ?? 0;
     };
     const nextPinned = patchParams.pinned === true;
-    const pinPatchToken = Symbol();
+    const pinPatchToken = Symbol("session-pin-patch");
     let pinPatchStarted = false;
     // Sidebar rows read `pinned` straight off the snapshot, so a pin/unpin has
     // no visible outcome until this flip; the Gateway patch and its list
@@ -389,7 +389,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         return null;
       }
       if (ownsModelOverride()) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       throw error;
     }
@@ -489,7 +489,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return host.connection.isCurrent(scope) ? "completed" : "uncertain";
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: String(error) }, "operation");
+        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       // Reset can commit before awaited lifecycle work rejects; never infer safe retry.
       return "uncertain";

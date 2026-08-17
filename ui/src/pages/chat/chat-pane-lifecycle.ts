@@ -21,6 +21,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -53,10 +54,12 @@ import { setChatError } from "./chat-send-queue-state.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { invalidateChatMetadataCache, refreshPageChat } from "./chat-state-refresh.ts";
+import { refreshPageChat, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
+import { detailSlotOpen } from "./components/chat-detail-slot.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
+import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
@@ -275,7 +278,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         },
       })
       .catch((error: unknown) => {
-        setChatError(state, error instanceof Error ? error.message : String(error));
+        setChatError(state, formatUiError(error));
         state.requestUpdate?.();
       });
   }
@@ -545,7 +548,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
             invalidateChatAvatarCache(state);
             invalidateAssistantIdentityCache(state.client);
             state.assistantIdentityRequestVersion += 1;
-            invalidateChatMetadataCache(state);
+            retireChatMetadataRequests(state);
             void refreshChatAvatar(state).finally(() => state.requestUpdate?.());
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
@@ -644,6 +647,24 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
     this.sessionPanelToggles.flush();
+    this.seedSessionDiffSidebar();
+  }
+
+  private seedSessionDiffSidebar(): void {
+    const state = this.state;
+    const detailOpen =
+      state?.sidebarLayout.open === true && detailSlotOpen(state.sidebarLayout) && this.presented;
+    if (!state || !detailOpen || state.sidebarContent !== null) {
+      return;
+    }
+    const content = resolveSessionDiffSidebarContent(state);
+    if (!content) {
+      return;
+    }
+    // The null check is the per-pane/session transition latch. Assign content
+    // only: activating or opening the panel would override user intent.
+    state.sidebarContent = content;
+    state.requestUpdate?.();
   }
 
   override disconnectedCallback() {

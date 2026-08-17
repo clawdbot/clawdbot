@@ -1,17 +1,15 @@
-// Runs tsgo through local heavy-check policy and sparse-checkout guards.
+// Runs tsgo through local resource policy and sparse-checkout guards.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readFlagValue } from "./lib/arg-utils.mts";
 import {
-  acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
   ensureRepoToolNodeModulesLink,
-  resolveLocalHeavyCheckEnv,
+  resolveLocalCheckEnv,
   resolveRepoToolBinPath,
-  shouldAcquireLocalHeavyCheckLockForTsgo,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import {
   getSparseTsgoGuardError,
@@ -26,7 +24,7 @@ function main(): void {
   };
   const { args: finalArgs, env } = applyLocalTsgoPolicy(
     process.argv.slice(2),
-    resolveLocalHeavyCheckEnv(process.env),
+    resolveLocalCheckEnv(process.env),
     hostResources,
   );
 
@@ -36,49 +34,35 @@ function main(): void {
     fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
   }
   const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd: process.cwd() });
-  const releaseLock =
-    sparseGuardError ||
-    env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1" ||
-    !shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env)
-      ? () => {}
-      : acquireLocalHeavyCheckLockSync({
-          cwd: process.cwd(),
-          env,
-          toolName: "tsgo",
-        });
-
-  try {
-    if (sparseGuardError) {
-      console.error(sparseGuardError);
-      if (shouldSkipSparseTsgoGuardError(env)) {
-        console.error("[tsgo] skipping sparse-missing project because OPENCLAW_TSGO_SPARSE_SKIP=1");
-        process.exitCode = 0;
-      } else {
-        process.exitCode = 1;
-      }
+  if (sparseGuardError) {
+    console.error(sparseGuardError);
+    if (shouldSkipSparseTsgoGuardError(env)) {
+      console.error("[tsgo] skipping sparse-missing project because OPENCLAW_TSGO_SPARSE_SKIP=1");
+      process.exitCode = 0;
     } else {
-      ensureRepoToolNodeModulesLink(tsgoPath);
-      const tsgo = createManagedCommandInvocation({
-        args: finalArgs,
-        bin: tsgoPath,
-        env,
-      });
-      const result = spawnSync(tsgo.command, tsgo.args, {
-        stdio: "inherit",
-        env,
-        shell: tsgo.shell,
-        windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
-      });
-
-      if (result.error) {
-        throw result.error;
-      }
-
-      process.exitCode = result.status ?? 1;
+      process.exitCode = 1;
     }
-  } finally {
-    releaseLock();
+    return;
   }
+
+  ensureRepoToolNodeModulesLink(tsgoPath);
+  const tsgo = createManagedCommandInvocation({
+    args: finalArgs,
+    bin: tsgoPath,
+    env,
+  });
+  const result = spawnSync(tsgo.command, tsgo.args, {
+    stdio: "inherit",
+    env,
+    shell: tsgo.shell,
+    windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  process.exitCode = result.status ?? 1;
 }
 
 if (import.meta.main) {

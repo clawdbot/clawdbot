@@ -23,6 +23,7 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
 /** Stable discriminants for structured method-level failures. */
 export const GatewayErrorDetailCodes = {
+  CRON_JOB_NOT_FOUND: "CRON_JOB_NOT_FOUND",
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
   USER_PREFS_LIMIT_EXCEEDED: "USER_PREFS_LIMIT_EXCEEDED",
@@ -31,6 +32,12 @@ export const GatewayErrorDetailCodes = {
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
 } as const;
+
+/** Missing cron automation identified by its exact store key. */
+export type CronJobNotFoundErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND;
+  jobId: string;
+};
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
 export type MissingScopeErrorDetails = {
@@ -76,6 +83,7 @@ export type ProjectCloneErrorDetails = {
 
 /** Structured details emitted by method-level failures. */
 export type GatewayErrorDetails =
+  | CronJobNotFoundErrorDetails
   | MissingScopeErrorDetails
   | McpAppViewExpiredErrorDetails
   | UserPrefsLimitExceededErrorDetails
@@ -91,6 +99,17 @@ type GatewayErrorLike = {
 };
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
+
+/** Reads a typed cron lookup miss without parsing operator-facing prose. */
+export function readCronJobNotFoundError(error: unknown): CronJobNotFoundErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  if (details?.code !== GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND) {
+    return null;
+  }
+  const jobId = typeof details.jobId === "string" ? details.jobId.trim() : "";
+  return jobId ? { code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND, jobId } : null;
+}
 
 /** Reads validated missing-scope details from an untrusted protocol payload. */
 export function readMissingScopeErrorDetails(details: unknown): MissingScopeErrorDetails | null {

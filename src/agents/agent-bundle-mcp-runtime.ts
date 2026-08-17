@@ -10,8 +10,8 @@ import {
   McpError,
   type CallToolResult,
   type ClientCapabilities,
+  type ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -22,7 +22,6 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
-import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   disposeAllSessionMcpRuntimes,
@@ -69,6 +68,7 @@ import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
+import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type BundleMcpSession = {
@@ -113,11 +113,6 @@ function getBundleMcpTestState(): BundleMcpTestState {
   globalStore[BUNDLE_MCP_TEST_STATE_KEY] = state;
   return state;
 }
-
-type McpToolSelection = {
-  include?: readonly string[];
-  exclude?: readonly string[];
-};
 
 type McpServerBackoffState = {
   session: BundleMcpSession;
@@ -285,14 +280,6 @@ function buildMcpClientOptions(mcpAppsEnabled: boolean): ClientOptions {
   return { capabilities: buildMcpClientCapabilities(mcpAppsEnabled) };
 }
 
-function normalizeStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const entries = value.filter((entry): entry is string => typeof entry === "string");
-  return entries.length > 0 ? entries : undefined;
-}
-
 function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -301,28 +288,6 @@ function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | und
     (entry): entry is "app" | "model" => entry === "app" || entry === "model",
   );
   return [...new Set(normalized)].toSorted();
-}
-
-function getMcpToolSelection(rawServer: unknown): McpToolSelection {
-  if (!isRecord(rawServer) || !isRecord(rawServer.toolFilter)) {
-    return {};
-  }
-  return {
-    include: normalizeStringList(rawServer.toolFilter.include),
-    exclude: normalizeStringList(rawServer.toolFilter.exclude),
-  };
-}
-
-function shouldExposeMcpTool(selection: McpToolSelection, toolName: string): boolean {
-  const include = selection.include ?? [];
-  const exclude = selection.exclude ?? [];
-  if (
-    include.length > 0 &&
-    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName))
-  ) {
-    return false;
-  }
-  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName));
 }
 
 function summarizeServerCapabilities(capabilities: ServerCapabilities | undefined) {
@@ -891,13 +856,15 @@ export function createSessionMcpRuntime(params: {
                   ),
                 });
                 failIfDisposed();
-                const selection = getMcpToolSelection(rawServer);
+                const toolFilter = normalizeMcpToolFilter(
+                  isRecord(rawServer) ? rawServer.toolFilter : undefined,
+                );
                 const denialMap = params.toolOverrides?.mcpToolsDeny;
                 const deniedToolNames = new Set(
                   denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
                 );
                 const policyEligibleTools = listedTools.filter((tool) =>
-                  shouldExposeMcpTool(selection, tool.name.trim()),
+                  isMcpToolAllowed(toolFilter, tool.name.trim()),
                 );
                 const exposedTools = policyEligibleTools.filter((tool) => {
                   const toolName = tool.name.trim();
@@ -922,14 +889,7 @@ export function createSessionMcpRuntime(params: {
                         },
                       }
                     : {}),
-                  ...(selection.include || selection.exclude
-                    ? {
-                        toolFilter: {
-                          ...(selection.include ? { include: [...selection.include] } : {}),
-                          ...(selection.exclude ? { exclude: [...selection.exclude] } : {}),
-                        },
-                      }
-                    : {}),
+                  ...(toolFilter ? { toolFilter } : {}),
                   ...(deniedToolNames.size > 0
                     ? { deniedToolNames: [...deniedToolNames].toSorted() }
                     : {}),

@@ -60,6 +60,7 @@ import {
 } from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
+  createRememberSessionKeyWriter,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
   writeTuiLastSessionKey,
@@ -315,6 +316,12 @@ export function resolveGatewayDisconnectState(
   activityStatus: string;
   remediation?: string;
 } {
+  if (input.reason === "gateway starting") {
+    return {
+      connectionStatus: "gateway starting",
+      activityStatus: "starting up",
+    };
+  }
   const failure = classifyGatewayConnectFailure(input);
   const reasonLabel =
     failure.userMessage === "gateway unreachable" ? "closed" : failure.userMessage;
@@ -677,6 +684,25 @@ export function resolveTuiCtrlCAction(params: {
   return resolveCtrlCAction(params);
 }
 
+export function createTuiConnectionLineage() {
+  let hasConnected = false;
+  let wasDisconnected = false;
+  return {
+    connect: () => {
+      const reconnected = wasDisconnected;
+      hasConnected = true;
+      wasDisconnected = false;
+      return reconnected;
+    },
+    disconnect: () => {
+      if (hasConnected) {
+        wasDisconnected = true;
+      }
+    },
+    wasDisconnected: () => wasDisconnected,
+  };
+}
+
 function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
   return {
     verboseLevel: config.agents?.defaults?.verboseDefault,
@@ -743,7 +769,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const sessionGenerations = new Map<string, number>();
   const sessionIds = new Map<string, string>();
   let connectionGeneration = 0;
-  let wasDisconnected = false;
+  const connectionLineage = createTuiConnectionLineage();
   let remediationShown = false;
   const localRunIds = createTuiRunIdTracker();
   const localBtwRunIds = createTuiRunIdTracker();
@@ -1018,16 +1044,14 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     });
   };
 
-  const rememberCurrentSessionKey = (sessionKey: string) => {
-    const trimmed = sessionKey.trim();
-    if (!trimmed || trimmed === "unknown") {
-      return;
-    }
-    void writeTuiLastSessionKey({
-      scopeKey: buildLastSessionScopeKeyFor(trimmed),
-      sessionKey: trimmed,
-    }).catch(() => undefined);
-  };
+  const rememberCurrentSessionKey = createRememberSessionKeyWriter({
+    buildScopeKey: buildLastSessionScopeKeyFor,
+    reportFailure: (message) => {
+      chatLog.addSystem(`session memory write failed: ${message}`);
+      tui.requestRender();
+    },
+    write: writeTuiLastSessionKey,
+  });
 
   const restoreRememberedSession = async (expectedConnectionGeneration: number) => {
     if (initialSessionInput || rememberedSessionApplied) {
@@ -1617,7 +1641,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       now,
       lastCtrlCAt: state.lastCtrlCAt,
       exitRequested,
-      wasDisconnected,
+      wasDisconnected: connectionLineage.wasDisconnected(),
       exitWindowMs: opts.ctrlCExitWindowMs,
     });
     if (decision.action === "force-exit") {
@@ -1719,8 +1743,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       connectedGeneration === connectionGeneration && state.isConnected && !exitRequested;
     state.isConnected = true;
     remediationShown = false;
-    const reconnected = wasDisconnected;
-    wasDisconnected = false;
+    const reconnected = connectionLineage.connect();
     if (reconnected) {
       reconnectStreamingWatchdog();
     }
@@ -1836,7 +1859,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     }
     connectionGeneration += 1;
     state.isConnected = false;
-    wasDisconnected = true;
+    connectionLineage.disconnect();
     state.historyLoaded = false;
     dynamicSlashCommands = [];
     dynamicSlashCommandsKey = null;
@@ -1846,13 +1869,16 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     dynamicSlashCommandsRequestId += 1;
     updateAutocompleteProvider();
     pauseStreamingWatchdog();
-    const disconnectState = isLocalMode
-      ? {
-          connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,
-          activityStatus: "idle",
-          remediation: undefined,
-        }
-      : resolveGatewayDisconnectState({ reason, details });
+    const disconnectState =
+      reason === "gateway starting"
+        ? resolveGatewayDisconnectState({ reason, details })
+        : isLocalMode
+          ? {
+              connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,
+              activityStatus: "idle",
+              remediation: undefined,
+            }
+          : resolveGatewayDisconnectState({ reason, details });
     setConnectionStatus(disconnectState.connectionStatus, 5000);
     setActivityStatus(disconnectState.activityStatus);
     if (disconnectState.remediation && !remediationShown) {

@@ -7,16 +7,6 @@ import {
   logLaneDequeue,
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
-import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
-import {
-  GatewayDrainingError,
-  isGatewaySubordinateWorkAdmissionClosed,
-  isGatewayWorkAdmissionClosed,
-  markGatewayRestartDraining,
-  resetGatewayWorkAdmission,
-  runWithGatewayRootWorkReadmission,
-} from "./gateway-work-admission.js";
-export { GatewayDrainingError } from "./gateway-work-admission.js";
 import {
   canAdmitInGroup,
   type CommandLaneBlockReason,
@@ -38,7 +28,17 @@ import {
   normalizeLane,
   type QueueEntry,
 } from "./command-queue.state.js";
+import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  runWithGatewayRootWorkReadmission,
+} from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
+export { GatewayDrainingError } from "./gateway-work-admission.js";
 export type { CommandLaneTaskMarker } from "./command-queue.state.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because

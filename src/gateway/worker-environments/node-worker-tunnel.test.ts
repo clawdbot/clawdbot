@@ -23,17 +23,22 @@ import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js"
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
+const tunnelWarn = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "gateway/worker-workspace" ? { ...logger, info: workspaceInfo } : logger;
+      if (subsystem === "gateway/worker-workspace") {
+        return { ...logger, info: workspaceInfo };
+      }
+      return subsystem === "gateway/worker-tunnel" ? { ...logger, warn: tunnelWarn } : logger;
     },
   };
 });
@@ -105,6 +110,16 @@ function plan() {
   });
 }
 
+function turnClaim() {
+  return {
+    sessionId: "session-1",
+    claimId: "claim-1",
+    runId: "run-1",
+    placementGeneration: 4,
+    owner: { kind: "worker" as const, environmentId: "environment-1", ownerEpoch: 2 },
+  };
+}
+
 function transport(): NodeWorkerSupervisorTransport {
   return {
     listCurrentNodes: async () => [
@@ -116,9 +131,8 @@ function transport(): NodeWorkerSupervisorTransport {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        workerHost: { enabled: true, capacity: "available" },
         commands: ["system.run"],
-        workerBuild: BUILD,
-        workerRuns: BUILD,
       },
     ],
     isCurrent: () => true,
@@ -144,6 +158,41 @@ function workspaceTransfer(): NodeWorkspaceTransferService {
 }
 
 describe("node worker tunnel manager", () => {
+  it("revalidates the exact claim when a same-run replacement launches", async () => {
+    const record = environment();
+    let currentClaim = turnClaim();
+    const authorizations: boolean[] = [];
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: transport,
+      launchNodeWorker: vi.fn<NodeWorkerLaunch>(async (request) => {
+        authorizations.push(request.isDispatchAuthorized());
+        return {
+          launchId: request.input.launchId,
+          planHash: "b".repeat(64),
+          environmentId: request.input.descriptor.admission.environmentId,
+          sessionId: request.input.descriptor.admission.sessionId,
+          ownerEpoch: request.input.descriptor.admission.ownerEpoch,
+          placementGeneration: request.input.placementGeneration,
+          runId: request.input.descriptor.assignment.runId,
+          state: "cancelled",
+          errorText: "test launch finished",
+        };
+      }),
+      validateWorkerTurn: (claim) => sameWorkerSessionTurnClaim(claim, currentClaim),
+      workspaceTransfer: workspaceTransfer(),
+    });
+    const handle = await manager.start(startRequest());
+    const staleClaim = currentClaim;
+    currentClaim = { ...staleClaim, claimId: "claim-2", placementGeneration: 5 };
+
+    await handle.launchTurn({ plan: plan(), turnClaim: staleClaim });
+    await handle.launchTurn({ plan: plan(), turnClaim: currentClaim });
+
+    expect(authorizations).toEqual([false, true]);
+  });
+
   it("projects a terminal gateway connection failure into the launch result", async () => {
     const record = environment();
     const errorText =
@@ -169,7 +218,7 @@ describe("node worker tunnel manager", () => {
     const handle = await manager.start(startRequest());
 
     await expect(
-      handle.launchTurn({ plan: plan(), placementGeneration: 4 }),
+      handle.launchTurn({ plan: plan(), turnClaim: turnClaim() }),
     ).resolves.toMatchObject({
       code: 1,
       killed: true,
@@ -192,6 +241,97 @@ describe("node worker tunnel manager", () => {
     await expect(manager.start(startRequest())).resolves.toBe(first);
     await expect(manager.start({ ...startRequest(), sessionId: "session-other" })).rejects.toThrow(
       "binding changed",
+    );
+  });
+
+  it("joins same-owner starts while workspace binding resolution is pending", async () => {
+    const record = environment();
+    const workspaceBinding = createDeferred<undefined>();
+    const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: transport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: workspaceTransfer(),
+    });
+    manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
+
+    const first = manager.start(startRequest());
+    await vi.waitFor(() => expect(resolveWorkspaceBinding).toHaveBeenCalledOnce());
+    const second = manager.start(startRequest());
+    workspaceBinding.resolve(undefined);
+
+    const [firstHandle, secondHandle] = await Promise.all([first, second]);
+    expect(resolveWorkspaceBinding).toHaveBeenCalledOnce();
+    expect(secondHandle).toBe(firstHandle);
+  });
+
+  it.each(["stop", "stopAll"] as const)(
+    "%s fences a pending workspace resolver without waiting for it",
+    async (operation) => {
+      const record = environment();
+      const workspaceBinding = createDeferred<undefined>();
+      const resolverSettled = vi.fn();
+      void workspaceBinding.promise.then(resolverSettled);
+      const transfer = {
+        ...workspaceTransfer(),
+        closeAll: vi.fn(async () => {}),
+      } as unknown as NodeWorkspaceTransferService;
+      const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
+      const manager = createNodeWorkerTunnelManager({
+        gatewayDeviceId: "gateway-device-1",
+        getEnvironment: () => record,
+        getTransport: transport,
+        launchNodeWorker: vi.fn(),
+        validateWorkerTurn: () => true,
+        workspaceTransfer: transfer,
+      });
+      manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
+
+      const starting = manager.start(startRequest());
+      await vi.waitFor(() => expect(resolveWorkspaceBinding).toHaveBeenCalledOnce());
+      await (operation === "stop"
+        ? manager.stop("environment-1", record.ownerEpoch)
+        : manager.stopAll());
+
+      expect(resolverSettled).not.toHaveBeenCalled();
+      await expect(starting).rejects.toThrow("stopped before connecting");
+      expect(manager.status("environment-1")).toBe("stopped");
+      workspaceBinding.resolve(undefined);
+    },
+  );
+
+  it("reports a cleanup failure after workspace binding initialization fails", async () => {
+    tunnelWarn.mockClear();
+    const record = environment();
+    const transfer = workspaceTransfer();
+    transfer.close = vi.fn(async () => {
+      throw new Error("workspace cleanup failed");
+    });
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: transport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: transfer,
+    });
+    manager.bindWorkspaceBindingResolver(async () => {
+      throw new Error("workspace binding failed");
+    });
+
+    await expect(manager.start(startRequest())).rejects.toThrow("workspace binding failed");
+    await vi.waitFor(() =>
+      expect(tunnelWarn).toHaveBeenCalledWith(
+        "node worker tunnel cleanup failed after initialization error",
+        {
+          environmentId: "environment-1",
+          ownerEpoch: record.ownerEpoch,
+          error: "workspace cleanup failed",
+        },
+      ),
     );
   });
 
@@ -317,9 +457,11 @@ describe("node worker tunnel manager", () => {
             return [
               {
                 ...proof,
-                workerBuild: BUILD,
-                ...(launchEligible ? {} : { workerRuns: undefined }),
-              } as typeof proof & { workerBuild: typeof BUILD },
+                workerHost: {
+                  enabled: true,
+                  capacity: launchEligible ? "available" : "full",
+                },
+              },
             ];
           },
           invoke,
@@ -461,15 +603,26 @@ describe("node worker tunnel manager", () => {
       workspaceTransfer: workspaceTransfer(),
     });
     const first = await manager.start(startRequest());
-    const launched = first.launchTurn({ plan: plan(), placementGeneration: 4, timeoutMs: 5_000 });
+    const launched = first.launchTurn({
+      plan: plan(),
+      turnClaim: turnClaim(),
+      timeoutMs: 5_000,
+    });
     await vi.waitFor(() => expect(launchNodeWorker).toHaveBeenCalledOnce());
     record.ownerEpoch = 3;
     const replacement = manager.start({ ...startRequest(), ownerEpoch: 3 });
 
-    await manager.stop("environment-1", 3);
+    const stopping = manager.stop("environment-1", 3);
+    const stopSettled = vi.fn();
+    void stopping.then(stopSettled, stopSettled);
+    await expect(replacement).rejects.toThrow("stopped before connecting");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(stopSettled).not.toHaveBeenCalled();
     releaseLaunch.resolve();
+    await stopping;
 
-    await expect(replacement).rejects.toThrow("start was cancelled");
     await expect(launched).resolves.toMatchObject({ code: 1, killed: true });
     expect(manager.status("environment-1")).toBe("stopped");
   });
@@ -513,7 +666,7 @@ describe("node worker tunnel manager", () => {
     const handle = await manager.start(startRequest());
     const launched = handle.launchTurn({
       plan: plan(),
-      placementGeneration: 4,
+      turnClaim: turnClaim(),
       timeoutMs: 5_000,
       onDispatchReady,
     });

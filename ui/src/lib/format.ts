@@ -7,6 +7,7 @@ import {
   formatDurationHuman as formatDurationHumanCore,
 } from "../../../src/infra/format-time/format-duration.ts";
 import { i18n, t } from "../i18n/index.ts";
+import { formatUiError } from "./format-error.ts";
 
 export { formatByteSize } from "@openclaw/normalization-core";
 
@@ -183,7 +184,7 @@ export function formatUnknownText(
     // Fall back when value is not JSON-serializable.
   }
   if (value instanceof Error) {
-    return value.message || value.name;
+    return formatUiError(value);
   }
   return Object.prototype.toString.call(value);
 }

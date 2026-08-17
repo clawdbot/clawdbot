@@ -164,6 +164,7 @@ import {
   detectLegacySubagentRegistry,
   migrateLegacySubagentRegistry,
 } from "./state-migrations.subagent-registry.js";
+import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 import {
   detectLegacyTuiLastSessions,
   migrateLegacyTuiLastSessions,
@@ -194,6 +195,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "retired commitments storage → removed table and indexes";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements → execution-mode claims";
+    case "agent-databases-relative-paths-v9":
+      return "agent database registry paths → state-relative storage";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":
@@ -1380,35 +1383,51 @@ export async function autoMigrateLegacyState(params: {
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
+  const configuredAgentDatabaseTargets = resolveSessionStoreTargets(
+    params.cfg,
+    { allAgents: true },
+    { env },
+  ).map((target) => ({
+    agentId: target.agentId,
+    path: resolveSqliteTargetFromSessionStorePath(target.storePath, {
+      agentId: target.agentId,
+      defaultAgentId: isPerAgentSessionStoreConfig(params.cfg.session?.store)
+        ? target.agentId
+        : resolveSessionStoreCompatibilityAgentId(params.cfg),
+      env,
+    }).path,
+  }));
+  const transcriptDirectives = migrateHistoricalTranscriptDirectives({
+    configuredAgentDatabaseTargets,
+    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+  });
   const mediaPersistence =
     params.doctorOnlyStateMigrations === true
       ? migrateLegacyMediaPersistence({
-          configuredAgentDatabaseTargets: resolveSessionStoreTargets(
-            params.cfg,
-            { allAgents: true },
-            { env },
-          ).map((target) => ({
-            agentId: target.agentId,
-            path: resolveSqliteTargetFromSessionStorePath(target.storePath, {
-              agentId: target.agentId,
-              defaultAgentId: isPerAgentSessionStoreConfig(params.cfg.session?.store)
-                ? target.agentId
-                : resolveSessionStoreCompatibilityAgentId(params.cfg),
-              env,
-            }).path,
-          })),
+          configuredAgentDatabaseTargets,
           env: { ...env, OPENCLAW_STATE_DIR: stateDir },
         })
       : { changes: [], warnings: [] };
-  if (mediaPersistence.warnings.length > 0) {
+  if (transcriptDirectives.warnings.length > 0 || mediaPersistence.warnings.length > 0) {
     return {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        transcriptDirectives.changes.length > 0 ||
         mediaPersistence.changes.length > 0,
       skipped: false,
-      changes: [...stateDirResult.changes, ...stateSchema.changes, ...mediaPersistence.changes],
-      warnings: [...stateDirResult.warnings, ...stateSchema.warnings, ...mediaPersistence.warnings],
+      changes: [
+        ...stateDirResult.changes,
+        ...stateSchema.changes,
+        ...transcriptDirectives.changes,
+        ...mediaPersistence.changes,
+      ],
+      warnings: [
+        ...stateDirResult.warnings,
+        ...stateSchema.warnings,
+        ...transcriptDirectives.warnings,
+        ...mediaPersistence.warnings,
+      ],
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
@@ -1517,6 +1536,7 @@ export async function autoMigrateLegacyState(params: {
     stateDirResult,
     profileWorkspace,
     stateSchema,
+    transcriptDirectives,
     mediaPersistence,
     configMachineState,
     orphanKeys,

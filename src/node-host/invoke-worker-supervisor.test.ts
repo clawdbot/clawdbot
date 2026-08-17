@@ -272,6 +272,130 @@ describe("node-host worker supervisor commands", () => {
     });
   });
 
+  it("combines bounded bundle cleanup with the workspace retain snapshot", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    const retainBundles = vi.fn(async () => ({ deleted: 2, hasMore: false, generation: 4 }));
+    const inspectBundle = vi.fn(async () => ({
+      bundleHash: "a".repeat(64),
+      status: "installed" as const,
+    }));
+    const bundleInstaller = {
+      ensure: vi.fn(),
+      inspect: inspectBundle,
+      retain: retainBundles,
+    } as unknown as NodeWorkerBundleInstallerControl;
+    const retain = {
+      version: 1,
+      gatewayNamespace: input.gatewayNamespace,
+      controllerId: "controller-1",
+      sequence: 1,
+      retain: [],
+      bundleHashes: ["a".repeat(64)],
+      acknowledgedBundleGeneration: 3,
+      bundleStatusHash: "a".repeat(64),
+    } as const;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify(retain),
+      supervisor,
+      bundleInstaller,
+    });
+
+    expect(retainBundles).toHaveBeenCalledWith({
+      gatewayNamespace: input.gatewayNamespace,
+      bundleHashes: ["a".repeat(64)],
+      acknowledgedGeneration: 3,
+    });
+    expect(inspectBundle).toHaveBeenCalledWith({
+      gatewayNamespace: input.gatewayNamespace,
+      bundleHash: "a".repeat(64),
+    });
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: true,
+      deleted: 0,
+      hasMore: false,
+      bundleDeleted: 2,
+      bundleGeneration: 4,
+      bundleStatus: { bundleHash: "a".repeat(64), status: "installed" },
+    });
+  });
+
+  it("defers full bundle status validation until the cleanup snapshot is terminal", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    const inspectBundle = vi.fn(async () => ({
+      bundleHash: "a".repeat(64),
+      status: "installed" as const,
+    }));
+    const bundleInstaller = {
+      ensure: vi.fn(),
+      inspect: inspectBundle,
+      retain: vi.fn(async () => ({ deleted: 2, hasMore: true, generation: 4 })),
+    } as unknown as NodeWorkerBundleInstallerControl;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify({
+        version: 1,
+        gatewayNamespace: input.gatewayNamespace,
+        controllerId: "controller-1",
+        sequence: 1,
+        retain: [],
+        bundleHashes: ["a".repeat(64)],
+        bundleStatusHash: "a".repeat(64),
+      }),
+      supervisor,
+      bundleInstaller,
+    });
+
+    expect(inspectBundle).not.toHaveBeenCalled();
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: true,
+      deleted: 0,
+      hasMore: true,
+      bundleDeleted: 2,
+      bundleGeneration: 4,
+    });
+  });
+
+  it("does not prune bundles when the retain snapshot is stale", async () => {
+    const input = launchInput();
+    const supervisor = supervisorWith(fullReceipt(input));
+    supervisor.retainWorkspaces = vi.fn(async () => ({
+      applied: false,
+      deleted: 0,
+      hasMore: false,
+    }));
+    const retainBundles = vi.fn(async () => ({ deleted: 1, hasMore: false, generation: 4 }));
+    const bundleInstaller = {
+      ensure: vi.fn(),
+      retain: retainBundles,
+    } as unknown as NodeWorkerBundleInstallerControl;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+      paramsJSON: JSON.stringify({
+        version: 1,
+        gatewayNamespace: input.gatewayNamespace,
+        controllerId: "controller-stale",
+        sequence: 1,
+        retain: [],
+        bundleHashes: ["a".repeat(64)],
+      }),
+      supervisor,
+      bundleInstaller,
+    });
+
+    expect(retainBundles).not.toHaveBeenCalled();
+    expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
+      applied: false,
+      deleted: 0,
+      hasMore: false,
+    });
+  });
+
   it("preserves the connected Gateway TLS pin in the node-owned worker endpoint", async () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));

@@ -1,5 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Lmstudio tests cover stream plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +32,26 @@ beforeAll(async () => {
 type StreamEvent = { type: string } & Record<string, unknown>;
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
+
+function lmstudioAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+  return {
+    role: "assistant" as const,
+    content,
+    api: "openai-completions" as const,
+    provider: "lmstudio",
+    model: "qwen3-8b-instruct",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: 1,
+  };
+}
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -104,7 +124,7 @@ function buildDoneStreamFn(): StreamFn {
   return vi.fn((_model, _context, _options) => {
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => {
-      stream.push({ type: "done", reason: "stop", message: {} as never });
+      stream.push({ type: "done", reason: "stop", message: lmstudioAssistantMessage([]) });
       stream.end();
     });
     return stream;
@@ -842,18 +862,18 @@ describe("lmstudio stream wrapper", () => {
       "[END_TOOL_REQUEST]",
     ].join("\n");
     const baseStream = buildEventStreamFn([
-      { type: "start", partial: { content: [] } },
-      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "start", partial: lmstudioAssistantMessage([]) },
+      {
+        type: "text_start",
+        contentIndex: 0,
+        partial: lmstudioAssistantMessage([{ type: "text", text: "" }]),
+      },
       { type: "text_delta", contentIndex: 0, delta: rawToolText },
       { type: "text_end", contentIndex: 0, content: rawToolText },
       {
         type: "done",
         reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: rawToolText }],
-          stopReason: "stop",
-        },
+        message: lmstudioAssistantMessage([{ type: "text", text: rawToolText }]),
       },
     ]);
     const wrapped = createWrappedLmstudioStream(baseStream);
@@ -895,18 +915,18 @@ describe("lmstudio stream wrapper", () => {
     const rawToolText =
       'commentary to=read code {"path":"/path/to/file","line_start":1,"line_end":400}';
     const baseStream = buildEventStreamFn([
-      { type: "start", partial: { content: [] } },
-      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "start", partial: lmstudioAssistantMessage([]) },
+      {
+        type: "text_start",
+        contentIndex: 0,
+        partial: lmstudioAssistantMessage([{ type: "text", text: "" }]),
+      },
       { type: "text_delta", contentIndex: 0, delta: rawToolText },
       { type: "text_end", contentIndex: 0, content: rawToolText },
       {
         type: "done",
         reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: rawToolText }],
-          stopReason: "stop",
-        },
+        message: lmstudioAssistantMessage([{ type: "text", text: rawToolText }]),
       },
     ]);
     const wrapped = createWrappedLmstudioStream(baseStream);
@@ -942,18 +962,18 @@ describe("lmstudio stream wrapper", () => {
       "[/mempalace_mempalace_search]",
     ].join("\n");
     const baseStream = buildEventStreamFn([
-      { type: "start", partial: { content: [] } },
-      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "start", partial: lmstudioAssistantMessage([]) },
+      {
+        type: "text_start",
+        contentIndex: 0,
+        partial: lmstudioAssistantMessage([{ type: "text", text: "" }]),
+      },
       { type: "text_delta", contentIndex: 0, delta: rawToolText },
       { type: "text_end", contentIndex: 0, content: rawToolText },
       {
         type: "done",
         reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: rawToolText }],
-          stopReason: "stop",
-        },
+        message: lmstudioAssistantMessage([{ type: "text", text: rawToolText }]),
       },
     ]);
     const wrapped = createWrappedLmstudioStream(baseStream);

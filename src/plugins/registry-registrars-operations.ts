@@ -50,7 +50,7 @@ function isOfficialCodexPluginRecord(
   return sourcePath.includes("/node_modules/@openclaw/codex");
 }
 
-function canClaimReservedCommandOwnership(
+export function canClaimReservedCommandOwnership(
   record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
 ) {
   return record.origin === "bundled" || isOfficialCodexPluginRecord(record);

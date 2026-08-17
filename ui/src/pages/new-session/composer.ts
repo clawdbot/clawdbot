@@ -2,9 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/tooltip.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
@@ -33,6 +34,7 @@ type NewSessionComposerOptions = {
   readSignal: AbortSignal;
   requiresModifier: boolean;
   submitDisabledReason?: string;
+  blockedSubmitNotice?: string;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -172,23 +174,24 @@ export function renderDraftError(message: string) {
   return html`
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
       <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span class="callout__content new-session-page__alert-message">${message}</span>
+      <span class="callout__content new-session-page__alert-message"
+        >${formatUiError(message)}</span
+      >
     </div>
   `;
 }
 
 function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposerOptions) {
-  if (
-    !options.canSubmit ||
-    options.submitting ||
-    event.key !== "Enter" ||
-    event.shiftKey ||
-    event.isComposing ||
-    event.keyCode === 229
-  ) {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) {
     return;
   }
-  if (!options.requiresModifier || event.metaKey || event.ctrlKey) {
+  if (options.requiresModifier && !event.metaKey && !event.ctrlKey) {
+    return;
+  }
+  // A reasoned gate still consumes the press: the submission flow records the
+  // attempt and surfaces the reason instead of silently inserting a newline.
+  // Only silent gates (busy button, empty draft) keep Enter native.
+  if (options.canSubmit || options.submitDisabledReason !== undefined) {
     event.preventDefault();
     options.onSubmit();
   }
@@ -265,6 +268,11 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               : nothing}
           </div>
         </div>
+        ${options.blockedSubmitNotice
+          ? html`<div class="new-session-page__blocked-submit" role="status">
+              ${options.blockedSubmitNotice}
+            </div>`
+          : nothing}
         ${options.pendingAttachmentReads > 0
           ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
           : nothing}
@@ -287,6 +295,7 @@ export function renderNewSessionDraftComposer(options: {
   textareaController: NewSessionComposerTextareaController;
   requiresModifier: boolean;
   submitDisabledReason?: string;
+  blockedSubmitNotice?: string;
   terminalAction?: {
     canStart: boolean;
     disabledReason?: string;
@@ -320,6 +329,7 @@ export function renderNewSessionDraftComposer(options: {
     readSignal,
     requiresModifier: options.requiresModifier,
     submitDisabledReason: options.submitDisabledReason,
+    blockedSubmitNotice: options.blockedSubmitNotice,
     terminalAction: options.terminalAction,
     submitting: options.submitting,
     textareaController: options.textareaController,

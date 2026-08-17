@@ -206,28 +206,31 @@ function activityAlignmentHtml() {
           <div class="chat-avatar tool">A</div>
           <div class="chat-group-messages">
             <div class="chat-activity-group is-open">
-              <button class="chat-activity-group__summary" type="button">
+              <button class="chat-inline-disclosure chat-activity-group__summary" type="button" aria-expanded="true">
                 <span class="chat-activity-group__icon">${iconSvg()}</span>
                 <span class="chat-activity-group__label">Activity: 2 tools</span>
+                <span class="chat-inline-disclosure__chevron">${iconSvg()}</span>
               </button>
               <div class="chat-activity-group__body">
                 <div class="chat-bubble chat-bubble--tool-shell" data-activity-call-row>
                   <div class="chat-tools-inline">
                     <div class="chat-tool-msg-collapse">
-                      <button class="chat-tool-msg-summary" type="button">
+                      <button class="chat-inline-disclosure chat-tool-msg-summary" type="button" aria-expanded="false">
                         <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
                         <span class="chat-tool-msg-summary__label">Bash</span>
                         <span class="chat-tool-msg-summary__names">search a deliberately long workspace path without extra card chrome</span>
+                        <span class="chat-inline-disclosure__chevron">${iconSvg()}</span>
                       </button>
                     </div>
                   </div>
                 </div>
                 <div class="chat-bubble chat-bubble--tool-shell">
                   <div class="chat-tool-msg-collapse">
-                    <button class="chat-tool-msg-summary" data-failed-call-row type="button">
+                    <button class="chat-inline-disclosure chat-tool-msg-summary" data-failed-call-row type="button" aria-expanded="false">
                       <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
                       <span class="chat-tool-msg-summary__label">Bash</span>
                       <span class="chat-tool-msg-summary__names">Bash</span>
+                      <span class="chat-inline-disclosure__chevron">${iconSvg()}</span>
                       <span class="chat-tool-row__badge">failed</span>
                     </button>
                   </div>
@@ -1171,7 +1174,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it.each([
     [430, 720],
     [1366, 900],
-  ] as const)("right-aligns activity rows with call bubbles at %sx%s", async (width, height) => {
+  ] as const)("keeps activity disclosures compact at %sx%s", async (width, height) => {
     const page = await openBrowserPage(width, height);
     try {
       await page.setContent(
@@ -1179,24 +1182,27 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       );
 
       await expectNoHorizontalOverflow(page);
-      const callRow = await getRect(page, "[data-activity-call-row]");
+      const activityGroup = await getRect(page, ".chat-activity-group");
+      const activitySummary = await getRect(page, ".chat-activity-group__summary");
       const failedSummary = await getRect(page, "[data-failed-call-row]");
-      expect(Math.abs(callRow.right - failedSummary.right)).toBeLessThanOrEqual(1);
-      expect(Math.abs(callRow.height - failedSummary.height)).toBeLessThanOrEqual(1);
+      expect(activitySummary.width).toBeLessThan(activityGroup.width);
+      expect(failedSummary.width).toBeLessThan(activityGroup.width);
       const styles = await page.evaluate(() => {
-        const call = document.querySelector<HTMLElement>("[data-activity-call-row]")!;
+        const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
+        const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;
+        const chevron = activity.querySelector<HTMLElement>(".chat-inline-disclosure__chevron")!;
         return {
-          activity: getComputedStyle(
-            document.querySelector<HTMLElement>(".chat-activity-group__summary")!,
-          ).userSelect,
-          callBackground: getComputedStyle(call).backgroundColor,
+          activity: getComputedStyle(activity).userSelect,
+          activityBackground: getComputedStyle(activity).backgroundColor,
+          chevronGap: chevron.getBoundingClientRect().left - label.getBoundingClientRect().right,
           tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
             .userSelect,
         };
       });
       expect(styles).toEqual({
         activity: "text",
-        callBackground: "rgba(0, 0, 0, 0)",
+        activityBackground: "rgba(0, 0, 0, 0)",
+        chevronGap: 8,
         tool: "text",
       });
     } finally {

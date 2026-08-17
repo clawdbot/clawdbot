@@ -14,9 +14,9 @@ import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import type { DiscordChannelInfo, DiscordMediaInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
+import type { DiscordThreadChannel } from "./threading.js";
 
 export type { DiscordSenderIdentity } from "./sender-identity.js";
-import type { DiscordThreadChannel } from "./threading.js";
 
 type LoadedConfig = OpenClawConfig;
 type BuildChannelInboundContext =

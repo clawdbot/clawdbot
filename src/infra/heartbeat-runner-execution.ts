@@ -184,6 +184,14 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     wakeSource !== "cron" &&
     !isWithinActiveHours(cfg, heartbeat, startedAt)
   ) {
+    // Documented observable skip (`system heartbeat last` / troubleshooting
+    // docs promise reason=quiet-hours); every sibling skip past this point
+    // emits, so a silent return here hides the window from operators.
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "quiet-hours",
+      durationMs: Date.now() - startedAt,
+    });
     return { kind: "skipped", reason: "quiet-hours" } as const;
   }
 

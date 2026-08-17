@@ -26,12 +26,12 @@ import {
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
 import { isWorkerPlacementSafeForArchive } from "../worker-environments/session-placement-lifecycle.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 export {
   resolveSessionWorkerPlacementMutationError,
   retireSessionWorkerPlacementBeforeMutation,
   SessionWorkerPlacementMutationError,
 } from "../worker-environments/session-placement-lifecycle.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
 

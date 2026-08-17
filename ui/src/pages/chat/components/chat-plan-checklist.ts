@@ -50,6 +50,16 @@ export function renderChatPlanChecklist(
     return nothing;
   }
   const completed = status.steps.filter((step) => step.status === "completed").length;
+  if (options.variant === "card") {
+    return html`
+      <section
+        class="plan-checklist plan-checklist--card"
+        aria-label=${`Plan: ${completed} of ${status.steps.length} completed`}
+      >
+        ${renderPlanChecklistBody(status)}
+      </section>
+    `;
+  }
   let current = status.steps.find((step) => step.status === "in_progress");
   if (!current) {
     for (let index = status.steps.length - 1; index >= 0; index -= 1) {
@@ -70,20 +80,10 @@ export function renderChatPlanChecklist(
     <span class="plan-checklist__current">${current.step}</span>
     <span class="plan-checklist__count">${completed}/${status.steps.length}</span>
   `;
-  const body = renderPlanChecklistBody(status);
-
-  if (options.variant === "card") {
-    return html`
-      <section class="plan-checklist plan-checklist--card" aria-label=${label}>
-        <div class="plan-checklist__summary">${summary}</div>
-        ${body}
-      </section>
-    `;
-  }
   return html`
     <details class="plan-checklist plan-checklist--bar">
       <summary class="plan-checklist__summary" aria-label=${label}>${summary}</summary>
-      ${body}
+      ${renderPlanChecklistBody(status)}
     </details>
   `;
 }

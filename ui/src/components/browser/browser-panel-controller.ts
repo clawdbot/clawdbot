@@ -1,6 +1,7 @@
 import type { ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
 import type { BrowserInspectedNode, BrowserPanelTab } from "./browser-client.ts";
 import {
@@ -125,7 +126,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   reportError(error: unknown): void {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = formatUiError(error);
     this.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
   }
 

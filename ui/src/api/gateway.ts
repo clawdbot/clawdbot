@@ -29,7 +29,6 @@ import {
   resolveSafeTimeoutDelayMs,
   shouldPauseGatewayReconnect,
 } from "@openclaw/gateway-client/browser";
-export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 import type {
   GatewayScopeUpgrade,
   ScopeUpgradeBinding,
@@ -57,6 +56,7 @@ import {
   enrichProtocolMismatchDetails,
   resolveGatewayErrorDetailCode,
 } from "./gateway-connect-errors.ts";
+export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 
 export { resolveGatewayErrorDetailCode };
 
@@ -70,6 +70,11 @@ export class GatewayRequestError extends GatewayProtocolRequestError {
     });
     this.name = "GatewayRequestError";
   }
+}
+
+function browserSecureContext(): boolean {
+  const win = typeof window !== "undefined" ? window : undefined;
+  return win?.isSecureContext === true;
 }
 
 function isLoopbackIPv4Host(host: string): boolean {
@@ -399,7 +404,7 @@ export class GatewayBrowserClient {
 
   private connectPlanTimingPayload(plan: ConnectPlan): Partial<GatewayConnectTiming> {
     return {
-      secureContext: Boolean(plan.deviceIdentity),
+      secureContext: browserSecureContext(),
       hasDeviceIdentity: Boolean(plan.deviceIdentity),
       hasDevice: Boolean(plan.params.device),
       hasAuthToken: Boolean(plan.selectedAuth.authToken),
@@ -429,25 +434,20 @@ export class GatewayBrowserClient {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
 
-    // crypto.subtle is only available in secure contexts (HTTPS, localhost).
-    // Token/password auth cannot replace browser device identity over plain HTTP.
-    const isSecureContext = typeof crypto !== "undefined" && Boolean(crypto.subtle);
-    let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
+    // Pure-JS Ed25519 signing keeps device identity working on any origin,
+    // including plain-HTTP dashboards without crypto.subtle; only a failed
+    // mint (no WebCrypto RNG) degrades to a device-less connect.
     let selectedAuth: GatewayConnectAuthSelection = {
       authToken: explicitGatewayToken,
       authPassword: explicitPassword,
     };
-
-    if (isSecureContext) {
-      deviceIdentity = await loadOrCreateDeviceIdentity();
-      this.client.recordTiming("device-identity-ready", generation, undefined, {
-        secureContext: true,
-        hasDeviceIdentity: true,
-      });
-      selectedAuth = this.selectConnectAuth({
-        role,
-        deviceId: deviceIdentity.deviceId,
-      });
+    const deviceIdentity = await loadOrCreateDeviceIdentity().catch(() => null);
+    this.client.recordTiming("device-identity-ready", generation, undefined, {
+      secureContext: browserSecureContext(),
+      hasDeviceIdentity: deviceIdentity !== null,
+    });
+    if (deviceIdentity) {
+      selectedAuth = this.selectConnectAuth({ role, deviceId: deviceIdentity.deviceId });
     }
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: selectedAuth.authBootstrapToken
@@ -724,7 +724,7 @@ export class GatewayBrowserClient {
     const error = context.connectFailure?.error;
     const startupDelay = context.connectFailure?.reconnectDelayMs;
     if (startupDelay !== undefined) {
-      return { retry: true, notify: false, reconnectDelayMs: startupDelay, pendingError: error };
+      return { retry: true, notify: true, reconnectDelayMs: startupDelay, pendingError: error };
     }
     const connectError =
       error instanceof GatewayRequestError ? toGatewayErrorInfo(error) : undefined;

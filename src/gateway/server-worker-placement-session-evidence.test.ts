@@ -1,6 +1,21 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const evidenceWarnSpy = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../logging/subsystem.js")>("../logging/subsystem.js");
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/placement-session-evidence"
+        ? { ...logger, warn: evidenceWarnSpy }
+        : logger;
+    },
+  };
+});
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -27,6 +42,7 @@ afterEach(() => {
   resetConfigRuntimeState();
   resolveTargetsReadOnlySpy.mockClear();
   readIdentityEvidenceBatchSpy.mockClear();
+  evidenceWarnSpy.mockClear();
 });
 
 function localPlacement(
@@ -205,6 +221,23 @@ describe("worker placement session evidence", () => {
 
       await expect(resolvePlacementEvidence(localPlacement(sessionId, sessionKey))).resolves.toBe(
         "unknown",
+      );
+    });
+  });
+
+  it("warns instead of silently swallowing resolver pipeline failures", async () => {
+    const stateDir = tempDirs.make("openclaw-placement-session-pipeline-failure-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      resolveTargetsReadOnlySpy.mockImplementationOnce(() => {
+        throw new Error("evidence pipeline exploded");
+      });
+      const placement = localPlacement("session-pipeline-failure", "agent:main:pipeline-failure");
+
+      await expect(resolvePlacementEvidence(placement)).resolves.toBe("unknown");
+      expect(evidenceWarnSpy).toHaveBeenCalledOnce();
+      expect(evidenceWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("session evidence resolution failed"),
+        { error: expect.objectContaining({ message: "evidence pipeline exploded" }) },
       );
     });
   });

@@ -74,7 +74,7 @@ export interface ShellChromeHost extends HTMLElement {
   readonly desktopPanelElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
-  readonly approvalOverlay: (HTMLElement & { show(): void }) | undefined;
+  readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
   routeState: ShellRouteState;
   navDrawerOpen: boolean;
   desktopNavigationExpanded: boolean;
@@ -407,7 +407,7 @@ export class ShellChromeOwner {
     if (
       host.commandPalette?.isOpen ||
       overlaySnapshot?.devicePairSetupOpen ||
-      (overlaySnapshot?.approvalQueue.length ?? 0) > 0 ||
+      host.approvalOverlay?.dialogOpen === true ||
       document.querySelector("dialog[open]")
     ) {
       return true;

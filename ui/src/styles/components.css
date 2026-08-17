@@ -4,6 +4,7 @@
 
 .connect-splash {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100vh;
@@ -13,6 +14,12 @@
   /* Stay invisible past fast handshakes so a quick connect paints nothing. */
   opacity: 0;
   animation: fade-in 0.3s var(--ease-out) 0.2s forwards;
+}
+
+.connect-splash__status {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 openclaw-session-owner-chip {
@@ -89,6 +96,17 @@ openclaw-session-owner-chip {
 .session-glyph__emoji {
   font-size: 15px;
   line-height: 1;
+}
+
+.session-glyph__icon,
+.session-glyph__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-glyph__icon {
+  display: inline-flex;
+  color: inherit;
 }
 
 /* The ring is a circle, so square artwork (page icons, thumbnails, arbitrary
@@ -2389,6 +2407,10 @@ openclaw-chat-session-rail {
   transition: border-color var(--duration-fast) ease;
 }
 
+.list-item-clickable {
+  text-decoration: none;
+}
+
 .list-item-clickable:hover {
   border-color: var(--border-strong);
 }
@@ -3227,12 +3249,14 @@ td.data-table-key-col {
    =========================================== */
 
 .exec-approval-card {
+  --exec-approval-accent: var(--border);
+
   width: 100%;
   max-height: inherit;
   display: flex;
   flex-direction: column;
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--exec-approval-accent) 5%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--exec-approval-accent) 45%, var(--border));
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: scale-in 0.2s var(--ease-out);
@@ -3248,9 +3272,19 @@ td.data-table-key-col {
 
 .exec-approval-card--inline {
   padding: 14px 16px;
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
-  background: color-mix(in srgb, var(--warn) 5%, var(--card));
   animation: none;
+}
+
+.exec-approval-card--severity-info {
+  --exec-approval-accent: var(--border);
+}
+
+.exec-approval-card--severity-warning {
+  --exec-approval-accent: var(--warn);
+}
+
+.exec-approval-card--severity-danger {
+  --exec-approval-accent: var(--danger);
 }
 
 .exec-approval-header {
@@ -3271,13 +3305,25 @@ td.data-table-key-col {
   margin-top: 4px;
 }
 
-.exec-approval-queue {
+.exec-approval-queue,
+.exec-approval-chip {
   font-size: 12px; /* was 11px */
   font-weight: 500;
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 4px 10px;
+}
+
+.exec-approval-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.exec-approval-chip {
+  padding: 2px 8px;
 }
 
 .exec-approval-command {
@@ -3321,6 +3367,21 @@ td.data-table-key-col {
   font-family: var(--mono);
   overflow-wrap: anywhere;
   text-align: right;
+}
+
+.exec-approval-details {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exec-approval-details summary {
+  width: fit-content;
+  cursor: var(--cursor-action);
+}
+
+.exec-approval-details .exec-approval-meta {
+  margin-top: 8px;
 }
 
 .exec-approval-error {
@@ -5094,29 +5155,6 @@ td.data-table-key-col {
   }
 }
 
-/* ── Shared collapse chevron ── */
-
-.collapse-chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform var(--duration-fast) ease;
-}
-
-.collapse-chevron svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.collapse-chevron--collapsed {
-  transform: rotate(-90deg);
-}
-
 /* Mobile pairing */
 .device-pair-setup {
   max-height: calc(100dvh - 48px);
@@ -5656,9 +5694,7 @@ td.data-table-key-col {
 }
 
 /* Attribute badges (attached automation, approval, cloud placement):
-   muted metadata that sits after the title inside the row link, outside the
-   trail/action overlap cell, so touch devices (which hide the trail) and
-   hovered rows keep them. */
+   muted metadata grouped in the row's second-line endcap. */
 .session-row-badges {
   display: inline-flex;
   align-items: center;

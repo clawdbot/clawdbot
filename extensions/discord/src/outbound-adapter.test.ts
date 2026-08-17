@@ -12,6 +12,20 @@ import {
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
 
+const outboundWarnSpy = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "discord/outbound" ? { ...logger, warn: outboundWarnSpy } : logger;
+    },
+  };
+});
+
 const hoisted = createDiscordOutboundHoisted();
 await installDiscordOutboundModuleSpies(hoisted);
 
@@ -91,6 +105,7 @@ describe("normalizeDiscordOutboundTarget", () => {
 describe("discordOutbound", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
+    outboundWarnSpy.mockClear();
   });
 
   it("routes text sends to thread target when threadId is provided", async () => {
@@ -281,6 +296,11 @@ describe("discordOutbound", () => {
       text: "fallback",
       result,
     });
+    // The fallback is intended, but the persona failure must stay visible.
+    expect(outboundWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("webhook persona send failed"),
+      { error: expect.objectContaining({ message: "rate limited" }) },
+    );
   });
 
   it("routes poll sends to thread target when threadId is provided", async () => {

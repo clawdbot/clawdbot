@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractLeadingHttpStatus,
   parseApiErrorInfo,
@@ -9,18 +10,9 @@ import {
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-const TIMEOUT_ERROR_CODES = new Set([
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNRESET",
-  "ECONNABORTED",
-  "ECONNREFUSED",
-  "ENETUNREACH",
-  "EHOSTUNREACH",
+const FAILOVER_TIMEOUT_ERROR_CODES = new Set([
   "EHOSTDOWN",
   "ENETRESET",
-  "EPIPE",
-  "EAI_AGAIN",
   "ERR_STREAM_PREMATURE_CLOSE",
 ]);
 const NO_BODY_HTTP_WRAPPER_RE =
@@ -342,7 +334,10 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
     case "OVERLOADED_ERROR":
       return "overloaded";
     default:
-      return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
+      return FAILOVER_TIMEOUT_ERROR_CODES.has(normalized) ||
+        isTransientNetworkError({ code: normalized })
+        ? "timeout"
+        : null;
   }
 }
 export function classifyCoreFailoverReasonFromErrorType(

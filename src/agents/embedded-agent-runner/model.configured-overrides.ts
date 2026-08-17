@@ -440,8 +440,6 @@ export function applyConfiguredProviderOverrides(params: {
     !configuredModel &&
     !providerConfig.baseUrl &&
     !providerConfig.api &&
-    providerConfig.contextWindow === undefined &&
-    providerConfig.contextTokens === undefined &&
     providerConfig.maxTokens === undefined &&
     requestTimeoutMs === undefined &&
     !providerHeaders &&
@@ -524,8 +522,7 @@ export function applyConfiguredProviderOverrides(params: {
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
   });
-  const resolvedContextWindow =
-    metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
+  const resolvedContextWindow = metadataOverrideModel?.contextWindow;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
@@ -594,10 +591,7 @@ export function applyConfiguredProviderOverrides(params: {
           input: normalizedInput,
           cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
           contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
-          contextTokens:
-            metadataOverrideModel?.contextTokens ??
-            providerConfig.contextTokens ??
-            discoveredModel.contextTokens,
+          contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
           ...(normalizedResolvedMaxTokens !== undefined
             ? {
                 maxTokens: normalizedResolvedMaxTokens,

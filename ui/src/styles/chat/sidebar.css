@@ -28,6 +28,10 @@
     padding-right: 0;
   }
 
+  .content--chat:has(.chat-workbench) .scope-upgrade-chip-row {
+    padding: 8px 20px 0;
+  }
+
   .content--chat:has(.chat-workbench) .chat {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;

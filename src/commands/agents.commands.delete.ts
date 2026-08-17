@@ -28,6 +28,8 @@ import {
   prepareWorkspaceStateDeletion,
 } from "../agents/workspace-state-store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import {
@@ -39,9 +41,8 @@ import {
   isGatewayCredentialsRequiredError,
   isGatewayTransportError,
 } from "../gateway/call.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -64,6 +65,16 @@ type AgentsDeleteGatewayResult = {
   removed?: Array<{ path: string; method: "trash" | "missing" }>;
   failed?: Array<{ path: string; reason: string }>;
 };
+
+function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, message: string): void {
+  if (opts.json) {
+    writeRuntimeJson(runtime, formatCliJsonFailure(message));
+    runtime.exit(1, { resetStream: process.stderr });
+  } else {
+    runtime.error(message);
+    runtime.exit(1);
+  }
+}
 
 function logClearedOwnerRefs(runtime: RuntimeEnv, clearedOwnerRefs: readonly string[]): void {
   if (clearedOwnerRefs.length > 0) {
@@ -108,24 +119,35 @@ export async function agentsDeleteCommand(
 
   const input = opts.id?.trim();
   if (!input) {
-    runtime.error(
+    failAgentsDelete(
+      opts,
+      runtime,
       `Agent id is required. Run ${formatCliCommand("openclaw agents list")} to choose one.`,
     );
-    runtime.exit(1);
     return;
   }
 
-  const agentId = normalizeAgentId(input);
-  if (agentId !== input) {
+  const normalized = normalizeAgentIdStrict(input);
+  if (!normalized.ok) {
+    failAgentsDelete(
+      opts,
+      runtime,
+      `Agent "${input}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
+    );
+    return;
+  }
+  const agentId = normalized.value;
+  if (!opts.json && agentId !== input) {
     runtime.log(`Normalized agent id to "${agentId}".`);
   }
   const configured = findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
   let existingJournal = configured ? undefined : readAgentDeletionJournal(agentId);
   if (!configured && (!existingJournal || existingJournal.cleanupCompleted)) {
-    runtime.error(
+    failAgentsDelete(
+      opts,
+      runtime,
       `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
-    runtime.exit(1);
     return;
   }
   const configuredAgentDir = configured ? resolveAgentDir(cfg, agentId) : undefined;
@@ -141,14 +163,16 @@ export async function agentsDeleteCommand(
       sharedAuthDbPath: resolveSharedAuthStorePath(),
     })
   ) {
-    runtime.error(formatSharedAuthStoreOwnerDeleteError(agentId));
-    runtime.exit(1);
+    failAgentsDelete(opts, runtime, formatSharedAuthStoreOwnerDeleteError(agentId));
     return;
   }
 
   if (configured && agentId === tryResolveSoleAgentId(cfg)) {
-    runtime.error(`Agent "${agentId}" is the only configured agent and cannot be deleted.`);
-    runtime.exit(1);
+    failAgentsDelete(
+      opts,
+      runtime,
+      `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
+    );
     return;
   }
   const explicitInheritedAuthAgentId = cfg.agents?.defaults?.authInheritance?.agentId?.trim();
@@ -156,10 +180,11 @@ export async function agentsDeleteCommand(
     explicitInheritedAuthAgentId ||
     (sharedAuthOwnership.location === "legacy-main" ? resolveLegacyInheritedAuthAgentId(cfg) : "");
   if (inheritedAuthAgentId && agentId === normalizeAgentId(inheritedAuthAgentId)) {
-    runtime.error(
+    failAgentsDelete(
+      opts,
+      runtime,
       `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
     );
-    runtime.exit(1);
     return;
   }
 
@@ -178,9 +203,8 @@ export async function agentsDeleteCommand(
   }
 
   if (!opts.force) {
-    if (!process.stdin.isTTY) {
-      runtime.error("Non-interactive session. Re-run with --force.");
-      runtime.exit(1);
+    if (!isTerminalInteractive()) {
+      failAgentsDelete(opts, runtime, "Non-interactive session. Re-run with --force.");
       return;
     }
     const prompter = createClackPrompter();

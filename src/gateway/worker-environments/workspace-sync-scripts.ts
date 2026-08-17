@@ -1,9 +1,3 @@
-import {
-  REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
-  REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
-} from "./workspace-manifest-remote-script.js";
-export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-accepted-remote-script.js";
-export { REMOTE_GIT_WORKSPACE_RETRY_RESET_JS } from "./workspace-mutation-remote-script.js";
 import { MAX_WORKSPACE_HASH_MEMO_BYTES, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
@@ -12,6 +6,10 @@ import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
+import {
+  REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
+  REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
+} from "./workspace-manifest-remote-script.js";
 import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import {
   DERIVED_WORKSPACE_DIRECTORY_NAMES,
@@ -19,6 +17,8 @@ import {
   DERIVED_WORKSPACE_FILE_SUFFIXES,
   isDerivedWorkspacePath,
 } from "./workspace-path-exclusions.js";
+export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-accepted-remote-script.js";
+export { REMOTE_GIT_WORKSPACE_RETRY_RESET_JS } from "./workspace-mutation-remote-script.js";
 export { REMOTE_WORKSPACE_SETUP_SCRIPT } from "./workspace-sync-setup-script.js";
 
 export const REMOTE_GIT_WORKSPACE_SETUP_SCRIPT = String.raw`set -eu

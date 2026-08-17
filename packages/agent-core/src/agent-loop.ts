@@ -8,8 +8,8 @@ import type {
   Context,
   EventStream,
   ToolResultMessage,
+  EventStream as SourceEventStream,
 } from "@openclaw/llm-core";
-import type { EventStream as SourceEventStream } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
@@ -34,8 +34,8 @@ import {
   isTurnHandoffAbort,
   normalizeCoreContextMessages,
 } from "./turn-interruption.js";
-import type { ToolResultContentSource } from "./types.js";
 import type {
+  ToolResultContentSource,
   AgentContext,
   AgentEvent,
   AgentLoopConfig,

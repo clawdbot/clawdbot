@@ -364,7 +364,15 @@ export async function resumeMainSession(params: {
     log.warn(`refusing message-tool-only recovery without channel authority: ${params.sessionKey}`);
     return "failed";
   }
-  const recoveryRunId = claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : randomUUID();
+  const claimedRunWasAdmittedBeforeRestart =
+    claimedRunId !== undefined &&
+    params.entry.restartRecoveryRuns?.some(
+      (run) => run.runId === claimedRunId && run.lifecycleGeneration !== lifecycleGeneration,
+    ) === true;
+  const recoveryRunId =
+    claimedRunId && claimedRunId !== sourceRunId && !claimedRunWasAdmittedBeforeRestart
+      ? claimedRunId
+      : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));

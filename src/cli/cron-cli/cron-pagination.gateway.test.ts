@@ -6,6 +6,7 @@ import { createMockCronStateForJobs } from "../../cron/service.test-harness.js";
 import { listPage } from "../../cron/service/ops-read.js";
 import type { CronJob } from "../../cron/types.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
+import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 
 const mocks = vi.hoisted(() => {
   const runtime = {
@@ -129,6 +130,16 @@ async function runCron(args: string[]): Promise<void> {
   program.exitOverride();
   registerCronCli(program);
   await program.parseAsync(["cron", ...args], { from: "user" });
+}
+
+async function runCronWithJsonOwner(args: string[]): Promise<void> {
+  const originalArgv = process.argv;
+  process.argv = ["node", "openclaw", "cron", ...args];
+  try {
+    await withConsoleLogsRoutedToStderrForJson(process.argv, () => runCron(args));
+  } finally {
+    process.argv = originalArgv;
+  }
 }
 
 afterEach(() => {
@@ -278,11 +289,11 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     );
     disableCronGetForProtocolV4Gateway();
 
-    await expect(runCron(["list", "--json"])).rejects.toThrow("exit 1");
-
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("inventory changed repeatedly"),
+    await expect(runCronWithJsonOwner(["list", "--json"])).rejects.toThrow(
+      "inventory changed repeatedly",
     );
+
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
     expect(
       mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),

@@ -378,6 +378,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     return this.renderRoot.querySelector(".tp-viewport");
   }
 
+  private retryTerminalOpen(): void {
+    this.terminalPanelErrorText = null;
+    this.terminalSessions.openRetry.run();
+  }
+
   override render() {
     if (
       !this.available ||
@@ -400,6 +405,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.terminalSessions.waitingForRefresh ||
       (this.terminalSessions.booting && this.terminalSessions.tabs.length === 0) ||
       activeTab?.status === "connecting";
+    const terminalError = this.terminalPanelErrorText
+      ? {
+          text: this.terminalPanelErrorText,
+          retry: this.terminalSessions.openRetry.available
+            ? () => this.retryTerminalOpen()
+            : undefined,
+        }
+      : null;
     const sessionPicker = renderTerminalSessionPicker({
       open: this.sessionPickerOpen,
       loading: this.sessionPickerTask.status === TaskStatus.PENDING,
@@ -443,12 +456,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           },
           () => void this.terminalSessions.openSession(),
         )}
-        ${renderTerminalPanelViewport(
-          this.terminalSessions.activeId,
+        ${renderTerminalPanelViewport({
+          activeId: this.terminalSessions.activeId,
           connecting,
-          this.terminalPanelErrorText,
-          this.terminalPanelUploadController,
-        )}
+          error: terminalError,
+          uploadController: this.terminalPanelUploadController,
+        })}
       </section>
     `;
   }

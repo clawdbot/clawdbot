@@ -82,7 +82,6 @@ function buildActionRows(params: {
   modelRunPrunedKeys: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
-  budgetEvictedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
 }): SessionCleanupActionRow[] {
   // Recompute row actions from the preview sets so dry-run output uses the same
@@ -96,7 +95,6 @@ function buildActionRows(params: {
         modelRunPrunedKeys: params.modelRunPrunedKeys,
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
-        budgetEvictedKeys: params.budgetEvictedKeys,
         dmScopeRetiredKeys: params.dmScopeRetiredKeys,
       }),
     }),

@@ -157,7 +157,7 @@ export function renderSessionRowBadges(params: {
         )
       : nothing}
     ${outboxCount > 0
-      ? renderSessionRowBadge(outboxLabel, icons.clock, "session-row-badge--queued", outboxCount)
+      ? renderSessionRowBadge(outboxLabel, icons.outbox, "session-row-badge--queued", outboxCount)
       : nothing}
     ${params.hasComposerDraft
       ? renderSessionRowBadge(

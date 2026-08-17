@@ -17,7 +17,7 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
+import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
@@ -227,7 +227,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const node = nodes.find(
       (candidate) =>
         candidate.nodeId === params.deviceId &&
-        (!params.requireLaunchAvailability || candidate.workerRuns !== undefined),
+        (!params.requireLaunchAvailability || candidate.workerHost.capacity === "available"),
     );
     if (!node) {
       throw new NodeWorkerLaunchTransportError(
@@ -307,11 +307,12 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       const result = await raceWithSignal(operation, signal);
       if (!result.ok) {
         const code = result.error?.code ?? "UNAVAILABLE";
+        if (code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE) {
+          throw new WorkerRunnerCapacityError();
+        }
         throw new NodeWorkerLaunchTransportError(
           code,
-          code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-            ? "device worker capacity remained full"
-            : `node worker supervisor invocation failed (${code})`,
+          `node worker supervisor invocation failed (${code})`,
         );
       }
       return parseInvokeReceipt(result.payloadJSON);
@@ -496,10 +497,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       }
       // The node authors this result only after its durable claim stayed absent.
       // Transport dispatch is therefore not launch ambiguity and needs no cancel.
-      if (
-        error instanceof NodeWorkerLaunchTransportError &&
-        error.code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-      ) {
+      if (error instanceof WorkerRunnerCapacityError) {
         throw error;
       }
       if (!mayHaveLaunched) {

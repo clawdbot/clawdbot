@@ -16,7 +16,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
-  agentCfgContextTokens?: number;
   cfg?: OpenClawConfig;
   provider?: string;
 }): number {
@@ -25,7 +24,6 @@ export function resolveMemoryFlushContextWindowTokens(params: {
       cfg: params.cfg,
       provider: params.provider,
       model: params.modelId,
-      contextTokensOverride: params.agentCfgContextTokens,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS
   );
@@ -76,7 +74,6 @@ export function resolveResponsesServerCompactionThreshold(params: {
         baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
         contextWindow:
           configuredModel?.contextWindow ??
-          providerConfig?.contextWindow ??
           resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
       },
       extraParams,
@@ -95,7 +92,6 @@ export function resolveResponsesServerCompactionThreshold(params: {
       compat: configuredModel?.compat,
       contextWindow:
         configuredModel?.contextWindow ??
-        providerConfig?.contextWindow ??
         resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
     },
     extraParams,

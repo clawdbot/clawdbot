@@ -260,6 +260,9 @@ export const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 export const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
 export const QA_SLACK_CHART_PRESENTATION_PROMPT_RE =
   /Slack native chart QA check\s+(SLACK_QA_CHART_SUMMARY_[A-Z0-9]+)[\s\S]*?reply with only this exact marker:\s*(SLACK_QA_CHART_DONE_[A-Z0-9]+)/i;
+export const QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE =
+  /message delivery decision suppression qa check/i;
+export const QA_MESSAGE_DECISION_SEND_PROMPT_RE = /message delivery decision send qa check/i;
 export const QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE =
   /Slack MPIM assistant-history seed check[\s\S]*?exact format:\s*(SLACK_QA_MPIM_SEED_[A-Z0-9]+)_BOT_<NONCE>/i;
 export const QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE =

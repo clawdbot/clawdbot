@@ -6,6 +6,7 @@ import type {
   AgentsFilesListResult,
   AgentsFilesSetResult,
 } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 
 type AgentFilesState = {
   client: GatewayBrowserClient | null;
@@ -75,7 +76,7 @@ export async function loadAgentFileContent(
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentFilesError = String(err);
+      state.agentFilesError = formatUiError(err);
     }
     return false;
   } finally {
@@ -119,7 +120,7 @@ export async function saveAgentFile(
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentFilesError = String(err);
+      state.agentFilesError = formatUiError(err);
     }
     return false;
   } finally {

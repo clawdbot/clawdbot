@@ -22,7 +22,7 @@ import {
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
-  projectConfigAccountIdWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -330,6 +330,12 @@ const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningC
       `- Feishu[${account.accountId}] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.feishu.groupPolicy="allowlist" + channels.feishu.groupAllowFrom to restrict senders.`,
     ];
   },
+});
+const collectFeishuOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectFeishuSecurityWarnings,
+  checkId: "channels.feishu.groups.open",
+  severity: "critical",
+  title: "Feishu security warning",
 });
 
 function describeFeishuMessageTool({
@@ -1808,10 +1814,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       message: feishuMessageAdapter,
     },
     security: {
-      collectWarnings: projectConfigAccountIdWarningCollector<{
-        cfg: ClawdbotConfig;
-        accountId?: string | null;
-      }>(collectFeishuSecurityWarnings),
+      collectWarnings: ({ cfg, accountId }) => collectFeishuOpenGroupFindings({ cfg, accountId }),
       collectAuditFindings: ({ cfg }) => collectFeishuSecurityAuditFindings({ cfg }),
     },
     pairing: {

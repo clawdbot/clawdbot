@@ -21,7 +21,6 @@ import {
   changedCheckLocalDependenciesReady,
   changedCheckRequiresRemote,
   cleanupCorepackPnpmShimDir,
-  createChangedCheckChildEnv,
   createChangedCheckPlan,
   createPnpmManagedCommand,
   createTargetedCoreLintCommand,
@@ -326,6 +325,7 @@ describe("scripts/changed-lanes", () => {
           ...createNestedGitEnv(),
           CI: "",
           GITHUB_ACTIONS: "",
+          AGENT_HOST_ROLE: "workstation",
           OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "",
           OPENCLAW_TESTBOX: "",
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -739,9 +739,6 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
     expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toEqual({
       PATH: "/usr/bin",
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
-      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
     });
     expect(plan.commands.find((command) => command.name === "lint core changed file")).toEqual({
@@ -755,9 +752,6 @@ describe("scripts/changed-lanes", () => {
       ],
       env: {
         PATH: "/usr/bin",
-        OPENCLAW_OXLINT_SKIP_LOCK: "1",
-        OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-        OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       },
     });
   });
@@ -1073,19 +1067,7 @@ describe("scripts/changed-lanes", () => {
 
     expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
-      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
-      PATH: "/usr/bin",
-    });
-  });
-
-  it("marks changed-check children as covered by the parent heavy-check lock", () => {
-    expect(createChangedCheckChildEnv({ PATH: "/usr/bin" })).toEqual({
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
-      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       PATH: "/usr/bin",
     });
   });
@@ -1134,7 +1116,7 @@ describe("scripts/changed-lanes", () => {
       shouldDelegateChangedCheckToCrabbox(
         ["--base", "origin/main"],
         { PATH: "/usr/bin" },
-        { result },
+        { platform: "darwin", result },
       ),
     ).toBe(true);
     expect(changedCheckRequiresRemote(result)).toBe(true);
@@ -1171,7 +1153,7 @@ describe("scripts/changed-lanes", () => {
     const result = detectChangedLanes(["src/config/config.ts"]);
 
     expect(changedCheckRequiresRemote(result)).toBe(true);
-    expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(true);
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, { platform: "darwin", result })).toBe(true);
   });
 
   it("adds the dead export scan only for production source changes", () => {
@@ -1204,9 +1186,13 @@ describe("scripts/changed-lanes", () => {
     expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result: noChangesResult })).toBe(
       false,
     );
-    expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result: docsResult })).toBe(
-      true,
-    );
+    expect(
+      shouldDelegateChangedCheckToCrabbox(
+        [],
+        {},
+        { cwd: dir, platform: "darwin", result: docsResult },
+      ),
+    ).toBe(true);
 
     writeRepoFile(dir, "node_modules/.modules.yaml", "layoutVersion: 5\n");
     writeRepoFile(dir, "node_modules/.bin/oxfmt", "#!/bin/sh\n");
@@ -1231,7 +1217,56 @@ describe("scripts/changed-lanes", () => {
     ]);
     expect(result.docsOnly).toBe(true);
     expect(changedCheckRequiresRemote(result)).toBe(true);
-    expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: repoRoot, result })).toBe(true);
+    expect(
+      shouldDelegateChangedCheckToCrabbox([], {}, { cwd: repoRoot, platform: "darwin", result }),
+    ).toBe(true);
+  });
+
+  it("runs trusted changed gates on a dedicated Linux worker", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-worker-route-");
+    const result = detectChangedLanes(["src/config/config.ts"]);
+    const detectedWorker = {
+      cwd: dir,
+      interactive: false,
+      platform: "linux" as const,
+      result,
+      virtualized: true,
+    };
+
+    expect(
+      shouldDelegateChangedCheckToCrabbox(
+        [],
+        {},
+        {
+          interactive: false,
+          platform: "linux",
+          virtualized: true,
+        },
+      ),
+    ).toBe(true);
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, detectedWorker)).toBe(true);
+
+    writeRepoFile(dir, "node_modules/.modules.yaml", "layoutVersion: 5\n");
+    writeRepoFile(dir, "node_modules/.bin/oxfmt", "#!/bin/sh\n");
+    writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
+
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, detectedWorker)).toBe(false);
+    expect(
+      shouldDelegateChangedCheckToCrabbox([], {}, { ...detectedWorker, interactive: true }),
+    ).toBe(true);
+    expect(
+      shouldDelegateChangedCheckToCrabbox(
+        [],
+        { AGENT_HOST_ROLE: "worker" },
+        { platform: "linux", result, virtualized: false },
+      ),
+    ).toBe(false);
+    expect(
+      shouldDelegateChangedCheckToCrabbox([], { AGENT_HOST_ROLE: "workstation" }, detectedWorker),
+    ).toBe(true);
+    expect(shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1" }, detectedWorker)).toBe(
+      true,
+    );
   });
 
   it("delegates staged changed gates as explicit remote paths", () => {
@@ -1275,36 +1310,6 @@ describe("scripts/changed-lanes", () => {
     expect(
       shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1" }),
     ).toBe(false);
-  });
-
-  it("runs changed-check lint lanes under the parent heavy-check lock", () => {
-    const result = detectChangedLanes(["extensions/lmstudio/src/api.ts"]);
-    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
-    const lintCommand = plan.commands.find(
-      (command) => command.name === "lint extension changed file",
-    );
-
-    expect(lintCommand?.env).toEqual({
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
-      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
-      PATH: "/usr/bin",
-    });
-  });
-
-  it("runs changed-check app tests under the parent heavy-check lock", () => {
-    const result = detectChangedLanes([
-      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-    ]);
-    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
-    const testCommand = plan.commands.find((command) => command.args[0] === "test:macos:ci");
-
-    expect(testCommand?.env).toEqual({
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
-      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
-      PATH: "/usr/bin",
-    });
   });
 
   it.each([
@@ -2338,6 +2343,15 @@ describe("scripts/changed-lanes", () => {
     expect(stagedPlan.commands.find((command) => command.name === commandName)).toMatchObject({
       args: expected.staged,
     });
+  });
+
+  it("routes the shared ratchet base owner to both ratchets", () => {
+    const commands = createChangedCheckPlan(
+      detectChangedLanes(["scripts/lib/ratchet-base.mts"]),
+    ).commands.map((command) => command.args);
+
+    expect(commands).toContainEqual(["check:max-lines-ratchet", "--base", "origin/main"]);
+    expect(commands).toContainEqual(["check:assertion-safety", "--base", "origin/main"]);
   });
 
   it("keeps the temp creation report out of non-test changed paths", () => {

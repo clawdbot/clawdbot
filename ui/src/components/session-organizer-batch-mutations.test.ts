@@ -583,6 +583,35 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
+  it("surfaces a forced worktree removal that could not create a snapshot", async () => {
+    const harness = createHarness({
+      ...destructiveHarness,
+      methods: [...destructiveHarness.methods, "worktrees.remove"],
+    });
+    harness.deleteOne.mockResolvedValueOnce({
+      deleted: true,
+      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+    } as never);
+    harness.request.mockResolvedValueOnce({
+      removed: true,
+      snapshotError: "nested gitlink",
+    } as never);
+
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    await pending;
+
+    expect(harness.request).toHaveBeenCalledWith("worktrees.remove", {
+      id: "wt-1",
+      force: true,
+    });
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      "nested gitlink",
+    );
+  });
+
   it("skips the delete confirm entirely once the operator opted out", async () => {
     patchSettings({ sessionDeleteConfirm: false });
     const harness = createHarness(destructiveHarness);

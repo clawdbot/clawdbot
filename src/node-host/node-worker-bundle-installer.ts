@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import fs from "node:fs";
+import fs, { type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
@@ -12,6 +12,7 @@ import {
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -39,6 +40,10 @@ import {
 
 const INSTALL_RECEIPT = "bootstrap-receipt.json";
 const INSTALL_IGNORED_TOP_LEVEL = new Set([INSTALL_RECEIPT]);
+const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
+const STAGING_PATTERN = /^\.staging-[a-f0-9]{64}-/u;
+const PREVIOUS_PATTERN = /^[a-f0-9]{64}\.previous-/u;
+const BUNDLE_DELETE_BATCH = 16;
 const WORKER_PREWARM_TIMEOUT_MS = 10 * 60_000;
 const execFileAsync = promisify(execFile);
 
@@ -189,6 +194,8 @@ async function publishBundle(destination: string, staging: string): Promise<void
 export class NodeWorkerBundleInstaller {
   readonly #root: string;
   readonly #operations = new KeyedAsyncQueue();
+  readonly #bundleGenerationsByNamespace = new Map<string, Map<string, number>>();
+  readonly #currentGenerationByNamespace = new Map<string, number>();
   readonly #prewarmedBundles = new Set<string>();
   readonly #workerEnv: NodeJS.ProcessEnv;
 
@@ -196,6 +203,15 @@ export class NodeWorkerBundleInstaller {
     const env = options.env ?? process.env;
     this.#root = path.resolve(options.root ?? path.join(resolveStateDir(env), "node-host"));
     this.#workerEnv = snapshotNodeWorkerEnv(env);
+  }
+
+  #markPendingRetention(gatewayNamespace: string, bundleHash: string): void {
+    const generation = (this.#currentGenerationByNamespace.get(gatewayNamespace) ?? 0) + 1;
+    this.#currentGenerationByNamespace.set(gatewayNamespace, generation);
+    const generations =
+      this.#bundleGenerationsByNamespace.get(gatewayNamespace) ?? new Map<string, number>();
+    generations.set(bundleHash, generation);
+    this.#bundleGenerationsByNamespace.set(gatewayNamespace, generations);
   }
 
   async #prewarmBundle(bundleDir: string, signal?: AbortSignal): Promise<void> {
@@ -241,6 +257,7 @@ export class NodeWorkerBundleInstaller {
           if (input.bundlePrewarm) {
             await this.#prewarmBundle(destination, params.signal);
           }
+          this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
           return structuredClone(input.build);
         }
         await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
@@ -278,6 +295,7 @@ export class NodeWorkerBundleInstaller {
           if (input.bundlePrewarm) {
             await this.#prewarmBundle(destination, params.signal);
           }
+          this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
           return structuredClone(input.build);
         } finally {
           await fsp.rm(operationRoot, { recursive: true, force: true });
@@ -305,6 +323,88 @@ export class NodeWorkerBundleInstaller {
       }
     });
   }
+
+  async inspect(params: {
+    gatewayNamespace: string;
+    bundleHash: string;
+  }): Promise<{ bundleHash: string; status: "installed" | "missing" }> {
+    return await this.#operations.enqueue(params.gatewayNamespace, async () => {
+      const bundleDir = path.join(
+        this.#root,
+        params.gatewayNamespace,
+        "bundles",
+        params.bundleHash,
+      );
+      const receipt = await readReceipt(bundleDir);
+      const installed =
+        receipt?.bundleHash === params.bundleHash &&
+        (await validateInstalledBundle(bundleDir, receipt));
+      return { bundleHash: params.bundleHash, status: installed ? "installed" : "missing" };
+    });
+  }
+
+  async retain(params: {
+    gatewayNamespace: string;
+    bundleHashes: readonly string[];
+    acknowledgedGeneration?: number;
+  }): Promise<{ deleted: number; hasMore: boolean; generation: number }> {
+    return await this.#operations.enqueue(params.gatewayNamespace, async () => {
+      const bundlesRoot = path.join(this.#root, params.gatewayNamespace, "bundles");
+      let entries: Dirent[];
+      try {
+        entries = await fsp.readdir(bundlesRoot, { withFileTypes: true });
+      } catch (error) {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return {
+            deleted: 0,
+            hasMore: false,
+            generation: this.#currentGenerationByNamespace.get(params.gatewayNamespace) ?? 0,
+          };
+        }
+        throw error;
+      }
+      const protectedHashes = new Set(params.bundleHashes);
+      const generations =
+        this.#bundleGenerationsByNamespace.get(params.gatewayNamespace) ??
+        new Map<string, number>();
+      const acknowledgedGeneration = params.acknowledgedGeneration ?? 0;
+      for (const [bundleHash, generation] of generations) {
+        if (generation > acknowledgedGeneration) {
+          protectedHashes.add(bundleHash);
+        } else {
+          generations.delete(bundleHash);
+        }
+      }
+      if (generations.size > 0) {
+        this.#bundleGenerationsByNamespace.set(params.gatewayNamespace, generations);
+      } else {
+        this.#bundleGenerationsByNamespace.delete(params.gatewayNamespace);
+      }
+      const candidates = entries
+        .filter(
+          (entry) =>
+            entry.isDirectory() &&
+            !entry.isSymbolicLink() &&
+            ((BUNDLE_HASH_PATTERN.test(entry.name) && !protectedHashes.has(entry.name)) ||
+              STAGING_PATTERN.test(entry.name) ||
+              PREVIOUS_PATTERN.test(entry.name)),
+        )
+        .map((entry) => entry.name)
+        .toSorted();
+      const selected = candidates.slice(0, BUNDLE_DELETE_BATCH);
+      for (const name of selected) {
+        const target = path.join(bundlesRoot, name);
+        await fsp.rm(target, { recursive: true, force: true });
+        this.#prewarmedBundles.delete(target);
+      }
+      return {
+        deleted: selected.length,
+        hasMore: candidates.length > selected.length,
+        generation: this.#currentGenerationByNamespace.get(params.gatewayNamespace) ?? 0,
+      };
+    });
+  }
 }
 
-export type NodeWorkerBundleInstallerControl = Pick<NodeWorkerBundleInstaller, "ensure">;
+export type NodeWorkerBundleInstallerControl = Pick<NodeWorkerBundleInstaller, "ensure"> &
+  Partial<Pick<NodeWorkerBundleInstaller, "inspect" | "retain">>;
