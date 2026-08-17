@@ -7,6 +7,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { deliverFollowupDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
@@ -144,7 +145,10 @@ describe("follow-up delivery channel boundary", () => {
       outcomes: ["delivered", "failed"],
       payloads: [
         { text: "status delivered", isStatusNotice: true },
-        { text: "private terminal reply" },
+        setReplyPayloadMetadata(
+          { text: "private terminal reply" },
+          { assistantTranscriptOwned: true },
+        ),
       ],
     });
 
