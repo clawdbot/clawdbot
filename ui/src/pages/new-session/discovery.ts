@@ -34,6 +34,14 @@ export type DraftCloudProfile = {
   id: string;
   providerId: string;
   trust?: "persistent" | "disposable";
+  machines?: DraftMachineOption[];
+};
+
+export type DraftMachineOption = {
+  id: string;
+  label: string;
+  description?: string;
+  default?: boolean;
 };
 
 export type DraftEnvironment = {
@@ -137,7 +145,12 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
       if (!raw || typeof raw !== "object") {
         return [];
       }
-      const profile = raw as { id?: unknown; providerId?: unknown; trust?: unknown };
+      const profile = raw as {
+        id?: unknown;
+        providerId?: unknown;
+        trust?: unknown;
+        machines?: unknown;
+      };
       const id = normalizeOptionalString(profile.id);
       const providerId = normalizeOptionalString(profile.providerId);
       if (!id || !providerId) {
@@ -147,9 +160,32 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         profile.trust === "persistent" || profile.trust === "disposable"
           ? profile.trust
           : undefined;
-      return [{ id, providerId, trust }];
+      const machines = readDraftMachineOptions(profile.machines);
+      return [{ id, providerId, trust, ...(machines.length > 0 ? { machines } : {}) }];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+function readDraftMachineOptions(value: unknown): DraftMachineOption[] {
+  const options = new Map<string, DraftMachineOption>();
+  for (const raw of (Array.isArray(value) ? value : []).slice(0, 32)) {
+    if (!isRecord(raw)) {
+      continue;
+    }
+    const id = normalizeOptionalString(raw.id);
+    const label = normalizeOptionalString(raw.label);
+    if (!id || id.length > 128 || !label || label.length > 128 || options.has(id)) {
+      continue;
+    }
+    const description = normalizeOptionalString(raw.description);
+    options.set(id, {
+      id,
+      label,
+      ...(description && description.length <= 512 ? { description } : {}),
+      ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
+    });
+  }
+  return [...options.values()];
 }
 
 export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
