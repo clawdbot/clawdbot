@@ -282,8 +282,8 @@
 }
 
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked) {
-  border-color: var(--accent);
-  background: var(--accent)
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  background: color-mix(in srgb, var(--accent) 72%, var(--bg))
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
     center / 13px no-repeat;
 }
