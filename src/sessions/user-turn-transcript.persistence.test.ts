@@ -12,6 +12,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
 
 describe("persistUserTurnTranscript", () => {
@@ -415,15 +416,18 @@ describe("persistUserTurnTranscript", () => {
       const dir = tempDirs.make("openclaw-user-turn-steer-target-hook-");
       const target = createSqliteTranscriptTarget({ dir });
 
-      await persistUserTurnTranscript({
-        ...target,
+      const recorder = createUserTurnTranscriptRecorder({
         input: {
           text: "steer or queue",
           idempotencyKey: "chat-run-steer-target:user",
-          ...(producerTarget ? { steerTargetRunId: producerTarget } : {}),
         },
+        target,
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
+      if (producerTarget) {
+        await recorder.confirmSteerTargetRunIdForPersistence?.(producerTarget);
+      }
+      await recorder.persistApproved();
 
       const [message] = await readTranscriptMessages(target);
       const metadata = message?.["__openclaw"] as Record<string, unknown> | undefined;

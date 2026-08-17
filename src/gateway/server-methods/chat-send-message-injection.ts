@@ -125,9 +125,6 @@ export function createChatSendMessageInjectionStarter(params: {
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
     );
-    if (!attempt) {
-      params.userTurnTranscriptRecorder.setSteerTargetRunIdForPersistence?.(undefined);
-    }
     return attempt;
   };
 }

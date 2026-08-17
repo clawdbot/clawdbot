@@ -63,8 +63,6 @@ export type UserTurnInput = {
     replyToId?: string;
     threadId?: string;
   };
-  /** Presentation provenance for a user turn consumed by an exact active run. */
-  steerTargetRunId?: string;
 };
 
 export type UserTurnTranscriptUpdateMode = "inline" | "none";
@@ -160,8 +158,8 @@ export type UserTurnTranscriptRecorder = {
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
-  /** Sets exact-run steering provenance while the injection attempt owns persistence. */
-  setSteerTargetRunIdForPersistence?: (targetRunId: string | undefined) => void;
+  /** Confirms exact-run steering provenance after transcript commitment is proven. */
+  confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;

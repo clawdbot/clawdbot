@@ -6,7 +6,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
   persistSessionTranscriptTurn,
+  publishTranscriptUpdate,
   readActiveTranscriptEntryAnchor,
+  rewriteTranscriptMessageAtAnchor,
   type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
@@ -160,8 +162,8 @@ function resolvePersistedUserTurnMessage(
   return params.message ?? (params.input ? buildPersistedUserTurnMessage(params.input) : undefined);
 }
 
-function isUserMessage(message: AgentMessage): message is PersistedUserTurnMessage {
-  return (message as { role?: unknown }).role === "user";
+function isUserMessage(message: unknown): message is PersistedUserTurnMessage {
+  return asOptionalRecord(message)?.role === "user";
 }
 
 function buildLateResolvedMediaMessage(params: {
@@ -325,6 +327,39 @@ async function resolveUserTurnTranscriptTarget(
   return typeof target === "function" ? await target() : target;
 }
 
+async function confirmPersistedSteerTargetRunId(params: {
+  admission: UserTurnTranscriptAdmissionReceipt;
+  targetRunId: string;
+}): Promise<
+  | {
+      admission: UserTurnTranscriptAdmissionReceipt;
+      message: PersistedUserTurnMessage;
+    }
+  | undefined
+> {
+  const rewritten = await rewriteTranscriptMessageAtAnchor(params.admission, (message) => {
+    if (!isUserMessage(message)) {
+      return undefined;
+    }
+    const currentTarget = normalizePersistedSteerTargetRunId(
+      message["__openclaw"]?.steerTargetRunId,
+    );
+    return currentTarget === params.targetRunId
+      ? undefined
+      : rewritePersistedSteerTargetRunId(message, params.targetRunId);
+  });
+  if (!rewritten) {
+    return undefined;
+  }
+  const admission = { ...params.admission, generation: rewritten.generation };
+  await publishTranscriptUpdate(admission, {
+    message: rewritten.message,
+    messageId: admission.entryId,
+    messageSeq: admission.activeMessagePosition + 1,
+  });
+  return { admission, message: rewritten.message };
+}
+
 export function createUserTurnTranscriptRecorder(
   params: CreateUserTurnTranscriptRecorderParams,
 ): UserTurnTranscriptRecorder {
@@ -345,7 +380,7 @@ export function createUserTurnTranscriptRecorder(
   let admissionHandler: ((admission: UserTurnTranscriptAdmissionReceipt) => void) | undefined;
   let resolvedBeforeProvider = false;
   let replacementText: string | undefined;
-  let steerTargetRunIdOverride: string | null | undefined;
+  let confirmedSteerTargetRunId: string | undefined;
 
   const applyReplacementText = (
     candidate: PersistedUserTurnMessage | undefined,
@@ -357,7 +392,7 @@ export function createUserTurnTranscriptRecorder(
   };
 
   const applyMessageOverrides = (candidate: PersistedUserTurnMessage | undefined) =>
-    rewritePersistedSteerTargetRunId(applyReplacementText(candidate), steerTargetRunIdOverride);
+    rewritePersistedSteerTargetRunId(applyReplacementText(candidate), confirmedSteerTargetRunId);
 
   const handlePersistenceError = (error: unknown) => {
     if (params.onPersistenceError) {
@@ -569,13 +604,42 @@ export function createUserTurnTranscriptRecorder(
       message = applyMessageOverrides(message);
       resolvedMessagePromise = undefined;
     },
-    setSteerTargetRunIdForPersistence: (targetRunId) => {
-      if (persisted || runtimePersisted) {
+    confirmSteerTargetRunIdForPersistence: async (targetRunId) => {
+      const normalizedTargetRunId = normalizePersistedSteerTargetRunId(targetRunId);
+      if (!normalizedTargetRunId || confirmedSteerTargetRunId === normalizedTargetRunId) {
         return;
       }
-      steerTargetRunIdOverride = normalizePersistedSteerTargetRunId(targetRunId) ?? null;
+      confirmedSteerTargetRunId = normalizedTargetRunId;
       message = applyMessageOverrides(message);
       resolvedMessagePromise = undefined;
+
+      const pendingSelfPersistence = selfPersistencePromise;
+      await waitForRuntimePersistence();
+      await pendingSelfPersistence?.catch(() => undefined);
+      if (!admissionReceipt) {
+        return;
+      }
+      try {
+        const confirmed = await confirmPersistedSteerTargetRunId({
+          admission: admissionReceipt,
+          targetRunId: normalizedTargetRunId,
+        });
+        if (!confirmed) {
+          return;
+        }
+        admissionReceipt = confirmed.admission;
+        admittedMessage = confirmed.message;
+        runtimePersistedMessage = confirmed.message;
+        if (persistedResult) {
+          persistedResult = {
+            ...persistedResult,
+            admission: confirmed.admission,
+            message: confirmed.message,
+          };
+        }
+      } catch (error) {
+        handlePersistenceError(error);
+      }
     },
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,

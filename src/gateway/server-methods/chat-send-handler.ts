@@ -222,10 +222,6 @@ async function handleChatSendWithOptions(
       return;
     }
     messageInjectionAttempt = preAckInjection.attempt;
-    if (!messageInjectionAttempt) {
-      userTurnRecorder.setSteerTargetRunIdForPersistence?.(undefined);
-    }
-
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
           receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),

@@ -41,7 +41,6 @@ export function buildPersistedUserTurnMetadata(
   const replyToId = normalizeOptionalString(input.replyToId);
   const replyPreviewText = normalizeOptionalString(input.replyToPreview?.text);
   const replyPreviewSender = normalizeOptionalString(input.replyToPreview?.senderLabel);
-  const steerTargetRunId = normalizePersistedSteerTargetRunId(input.steerTargetRunId);
   return {
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
@@ -68,7 +67,6 @@ export function buildPersistedUserTurnMetadata(
         }
       : {}),
     ...(input.transport ? { transport: input.transport } : {}),
-    ...(steerTargetRunId ? { steerTargetRunId } : {}),
     ...(normalizedMedia.length > 0 ? { media: normalizedMedia } : {}),
     ...(input.mediaImageLayout
       ? {
