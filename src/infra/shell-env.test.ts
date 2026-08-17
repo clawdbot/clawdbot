@@ -336,101 +336,97 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
-  it("caches login-shell env probe failures for repeated fallback reads", () => {
+  it("retries a failed login-shell env probe when the shell recovers", () => {
     const env: NodeJS.ProcessEnv = {};
     const logger = { warn: vi.fn() };
-    const exec = vi.fn(() => {
-      throw new Error("shell unavailable");
+    const exec = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("shell unavailable");
+      })
+      .mockImplementationOnce(() => Buffer.from("OPENAI_API_KEY=from-shell\0"));
+    const opts = {
+      enabled: true,
+      env,
+      expectedKeys: ["OPENAI_API_KEY"],
+      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      logger,
+    };
+
+    expect(loadShellEnvFallback(opts)).toEqual({
+      ok: false,
+      applied: [],
+      error: "shell unavailable",
     });
-
-    for (let i = 0; i < 2; i += 1) {
-      const result = loadShellEnvFallback({
-        enabled: true,
-        env,
-        expectedKeys: ["OPENAI_API_KEY"],
-        exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
-        logger,
-      });
-      expect(result).toEqual({
-        ok: false,
-        applied: [],
-        error: "shell unavailable",
-      });
-    }
-
-    expect(exec).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(loadShellEnvFallback(opts)).toEqual({
+      ok: true,
+      applied: ["OPENAI_API_KEY"],
+    });
+    expect(env.OPENAI_API_KEY).toBe("from-shell");
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     {
       name: "successful",
       oldest: Buffer.from("PROBE_RESULT=oldest\0"),
-      newest: new Error("newest failure"),
-      refreshOldest: false,
-    },
-    {
-      name: "failed",
-      oldest: new Error("oldest failure"),
       newest: Buffer.from("PROBE_RESULT=newest\0"),
       refreshOldest: false,
     },
     {
       name: "recent successful",
       oldest: Buffer.from("PROBE_RESULT=oldest\0"),
-      newest: new Error("newest failure"),
-      refreshOldest: true,
-    },
-    {
-      name: "recent failed",
-      oldest: new Error("oldest failure"),
       newest: Buffer.from("PROBE_RESULT=newest\0"),
       refreshOldest: true,
     },
-  ])("bounds $name probe entries with LRU eviction", ({ oldest, newest, refreshOldest }) => {
-    const logger = { warn: vi.fn() };
-    const makeExec = (outcome: Buffer | Error) =>
-      vi.fn(() => {
-        if (outcome instanceof Error) {
-          throw outcome;
-        }
-        return outcome;
-      });
-    const runProbe = (exec: ReturnType<typeof vi.fn>) =>
-      runShellEnvFallback({
-        enabled: true,
-        env: {},
-        expectedKeys: ["PROBE_RESULT"],
-        exec,
-        logger,
-      });
-    const oldestExec = makeExec(oldest);
-    const oldestFillerExec = makeExec(Buffer.from("PROBE_RESULT=filler-0\0"));
-    const fillerExecs = [
-      oldestFillerExec,
-      ...Array.from({ length: 62 }, (_, index) =>
-        makeExec(Buffer.from(`PROBE_RESULT=filler-${index + 1}\0`)),
-      ),
-    ];
-    const newestExec = makeExec(newest);
+  ])(
+    "bounds $name successful probe entries with LRU eviction",
+    ({ oldest, newest, refreshOldest }) => {
+      const logger = { warn: vi.fn() };
+      const makeExec = (outcome: Buffer | Error) =>
+        vi.fn(() => {
+          if (outcome instanceof Error) {
+            throw outcome;
+          }
+          return outcome;
+        });
+      const runProbe = (exec: ReturnType<typeof vi.fn>) =>
+        runShellEnvFallback({
+          enabled: true,
+          env: {},
+          expectedKeys: ["PROBE_RESULT"],
+          exec,
+          logger,
+        });
+      const oldestExec = makeExec(oldest);
+      const oldestFillerExec = makeExec(Buffer.from("PROBE_RESULT=filler-0\0"));
+      const fillerExecs = [
+        oldestFillerExec,
+        ...Array.from({ length: 62 }, (_, index) =>
+          makeExec(Buffer.from(`PROBE_RESULT=filler-${index + 1}\0`)),
+        ),
+      ];
+      const newestExec = makeExec(newest);
 
-    for (const exec of [oldestExec, ...fillerExecs]) {
-      runProbe(exec);
-    }
-    if (refreshOldest) {
+      for (const exec of [oldestExec, ...fillerExecs]) {
+        runProbe(exec);
+      }
+      if (refreshOldest) {
+        runProbe(oldestExec);
+      }
+      runProbe(newestExec);
+      runProbe(newestExec);
       runProbe(oldestExec);
-    }
-    runProbe(newestExec);
-    runProbe(newestExec);
-    runProbe(oldestExec);
 
-    expect(newestExec).toHaveBeenCalledOnce();
-    expect(oldestExec).toHaveBeenCalledTimes(refreshOldest ? 1 : 2);
-    if (refreshOldest) {
-      runProbe(oldestFillerExec);
-      expect(oldestFillerExec).toHaveBeenCalledTimes(2);
-    }
-  });
+      expect(newestExec).toHaveBeenCalledOnce();
+      expect(oldestExec).toHaveBeenCalledTimes(refreshOldest ? 1 : 2);
+      if (refreshOldest) {
+        runProbe(oldestFillerExec);
+        expect(oldestFillerExec).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
 
   it("tracks last applied keys across success, skip, and failure paths", () => {
     const successEnv: NodeJS.ProcessEnv = {};

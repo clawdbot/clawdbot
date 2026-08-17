@@ -20,9 +20,7 @@ let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 let cachedEtcShells: Set<string> | null | undefined;
 let nextExecCacheId = 1;
-type CachedLoginShellEnvProbeResult =
-  | { ok: true; entries: Array<[string, string]> }
-  | { ok: false; error: string };
+type CachedLoginShellEnvProbeResult = { entries: Array<[string, string]> };
 const loginShellEnvProbeCache = new Map<string, CachedLoginShellEnvProbeResult>();
 const LOGIN_SHELL_ENV_CACHE_LIMIT = 64;
 const execCacheIds = new WeakMap<object, number>();
@@ -173,8 +171,8 @@ type LoginShellEnvProbeResult =
   | { ok: true; shellEnv: Map<string, string> }
   | { ok: false; error: string };
 
-function cacheLoginShellEnvProbe(cacheKey: string, result: CachedLoginShellEnvProbeResult): void {
-  loginShellEnvProbeCache.set(cacheKey, result);
+function cacheLoginShellEnvProbe(cacheKey: string, entries: Array<[string, string]>): void {
+  loginShellEnvProbeCache.set(cacheKey, { entries });
   pruneMapToMaxSize(loginShellEnvProbeCache, LOGIN_SHELL_ENV_CACHE_LIMIT);
 }
 
@@ -205,18 +203,16 @@ function probeLoginShellEnv(params: {
     // colder entries when the shared insertion-order pruning helper enforces the bound.
     loginShellEnvProbeCache.delete(cacheKey);
     loginShellEnvProbeCache.set(cacheKey, cached);
-    return cached.ok ? { ok: true, shellEnv: new Map(cached.entries) } : cached;
+    return { ok: true, shellEnv: new Map(cached.entries) };
   }
 
   try {
     const stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
     const shellEnv = parseShellEnv(stdout);
-    cacheLoginShellEnvProbe(cacheKey, { ok: true, entries: [...shellEnv.entries()] });
+    cacheLoginShellEnvProbe(cacheKey, [...shellEnv.entries()]);
     return { ok: true, shellEnv };
   } catch (err) {
-    const result = { ok: false as const, error: formatErrorMessage(err) };
-    cacheLoginShellEnvProbe(cacheKey, result);
-    return result;
+    return { ok: false as const, error: formatErrorMessage(err) };
   }
 }
 
