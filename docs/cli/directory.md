@@ -19,8 +19,9 @@ Results are meant to be pasted into other commands, especially `openclaw message
 - `--json`: output JSON
 
 Default output renders IDs and names in a table. Empty list results name the channel and account
-that were queried; JSON list output uses an empty array (`[]`). Failures exit nonzero and use an
-`{ "error": "..." }` object in JSON mode.
+that were queried; JSON list output uses an empty array (`[]`). Failures exit nonzero and use the
+canonical `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` envelope in
+JSON mode.
 
 ## Notes
 
