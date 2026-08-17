@@ -353,10 +353,9 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
     workspaceOnly: input.effectiveFsWorkspaceOnly,
-    localRoots:
-      input.effectiveFsWorkspaceOnly
-        ? undefined
-        : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.mediaOwnerAgentId),
+    localRoots: input.effectiveFsWorkspaceOnly
+      ? undefined
+      : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.mediaOwnerAgentId),
     sandbox:
       input.sandbox?.enabled && input.sandbox.fsBridge
         ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
