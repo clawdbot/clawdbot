@@ -200,8 +200,8 @@ describe("memory-core plugin runtime registration", () => {
       };
     };
     expect(ownerTool).toMatchObject({ name: "intent" });
-    expect(ownerTool.parameters?.properties?.scope?.default).toBe("anywhere");
-    expect(ownerTool.parameters?.properties?.senderScope?.default).toBe("anyone");
+    expect(ownerTool.parameters?.properties?.scope?.default).toBe("channel");
+    expect(ownerTool.parameters?.properties?.senderScope?.default).toBe("sender");
     expect(warn).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("owner authorization"));
   });

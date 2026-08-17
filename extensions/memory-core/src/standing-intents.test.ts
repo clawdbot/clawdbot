@@ -81,7 +81,6 @@ describe("standing intents", () => {
   it("creates, lists, and explicitly cancels through the agent tool", async () => {
     const tool = createStandingIntentTool({
       agentId: "main",
-      creatorPrincipal: "alice",
       sourceSessionId: "session-1",
       conversationId: "qa-dm-5",
       provider: "qa-channel",
@@ -111,7 +110,7 @@ describe("standing intents", () => {
     );
     expect(tool.description).toContain("system injects the reminder automatically");
     expect(tool.description).toContain(
-      'Use "channel" for any "whenever I mention X" request when channel identity is available.',
+      'Use "channel" (the default) for any "whenever I mention X" request.',
     );
     expect(tool.description).toContain(
       'Use "conversation" only when the user explicitly limits the reminder to the current thread.',
@@ -132,7 +131,6 @@ describe("standing intents", () => {
   it("injects owner-created intents and skips rows without a known creator", async () => {
     const tool = createStandingIntentTool({
       agentId: "main",
-      creatorPrincipal: "owner-1",
       conversationId: "qa-dm-5",
       provider: "qa-channel",
       senderId: "owner-1",
@@ -193,7 +191,6 @@ describe("standing intents", () => {
   it("derives typed conversation, channel, anywhere, sender, and anyone scopes", async () => {
     const tool = createStandingIntentTool({
       agentId: "main",
-      creatorPrincipal: "alice",
       conversationId: "QA-DM-5",
       provider: "QA-CHANNEL",
       senderId: "alice",
@@ -248,27 +245,30 @@ describe("standing intents", () => {
     expect(anywhereResult.message).toContain("Intent is armed everywhere.");
   });
 
-  it("creates a durable owner intent without channel or sender identity", async () => {
-    const tool = createStandingIntentTool({ agentId: "main", creatorPrincipal: "owner" });
+  it("refuses senderless creation instead of exposing it to unrelated channel users", async () => {
+    const tool = createStandingIntentTool({ agentId: "main" });
 
     expect(parseToolJson(await tool.execute("list-empty", { action: "list" }))).toEqual({
       intents: [],
     });
-    const created = parseToolJson(
-      await tool.execute("create-default", {
+    await expect(
+      tool.execute("create-default", {
         action: "create",
         description: "Identity-free reminder.",
         triggerKeywords: ["identity free"],
       }),
-    ).intent;
+    ).rejects.toThrow("authenticated channel and sender identity is unavailable");
 
-    expect(created).toMatchObject({
-      channelScope: null,
-      senderScope: null,
-      creatorSender: "owner",
-      status: "armed",
-    });
-    expect(listStandingIntents({ agentId: "main" })).toHaveLength(1);
+    expect(listStandingIntents({ agentId: "main" })).toEqual([]);
+    expect(
+      matchStandingIntents({
+        agentId: "main",
+        prompt: "identity free",
+        provider: "qa-channel",
+        channel: "unrelated-room",
+        senderId: "unrelated-user",
+      }),
+    ).toEqual([]);
   });
 
   it("applies scope, cooldown, fire-budget, and expiry transitions", () => {

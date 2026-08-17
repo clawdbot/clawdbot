@@ -163,8 +163,6 @@ function createLazyStandingIntentTool(
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
   const provider = ctx.messageChannel?.trim();
   const senderId = ctx.requesterSenderId?.trim();
-  const defaultScope = provider ? "channel" : "anywhere";
-  const defaultSenderScope = provider && senderId ? "sender" : "anyone";
   if (!cfg) {
     reportUnavailable("runtime config is unavailable for this turn");
     return null;
@@ -179,7 +177,6 @@ function createLazyStandingIntentTool(
     toolPromise ??= loadStandingIntentToolModule().then((module: StandingIntentToolModule) =>
       module.createStandingIntentTool({
         agentId,
-        creatorPrincipal: senderId || "owner",
         ...(ctx.sessionId ? { sourceSessionId: ctx.sessionId } : {}),
         ...(ctx.nativeChannelId ? { conversationId: ctx.nativeChannelId } : {}),
         ...(provider ? { provider } : {}),
@@ -204,12 +201,12 @@ function createLazyStandingIntentTool(
         scope: {
           type: "string",
           enum: ["conversation", "channel", "anywhere"],
-          default: defaultScope,
+          default: "channel",
         },
         senderScope: {
           type: "string",
           enum: ["sender", "anyone"],
-          default: defaultSenderScope,
+          default: "sender",
         },
         expiresAt: { type: "string" },
         maxFires: { type: "integer", minimum: 1 },
