@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Telegram plugin module implements bot native commands behavior.
 import { resolveAgentScopedOutboundMediaAccess } from "openclaw/plugin-sdk/media-local-roots";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export {
   ensureConfiguredBindingRouteReady,
@@ -26,13 +26,15 @@ export function resolveNativeCommandOutboundMediaRoots(params: {
   route: { agentId: string; sessionKey: string; accountId: string };
   auth: { isGroup: boolean; chatId: number; senderId?: string };
 }): readonly string[] {
-  return resolveAgentScopedOutboundMediaAccess({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    sessionKey: params.route.sessionKey,
-    messageProvider: "telegram",
-    accountId: params.route.accountId,
-    groupId: params.auth.isGroup ? String(params.auth.chatId) : undefined,
-    requesterSenderId: params.auth.senderId,
-  }).localRoots ?? [];
+  return (
+    resolveAgentScopedOutboundMediaAccess({
+      cfg: params.cfg,
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      messageProvider: "telegram",
+      accountId: params.route.accountId,
+      groupId: params.auth.isGroup ? String(params.auth.chatId) : undefined,
+      requesterSenderId: params.auth.senderId,
+    }).localRoots ?? []
+  );
 }
