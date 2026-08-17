@@ -21,7 +21,8 @@ const expectedColdOpenOutcomes: Record<string, ColdOpenOutcome> = {
   Review: { outcome: "generic-empty", emptyStateOffersAction: false },
   Terminal: { outcome: "content", emptyStateOffersAction: false },
   Browser: { outcome: "generic-empty", emptyStateOffersAction: true },
-  Files: { outcome: "generic-empty", emptyStateOffersAction: false },
+  // Files deliberately defaults to the project browser when the session has no items.
+  Files: { outcome: "content", emptyStateOffersAction: false },
   "Side chat": { outcome: "generic-empty", emptyStateOffersAction: false },
   Tasks: { outcome: "generic-empty", emptyStateOffersAction: false },
   Desktop: { outcome: "content", emptyStateOffersAction: false },
