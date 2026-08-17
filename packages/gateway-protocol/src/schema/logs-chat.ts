@@ -207,7 +207,7 @@ export const ChatDeltaEventSchema = closedObject({
   usage: Type.Optional(Type.Unknown()),
 });
 
-/** Successful terminal event for a completed chat run. */
+/** Successful terminal event for a completed or explicitly queued chat run. */
 export const ChatFinalEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("final"),
@@ -215,6 +215,8 @@ export const ChatFinalEventSchema = closedObject({
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),
   yielded: Type.Optional(Type.Literal(true)),
+  /** This client run ended after its prompt was accepted for a later queue drain. */
+  queued: Type.Optional(Type.Literal(true)),
 });
 
 /** Terminal event for user-initiated or coordinator-initiated cancellation. */

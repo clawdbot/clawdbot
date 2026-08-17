@@ -503,6 +503,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           runId: clientRunId,
           sessionKey,
           agentId,
+          queued: true,
         });
       }
     })

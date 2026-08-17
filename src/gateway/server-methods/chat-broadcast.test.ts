@@ -68,6 +68,28 @@ describe("chat terminal broadcasts", () => {
     expect(context.agentRunSeq.has("run-1")).toBe(false);
   });
 
+  it("marks queue-admission finals without changing terminal delivery", () => {
+    const { context } = createContext();
+
+    broadcastChatFinal({
+      context,
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      queued: true,
+    });
+
+    const payload = context.broadcast.mock.calls[0]?.[1];
+    expect(payload).toEqual({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      seq: 1,
+      state: "final",
+      message: undefined,
+      queued: true,
+    });
+    expect(context.nodeSendToSession).toHaveBeenCalledWith("agent:main:main", "chat", payload);
+  });
+
   it("emits canonical error payloads without message or agentId", () => {
     const { context } = createContext(2);
 

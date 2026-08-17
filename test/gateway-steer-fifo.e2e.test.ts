@@ -36,6 +36,7 @@ type GatewayFixture = {
   events: AgentEvent[];
   chatErrors: Array<{ errorMessage?: string; runId?: string; state: "error" }>;
   chatFinalRunIds: string[];
+  queuedChatFinalRunIds: string[];
   sessionKey: string;
   steeringTools?: SteeringToolsFixture;
 };
@@ -531,6 +532,7 @@ async function createGatewayFixture(
   const events: AgentEvent[] = [];
   const chatErrors: Array<{ errorMessage?: string; runId?: string; state: "error" }> = [];
   const chatFinalRunIds: string[] = [];
+  const queuedChatFinalRunIds: string[] = [];
   const client = new GatewayChatClient({
     url: instance.url,
     token: "steer-fifo-token",
@@ -542,7 +544,12 @@ async function createGatewayFixture(
       events.push(agentEvent);
     }
     if (event === "chat" && payload && typeof payload === "object") {
-      const chat = payload as { errorMessage?: unknown; runId?: unknown; state?: unknown };
+      const chat = payload as {
+        errorMessage?: unknown;
+        queued?: unknown;
+        runId?: unknown;
+        state?: unknown;
+      };
       if (chat.state === "error") {
         chatErrors.push({
           state: "error",
@@ -553,6 +560,9 @@ async function createGatewayFixture(
         });
       } else if (chat.state === "final" && typeof chat.runId === "string") {
         chatFinalRunIds.push(chat.runId);
+        if (chat.queued === true) {
+          queuedChatFinalRunIds.push(chat.runId);
+        }
       }
     }
   };
@@ -568,6 +578,7 @@ async function createGatewayFixture(
     events,
     chatErrors,
     chatFinalRunIds,
+    queuedChatFinalRunIds,
     sessionKey: `agent:main:${name}`,
     ...(steeringTools ? { steeringTools } : {}),
   };
@@ -732,6 +743,7 @@ async function queueOrdinaryFollowup(
   expect(result).toMatchObject({ runId, status: "started" });
   await vi.waitFor(() => {
     expect(fixture.chatFinalRunIds).toContain(runId);
+    expect(fixture.queuedChatFinalRunIds).toContain(runId);
     expect(fixture.modelServer.requests).toHaveLength(1);
   }, WAIT_OPTS);
 }

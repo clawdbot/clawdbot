@@ -19739,6 +19739,7 @@ public struct ChatFinalEvent: Codable, Sendable {
     public let usage: AnyCodable?
     public let stopreason: String?
     public let yielded: Bool?
+    public let queued: Bool?
 
     public init(
         runid: String,
@@ -19750,7 +19751,8 @@ public struct ChatFinalEvent: Codable, Sendable {
         message: AnyCodable? = nil,
         usage: AnyCodable? = nil,
         stopreason: String? = nil,
-        yielded: Bool? = nil)
+        yielded: Bool? = nil,
+        queued: Bool? = nil)
     {
         self.runid = runid
         self.sessionkey = sessionkey
@@ -19762,6 +19764,7 @@ public struct ChatFinalEvent: Codable, Sendable {
         self.usage = usage
         self.stopreason = stopreason
         self.yielded = yielded
+        self.queued = queued
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -19775,6 +19778,7 @@ public struct ChatFinalEvent: Codable, Sendable {
         case usage
         case stopreason = "stopReason"
         case yielded
+        case queued
     }
 }
 

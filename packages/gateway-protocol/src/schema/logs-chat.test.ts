@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   ChatEventSchema,
+  ChatFinalEventSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
   ChatStatusEventSchema,
@@ -14,6 +15,14 @@ const statusEvent = {
   seq: 1,
   state: "status",
   phase: "preparing_context",
+} as const;
+
+const queuedFinalEvent = {
+  runId: "run-queued",
+  sessionKey: "agent:main:main",
+  seq: 1,
+  state: "final",
+  queued: true,
 } as const;
 
 describe("ChatHistoryParamsSchema", () => {
@@ -34,6 +43,17 @@ describe("ChatStatusEventSchema", () => {
   it("rejects unknown phases and extra fields", () => {
     expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, phase: "thinking" })).toBe(false);
     expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, detail: "Loading" })).toBe(false);
+  });
+});
+
+describe("ChatFinalEventSchema", () => {
+  it("accepts an explicit queued terminal outcome", () => {
+    expect(Value.Check(ChatFinalEventSchema, queuedFinalEvent)).toBe(true);
+    expect(Value.Check(ChatEventSchema, queuedFinalEvent)).toBe(true);
+  });
+
+  it("keeps the queued marker closed to literal true", () => {
+    expect(Value.Check(ChatFinalEventSchema, { ...queuedFinalEvent, queued: false })).toBe(false);
   });
 });
 

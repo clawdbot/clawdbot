@@ -4354,6 +4354,7 @@ describe("gateway server chat", () => {
             runId: "idem-queued-followup",
             sessionKey: "agent:main:main",
             state: "final",
+            queued: true,
           }),
           { sessionKeys: ["agent:main:main"] },
         );
@@ -4454,7 +4455,7 @@ describe("gateway server chat", () => {
           (payload as { runId?: string }).runId === "idem-queued-followup-post-error",
       );
       expect(acceptedErrorEvents).toHaveLength(1);
-      expect(acceptedErrorEvents[0]?.[1]).toMatchObject({ state: "final" });
+      expect(acceptedErrorEvents[0]?.[1]).toMatchObject({ state: "final", queued: true });
       expect(context.dedupe.get("chat:idem-queued-followup-post-error")).toMatchObject({
         ok: true,
         payload: { status: "ok" },

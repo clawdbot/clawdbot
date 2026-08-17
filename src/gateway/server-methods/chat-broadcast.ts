@@ -93,7 +93,7 @@ type ChatBroadcastParams = {
 };
 
 type ChatTerminal =
-  | { state: "final"; message?: Record<string, unknown> }
+  | { state: "final"; message?: Record<string, unknown>; queued?: true }
   | { state: "error"; errorMessage?: string };
 
 function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
@@ -101,7 +101,11 @@ function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void
   const payloadAgentId = parseAgentSessionKey(params.sessionKey) ? undefined : params.agentId;
   const terminal =
     params.state === "final"
-      ? { state: params.state, message: projectChatDisplayMessage(params.message) }
+      ? {
+          state: params.state,
+          message: projectChatDisplayMessage(params.message),
+          ...(params.queued ? { queued: true as const } : {}),
+        }
       : { state: params.state, errorMessage: params.errorMessage };
   const payload = {
     runId: params.runId,
@@ -128,7 +132,7 @@ function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void
 }
 
 export function broadcastChatFinal(
-  params: ChatBroadcastParams & { message?: Record<string, unknown> },
+  params: ChatBroadcastParams & { message?: Record<string, unknown>; queued?: true },
 ): void {
   broadcastChatTerminal({ ...params, state: "final" });
 }

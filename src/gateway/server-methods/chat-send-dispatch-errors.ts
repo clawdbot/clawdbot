@@ -135,6 +135,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
           runId: clientRunId,
           sessionKey,
           agentId,
+          queued: true,
         });
       }
       return;
