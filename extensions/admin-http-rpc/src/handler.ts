@@ -109,11 +109,10 @@ function statusForBodyErrorCode(code: RequestBodyLimitFailureCode): number {
 
 async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResult> {
   const body = await readJsonBodyWithLimit(req, {
-    ...WEBHOOK_BODY_READ_DEFAULTS.postAuth,
+    // Admin responses are part of the client contract. The response-first profile
+    // defers destruction so closeRequestAfterResponse can flush the JSON error.
+    ...WEBHOOK_BODY_READ_DEFAULTS.postAuthResponseFirst,
     emptyObjectOnEmpty: false,
-    // Admin responses are part of the client contract. Defer destruction so
-    // closeRequestAfterResponse can flush the JSON error before closing.
-    destroyOnLimit: false,
   });
   if (body.ok) {
     return body;

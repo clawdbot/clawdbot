@@ -36,6 +36,11 @@ export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
     maxBytes: 1024 * 1024,
     timeoutMs: 30_000,
   },
+  postAuthResponseFirst: {
+    maxBytes: 1024 * 1024,
+    timeoutMs: 30_000,
+    destroyOnLimit: false,
+  },
 });
 
 /** Default in-flight concurrency limits for webhook request pipelines. */
