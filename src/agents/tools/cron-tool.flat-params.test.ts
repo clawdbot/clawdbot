@@ -288,24 +288,38 @@ describe("cron tool flat-params", () => {
     expect(prepared.job?.payload?.toolsAllow).toBe("");
   });
 
-  it("rejects wake-only mode on add and update calls", () => {
-    const tool = createCronTool();
+  it("rejects wake-only mode on add and update calls", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
     for (const action of ["add", "update"] as const) {
       expect(() => tool.prepareArguments?.({ action, mode: "now" })).toThrow(
         '"mode" is only valid for action="wake"',
       );
     }
-    expect(() =>
-      tool.prepareArguments?.({
+
+    const nestedCalls = [
+      {
         action: "add",
         mode: "now",
         job: {
           schedule: { kind: "every", everyMs: 60_000 },
           payload: { kind: "agentTurn", message: "Run the report" },
         },
-      }),
-    ).not.toThrow();
+      },
+      {
+        action: "update",
+        id: "job-1",
+        mode: "now",
+        job: { enabled: false },
+      },
+    ] as const;
+    for (const args of nestedCalls) {
+      expect(() => tool.prepareArguments?.(args)).toThrow('"mode" is only valid for action="wake"');
+      await expect(tool.execute(`call-nested-mode-${args.action}`, args)).rejects.toThrow(
+        '"mode" is only valid for action="wake"',
+      );
+    }
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("recovers flat script payload fields before agent-turn hints", async () => {

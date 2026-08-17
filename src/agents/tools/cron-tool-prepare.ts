@@ -38,7 +38,7 @@ export function prepareCronToolArguments(args: unknown): Record<string, unknown>
     return next;
   }
   const nestedJob = hasNestedJob(next.job) ? next.job : undefined;
-  if (Object.hasOwn(next, "mode") && !nestedJob) {
+  if (Object.hasOwn(next, "mode")) {
     throw new Error(
       '"mode" is only valid for action="wake"; use nested job fields for cron delivery or streams.',
     );
