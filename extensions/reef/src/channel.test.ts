@@ -44,6 +44,7 @@ describe("Reef inbound dispatch content", () => {
         ReefProvenance: "Untrusted third-party data from @clanky's agent.",
         ReefEnvelopeId: "message-1",
         SenderIsBot: true,
+        MessageThreadId: "message-1",
       },
     });
   });
@@ -65,6 +66,53 @@ describe("Reef inbound dispatch content", () => {
       ReplyToIdFull: "message-1",
       MessageThreadId: "thread-1",
     });
+  });
+});
+
+describe("Reef message-tool threading", () => {
+  it("keeps contextual replies on the inbound message thread", () => {
+    const threading = reefPlugin.threading;
+    if (!threading?.buildToolContext || !threading.resolveAutoThreadId) {
+      throw new Error("expected Reef threading adapter");
+    }
+    const toolContext = threading.buildToolContext({
+      cfg: {},
+      accountId: "default",
+      context: {
+        Channel: "reef",
+        To: "reef:remote-agent",
+        ChatType: "direct",
+        CurrentMessageId: "message-1",
+        ReplyToMode: "all",
+        MessageThreadId: "message-1",
+      },
+    });
+
+    expect(toolContext).toMatchObject({
+      currentChannelId: "reef:remote-agent",
+      currentMessagingTarget: "reef:remote-agent",
+      currentMessageId: "message-1",
+      currentThreadTs: "message-1",
+      replyToMode: "all",
+    });
+    expect(
+      threading.resolveAutoThreadId({
+        cfg: {},
+        accountId: "default",
+        to: "@remote-agent",
+        toolContext,
+        replyToId: "message-1",
+      }),
+    ).toBe("message-1");
+    expect(
+      threading.resolveAutoThreadId({
+        cfg: {},
+        accountId: "default",
+        to: "reef:another-agent",
+        toolContext,
+        replyToId: "message-1",
+      }),
+    ).toBeUndefined();
   });
 });
 

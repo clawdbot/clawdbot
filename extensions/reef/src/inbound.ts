@@ -9,7 +9,9 @@ export function resolveReefInboundDispatchContent(message: ReefIngressMessage) {
       ReefEnvelopeId: message.id,
       SenderIsBot: true,
       ...(message.replyTo ? { ReplyToId: message.replyTo, ReplyToIdFull: message.replyTo } : {}),
-      ...(message.thread ? { MessageThreadId: message.thread } : {}),
+      // Reef promotes an unthreaded exchange to the initiating envelope id.
+      // Tool replies must use the same anchor as the normal reply pipeline.
+      MessageThreadId: message.thread ?? message.id,
     },
   };
 }
