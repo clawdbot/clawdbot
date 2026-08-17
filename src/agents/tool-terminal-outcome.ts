@@ -7,7 +7,7 @@ import {
 import { extractApplyPatchTargets } from "./apply-patch-targets.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { createToolErrorState } from "./tool-error-state.js";
-import type { ToolErrorSummary } from "./tool-error-summary.js";
+import type { ToolErrorSummary, ToolRecoverySummary } from "./tool-error-summary.js";
 import type { FileTarget } from "./tool-mutation.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 
@@ -57,6 +57,7 @@ export function createToolTerminalObserver(
       (mutation.fileTarget ? [mutation.fileTarget] : undefined);
 
     let lastToolError: ToolErrorSummary | undefined;
+    let lastToolRecovery: ToolRecoverySummary | undefined;
     if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
       const failure: ToolErrorSummary = {
@@ -83,15 +84,19 @@ export function createToolTerminalObserver(
         ...(mutation.actionFingerprint ? { actionFingerprint: mutation.actionFingerprint } : {}),
       };
       for (const fileTarget of fileTargets ?? [undefined]) {
-        lastToolError = errors.recordSuccess({
+        const successState = errors.recordSuccess({
           ...success,
           ...(fileTarget ? { fileTarget } : {}),
         });
+        lastToolError = successState.kind === "unresolved" ? successState.lastToolError : undefined;
+        lastToolRecovery =
+          successState.kind === "recovered" ? successState.lastToolRecovery : undefined;
       }
     }
 
     return {
       ...(lastToolError ? { lastToolError } : {}),
+      ...(lastToolRecovery ? { lastToolRecovery } : {}),
       executionStarted,
       ...(executedArguments ? { executedArguments } : {}),
       sideEffectEvidence: executionStarted && !mutation.replaySafe,

@@ -1,22 +1,31 @@
-import type { ToolErrorSummary } from "./tool-error-summary.js";
+import type { ToolErrorSummary, ToolRecoverySummary } from "./tool-error-summary.js";
 import { isSameToolMutationAction } from "./tool-mutation.js";
+
+type ToolSuccessState =
+  | { kind: "clear" }
+  | { kind: "recovered"; lastToolRecovery: ToolRecoverySummary }
+  | { kind: "unresolved"; lastToolError: ToolErrorSummary };
 
 type ToolErrorState = {
   recordFailure: (failure: ToolErrorSummary) => ToolErrorSummary;
   recordSuccess: (
     success: Pick<ToolErrorSummary, "toolName" | "meta" | "actionFingerprint" | "fileTarget">,
-  ) => ToolErrorSummary | undefined;
+  ) => ToolSuccessState;
 };
 
 /** Keep attempt-local mutation recovery state outside the public error summary. */
 export function createToolErrorState(): ToolErrorState {
   let nonMutatingFailure: ToolErrorSummary | undefined;
   let unresolvedMutations: ToolErrorSummary[] = [];
+  // Latch recovery through later successes until terminal payload assembly.
+  // A later failure supersedes it; clearing on reads would lose the retry receipt.
+  let lastToolRecovery: ToolRecoverySummary | undefined;
 
   const current = () => unresolvedMutations.at(-1) ?? nonMutatingFailure;
 
   return {
     recordFailure(failure) {
+      lastToolRecovery = undefined;
       if (failure.mutatingAction !== true) {
         if (unresolvedMutations.length === 0) {
           nonMutatingFailure = failure;
@@ -36,12 +45,21 @@ export function createToolErrorState(): ToolErrorState {
     recordSuccess(success) {
       if (unresolvedMutations.length === 0) {
         nonMutatingFailure = undefined;
-        return undefined;
+        return lastToolRecovery ? { kind: "recovered", lastToolRecovery } : { kind: "clear" };
       }
+      const unresolvedCount = unresolvedMutations.length;
       unresolvedMutations = unresolvedMutations.filter(
         (entry) => !isSameToolMutationAction(entry, success),
       );
-      return current();
+      const unresolved = current();
+      if (unresolved) {
+        return { kind: "unresolved", lastToolError: unresolved };
+      }
+      if (unresolvedMutations.length < unresolvedCount) {
+        lastToolRecovery = { toolName: success.toolName };
+        return { kind: "recovered", lastToolRecovery };
+      }
+      return { kind: "clear" };
     },
   };
 }

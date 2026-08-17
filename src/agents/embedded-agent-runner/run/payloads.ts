@@ -23,6 +23,7 @@ import {
   isSilentReplyPayloadText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
+import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -54,7 +55,7 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
-import type { ToolErrorSummary } from "../../tool-error-summary.js";
+import type { ToolErrorSummary, ToolRecoverySummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
 import { hasExplicitMutatingToolFailureAcknowledgement } from "./tool-failure-acknowledgement.js";
@@ -136,6 +137,7 @@ export function buildEmbeddedRunPayloads(params: {
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
+  lastToolRecovery?: ToolRecoverySummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   isHeartbeatTrigger?: boolean;
@@ -410,6 +412,12 @@ export function buildEmbeddedRunPayloads(params: {
     if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
       hasUserFacingFailureAcknowledgement = true;
     }
+  }
+  if (params.lastToolRecovery) {
+    const toolLabel = formatToolAggregate(params.lastToolRecovery.toolName, undefined, {
+      markdown: useMarkdown,
+    });
+    replyItems.push({ text: `✅ ${toolLabel} succeeded after retry.` });
   }
   if (params.lastToolError) {
     // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
