@@ -9,6 +9,9 @@ import {
 import type { SessionLinkHovercardProvider } from "./session-link-hovercard.runtime.ts";
 
 const HOVERCARD_TAG = "openclaw-session-link-hovercard-provider";
+const SESSION_LINK_SELECTOR = "a.markdown-session-link";
+
+let bootstrapObserver: MutationObserver | null = null;
 
 type HovercardProviderElement = HTMLElement & {
   client: GatewayBrowserClient | null;
@@ -19,9 +22,11 @@ function providerForAnchor(anchor: HTMLAnchorElement): SessionLinkHovercardProvi
   return anchor.closest<SessionLinkHovercardProvider>(HOVERCARD_TAG);
 }
 
-function removeBootstrapListeners(): void {
+function removeBootstrapActivation(): void {
   document.removeEventListener("pointerover", handleBootstrapPointerOver, true);
   document.removeEventListener("focusin", handleBootstrapFocusIn, true);
+  bootstrapObserver?.disconnect();
+  bootstrapObserver = null;
 }
 
 async function defineProvider(): Promise<void> {
@@ -41,7 +46,21 @@ async function defineProvider(): Promise<void> {
       provider.context = properties.context;
     }
   });
-  removeBootstrapListeners();
+  removeBootstrapActivation();
+}
+
+function handleBootstrapMutations(records: MutationRecord[]): void {
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (!(node instanceof Element)) {
+        continue;
+      }
+      if (node.matches(SESSION_LINK_SELECTOR) || node.querySelector(SESSION_LINK_SELECTOR)) {
+        void defineProvider();
+        return;
+      }
+    }
+  }
 }
 
 async function activateHovercard(event: Event, trigger: "focus" | "pointer"): Promise<void> {
@@ -77,8 +96,13 @@ function handleBootstrapFocusIn(event: Event): void {
 }
 
 if (customElements.get(HOVERCARD_TAG)) {
-  removeBootstrapListeners();
+  removeBootstrapActivation();
 } else {
   document.addEventListener("pointerover", handleBootstrapPointerOver, true);
   document.addEventListener("focusin", handleBootstrapFocusIn, true);
+  bootstrapObserver = new MutationObserver(handleBootstrapMutations);
+  bootstrapObserver.observe(document, { childList: true, subtree: true });
+  if (document.querySelector(SESSION_LINK_SELECTOR)) {
+    void defineProvider();
+  }
 }

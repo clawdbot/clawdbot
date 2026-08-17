@@ -10,6 +10,7 @@ import { i18n } from "../i18n/index.ts";
 import { SessionLinkHovercardProvider } from "./session-link-hovercard.runtime.ts";
 
 const ELEMENT_NAME = `test-openclaw-session-link-hovercard-provider-${crypto.randomUUID()}`;
+const REGISTERED_ELEMENT_NAME = "openclaw-session-link-hovercard-provider";
 const SESSION_KEY = "agent:main:research";
 
 customElements.define(ELEMENT_NAME, class extends SessionLinkHovercardProvider {});
@@ -244,5 +245,26 @@ describe("openclaw-session-link-hovercard-provider", () => {
     expect(document.querySelector(".session-link-hovercard")).toBeNull();
     expect(anchor.hasAttribute("aria-expanded")).toBe(false);
     expect(document.activeElement).toBe(anchor);
+  });
+
+  it("upgrades session chips without user interaction when they appear", async () => {
+    const request = vi.fn().mockResolvedValue(previewResponse());
+    const provider = document.createElement(REGISTERED_ELEMENT_NAME) as ProviderElement;
+    provider.client = { request } as unknown as GatewayBrowserClient;
+    provider.context = sessionContext();
+    document.body.append(provider);
+    await import("./session-link-hovercard-registration.ts");
+
+    const anchor = sessionAnchor();
+    provider.append(anchor);
+
+    await flushMutationBatch();
+    await vi.waitFor(() => {
+      expect(anchor.classList.contains("markdown-session-link--titled")).toBe(true);
+    });
+    expect(anchor.textContent).toBe("Research plan");
+    expect(anchor.title).toBe(SESSION_KEY);
+    expect(anchor.getAttribute("href")).toBe("/chat/main/research");
+    expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY });
   });
 });
