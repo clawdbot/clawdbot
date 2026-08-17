@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { validateSessionsAssignOwnerParams } from "../index.js";
 import { SessionRowSchema } from "./sessions-row.js";
 
 describe("SessionRowSchema", () => {
@@ -53,5 +54,20 @@ describe("SessionRowSchema", () => {
       sharingRole: "owner",
       restartRecoveryStatus: "tombstoned",
     });
+  });
+
+  it("keeps sessions.assignOwner target actors closed and non-empty", () => {
+    const accepted = [
+      { key: "agent:main:handoff", owner: { type: "human", id: "profile-ada" } },
+      { key: "agent:main:handoff", owner: { type: "agent", id: "research" }, agentId: "main" },
+    ];
+    const rejected = [
+      { key: "agent:main:handoff", owner: { type: "system", id: "system" } },
+      { key: "agent:main:handoff", owner: { type: "human", id: "" } },
+      { key: "agent:main:handoff", owner: { type: "human", id: "ada", label: "Ada" } },
+    ];
+
+    expect(accepted.every(validateSessionsAssignOwnerParams)).toBe(true);
+    expect(rejected.every((value) => !validateSessionsAssignOwnerParams(value))).toBe(true);
   });
 });

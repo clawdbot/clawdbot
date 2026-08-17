@@ -34,18 +34,14 @@ import type {
   SessionEntryProvenance,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
+import type { SessionToolOverrides } from "./session-tool-overrides.js";
+
+export type { SessionToolOverrides } from "./session-tool-overrides.js";
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
-
-export type SessionToolOverrides = {
-  mcpServers?: Record<string, boolean>;
-  mcpToolsDeny?: Record<string, string[]>;
-  skills?: Record<string, boolean>;
-  webSearch?: boolean;
-};
 
 export type SessionOrigin = {
   label?: string;

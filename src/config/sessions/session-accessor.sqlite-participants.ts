@@ -67,7 +67,7 @@ export function recordSessionParticipant(
             .select((builder) => builder.fn.countAll<number>().as("count"))
             .where("session_key", "=", resolved.sessionKey),
         )?.count;
-        if (Number(count ?? 0) >= MAX_SESSION_PARTICIPANTS) {
+        if ((count ?? 0) >= MAX_SESSION_PARTICIPANTS) {
           return "capped";
         }
       }
