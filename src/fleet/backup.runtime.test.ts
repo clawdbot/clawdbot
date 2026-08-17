@@ -635,6 +635,29 @@ describe("fleet restore runtime", () => {
     );
   });
 
+  it("reports when a force-stopped cell cannot be restarted after restore fails", async () => {
+    const archive = await createArchive();
+    const running = inspection(true);
+    const containers = containerMock(running);
+    containers.stop.mockImplementation(async () => {
+      running.running = false;
+      running.state = "exited";
+    });
+    containers.remove.mockRejectedValue(new Error("transient removal failure"));
+    containers.start.mockRejectedValue(new Error("restart unavailable"));
+
+    let message = "";
+    try {
+      await restoreFleetCell({ ...restoreParams(containers, archive), force: true });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/transient removal failure/iu);
+    expect(message).toMatch(/previous cell could not be restarted/iu);
+    expect(message).toMatch(/openclaw fleet start acme/iu);
+  });
+
   it("stops an unhealthy started replacement so its undelivered token cannot serve", async () => {
     const archive = await createArchive();
     const running = inspection(true);

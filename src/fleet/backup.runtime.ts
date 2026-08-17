@@ -792,7 +792,10 @@ export async function restoreFleetCell(params: {
           await params.containers.start(params.record.runtime, params.record.containerName);
         }
       } catch {
-        // Best-effort recovery; the container remains stopped but intact.
+        throw new Error(
+          `${errorMessage(error)}. The previous cell could not be restarted or verified; run \`openclaw fleet start ${params.record.tenantId}\` before retrying fleet restore.`,
+          { cause: error },
+        );
       }
     }
     throw error;
