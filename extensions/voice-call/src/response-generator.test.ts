@@ -33,7 +33,7 @@ type EmbeddedAgentArgs = {
     kind: "external_user";
     sourceChannel?: string;
   };
-  prompt?: string;
+  prompt: string;
   transcriptPrompt?: string;
   sessionKey?: string;
   sessionTarget?: {
