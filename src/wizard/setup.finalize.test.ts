@@ -141,10 +141,6 @@ const inspectWindowsGatewayFirewall = vi.hoisted(() =>
 vi.mock("../commands/onboard-helpers.js", () => ({
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
-  resolveControlUiLinks: vi.fn(() => ({
-    httpUrl: "http://127.0.0.1:18789",
-    wsUrl: "ws://127.0.0.1:18789",
-  })),
   resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 }));
@@ -1541,6 +1537,9 @@ describe("finalizeSetupWizard", () => {
 
   it("never prints the reusable Gateway token during classic onboarding", async () => {
     const prompter = createLaterPrompter();
+    const runtimeLog = vi.fn();
+    const runtimeError = vi.fn();
+    const runtime = { log: runtimeLog, error: runtimeError, exit: vi.fn() };
     probeGatewayReachable.mockResolvedValue({ ok: true });
 
     await finalizeSetupWizard({
@@ -1563,17 +1562,21 @@ describe("finalizeSetupWizard", () => {
         tailscaleMode: "off",
       },
       prompter,
-      runtime: createRuntime(),
+      runtime,
     });
 
-    const output = vi
-      .mocked(prompter.note)
-      .mock.calls.map((call) => call.join("\n"))
+    const terminalOutput = [prompter.note, prompter.outro]
+      .flatMap((writer) => vi.mocked(writer).mock.calls.flat())
       .join("\n");
-    expect(output).toContain("http://127.0.0.1:18789");
-    expect(output).toContain("openclaw dashboard --no-open");
-    expect(output).not.toContain("session-token");
-    expect(output).not.toContain("#token=");
+    const runtimeOutput = [runtimeLog, runtimeError]
+      .flatMap((writer) => writer.mock.calls.flat())
+      .join("\n");
+    expect(terminalOutput).toContain("http://127.0.0.1:18789");
+    expect(terminalOutput).toContain("openclaw dashboard --no-open");
+    for (const output of [terminalOutput, runtimeOutput]) {
+      expect(output).not.toContain("session-token");
+      expect(output).not.toContain("#token=");
+    }
   });
 
   it("stops after a scheduled restart instead of reinstalling the service", async () => {

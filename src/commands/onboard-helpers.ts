@@ -192,24 +192,16 @@ export function applyWizardMetadata(
 }
 
 /** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
-export function formatControlUiSshHint(params: {
-  port: number;
-  basePath?: string;
-  token?: string;
-}): string {
+export function formatControlUiSshHint(params: { port: number; basePath?: string }): string {
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
   const localUrl = `http://localhost:${params.port}${uiPath}`;
-  const authedUrl = params.token
-    ? `${localUrl}#token=${encodeURIComponent(params.token)}`
-    : undefined;
   const sshTarget = resolveSshTargetHint();
   return [
     "No GUI detected. Open from your computer:",
     `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
     "Then open:",
     localUrl,
-    authedUrl,
     "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
     "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     "Docs:",
