@@ -221,6 +221,12 @@ until their tool policy is explicitly edited or the job is recreated.
 
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
+Pick the model for the job's difficulty, not the agent's default. Routine
+automation - summaries, triage, classification, status checks - runs well on a
+lighter model, which is cheaper and faster per run and adds up across a
+schedule. Keep your default model for jobs that need deep reasoning, and use
+`--fallbacks` when a light primary should escalate on failure.
+
 Model-selection precedence for isolated jobs, highest first:
 
 1. Per-job payload `model` (explicit config; a disallowed model fails the run)
