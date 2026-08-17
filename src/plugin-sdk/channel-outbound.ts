@@ -133,7 +133,7 @@ export type {
 } from "../channels/streaming.js";
 export {
   createChannelProgressDraftCompositor,
-  createChannelProgressReceiptTracker,
+  createChannelProgressWorkCounter,
 } from "../channels/progress-draft-compositor.js";
 
 /** @deprecated The streaming.progress.render key was retired (#122927). */

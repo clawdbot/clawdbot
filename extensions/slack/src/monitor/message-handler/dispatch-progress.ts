@@ -3,7 +3,7 @@ import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
-  createChannelProgressReceiptTracker,
+  createChannelProgressWorkCounter,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLineChars,
@@ -124,7 +124,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     nativeStreamOrder = run.catch(() => undefined);
     return run;
   };
-  const progressReceipt = createChannelProgressReceiptTracker();
+  const progressWorkCounter = createChannelProgressWorkCounter();
   const progressSeed = `${account.accountId}:${message.channel}`;
   const useDraftProgressCard = Boolean(draftStream) && isProgressMode;
   const explicitProgressTitle = resolveExplicitSlackProgressTitle(account.config);
@@ -133,7 +133,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     setup: { account, cfg, ctx, prepared, slackClient },
     draftStream,
     enabled: useDraftProgressCard,
-    progressReceipt,
+    progressWorkCounter,
     progressSeed,
     explicitTitle: explicitProgressTitle,
     maxLineChars: progressDraftMaxLineChars,
@@ -318,7 +318,7 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
 
   const resetProgressTurnState = () => {
-    progressReceipt.reset();
+    progressWorkCounter.reset();
     nativeNarrationRenderedText = "";
     nativeNarrationSourceText = "";
   };
@@ -661,7 +661,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     suppressDefaultToolProgressMessages,
     progressDraft,
     commentaryProgressEnabled,
-    progressReceipt,
+    progressWorkCounter,
     get nativeProgressCompletionSent() {
       return nativeProgressCompletionSent;
     },
