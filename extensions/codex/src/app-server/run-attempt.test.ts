@@ -53,6 +53,7 @@ import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   buildDynamicTools,
   shouldEnableCodexAppServerNativeToolSurface,
+  shouldRequireCodexSandboxExecServerEnvironment,
 } from "./dynamic-tool-build.js";
 import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -428,6 +429,7 @@ async function buildDynamicToolsForTest(
 async function buildCodexTurnContextForTest(
   params: EmbeddedRunAttemptParams,
   workspaceDir: string,
+  options: { sandboxed?: boolean; execCwdRemapped?: boolean } = {},
 ) {
   const sessionAgentId = "main";
   const agentTools = await buildDynamicToolsForTest(params, workspaceDir);
@@ -444,6 +446,8 @@ async function buildCodexTurnContextForTest(
     sessionKey: params.sessionKey ?? params.sessionId,
     sessionAgentId,
     memoryToolNames,
+    ...(options.sandboxed === undefined ? {} : { sandboxed: options.sandboxed }),
+    ...(options.execCwdRemapped === undefined ? {} : { execCwdRemapped: options.execCwdRemapped }),
   });
   const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
@@ -3606,6 +3610,74 @@ describe("runCodexAppServerAttempt", () => {
       truncated: false,
     });
   });
+  it("injects AGENTS.md only when the exec cwd is remapped away from the host", async () => {
+    // The sandbox exec-server environment hands Codex a container workdir while
+    // the app-server resolves it on the host, so the native project-doc loader
+    // finds nothing and AGENTS.md silently never reaches the model. Every cwd
+    // Codex can still resolve must keep the native path, or the file lands
+    // twice.
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const agentsGuidance = "Follow AGENTS guidance.";
+    const soulGuidance = "Soul voice goes here.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
+    const params = createParams(sessionFile, workspaceDir);
+    setAgentWorkspaceForTest(params, workspaceDir);
+
+    const remapped = await buildCodexTurnContextForTest(params, workspaceDir, {
+      sandboxed: true,
+      execCwdRemapped: true,
+    });
+    // Sandboxed, but no exec-server environment: cwd stays the host workspace.
+    const sandboxedHostCwd = await buildCodexTurnContextForTest(params, workspaceDir, {
+      sandboxed: true,
+      execCwdRemapped: false,
+    });
+    const unsandboxed = await buildCodexTurnContextForTest(params, workspaceDir, {
+      sandboxed: false,
+      execCwdRemapped: false,
+    });
+
+    // Delivered exactly once, through the same channel as the other base files.
+    expect(remapped.collaborationInstructions).toContain(agentsGuidance);
+    expect(remapped.collaborationInstructions?.split(agentsGuidance).length).toBe(2);
+    expect(remapped.collaborationInstructions).toContain(soulGuidance);
+    // Never duplicated into the workspace prompt context.
+    expect(remapped.inputText).not.toContain(agentsGuidance);
+
+    // Both host-cwd shapes keep Codex's native project-doc path untouched.
+    for (const hostCwd of [sandboxedHostCwd, unsandboxed]) {
+      expect(hostCwd.collaborationInstructions).not.toContain(agentsGuidance);
+      expect(hostCwd.inputText).not.toContain(agentsGuidance);
+      expect(hostCwd.collaborationInstructions).toContain(soulGuidance);
+    }
+  });
+
+  it("gates the AGENTS.md fallback on the only shape that hands Codex a container cwd", () => {
+    // The fallback and the exec-server environment read one predicate, so the
+    // two cannot drift into injecting on a cwd Codex still resolves. Disabling
+    // the native tool surface keeps the host workspace cwd on every sandbox
+    // shape, which is why it must never open the fallback: the native
+    // project-doc loader is still the one delivering AGENTS.md there.
+    const sandbox = { enabled: true, backendId: "docker" } as never;
+    expect(
+      shouldRequireCodexSandboxExecServerEnvironment({
+        sandbox,
+        nativeToolSurfaceEnabled: true,
+        sandboxExecServerEnabled: true,
+      }),
+    ).toBe(true);
+    for (const hostCwdShape of [
+      { sandbox, nativeToolSurfaceEnabled: false, sandboxExecServerEnabled: true },
+      { sandbox, nativeToolSurfaceEnabled: true, sandboxExecServerEnabled: false },
+      { sandbox, nativeToolSurfaceEnabled: false, sandboxExecServerEnabled: false },
+      { sandbox: undefined, nativeToolSurfaceEnabled: true, sandboxExecServerEnabled: true },
+    ]) {
+      expect(shouldRequireCodexSandboxExecServerEnvironment(hostCwdShape)).toBe(false);
+    }
+  });
+
   it("adds memory recall guidance when dated memory notes exist without root MEMORY.md", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const datedMemory = "User avoids Chase cards while over 5/24.";
@@ -4072,8 +4144,17 @@ describe("runCodexAppServerAttempt", () => {
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
+      collaborationMode?: { settings?: { developer_instructions?: string | null } };
     };
     expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
+    // Lightweight cron keeps its context-free contract on the turn-scoped carrier too,
+    // not just on thread/start: bootstrap files are empty for this mode, so the sandbox
+    // project-doc fallback has nothing to inject even when the exec cwd is remapped.
+    // The carrier is asserted present first, so the exclusion below cannot pass vacuously.
+    const cronDeveloperInstructions = turnStartParams.collaborationMode?.settings
+      ?.developer_instructions as string;
+    expect(cronDeveloperInstructions).toContain("This is an OpenClaw cron automation turn.");
+    expect(cronDeveloperInstructions).not.toContain("Follow AGENTS guidance.");
     expect(result.systemPromptReport?.skills).toMatchObject({ promptChars: 0, entries: [] });
     expect(result.systemPromptReport?.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
   });

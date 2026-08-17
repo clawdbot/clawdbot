@@ -173,6 +173,11 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionAgentId: string;
   memoryToolNames: readonly string[];
   sandboxed?: boolean;
+  // True when the turn runs in the sandbox exec-server environment, whose cwd is
+  // a container path the host-side app-server cannot resolve. Narrower than
+  // `sandboxed`: a sandboxed run without that environment keeps the host
+  // workspace as its cwd, where Codex still loads the project doc natively.
+  execCwdRemapped?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const memoryToolsAvailable =
@@ -237,7 +242,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     const turnScopedDeveloperInstructionFiles = shouldInjectCodexOpenClawPromptContext(
       params.params,
     )
-      ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles)
+      ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(
+          contextFiles,
+          params.execCwdRemapped === true,
+        )
       : [];
     return {
       bootstrapFiles,
@@ -713,11 +721,23 @@ function selectCodexWorkspacePromptContextFiles(
 
 function selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(
   contextFiles: EmbeddedContextFile[],
+  injectNativeProjectDoc = false,
 ): EmbeddedContextFile[] {
-  return selectCodexWorkspaceDeveloperInstructionFiles(
-    contextFiles,
-    CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
-  );
+  // Codex resolves AGENTS.md itself, walking up from the thread cwd, which is
+  // why it is normally excluded here. When the turn runs in the sandbox
+  // exec-server environment, that cwd is the container workdir while the
+  // app-server resolves it on the host, so the native loader looks in a
+  // directory that does not exist there and the project doc silently never
+  // reaches the model. Inject it as a turn-scoped developer instruction in that
+  // case only; every cwd Codex can still resolve keeps the native path, so the
+  // file is delivered exactly once either way.
+  const basenames = injectNativeProjectDoc
+    ? new Set([
+        ...CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
+        ...CODEX_NATIVE_PROJECT_DOC_BASENAMES,
+      ])
+    : CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES;
+  return selectCodexWorkspaceDeveloperInstructionFiles(contextFiles, basenames);
 }
 
 function selectCodexWorkspaceDeveloperInstructionFiles(
