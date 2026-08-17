@@ -28,7 +28,7 @@ import {
   truncateUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
-import { parseCanvasSnapshotPayload } from "./cli-helpers.js";
+import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
 
 type CanvasToolOptions = {
@@ -235,7 +235,9 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           const buffer = Buffer.from(payload.base64, "base64");
           const saved = await saveMediaBuffer(
             buffer,
-            payload.format === "png" ? "image/png" : "image/jpeg",
+            normalizeCanvasSnapshotFileExtension(payload.format) === "png"
+              ? "image/png"
+              : "image/jpeg",
             "canvas",
           );
           return await imageResultFromFile({
