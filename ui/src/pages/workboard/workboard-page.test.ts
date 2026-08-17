@@ -346,4 +346,33 @@ describe("WorkboardPage lifecycle", () => {
     expect(workboard.state.draftTitle).toBe("New operations task");
     expect(workboard.state.editingCardId).toBeNull();
   });
+
+  it.each([
+    ["job-categorize-planning", true],
+    [undefined, false],
+  ])("renders the automation chip only for linked boards", async (automationJobId, visible) => {
+    const workboard = createWorkboardCapability();
+    workboard.state.boards = [
+      {
+        id: "planning",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+        ...(automationJobId ? { automationJobId } : {}),
+      },
+    ];
+    const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
+    page.context = contextWithWorkboard(workboard);
+    page.routeData = { boardFilter: "planning", search: "" };
+    document.body.append(page);
+    await page.updateComplete;
+
+    const chip = page.querySelector<HTMLAnchorElement>(".workboard-automation-chip");
+    expect(Boolean(chip)).toBe(visible);
+    if (visible) {
+      expect(chip?.getAttribute("href")).toBe("/automations");
+      expect(chip?.textContent?.trim()).toBe("Automation");
+    }
+  });
 });

@@ -186,6 +186,7 @@ export class WorkboardCoreStore {
         ...(board.description ? { description: board.description } : {}),
         ...(board.icon ? { icon: board.icon } : {}),
         ...(board.color ? { color: board.color } : {}),
+        ...(board.automationJobId ? { automationJobId: board.automationJobId } : {}),
         ...(board.defaultWorkspace ? { defaultWorkspace: board.defaultWorkspace } : {}),
         ...(board.orchestration ? { orchestration: board.orchestration } : {}),
         total: 0,

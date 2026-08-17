@@ -347,6 +347,7 @@ describe("workboard controller", () => {
             {
               id: "default",
               name: "Inbox",
+              automationJobId: "job-categorize-inbox",
               total: 1,
               active: 1,
               archived: 0,
@@ -378,6 +379,7 @@ describe("workboard controller", () => {
         {
           id: "default",
           name: "Inbox",
+          automationJobId: "job-categorize-inbox",
           total: 1,
           active: 1,
           archived: 0,
