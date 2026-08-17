@@ -60,7 +60,7 @@ export type ReplyDispatcher = {
   ) => void;
   supportsSettledReceipt?: true;
   waitForIdle: () => Promise<void | ReplyDispatchReceipt>;
-  /** @deprecated Remove in the next Plugin SDK major; derived from settled receipts. */
+  /** @deprecated Remove in the next Plugin SDK major; retains admission-time counts. */
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   /** @deprecated Remove in the next Plugin SDK major; derived from settled receipts. */
   getCancelledCounts?: () => Record<ReplyDispatchKind, number>;

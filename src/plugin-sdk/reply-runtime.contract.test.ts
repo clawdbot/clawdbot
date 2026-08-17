@@ -48,7 +48,7 @@ describe("reply runtime public progress contracts", () => {
 });
 
 describe("reply runtime public dispatcher compatibility", () => {
-  it("projects deprecated counters from settled receipt outcomes", async () => {
+  it("preserves deprecated admission counters beside settled receipt outcomes", async () => {
     let releaseFirstDelivery!: () => void;
     const firstDelivery = new Promise<void>((resolve) => {
       releaseFirstDelivery = resolve;
@@ -71,7 +71,7 @@ describe("reply runtime public dispatcher compatibility", () => {
     dispatcher.sendBlockReply({ text: "cancel" });
     dispatcher.sendFinalReply({ text: "fail" });
 
-    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 1, block: 1, final: 1 });
     expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
 

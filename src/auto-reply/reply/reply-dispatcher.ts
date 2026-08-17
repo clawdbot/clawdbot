@@ -612,10 +612,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       await waitForIdle();
       return buildReceipt();
     },
-    getQueuedCounts: () =>
-      mapReplyDispatchCounts(settledCounts, (counts) =>
-        Object.values(counts).reduce((total, count) => total + count, 0),
-      ),
+    getQueuedCounts: () => ({ ...queuedCounts }),
     getCancelledCounts: () => mapReplyDispatchCounts(settledCounts, (counts) => counts.cancelled),
     getFailedCounts: () =>
       mapReplyDispatchCounts(
