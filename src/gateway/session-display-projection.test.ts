@@ -25,7 +25,7 @@ describe("projectSessionDisplayMessage", () => {
       },
     ];
 
-    expect(messages.map(projectSessionDisplayMessage)).toEqual([
+    expect(messages.map((message) => projectSessionDisplayMessage(message))).toEqual([
       { role: "user", text: "Initial request" },
       { role: "assistant", text: "Visible final answer" },
       null,
