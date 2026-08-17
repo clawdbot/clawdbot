@@ -1,5 +1,4 @@
-// Model list result building resolves visible model catalogs for an agent and
-// strips runtime-only provider params before sending the browse API payload.
+// Resolves public model catalogs without exposing runtime-only provider params.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
@@ -58,6 +57,7 @@ import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
+import { includeConfiguredStaticCatalogEntries } from "./models-list-configured-static.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListEntry = Pick<
@@ -69,8 +69,6 @@ type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
 };
-type ModelsListAvailability = ModelAuthAvailability;
-type ModelsListEntryEvaluation = ModelAuthAvailabilityEvaluation;
 type ModelsListResult = {
   models: ModelsListEntryWithCapabilities[];
   providerOutcomes?: readonly ProviderCatalogOutcome[];
@@ -78,15 +76,12 @@ type ModelsListResult = {
 
 let loggedSlowModelsListCatalog = false;
 
-// Unknown views are rejected by protocol validation first; this helper keeps the
-// handler default explicit for older clients that omit the field.
 function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBrowseView {
   const view = params.view;
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
 }
 
-// Project explicitly onto the public protocol shape. Concrete route, base URL,
-// auth, and cost facts stay private; runtime intent is attached separately.
+// Keep concrete route, base URL, auth, and cost facts private.
 function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsListEntry {
   const contextWindow = resolvePositiveSafeInteger(entry.contextWindow);
   return {
@@ -127,11 +122,11 @@ function resolveModelChoiceAgentRuntime(params: {
 function resolveLegacyEntryAvailability(params: {
   authResolver: ModelAuthAvailabilityResolver;
   entry: ModelCatalogEntry;
-  primaryAvailability: ModelsListAvailability;
+  primaryAvailability: ModelAuthAvailability;
   cfg: OpenClawConfig;
   agentId: string;
   metadataSnapshot: PluginMetadataSnapshot;
-}): ModelsListAvailability {
+}): ModelAuthAvailability {
   if (params.primaryAvailability === true) {
     return true;
   }
@@ -169,8 +164,8 @@ function createModelsListEntryEvaluator(params: {
 }): (
   entry: ModelCatalogEntry,
   routeVariants?: readonly ModelCatalogEntry[],
-) => Promise<ModelsListEntryEvaluation> {
-  const pending = new Map<string, Promise<ModelsListEntryEvaluation>>();
+) => Promise<ModelAuthAvailabilityEvaluation> {
+  const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
   return (entry, routeVariants = [entry]) => {
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
     const cacheKey = resolveGatewayModelCatalogRouteKey(entry);
@@ -408,7 +403,7 @@ async function buildPublicModelsListEntries(params: {
   catalog: ModelCatalogEntry[];
   cfg: OpenClawConfig;
   agentId: string;
-  evaluateEntry(entry: ModelCatalogEntry): Promise<ModelsListEntryEvaluation>;
+  evaluateEntry(entry: ModelCatalogEntry): Promise<ModelAuthAvailabilityEvaluation>;
   includeInput?: boolean;
   preserveUnknownAvailability?: boolean;
   apiKeyCapabilities?: ApiKeyProviderCapabilities;
@@ -604,7 +599,7 @@ export async function buildModelsListResult(
     ownerSnapshot?.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
     resolveDefaultAgentWorkspaceDir();
-  const { entries: catalog, routeVariants, providerOutcomes } = snapshot;
+  const { routeVariants, providerOutcomes } = snapshot;
   const outcomeProjection = providerOutcomes?.length ? { providerOutcomes } : {};
   const preparedProjectionOwner = ownerSnapshot ?? params.catalogProjector;
   const metadataSnapshot = preparedProjectionOwner?.metadataSnapshot;
@@ -612,6 +607,15 @@ export async function buildModelsListResult(
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
+  const defaultModel = resolveAgentEffectiveModelPrimary(cfg, agentId);
+  const catalog = includeConfiguredStaticCatalogEntries({
+    cfg,
+    agentId,
+    snapshot,
+    defaultModel,
+    metadataSnapshot,
+    enabled: view === "configured",
+  });
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
@@ -660,7 +664,6 @@ export async function buildModelsListResult(
       ...outcomeProjection,
     };
   }
-  const defaultModel = resolveAgentEffectiveModelPrimary(cfg, agentId);
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
