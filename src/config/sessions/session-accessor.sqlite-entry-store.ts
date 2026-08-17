@@ -26,6 +26,7 @@ import {
   projectSqliteSessionOwner,
   type SqliteSessionOwnerRow,
 } from "./session-accessor.sqlite-owner-projection.js";
+import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
@@ -81,7 +82,11 @@ export function parseReadableSqliteSessionEntryRow(
 ): SessionEntry | null {
   const record = parseSqliteSessionEntryRecord(row);
   if (record) {
-    const entry = projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row);
+    const entry = projectSqliteSessionParticipants(
+      database.db,
+      row.session_key,
+      projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row),
+    );
     if (resolveDeliveryProvenCanonicalSessionKey(row.session_key, entry) !== row.session_key) {
       throw canonicalSessionKeyMigrationRequiredError(
         `non-canonical persisted row resolves to session key ${row.session_key}`,
@@ -502,7 +507,19 @@ export function sqliteSessionEntriesEqual(
   if (!left || !right) {
     return left === right;
   }
-  return JSON.stringify(left) === JSON.stringify(right);
+  const {
+    participants: _leftParticipants,
+    participantCount: _leftParticipantCount,
+    ...leftEntry
+  } = left;
+  const {
+    participants: _rightParticipants,
+    participantCount: _rightParticipantCount,
+    ...rightEntry
+  } = right;
+  // Participant history is a separately mutable display projection. It must not
+  // invalidate logical-session compare-and-swap or leak into entry_json writes.
+  return JSON.stringify(leftEntry) === JSON.stringify(rightEntry);
 }
 
 function sqliteSessionSnapshotRowsEqual(

@@ -210,6 +210,60 @@ it("projects and filters the effective owner while preserving creator provenance
   expect(filtered.sessions.map((row) => row.key)).toEqual(["agent:main:assigned-owner"]);
 });
 
+it("projects participant identities and filters sessions involving the viewer", () => {
+  const store: Record<string, SessionEntry> = {
+    "agent:main:owned": {
+      createdActor: { type: "human", id: "profile-ada" },
+      participants: [{ type: "human", id: "profile-bob" }],
+      participantCount: 1,
+      sessionId: "session-owned",
+      updatedAt: 3,
+    },
+    "agent:main:participating": {
+      createdActor: { type: "human", id: "profile-bob" },
+      participants: [
+        { type: "agent", id: "research" },
+        { type: "human", id: "profile-carol" },
+        { type: "human", id: "profile-dana" },
+        { type: "human", id: "profile-erin" },
+        { type: "human", id: "profile-ada" },
+      ],
+      participantCount: 5,
+      sessionId: "session-participating",
+      updatedAt: 2,
+    },
+    "agent:main:unrelated": {
+      createdActor: { type: "human", id: "profile-bob" },
+      sessionId: "session-unrelated",
+      updatedAt: 1,
+    },
+  };
+  const cfg: OpenClawConfig = {
+    agents: { list: [{ id: "research", identity: { name: "Research" } }] },
+  };
+  const result = listSessionsFromStore({
+    cfg,
+    storePath: "/tmp/openclaw-session-participants",
+    store,
+    opts: { archived: "all" },
+    involvingActorId: "profile-ada",
+  });
+
+  expect(result.sessions.map((row) => row.key)).toEqual([
+    "agent:main:owned",
+    "agent:main:participating",
+  ]);
+  expect(result.sessions[1]).toMatchObject({
+    participants: [
+      { type: "agent", id: "research", label: "Research" },
+      { type: "human", id: "profile-carol", label: "Bob" },
+      { type: "human", id: "profile-dana", label: "Bob" },
+      { type: "human", id: "profile-erin", label: "Bob" },
+    ],
+    participantCount: 5,
+  });
+});
+
 it("preserves legacy list output across visibility, scope, creator, and search filters", async () => {
   const now = 1_000_000;
   vi.spyOn(Date, "now").mockReturnValue(now);

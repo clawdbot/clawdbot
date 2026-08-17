@@ -87,6 +87,8 @@ export type GatewaySessionRow = {
   createdVia?: SessionEntry["createdVia"];
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
+  participants?: SessionCreatedActor[];
+  participantCount?: number;
   createdAt?: SessionEntry["createdAt"];
   forkSource?: SessionEntry["forkSource"];
   previousSessionId?: SessionEntry["previousSessionId"];

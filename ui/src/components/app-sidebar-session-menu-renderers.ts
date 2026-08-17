@@ -64,8 +64,9 @@ function renderSidebarMenuRadioItem(params: {
 function renderSidebarCreatorFilter(
   creators: readonly SessionOwnerOption[],
   creatorFilterId: string | null,
+  involvingMe: boolean,
 ) {
-  if (creators.length < 2) {
+  if (creators.length === 0) {
     return nothing;
   }
   return html`
@@ -73,8 +74,13 @@ function renderSidebarCreatorFilter(
     <div class="sidebar-session-sort-menu__title">${t("sessionsView.owners")}</div>
     ${renderSidebarMenuRadioItem({
       value: "creator:",
-      checked: creatorFilterId === null,
+      checked: creatorFilterId === null && !involvingMe,
       label: t("sessionsView.allOwners"),
+    })}
+    ${renderSidebarMenuRadioItem({
+      value: "involving-me",
+      checked: involvingMe,
+      label: t("sessionsView.involvingMe"),
     })}
     ${creators.map((creator) =>
       renderSidebarMenuRadioItem({
@@ -186,8 +192,9 @@ export function renderSidebarCatalogViewMenu(params: {
   grouping: CatalogProjectGrouping;
   creators: readonly SessionOwnerOption[];
   creatorFilterId: string | null;
+  involvingMe: boolean;
   onGroupingChange: (grouping: CatalogProjectGrouping) => void;
-  onCreatorFilterChange: (creatorId: string | null) => void;
+  onCreatorFilterChange: (creatorId: string | null, involvingMe?: boolean) => void;
   onHide: () => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
@@ -217,6 +224,8 @@ export function renderSidebarCatalogViewMenu(params: {
               params.onGroupingChange(value.slice("grouping:".length) as CatalogProjectGrouping);
             } else if (value?.startsWith("creator:")) {
               params.onCreatorFilterChange(value.slice("creator:".length) || null);
+            } else if (value === "involving-me") {
+              params.onCreatorFilterChange(null, true);
             } else if (value === "hide-catalog") {
               params.onHide();
             }
@@ -235,7 +244,7 @@ export function renderSidebarCatalogViewMenu(params: {
               label: option.label,
             }),
           )}
-          ${renderSidebarCreatorFilter(params.creators, params.creatorFilterId)}
+          ${renderSidebarCreatorFilter(params.creators, params.creatorFilterId, params.involvingMe)}
           <div class="session-menu__separator" role="separator"></div>
           <wa-dropdown-item class="sidebar-session-sort-menu__item" value="hide-catalog">
             <span class="session-menu__text">${t("chat.sidebar.hideFromSidebar")}</span>
@@ -257,10 +266,11 @@ export function renderSidebarSessionSortMenu(params: {
   showSystem: boolean;
   creators: readonly SessionOwnerOption[];
   creatorFilterId: string | null;
+  involvingMe: boolean;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
   onSortModeChange: (mode: SidebarSessionSortMode) => void;
   onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
-  onCreatorFilterChange: (creatorId: string | null) => void;
+  onCreatorFilterChange: (creatorId: string | null, involvingMe?: boolean) => void;
   onShowCronChange: (show: boolean) => void;
   onShowSystemChange: (show: boolean) => void;
   onClose: (restoreFocus: boolean) => void;
@@ -296,6 +306,8 @@ export function renderSidebarSessionSortMenu(params: {
               );
             } else if (value?.startsWith("creator:")) {
               params.onCreatorFilterChange(value.slice("creator:".length) || null);
+            } else if (value === "involving-me") {
+              params.onCreatorFilterChange(null, true);
             } else if (value === "show-cron") {
               params.onShowCronChange(!params.showCron);
             } else if (value === "show-system") {
@@ -341,7 +353,7 @@ export function renderSidebarSessionSortMenu(params: {
                     : t("sessionsView.all"),
             }),
           )}
-          ${renderSidebarCreatorFilter(params.creators, params.creatorFilterId)}
+          ${renderSidebarCreatorFilter(params.creators, params.creatorFilterId, params.involvingMe)}
           <div class="session-menu__separator" role="separator"></div>
           <wa-dropdown-item
             class="sidebar-session-sort-menu__item"

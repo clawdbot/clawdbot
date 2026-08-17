@@ -341,7 +341,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
     const showOwnerChip =
-      (result?.creators ?? listSessionOwners(result?.sessions ?? [])).length >= 2;
+      (result?.creators ?? listSessionOwners(result?.sessions ?? [])).length >= 2 ||
+      (row?.participantCount ?? 0) > 0;
     const renderedOwnerId = showOwnerChip
       ? (row?.owner?.actor ?? row?.createdActor)?.id
       : undefined;

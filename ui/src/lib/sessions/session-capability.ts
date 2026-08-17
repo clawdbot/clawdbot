@@ -57,6 +57,7 @@ export type SessionListOptions = {
   activeMinutes?: number;
   search?: string;
   creatorId?: string;
+  involvingMe?: boolean;
   offset?: number;
   limit?: number;
   includeGlobal?: boolean;
@@ -162,6 +163,7 @@ export type SessionCapability = {
   ) => () => void;
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
   setCreatorFilter: (creatorId: string | null) => Promise<void>;
+  setInvolvingMeFilter: (enabled: boolean) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],

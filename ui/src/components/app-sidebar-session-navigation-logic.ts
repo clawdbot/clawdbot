@@ -206,6 +206,8 @@ export function buildSidebarSessionNavigationState(input: {
       incognito: row.incognito === true,
       createdActor: row.createdActor,
       owner: row.owner,
+      participants: row.participants,
+      participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // The sidebar's zone structure already says what forked from what;
       // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
@@ -580,11 +582,13 @@ export function applySidebarSessionCreatorFilter(input: {
   }[];
   creatorFacet: readonly { id: string; label?: string; avatarUrl?: string }[] | undefined;
   selectedCreatorId: string | null;
+  involvingActorId?: string;
 }): {
   rows: SidebarRecentSession[];
   creatorOptions: readonly SessionOwnerOption[];
   ownershipVisible: boolean;
   activeCreatorId: string | null;
+  involvingMeActive: boolean;
 } {
   const flattened: SidebarRecentSession[] = [];
   const pending = [...input.projected];
@@ -602,20 +606,31 @@ export function applySidebarSessionCreatorFilter(input: {
     ...flattened,
     ...input.creatorRows,
   ]);
-  const ownershipVisible = creatorOptions.length >= 2;
+  const ownershipVisible =
+    creatorOptions.length >= 2 || flattened.some((row) => (row.participantCount ?? 0) > 0);
+  const involvingMeActive = Boolean(input.involvingActorId);
   const activeCreatorId = ownershipVisible
     ? creatorOptions.some((creator) => creator.id === input.selectedCreatorId)
       ? input.selectedCreatorId
       : null
     : null;
   if (!activeCreatorId) {
-    return { rows: [...input.projected], creatorOptions, ownershipVisible, activeCreatorId };
+    // Involving-me is evaluated by the Gateway against the complete participant table.
+    // The bounded display projection cannot safely repeat that predicate client-side.
+    return {
+      rows: [...input.projected],
+      creatorOptions,
+      ownershipVisible,
+      activeCreatorId,
+      involvingMeActive,
+    };
   }
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {
       const children = filterTree(row.children);
-      if ((row.owner?.actor ?? row.createdActor)?.id === activeCreatorId) {
+      const ownerId = (row.owner?.actor ?? row.createdActor)?.id;
+      if (activeCreatorId && ownerId === activeCreatorId) {
         filtered.push({ ...row, children });
       } else {
         for (const child of children) {
@@ -630,6 +645,7 @@ export function applySidebarSessionCreatorFilter(input: {
     creatorOptions,
     ownershipVisible,
     activeCreatorId,
+    involvingMeActive,
   };
 }
 

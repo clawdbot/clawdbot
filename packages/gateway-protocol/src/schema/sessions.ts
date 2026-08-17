@@ -404,6 +404,8 @@ export const SessionsListParamsSchema = closedObject({
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
   /** Filter rows by their permanent creator identity. */
   creatorId: Type.Optional(NonEmptyString),
+  /** Limit rows to sessions owned by or previously prompted by the authenticated viewer. */
+  involvingMe: Type.Optional(Type.Boolean()),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),

@@ -72,6 +72,16 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending
   ON session_nodes(session_key)
   WHERE entry_valid = 0;
 
+CREATE TABLE IF NOT EXISTS session_participants (
+  session_key TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  first_prompted_at INTEGER NOT NULL,
+  last_prompted_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, actor_type, actor_id),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS session_key_contract (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
   main_key TEXT NOT NULL,

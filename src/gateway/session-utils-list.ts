@@ -74,6 +74,7 @@ type ListSessionsFromStoreParams = {
   modelCatalog?: ModelCatalogEntry[];
   lightweightListRows?: boolean;
   opts: SessionsListParams;
+  involvingActorId?: string;
 };
 
 type SessionEntrySelection = {
@@ -197,6 +198,7 @@ function filterSessionEntries(params: {
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   getRowContext?: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  involvingActorId?: string;
 }): Pick<SessionEntrySelection, "creators" | "entries"> {
   const { cfg, store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;
@@ -211,6 +213,7 @@ function filterSessionEntries(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
   const creatorId = normalizeOptionalString(opts.creatorId);
+  const involvingActorId = normalizeOptionalString(params.involvingActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
   const entries: SessionEntryPair[] = [];
   const creators = new Map<string, { id: string; label?: string; avatarUrl?: string }>();
@@ -323,6 +326,16 @@ function filterSessionEntries(params: {
     if (creatorId && (entry.owner?.actor ?? entry.createdActor)?.id !== creatorId) {
       continue;
     }
+    if (involvingActorId) {
+      const owner = entry.owner?.actor ?? entry.createdActor;
+      const viewerOwns = owner?.type === "human" && owner.id === involvingActorId;
+      const viewerParticipates = entry.participants?.some(
+        (participant) => participant.type === "human" && participant.id === involvingActorId,
+      );
+      if (!viewerOwns && !viewerParticipates) {
+        continue;
+      }
+    }
     entries.push([key, entry]);
   }
 
@@ -347,6 +360,7 @@ function selectSessionEntries(params: {
   defaultLimit?: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  involvingActorId?: string;
 }): SessionEntrySelection {
   const { creators, entries: filtered } = filterSessionEntries(params);
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
@@ -400,6 +414,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
         : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     userProfileIdentityById,
+    involvingActorId: params.involvingActorId,
   });
   const fullRowContext =
     rowContext ||
@@ -470,6 +485,7 @@ export function filterAndSortSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: SessionsListParams;
   now: number;
+  involvingActorId?: string;
 }): [string, SessionEntry][] {
   return selectSessionEntries(params).entries;
 }

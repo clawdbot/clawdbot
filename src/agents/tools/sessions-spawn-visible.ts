@@ -8,11 +8,13 @@ import {
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
@@ -447,6 +449,12 @@ export async function maybeSpawnVisibleSession(params: {
         runId,
       };
     }
+    recordSessionParticipantBestEffort({
+      actor: { type: "agent", id: requesterAgentId },
+      agentId: targetAgentId,
+      sessionKey: childSessionKey,
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
+    });
     const ownerLabel = normalizeOptionalString(resolveAgentIdentity(cfg, requesterAgentId)?.name);
     const sessionUrl = resolveVisibleSessionUrl(cfg, childSessionKey, targetAgentId);
     return {

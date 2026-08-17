@@ -5,6 +5,10 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
+import {
+  projectSqliteSessionParticipants,
+  projectSqliteSessionParticipantsBatch,
+} from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
@@ -188,14 +192,15 @@ function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSe
           .select(["session_key", "entry_json", "updated_at"])
           .orderBy("session_key"),
       ).rows;
-  const entries = new Map<string, SessionEntry>();
+  const parsedEntries = new Map<string, SessionEntry>();
   for (const row of rows) {
     const entry = parseSessionEntryJson(row);
     if (!entry) {
       continue;
     }
-    entries.set(row.session_key, entry);
+    parsedEntries.set(row.session_key, entry);
   }
+  const entries = projectSqliteSessionParticipantsBatch(database.db, parsedEntries);
   const listProjections = new Map<string, SessionEntry>();
   return {
     entries,
@@ -267,7 +272,10 @@ function incrementallyRevalidateSessionEntrySnapshot(
     for (const row of changedRows) {
       const entry = parseSessionEntryJson(row);
       if (entry) {
-        entries.set(row.session_key, entry);
+        entries.set(
+          row.session_key,
+          projectSqliteSessionParticipants(database.db, row.session_key, entry),
+        );
       }
     }
   }
@@ -374,16 +382,17 @@ function publishSqliteSessionEntryCacheUpsert(
           .limit(1),
       ).rows[0]
     : undefined;
-  const entry = parseSessionEntryJson({
+  const parsedEntry = parseSessionEntryJson({
     current_session_id: row.current_session_id,
     entry_json: row.entry_json,
     updated_at: row.updated_at,
     ...ownerRow,
   });
-  if (!entry) {
+  if (!parsedEntry) {
     invalidateTrackedCache(database);
     return;
   }
+  const entry = projectSqliteSessionParticipants(database.db, row.session_key, parsedEntry);
   if (!writeGeneration) {
     invalidateTrackedCache(database);
     return;

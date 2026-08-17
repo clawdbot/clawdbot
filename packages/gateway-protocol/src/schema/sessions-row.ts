@@ -117,6 +117,8 @@ export const SessionRowSchema = Type.Object(
     ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
+    participants: Type.Optional(Type.Array(SessionCreatedActorSchema, { maxItems: 4 })),
+    participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
     createdAt: Type.Optional(Type.Number()),

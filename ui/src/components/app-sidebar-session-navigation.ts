@@ -120,6 +120,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   @state() sessionCreatorFilterId: string | null = null;
+  @state() sessionInvolvingMeFilterActive = false;
 
   sessionCreatorOptions: readonly SessionOwnerOption[] = [];
   protected activeSessionCreatorId: string | null = null;
@@ -186,13 +187,17 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     super.updated(changedProperties);
     const selectedId = this.sessionCreatorFilterId;
     const creators = this.sessionData.sessionsResult?.creators;
+    const hasParticipants = this.sessionData.sessionsResult?.sessions.some(
+      (session) => (session.participantCount ?? 0) > 0,
+    );
     if (this.sessionSortMode === "people" && this.sessionPeopleSortCapability() === false) {
       this.setSessionSortMode("created");
     }
     if (
       selectedId &&
       creators &&
-      (creators.length < 2 || !creators.some((creator) => creator.id === selectedId))
+      ((!hasParticipants && creators.length < 2) ||
+        !creators.some((creator) => creator.id === selectedId))
     ) {
       this.sessionCreatorFilterId = null;
       void this.context?.sessions.setCreatorFilter(null);
@@ -249,11 +254,15 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       creatorRows,
       creatorFacet: creatorFacet ?? this.sessionData.sessionsResult?.creators,
       selectedCreatorId: this.sessionCreatorFilterId,
+      involvingActorId: this.sessionInvolvingMeFilterActive
+        ? this.sessionDataContext?.gateway.snapshot.selfUser?.id
+        : undefined,
     });
     this.sessionCreatorOptions = result.creatorOptions;
     this.sessionOwnershipVisible = result.ownershipVisible;
     this.sessionCreatorFilterActive = result.activeCreatorId !== null;
     this.activeSessionCreatorId = result.activeCreatorId;
+    this.sessionInvolvingMeFilterActive = result.involvingMeActive;
     return result.rows;
   }
 

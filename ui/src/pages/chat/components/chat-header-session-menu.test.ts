@@ -99,7 +99,7 @@ async function mountMenu(
   return menu;
 }
 
-function itemLabel(menuItem: HTMLElement): string {
+function itemLabel(menuItem: Element): string {
   return menuItem.querySelector(":scope > .session-menu__text")?.textContent?.trim() ?? "";
 }
 

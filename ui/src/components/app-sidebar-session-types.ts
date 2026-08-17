@@ -63,6 +63,8 @@ export type SidebarRecentSession = {
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
+  participants?: SessionCreatedActor[];
+  participantCount?: number;
   archivedBy?: SessionCreatedActor;
   label: string;
   /**

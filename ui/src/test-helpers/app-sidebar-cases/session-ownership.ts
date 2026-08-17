@@ -246,6 +246,40 @@ describe("AppSidebar session ownership", () => {
     expect(harness.setCreatorFilter).toHaveBeenLastCalledWith(null);
   });
 
+  it("shows and requests Involving me for a participant session", async () => {
+    // SAFETY: this sidebar fixture only needs the Gateway client surface supplied by its harness.
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    gateway.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
+    const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:collab"]);
+    const result = harness.sessions.state.result;
+    const collab = result?.sessions.find((row) => row.key.endsWith(":collab"));
+    if (!result || !collab) {
+      throw new Error("expected participant row");
+    }
+    collab.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    collab.participants = [{ type: "human", id: "profile-ada", label: "Ada" }];
+    collab.participantCount = 1;
+    result.creators = [{ id: "profile-bob", label: "Bob" }];
+
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+    expect(
+      sidebar.querySelector('[data-session-key="agent:main:collab"] .session-owner-stack'),
+    ).not.toBeNull();
+
+    const menu = await openCreatorMenu(sidebar);
+    expect(menu.querySelector('[value="involving-me"]')?.textContent).toContain("Involving me");
+    menu.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: "involving-me" } },
+      }),
+    );
+    await sidebar.updateComplete;
+    expect(harness.setInvolvingMeFilter).toHaveBeenCalledWith(true);
+  });
+
   it("renders no ownership chrome when the listed sessions have fewer than two creators", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     gateway.publish({

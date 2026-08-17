@@ -270,6 +270,14 @@ export interface SessionNodes {
   updated_at: number;
 }
 
+export interface SessionParticipants {
+  actor_id: string;
+  actor_type: string;
+  first_prompted_at: number;
+  last_prompted_at: number;
+  session_key: string;
+}
+
 export interface SessionSuggestions {
   author_id: string;
   author_label: string | null;
@@ -482,6 +490,7 @@ export interface DB {
   session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
+  session_participants: SessionParticipants;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_archives: SessionTranscriptArchives;

@@ -139,6 +139,18 @@ function projectSessionOwner(
   };
 }
 
+function projectSessionParticipants(
+  entry: SessionEntry | undefined,
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined,
+  cfg: OpenClawConfig,
+): SessionCreatedActor[] | undefined {
+  const participants = entry?.participants?.flatMap((participant) => {
+    const projected = projectSessionActor(participant, userProfileIdentityById, cfg);
+    return projected ? [projected] : [];
+  });
+  return participants?.length ? participants.slice(0, 4) : undefined;
+}
+
 export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;
@@ -461,6 +473,8 @@ export function buildGatewaySessionRow(params: {
       cfg,
     ),
     owner: projectSessionOwner(entry, rowContext?.userProfileIdentityById, cfg),
+    participants: projectSessionParticipants(entry, rowContext?.userProfileIdentityById, cfg),
+    participantCount: entry?.participantCount,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,

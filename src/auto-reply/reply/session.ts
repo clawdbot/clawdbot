@@ -34,7 +34,10 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  type SessionCreatedActor,
+} from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -80,6 +83,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import {
   recordSessionCreated,
   classifySessionStateActor,
@@ -1041,6 +1045,26 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  if (!isSystemEvent && !isInterSession) {
+    const creationActor = ctx.SessionCreation?.actor;
+    const senderId = normalizeOptionalString(ctx.SenderId);
+    const participant: (SessionCreatedActor & { id: string }) | undefined =
+      creationActor?.id && (creationActor.type === "human" || creationActor.type === "agent")
+        ? { ...creationActor, id: creationActor.id }
+        : senderId
+          ? { type: "human", id: senderId }
+          : undefined;
+    if (participant) {
+      recordSessionParticipantBestEffort({
+        actor: participant,
+        agentId,
+        sessionKey,
+        storePath,
+        promptedAt: now,
+        onError: (error) => log.warn("failed to record session participant", { error }),
+      });
+    }
+  }
   clearBootstrapSnapshotOnSessionBoundary({
     boundaryAppended: resetBoundaryAppended,
     sessionKey,

@@ -39,6 +39,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "createdVia",
   "createdActor",
   "owner",
+  "participants",
+  "participantCount",
   "createdAt",
   "forkSource",
   "previousSessionId",

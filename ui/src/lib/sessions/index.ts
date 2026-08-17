@@ -491,6 +491,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     },
     refreshList: (options) => roster.refreshList(options),
     setCreatorFilter: (creatorId) => roster.setCreatorFilter(creatorId),
+    setInvolvingMeFilter: (enabled) => roster.setInvolvingMeFilter(enabled),
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,

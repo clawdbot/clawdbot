@@ -15,6 +15,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
@@ -46,6 +47,27 @@ const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 
 const steerRateLimit = new Map<string, number>();
+
+function recordSubagentControllerParticipant(params: {
+  cfg: OpenClawConfig;
+  controller: ResolvedSubagentController;
+  entry: SubagentRunRecord;
+}): void {
+  const requesterAgentId = params.controller.controllerAgentId;
+  if (!requesterAgentId) {
+    return;
+  }
+  const targetAgentId = parseAgentSessionKey(params.entry.childSessionKey)?.agentId;
+  if (!targetAgentId) {
+    return;
+  }
+  recordSessionParticipantBestEffort({
+    actor: { type: "agent", id: requesterAgentId },
+    agentId: targetAgentId,
+    sessionKey: params.entry.childSessionKey,
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId: targetAgentId }),
+  });
+}
 
 type GatewayCaller = typeof callGateway;
 type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
@@ -321,6 +343,7 @@ export async function steerControlledSubagentRun(params: {
     if (typeof response?.runId === "string" && response.runId) {
       runId = response.runId;
     }
+    recordSubagentControllerParticipant(params);
     let acceptedSessionEntry: SessionEntry | undefined;
     try {
       acceptedSessionEntry = loadSessionEntry({
@@ -477,6 +500,7 @@ export async function sendControlledSubagentMessage(params: {
     if (responseRunId) {
       runId = responseRunId;
     }
+    recordSubagentControllerParticipant(params);
 
     const result = await waitForAgentRunAndReadUpdatedAssistantReply({
       runId,

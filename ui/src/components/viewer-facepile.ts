@@ -195,6 +195,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
   @property({ attribute: false }) excludeUserId?: string;
+  @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
   @property() variant: "session" | "footer" = "session";
   @property({ attribute: false }) buildInfo: ControlUiBuildInfo = CONTROL_UI_BUILD_INFO;
@@ -208,16 +209,19 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
     );
     const sessionKey = this.sessionKey;
     const excludeUserId = normalized(this.excludeUserId);
-    const users = sessionKey
-      ? projection.users.filter(
-          (user) =>
-            user.id !== projection.selfUserId &&
-            user.id !== excludeUserId &&
-            user.watchedSessions.includes(sessionKey),
-        )
-      : this.variant === "footer"
-        ? projection.users.filter((user) => user.id !== projection.selfUserId)
-        : projection.users.filter((user) => user.id !== projection.selfUserId);
+    const users =
+      this.variant === "session" && this.staticUsers
+        ? [...this.staticUsers]
+        : sessionKey
+          ? projection.users.filter(
+              (user) =>
+                user.id !== projection.selfUserId &&
+                user.id !== excludeUserId &&
+                user.watchedSessions.includes(sessionKey),
+            )
+          : this.variant === "footer"
+            ? projection.users.filter((user) => user.id !== projection.selfUserId)
+            : projection.users.filter((user) => user.id !== projection.selfUserId);
     if (users.length === 0) {
       return nothing;
     }

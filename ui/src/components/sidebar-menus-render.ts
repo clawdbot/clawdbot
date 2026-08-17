@@ -378,6 +378,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     showSystem: host.sessionsShowSystem,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    involvingMe: host.sessionInvolvingMeFilterActive,
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -390,9 +391,12 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       host.sessionOrganizer.setSessionsStatusFilter(statusFilter);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
-    onCreatorFilterChange: (creatorId) => {
+    onCreatorFilterChange: (creatorId, involvingMe = false) => {
       host.sessionCreatorFilterId = creatorId;
-      void host.sessionDataContext?.sessions.setCreatorFilter(creatorId);
+      host.sessionInvolvingMeFilterActive = involvingMe;
+      void (involvingMe
+        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
+        : host.sessionDataContext?.sessions.setCreatorFilter(creatorId));
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onShowCronChange: (show) => {
@@ -421,6 +425,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     grouping: host.catalogProjectGrouping,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    involvingMe: host.sessionInvolvingMeFilterActive,
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });
@@ -432,9 +437,12 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
       host.hideSessionCatalog(position.catalogId);
       controller.closeCatalogViewMenu();
     },
-    onCreatorFilterChange: (creatorId) => {
+    onCreatorFilterChange: (creatorId, involvingMe = false) => {
       host.sessionCreatorFilterId = creatorId;
-      void host.sessionDataContext?.sessions.setCreatorFilter(creatorId);
+      host.sessionInvolvingMeFilterActive = involvingMe;
+      void (involvingMe
+        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
+        : host.sessionDataContext?.sessions.setCreatorFilter(creatorId));
       controller.closeCatalogViewMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

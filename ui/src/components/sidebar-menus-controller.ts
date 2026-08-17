@@ -97,6 +97,7 @@ export interface SidebarMenusControllerHost
   readonly sessionOrganizer: SessionOrganizerController;
   readonly sessionCreatorFilterActive: boolean;
   sessionCreatorFilterId: string | null;
+  sessionInvolvingMeFilterActive: boolean;
   readonly sessionCreatorOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
   readSessionMutationAccess(request: {

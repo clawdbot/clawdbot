@@ -107,6 +107,8 @@ export function renderSessionOwnerChip(
   size: "row" | "header",
   attribution: "created" | "owned" | "archived" = "created",
   viewingNow?: boolean,
+  participants?: readonly SessionCreatedActor[],
+  participantCount?: number,
 ) {
   return createdActor?.id
     ? html`<openclaw-session-owner-chip
@@ -114,6 +116,8 @@ export function renderSessionOwnerChip(
         size=${size}
         attribution=${attribution}
         .viewingNow=${viewingNow}
+        .participants=${participants ?? []}
+        .participantCount=${participantCount ?? participants?.length ?? 0}
       ></openclaw-session-owner-chip>`
     : nothing;
 }
@@ -155,6 +159,8 @@ class SessionOwnerChip extends OpenClawLightDomElement {
   @property({ type: String }) size: "row" | "header" = "row";
   @property({ type: String }) attribution: "created" | "owned" | "archived" = "created";
   @property({ attribute: false }) viewingNow?: boolean;
+  @property({ attribute: false }) participants: readonly SessionCreatedActor[] = [];
+  @property({ type: Number }) participantCount = 0;
 
   override render() {
     const createdActor = this.createdActor;
@@ -183,6 +189,52 @@ class SessionOwnerChip extends OpenClawLightDomElement {
           profileAvatarUrl: createdActor.avatarUrl,
         })
       : null;
+    if (this.size === "row" && this.participantCount > 0) {
+      const participant = this.participants[0];
+      const participantTitle = participant?.label || participant?.id;
+      const combinedLabel =
+        this.participantCount === 1 && participantTitle
+          ? `${accessibleLabel} · ${t("sessionsView.withParticipant", { name: participantTitle })}`
+          : `${accessibleLabel} · ${t("sessionsView.withMoreParticipants", { count: String(this.participantCount) })}`;
+      return html`
+        <span class="session-owner-stack" role="group" aria-label=${combinedLabel}>
+          <span class="session-owner-stack__back" aria-hidden="true">
+            ${this.participantCount === 1 && participant?.id
+              ? html`<openclaw-viewer-avatar
+                  .user=${{
+                    id: participant.id,
+                    name: participant.label,
+                    avatarUrl: participant.avatarUrl,
+                    watchedSessions: [],
+                  }}
+                  variant="session"
+                ></openclaw-viewer-avatar>`
+              : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`}
+          </span>
+          <span
+            class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false
+              ? "session-owner-chip--away"
+              : ""} session-owner-stack__front"
+            style="--owner-hue: ${ownerHue(createdActor.id)}"
+            role="img"
+            aria-label=${accessibleLabel}
+            title=${accessibleLabel}
+            >${avatar?.kind === "profile"
+              ? html`<openclaw-viewer-avatar
+                  .user=${{
+                    id: createdActor.id,
+                    name: createdActor.label,
+                    avatarUrl: createdActor.avatarUrl,
+                    watchedSessions: [],
+                  }}
+                  variant="session"
+                  aria-hidden="true"
+                ></openclaw-viewer-avatar>`
+              : initials}</span
+          >
+        </span>
+      `;
+    }
     return html`
       <span
         class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false

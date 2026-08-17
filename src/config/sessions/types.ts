@@ -387,6 +387,10 @@ type SessionEntryCore = SessionRestartRecoveryState &
     createdActor?: SessionCreatedActor;
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
     owner?: SessionOwnerAssignment;
+    /** Earliest external prompt actors, projected from the participant table. */
+    participants?: SessionCreatedActor[];
+    /** Total external prompt actors after excluding the effective owner. */
+    participantCount?: number;
     /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
     createdAt?: number;
     /** Exact source generation and optional cut entry for an actual transcript-copy fork. */

@@ -201,6 +201,8 @@ export function renderRecentSession(params: {
       ownerActor,
       ownerAttribution,
       ownerViewing,
+      session.participants,
+      session.participantCount,
     );
   const trailingDescription = session.isChild
     ? ""

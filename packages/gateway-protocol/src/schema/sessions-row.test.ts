@@ -19,6 +19,11 @@ describe("SessionRowSchema", () => {
         assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
         assignedAt: 42,
       },
+      participants: [
+        { type: "human", id: "profile-bob", label: "Bob" },
+        { type: "agent", id: "research", label: "Research" },
+      ],
+      participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       icon: "🦞",
       visibility: "suggest",
@@ -30,9 +35,19 @@ describe("SessionRowSchema", () => {
     expect(SessionRowSchema.properties.activeLeafEntryId).toBeDefined();
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);
+    expect(
+      Value.Check(SessionRowSchema, {
+        ...roundTripped,
+        participants: Array.from({ length: 5 }, (_, index) => ({
+          type: "human",
+          id: `profile-${index}`,
+        })),
+      }),
+    ).toBe(false);
     expect(roundTripped).toMatchObject({
       activeLeafEntryId: "leaf-rendered",
       createdActor: { avatarUrl: "/api/users/profile-ada/avatar?v=7" },
+      participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       visibility: "suggest",
       sharingRole: "owner",
