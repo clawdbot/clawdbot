@@ -24,12 +24,19 @@ export type CliJsonFailure = {
 export class CliParseError extends Error {
   readonly humanOutput: string;
   readonly humanOutputWritten: boolean;
+  readonly machineOutput: string;
 
-  constructor(params: { message: string; humanOutput: string; humanOutputWritten?: boolean }) {
+  constructor(params: {
+    message: string;
+    humanOutput: string;
+    humanOutputWritten?: boolean;
+    machineOutput: string;
+  }) {
     super(params.message);
     this.name = "CliParseError";
     this.humanOutput = params.humanOutput;
     this.humanOutputWritten = params.humanOutputWritten ?? false;
+    this.machineOutput = params.machineOutput;
   }
 }
 
@@ -40,7 +47,7 @@ export function formatCliJsonFailure(
 ): CliJsonFailure {
   const message =
     error instanceof CliParseError
-      ? formatErrorMessage(error.humanOutput.trimEnd())
+      ? formatErrorMessage(error.machineOutput.trimEnd())
       : formatCliOperatorError(error, options);
   return {
     ok: false,

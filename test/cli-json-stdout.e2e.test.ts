@@ -416,6 +416,28 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it("keeps parse-error JSON free of terminal controls when color is forced", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runSourceCli(tempHome, ["sessions", "lst", "--json"], {
+          FORCE_COLOR: "1",
+        });
+
+        expect(result.status).toBe(1);
+        const payload = JSON.parse(result.stdout) as {
+          error: { message: string };
+        };
+        expect(payload.error.message).toBe(
+          'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli',
+        );
+        expect(payload.error.message).not.toMatch(/[\u001B\u0007]/u);
+        expect(result.stdout).not.toContain("\\u001b");
+        expect(result.stderr).toContain("\u001B[");
+      },
+      { prefix: "openclaw-unknown-command-color-json-e2e-" },
+    );
+  });
+
   it("keeps representative success payload bytes unchanged", async () => {
     await withTempHome(
       async (tempHome) => {

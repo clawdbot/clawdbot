@@ -37,7 +37,9 @@ describe("formatCliJsonFailure", () => {
       new CliParseError({
         message: 'OpenClaw sessions has no command "lst".',
         humanOutput:
-          'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\n',
+          '\u001B[31mOpenClaw sessions has no command "lst".\u001B[39m\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: \u001B]8;;https://docs.openclaw.ai/cli\u0007docs.openclaw.ai/cli\u001B]8;;\u0007\n',
+        machineOutput:
+          'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli\n',
       }),
       { cause: new Error("internal parse cause") },
     );
@@ -48,7 +50,7 @@ describe("formatCliJsonFailure", () => {
       error: {
         type: "cli_error",
         message:
-          'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help',
+          'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli',
       },
     });
     expect(payload.error.message).not.toContain("internal parse cause");
@@ -60,15 +62,20 @@ describe("formatCliFailureLines", () => {
     { label: "default output", env: {} },
     { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
   ])("emits parse guidance only when not already written in $label", ({ env }) => {
-    const pending = new CliParseError({ message: "bad input", humanOutput: "first\nsecond\n" });
+    const pending = new CliParseError({
+      message: "bad input",
+      humanOutput: "\u001B[31mfirst\u001B[39m\nsecond\n",
+      machineOutput: "first\nsecond\n",
+    });
     const written = new CliParseError({
       message: "bad input",
-      humanOutput: "first\nsecond\n",
+      humanOutput: "\u001B[31mfirst\u001B[39m\nsecond\n",
       humanOutputWritten: true,
+      machineOutput: "first\nsecond\n",
     });
 
     expect(formatCliFailureLines({ title: "ignored", error: pending, env })).toEqual([
-      "first",
+      "\u001B[31mfirst\u001B[39m",
       "second",
     ]);
     expect(formatCliFailureLines({ title: "ignored", error: written, env })).toEqual([]);
