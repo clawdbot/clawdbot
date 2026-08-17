@@ -768,38 +768,4 @@ describe("renderChatComposer status", () => {
       "Selected: fireworks/minimax-m2p5 • Active: deepinfra/moonshotai/Kimi-K2.5 • Attempts: fireworks/minimax-m2p5: rate limit",
     );
   });
-
-  it("renders an expandable live plan checklist and hides it when idle", () => {
-    const planStatus = {
-      explanation: "Keep the change focused",
-      steps: [
-        { step: "Inspect the route", status: "completed" as const },
-        { step: "Wire the checklist", status: "in_progress" as const },
-        { step: "Run focused tests", status: "pending" as const },
-      ],
-    };
-    const { container } = renderComposer({
-      canAbort: true,
-      onAbort: vi.fn(),
-      planStatus,
-    });
-
-    const checklist = container.querySelector<HTMLDetailsElement>(".plan-checklist");
-    expect(checklist?.open).toBe(false);
-    expect(checklist?.querySelector(".plan-checklist__current")?.textContent).toBe(
-      "Wire the checklist",
-    );
-    expect(checklist?.querySelector(".plan-checklist__count")?.textContent).toBe("1/3");
-    expect(
-      [...(checklist?.querySelectorAll(".plan-checklist__step-marker") ?? [])].map((marker) =>
-        marker.textContent?.trim(),
-      ),
-    ).toEqual(["✓", "▸", "▢"]);
-    expect(checklist?.querySelector(".plan-checklist__explanation")?.textContent).toBe(
-      "Keep the change focused",
-    );
-
-    const idle = renderComposer({ planStatus });
-    expect(idle.container.querySelector(".plan-checklist")).toBeNull();
-  });
 });

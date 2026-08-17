@@ -431,6 +431,7 @@ describe("EmbeddedTuiBackend", () => {
         key: "tui-created",
         agentId: "main",
         parentSessionKey: "agent:main:main",
+        armSessionDiffBaselineCapture: true,
         emitCommandHooks: true,
         commandSource: "tui:embedded",
         loadGatewayModelCatalog: expect.any(Function),

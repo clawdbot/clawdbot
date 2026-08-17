@@ -909,6 +909,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_tls INTEGER,
   gateway_tls_fingerprint TEXT,
   gateway_context_path TEXT,
+  gateway_cloudflare_access_json TEXT,
   installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
@@ -2072,6 +2073,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   profile_snapshot_json TEXT NOT NULL,
   provision_operation_id TEXT NOT NULL UNIQUE,
   lease_id TEXT,
+  node_setup_id TEXT,
+  node_device_id TEXT,
   ssh_host TEXT,
   ssh_port INTEGER CHECK (ssh_port IS NULL OR (ssh_port >= 1 AND ssh_port <= 65535)),
   ssh_user TEXT,

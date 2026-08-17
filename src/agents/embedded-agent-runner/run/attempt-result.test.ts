@@ -13,6 +13,8 @@ function completeResult(params?: {
     completed: boolean;
   }>;
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
+  yieldDetected?: boolean;
+  yieldAcknowledgment?: string;
   toolMetas?: Array<{
     toolName: string;
     meta?: string;
@@ -64,7 +66,8 @@ function completeResult(params?: {
       sessionIdUsed: "session-1",
       messagesSnapshot: [],
       successfulNestedToolNames: params?.successfulNestedToolNames,
-      yieldDetected: false,
+      yieldDetected: params?.yieldDetected ?? false,
+      yieldAcknowledgment: params?.yieldAcknowledgment,
       didDeliverSourceReplyViaMessageTool: false,
       diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
     } as never,
@@ -86,6 +89,18 @@ describe("attempt result projection", () => {
   it("projects the last recovered tool", () => {
     expect(completeResult({ lastToolRecovery: { toolName: "write" } }).lastToolRecovery).toEqual({
       toolName: "write",
+    });
+  });
+
+  it("carries the explicit yield acknowledgment separately from continuation context", () => {
+    expect(
+      completeResult({
+        yieldDetected: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      }),
+    ).toMatchObject({
+      yieldDetected: true,
+      yieldAcknowledgment: "Research started; results will follow.",
     });
   });
 

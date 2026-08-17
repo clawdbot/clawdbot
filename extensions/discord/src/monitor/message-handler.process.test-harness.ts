@@ -232,6 +232,19 @@ const dispatchInboundMessage = vi.hoisted(() =>
       queuedFinal: boolean;
       counts: { final: number; tool: number; block: number };
       failedCounts?: { final?: number; tool?: number; block?: number };
+      settledReceipt?: {
+        counts: Record<
+          "tool" | "block" | "final",
+          {
+            delivered: number;
+            deliveredNotVisible: number;
+            cancelled: number;
+            failedBeforeSend: number;
+            failedAfterSend: number;
+          }
+        >;
+        anyVisibleDelivered: boolean;
+      };
     }>
   >(async (_params?: DispatchInboundParams) => ({
     queuedFinal: false,
@@ -391,6 +404,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
           await Promise.all(pendingDeliveries);
         }),
         getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
         markComplete: vi.fn(),
       },
       replyOptions: {

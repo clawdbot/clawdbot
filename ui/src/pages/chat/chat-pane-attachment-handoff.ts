@@ -6,7 +6,8 @@ import {
 } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
-import { panesOf, type ChatSplitLayout, visiblePanesOf } from "./split-layout.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
+import { panesOf, visiblePanesOf } from "./split-layout.ts";
 
 export type ChatAttachmentGatewayOwner = ApplicationContext["gateway"]["snapshot"]["client"];
 

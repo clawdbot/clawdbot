@@ -259,6 +259,8 @@ the parent/requester agent.
 
 With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this mode when the user asks to create or open a thread that should appear in the sidebar. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. Omit `cwd` to use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree, while the main session can reach every same-agent session unless `self` or the sandbox spawned-only clamp applies. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
 
+A visible spawn is attributed to the requesting agent: the new session's creator and initial owner is that agent, shown with its configured identity name and avatar in the sidebar. The accepted result doubles as a receipt with `childSessionKey`, `runId`, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second so the user can open the session and see who is responsible. Owners can be reassigned later; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
+
 ### Task names and targeting
 
 `taskName` is a model-facing handle for orchestration, not a session key.
@@ -286,6 +288,14 @@ answer until those completions arrive.
 `sessions_yield` is the waiting primitive. Do not replace it with polling
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
+
+Use the optional `message` field for private context that the resumed turn
+should receive. Use `acknowledgment` for a waiting reply when an interactive
+parent turn would otherwise end silently. The acknowledgment is not sent from
+sub-agent, heartbeat, or silent turns, and it does not replace a reply or
+message already delivered during the turn. This host-owned waiting status
+bypasses message-tool-only source suppression; ordinary model replies remain
+private unless the model sends them through the message tool.
 
 On native Codex harness turns, `wait_agent` keeps the current turn active and
 is reserved for an intentional same-turn wait when the immediate next step is

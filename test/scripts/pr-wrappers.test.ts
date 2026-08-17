@@ -76,6 +76,14 @@ function makeMismatchedWrapperRepo() {
   writeFileSync(join(canonical, "scripts", "pr"), readScript("scripts/pr"));
   cpSync("scripts/watch-pr-ci.mjs", join(canonical, "scripts", "watch-pr-ci.mjs"));
   cpSync("scripts/watch-pr-ci.mts", join(canonical, "scripts", "watch-pr-ci.mts"));
+  cpSync(
+    "scripts/verify-pr-hosted-gates.mjs",
+    join(canonical, "scripts", "verify-pr-hosted-gates.mjs"),
+  );
+  cpSync(
+    "scripts/verify-pr-hosted-gates.mts",
+    join(canonical, "scripts", "verify-pr-hosted-gates.mts"),
+  );
   cpSync("scripts/lib/plain-gh.mjs", join(canonical, "scripts", "lib", "plain-gh.mjs"));
   cpSync("scripts/lib/direct-run.mjs", join(canonical, "scripts", "lib", "direct-run.mjs"));
   cpSync("scripts/lib/tsx-cli-shim.mjs", join(canonical, "scripts", "lib", "tsx-cli-shim.mjs"));
@@ -190,6 +198,8 @@ describe("scripts/pr wrappers", () => {
     expect(script).not.toContain("gh() {");
     expect(script).toContain("scripts/watch-pr-ci.mjs");
     expect(script).toContain("scripts/watch-pr-ci.mts");
+    expect(script).toContain("scripts/verify-pr-hosted-gates.mjs");
+    expect(script).toContain("scripts/verify-pr-hosted-gates.mts");
     expect(script).toContain("scripts/lib/tsx-cli-shim.mjs");
     expect(script).toContain("scripts/lib/plain-gh.mjs");
     expect(script).toContain("scripts/lib/direct-run.mjs");
@@ -428,6 +438,8 @@ describe("scripts/pr wrappers", () => {
     writeFileSync(join(repo, "scripts", "lib", "tsx-cli-shim.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mts"), "// canonical\n");
+    writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mjs"), "// canonical\n");
+    writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mts"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# canonical\n");
     chmodSync(join(repo, "scripts", "pr"), 0o755);
 
@@ -459,6 +471,17 @@ describe("scripts/pr wrappers", () => {
       "scripts/pr wrapper files have uncommitted changes",
     );
     expect(git(linked, ["restore", "scripts/watch-pr-ci.mts"]).status).toBe(0);
+
+    writeFileSync(join(linked, "scripts", "verify-pr-hosted-gates.mts"), "// dirty verifier\n");
+    const dirtyVerifierResult = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
+      cwd: linked,
+      encoding: "utf8",
+    });
+    expect(dirtyVerifierResult.status).toBe(1);
+    expect(dirtyVerifierResult.stderr).toContain(
+      "scripts/pr wrapper files have uncommitted changes",
+    );
+    expect(git(linked, ["restore", "scripts/verify-pr-hosted-gates.mts"]).status).toBe(0);
 
     // A dirty canonical checkout no longer blocks a linked worktree whose
     // committed wrapper matches the origin/main trust anchor; without that
@@ -503,6 +526,8 @@ describe("scripts/pr wrappers", () => {
     writeFileSync(join(repo, "scripts", "lib", "tsx-cli-shim.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mts"), "// canonical\n");
+    writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mjs"), "// canonical\n");
+    writeFileSync(join(repo, "scripts", "verify-pr-hosted-gates.mts"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# canonical\n");
     chmodSync(join(repo, "scripts", "pr"), 0o755);
 

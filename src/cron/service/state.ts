@@ -280,7 +280,6 @@ export type CronServiceState = {
   stopped: boolean;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
-  restartRecoveryPending: boolean;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
@@ -317,7 +316,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     stopped: false,
     schedulingPaused: false,
     schedulerStarted: false,
-    restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
@@ -371,7 +369,6 @@ export type CronRunResult =
   | { ok: true; ran: false; reason: "disabled" }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
-  | { ok: true; ran: false; reason: "restart-recovery-pending" }
   | { ok: true; ran: false; reason: "invalid-spec" }
   | { ok: true; ran: false; reason: "stopped" }
   | { ok: false };

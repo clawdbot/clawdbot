@@ -464,6 +464,7 @@ export class CodexToolTranscriptProjection {
           name,
           text: formatMissingToolResultError({ id, name }),
           isError: true,
+          details: { reason: "missing_tool_result" },
         });
       }
     }

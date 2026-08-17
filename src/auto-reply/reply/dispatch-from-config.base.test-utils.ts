@@ -53,6 +53,7 @@ import {
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -495,7 +496,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "slack" });
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
     const ctx = buildTestCtx({
       Provider: "slack",
       Surface: "slack",
@@ -539,7 +540,7 @@ describe("dispatchReplyFromConfig", () => {
   it("mirrors reset acknowledgements into the canonically prepared Slack session", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
     const sessionKey = "Agent:Main:Slack:Channel:C123";
     const preparedSessionKey = "agent:main:slack:channel:c123";
     sessionStoreMocks.currentEntry = {
@@ -754,7 +755,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("mirrors the delivered ownerless Slack text after dispatcher hook rewrites", async () => {
     setNoAbort();
-    const dispatcher = createDispatcher();
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
     dispatcher.appendBeforeDeliver?.((payload, info) =>
       info.kind === "final" ? { ...payload, text: "Redacted Slack reply" } : payload,
     );
@@ -1054,9 +1055,9 @@ describe("dispatchReplyFromConfig", () => {
         replyResolver: async () => undefined,
       });
 
-      // Direct empty completions get a core no-visible-reply fallback final.
-      expect(result.queuedFinal).toBe(true);
-      expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+      // An unsettled custom dispatcher has no receipt, so the turn cannot claim delivery.
+      expect(result.queuedFinal).toBe(false);
+      expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
       await vi.waitFor(
         () => {
           expect(

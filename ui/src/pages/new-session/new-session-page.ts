@@ -245,11 +245,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     this.gateway.retryPendingCatalogTarget();
     void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
-    this.place.modelControl.loadCatalogTargets(
-      this.context,
-      this.place.agentId,
-      this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
-    );
     const agentState = this.context?.agents.state;
     const agentsReady = Boolean(
       this.gateway.connected &&
@@ -257,6 +252,11 @@ class NewSessionPage extends OpenClawLightDomElement {
       agentState?.connected &&
       agentState.client === this.gateway.client &&
       this.place.agents().length > 0,
+    );
+    this.place.modelControl.loadCatalogTargets(
+      this.context,
+      agentsReady && this.place.agentId ? (this.place.selectedAgent()?.id ?? "") : "",
+      this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
     );
     const openKey = this.data
       ? catalog.routeKey(this.data)

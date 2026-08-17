@@ -26,7 +26,6 @@ import {
   resetToolStream,
   type CompactionStatus,
   type FallbackStatus,
-  type PlanStatus,
   type WaitingApprovalStatus,
 } from "./tool-stream.ts";
 
@@ -65,7 +64,6 @@ type RunLifecycleHost = Omit<
   compactionClearTimer?: TimerHandle | number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: TimerHandle | number | null;
-  planStatus?: PlanStatus | null;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
@@ -355,12 +353,6 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
     if (!runId || !waitingApproval.runId || waitingApproval.runId === runId) {
       host.waitingApprovalStatuses?.delete(approvalId);
     }
-  }
-  // Plan checklists are run-owned (unlike the transient compaction/fallback
-  // toasts): a terminal reconcile for another run must not clear them.
-  const planOwner = host.planStatus?.runId;
-  if (host.planStatus && (!runId || !planOwner || planOwner === runId)) {
-    host.planStatus = null;
   }
 }
 

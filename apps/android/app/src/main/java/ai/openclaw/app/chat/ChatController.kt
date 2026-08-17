@@ -2017,7 +2017,6 @@ class ChatController internal constructor(
     updateErrorText(null)
     _historyLoading.value = true
     return try {
-      val label = nextNewChatSessionLabel(_sessions.value)
       val hasLoadedParentSession = !_sessionId.value.isNullOrBlank()
       val params =
         buildJsonObject {
@@ -2027,7 +2026,6 @@ class ChatController internal constructor(
             put("emitCommandHooks", JsonPrimitive(true))
             put("succeedsParent", JsonPrimitive(false))
           }
-          put("label", JsonPrimitive(label))
           if (worktree) put("worktree", JsonPrimitive(true))
         }
       val res = requestSessionCreateWithDispositionFallback(createGatewayId, params)
@@ -7032,27 +7030,8 @@ private enum class ChatMetadataLoadState {
   Loaded,
 }
 
-private const val NEW_CHAT_SESSION_LABEL = "New chat"
-
 // Group mutations enumerate whole stores; far past any realistic session count.
 private const val GROUP_MEMBER_FETCH_LIMIT = 10_000
-
-internal fun nextNewChatSessionLabel(sessions: List<ChatSessionEntry>): String {
-  val baseLabel = NEW_CHAT_SESSION_LABEL
-  val existingLabels =
-    sessions
-      .mapNotNull { session -> session.displayName?.trim()?.takeIf { it.isNotEmpty() } }
-      .toSet()
-  if (baseLabel !in existingLabels) return baseLabel
-
-  var suffix = 2
-  while (newChatSessionLabelWithSuffix(suffix) in existingLabels) {
-    suffix += 1
-  }
-  return newChatSessionLabelWithSuffix(suffix)
-}
-
-private fun newChatSessionLabelWithSuffix(suffix: Int): String = NEW_CHAT_SESSION_LABEL + ' ' + suffix
 
 internal fun isCurrentHistoryLoad(
   requestedSessionKey: String,

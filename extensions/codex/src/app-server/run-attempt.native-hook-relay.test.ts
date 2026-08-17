@@ -315,7 +315,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "cmd-policy-allow",
-        command: "gh run view 1",
+        command: "/bin/echo ready",
         cwd: workspaceDir,
       },
     });

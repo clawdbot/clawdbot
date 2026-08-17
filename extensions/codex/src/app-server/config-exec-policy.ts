@@ -100,6 +100,7 @@ function resolveOpenClawExecPolicyFromConfig(params: {
 
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   execOverrides?: {
+    mode?: unknown;
     security?: unknown;
     ask?: unknown;
   };

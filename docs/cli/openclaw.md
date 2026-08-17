@@ -249,10 +249,9 @@ Message-channel rescue mode never uses the model-assisted planner. Remote rescue
 Embedded runtimes and the Codex app-server harness enforce the ring-zero
 restriction directly: the run carries an OpenClaw tool allow-list with only
 the `openclaw` tool. For Codex, OpenClaw also disables environments, native
-execution, multi-agent, goal, app/plugin, skill/MCP, web-search, and
-`request_user_input` surfaces for that run. Codex still injects its inert native `update_plan`
-utility; it can update the model's temporary checklist but cannot write files
-or OpenClaw configuration. CLI harnesses do not consume OpenClaw's allow-list,
+execution, multi-agent, goal, app/plugin, skill/MCP, web-search,
+`request_user_input`, and its native planning utility for that run. CLI
+harnesses do not consume OpenClaw's allow-list,
 so OpenClaw admits only backends whose own tool-selection contract can prove
 the same restriction:
 

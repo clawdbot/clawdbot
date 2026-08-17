@@ -319,6 +319,7 @@ export async function resolveModelAsync(
     authProfileMode: options?.authProfileMode,
     preferredProfile: options?.preferredProfile,
   });
+  const preparedMetadataSnapshot = preparedModelRuntime?.metadataSnapshot;
   let staticCatalogLookup: Promise<ProviderRuntimeModel | undefined> | undefined;
   const resolveStaticCatalogModel = async () => {
     if (!options?.allowBundledStaticCatalogFallback) {
@@ -334,6 +335,7 @@ export async function resolveModelAsync(
         cfg,
         workspaceDir,
         includeRuntimeDiscovery: true,
+        ...(preparedMetadataSnapshot ? { metadataSnapshot: preparedMetadataSnapshot } : {}),
       });
       if (manifestModel) {
         return manifestModel;
@@ -343,6 +345,7 @@ export async function resolveModelAsync(
         modelId: normalizedRef.model,
         cfg,
         workspaceDir,
+        ...(preparedMetadataSnapshot ? { metadataSnapshot: preparedMetadataSnapshot } : {}),
       });
     })();
     return await staticCatalogLookup;

@@ -1740,6 +1740,40 @@ describe("gateway session utils", () => {
     expect(row.execCwd).toBe("/Users/peter/Projects/openclaw");
   });
 
+  test("buildGatewaySessionRow projects the session root only for an explicit permission mode", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const ordinaryEntry: SessionEntry = {
+      sessionId: "ordinary",
+      sessionRoot: "/workspace/private",
+      updatedAt: 1,
+    };
+    const ordinaryRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:ordinary": ordinaryEntry },
+      key: "agent:main:ordinary",
+      entry: ordinaryEntry,
+    });
+    expect(ordinaryRow).not.toHaveProperty("sessionRoot");
+
+    const permissionEntry: SessionEntry = {
+      ...ordinaryEntry,
+      permissionMode: "workspace",
+      sessionId: "permission",
+    };
+    const permissionRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:permission": permissionEntry },
+      key: "agent:main:permission",
+      entry: permissionEntry,
+    });
+    expect(permissionRow).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/private",
+    });
+  });
+
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry: SessionEntry = {

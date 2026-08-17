@@ -168,6 +168,8 @@ export function createService(
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
+      | "prepareNodeEnrollment"
+      | "retireNodeEnrollment"
       | "resolveWorkerGateway"
       | "tunnelManager"
       | "generateWorkerCredential"
@@ -207,6 +209,7 @@ export function createService(
 export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
   return {
     id: "fake",
+    supportedExecutionModes: ["worker-turn", "remote-exec"],
     provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
     inspect: async () => ({ status: "active" }),
     destroy: async () => {},

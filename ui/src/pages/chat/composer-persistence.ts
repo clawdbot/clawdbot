@@ -79,6 +79,11 @@ export type ChatComposerPersistResult =
   | { status: "conflict" }
   | ({ status: "storage-failed" } & ChatComposerDraftRetry);
 
+export type StoredChatQueueReplacement = {
+  id: string;
+  expected: ChatQueueItem;
+};
+
 type ChatComposerPersistOptions = {
   agentId?: string;
   draft?: string;
@@ -161,7 +166,8 @@ function queueItemVersionMatches(
     stored.sendAttempts === canonicalExpected.sendAttempts &&
     stored.sendState === canonicalExpected.sendState &&
     stored.agentId === canonicalExpected.agentId &&
-    stored.sessionKey === canonicalExpected.sessionKey,
+    stored.sessionKey === canonicalExpected.sessionKey &&
+    stored.orderKey === canonicalExpected.orderKey,
   );
 }
 
@@ -431,7 +437,7 @@ export function admitStoredChatComposerQueueItem(
   sessionKey: string,
   item: ChatQueueItem,
   agentId?: string,
-  replacesId?: string,
+  replaces?: StoredChatQueueReplacement,
 ): boolean {
   const storage = getSafeSessionStorage();
   if (!storage || !sessionKey.trim()) {
@@ -460,7 +466,17 @@ export function admitStoredChatComposerQueueItem(
     // by the write that stores the replacement, so a rejected write leaves the
     // original queued instead of losing both copies. Filtering before the cap
     // check also keeps a replacement admissible on a full queue.
-    const queue = (session?.queue ?? []).filter((entry) => entry.id !== replacesId);
+    const storedQueue = session?.queue ?? [];
+    if (
+      replaces &&
+      !storedQueue.some(
+        (entry) =>
+          entry.id === replaces.id && queueItemVersionMatches(entry, replaces.expected, scope),
+      )
+    ) {
+      return false;
+    }
+    const queue = storedQueue.filter((entry) => entry.id !== replaces?.id);
     const existing = queue.find((entry) => entry.id === serialized.id);
     if (existing) {
       if (!queueItemsEqual(existing, serialized, scope)) {

@@ -460,7 +460,7 @@ describe("Synology Chat client loopback", () => {
     });
     const incomingUrl =
       `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-      "api=SYNO.Chat.External&method=chatbot&version=2";
+      `api=SYNO.Chat.External&method=chatbot&version=2&token=${randomUUID()}`;
     const now = vi.spyOn(Date, "now");
     now.mockReturnValue(1_700_000_100_000);
 

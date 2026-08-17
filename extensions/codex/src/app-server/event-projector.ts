@@ -136,8 +136,10 @@ export class CodexAppServerEventProjector {
       (text) => this.toolProgressProjection.matchesEcho(text),
       () => this.nextTranscriptTimestamp(),
     );
-    this.reasoningProjection = new CodexReasoningProjection(params, (event) =>
-      this.emitAgentEvent(event),
+    this.reasoningProjection = new CodexReasoningProjection(
+      params,
+      (event) => this.emitAgentEvent(event),
+      options.onNativePlanUpdate,
     );
   }
 
@@ -238,7 +240,7 @@ export class CodexAppServerEventProjector {
         this.reasoningProjection.handlePlanDelta(params);
         break;
       case "turn/plan/updated":
-        this.reasoningProjection.handleTurnPlanUpdated(params);
+        await this.reasoningProjection.handleTurnPlanUpdated(params);
         break;
       case "item/started":
         await this.handleItemStarted(params);
@@ -349,10 +351,13 @@ export class CodexAppServerEventProjector {
     this.toolTranscriptProjection.recordDynamicToolCall(params);
   }
 
-  /** Projects a successful OpenClaw update_plan call through the native plan stream. */
-  recordDynamicPlanUpdate(params: unknown): void {
+  /** Projects a successful OpenClaw progress_card call through the native plan stream. */
+  async recordDynamicProgressCardUpdate(params: unknown): Promise<void> {
     if (isJsonObject(params)) {
-      this.reasoningProjection.handleTurnPlanUpdated(params, "openclaw");
+      const projected: JsonObject = {
+        plan: Array.isArray(params.plan) ? params.plan : [],
+      };
+      await this.reasoningProjection.handleTurnPlanUpdated(projected, "openclaw");
     }
   }
 

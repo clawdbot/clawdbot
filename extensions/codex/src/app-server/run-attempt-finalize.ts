@@ -481,6 +481,9 @@ export async function finalizeCodexAttempt(
   );
   const finalizedResult: EmbeddedRunAttemptResult = {
     ...result,
+    ...(toolState.yieldAcknowledgment
+      ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
+      : {}),
     terminal: attemptTerminal.normalize({
       timedOut: effectiveTimedOut,
       aborted: finalAborted,

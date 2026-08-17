@@ -9,11 +9,12 @@ const CRABBOX_PROVISION_TIMEOUT_MS = 290_000;
 // Crabbox starts its 45-minute desktop/browser bootstrap clock after acquisition.
 // Preserve OpenClaw's existing five-minute acquisition envelope, then leave one
 // lifecycle allowance for post-warmup inspection and cleanup.
-export const CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS = 50 * 60_000;
+const CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS = 50 * 60_000;
 const CRABBOX_DESKTOP_PROVISION_TIMEOUT_MS =
   CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS + CRABBOX_LIFECYCLE_TIMEOUT_MS;
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.
 export const CRABBOX_SETUP_TIMEOUT_MS = 300_000;
+export const CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS = 15 * 60_000;
 
 export function resolveCrabboxProvisionBaseTimeoutMs(
   profile: CrabboxProvisionTimeoutProfile,
@@ -31,6 +32,7 @@ export function resolveCrabboxProvisionCallTimeoutMs(
   return (
     resolveCrabboxProvisionBaseTimeoutMs(profile) +
     countCrabboxProvisionSetupPhases(profile) * CRABBOX_SETUP_TIMEOUT_MS +
+    CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS +
     CRABBOX_LIFECYCLE_TIMEOUT_MS
   );
 }

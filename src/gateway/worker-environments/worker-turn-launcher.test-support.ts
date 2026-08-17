@@ -199,6 +199,8 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     profileId: "development",
     profileSnapshot: { settings: { region: "test" } },
     provisionOperationId: "provision-worker-turn",
+    nodeSetupId: null,
+    nodeDeviceId: null,
     sharedHost: false,
     bootstrapReceipt: {
       bundleHash: BUNDLE_HASH,
@@ -321,6 +323,8 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     sessionFile,
     sessionTarget,
     workspaceDir: root,
+    permissionMode: "workspace" as const,
+    sessionRoot: root,
     prompt: "Inspect this workspace",
     timeoutMs: 5_000,
     runId,

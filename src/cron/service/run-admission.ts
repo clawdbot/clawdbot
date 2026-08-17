@@ -412,7 +412,7 @@ export async function activateQueuedCronRun(params: {
       runReceipt: ReturnType<typeof prepareServiceCronRunReceiptClaim>["handle"];
     }
   | { kind: "fenced" }
-  | { kind: "unavailable"; reason: "stopped" | "restart-recovery-pending" }
+  | { kind: "unavailable"; reason: "stopped" }
 > {
   const { state, job, reservationIdentity } = params;
   const startedAt = state.deps.nowMs();
@@ -467,7 +467,7 @@ export async function activateQueuedCronRun(params: {
     reservation.runReceipt = activatedReceipt!;
     reservation.activationPreviousLastError = { value: previousLastError };
   }
-  if (!state.stopped && !state.restartRecoveryPending) {
+  if (!state.stopped) {
     return { kind: "activated", job: activatedJob, startedAt, runReceipt: activatedReceipt! };
   }
 
@@ -483,7 +483,7 @@ export async function activateQueuedCronRun(params: {
         terminal: {
           status: "skipped",
           finishedAtMs: state.deps.nowMs(),
-          error: state.stopped ? "cron service stopped" : "cron restart recovery pending",
+          error: "cron service stopped",
         },
       }),
       mutate: ({ jobs }) => {
@@ -508,7 +508,7 @@ export async function activateQueuedCronRun(params: {
   releaseQueuedCronRun(state, job.id, reservationIdentity);
   return {
     kind: "unavailable",
-    reason: state.stopped ? "stopped" : "restart-recovery-pending",
+    reason: "stopped",
   };
 }
 
@@ -553,7 +553,7 @@ export async function executeQueuedCronRun(params: {
   const admission = await runWithCronAdmission(state, async () => {
     const started = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      if (params.isUnavailable?.() || state.stopped || state.restartRecoveryPending) {
+      if (params.isUnavailable?.() || state.stopped) {
         params.onUnavailable?.();
         return undefined;
       }

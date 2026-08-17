@@ -2333,6 +2333,15 @@ body.update-dialog-open .sidebar-update-card__status {
   pointer-events: none;
 }
 
+.sidebar-recent-session--child > .sidebar-recent-session__aside {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: 0 0 24px;
+  padding-right: 0;
+  pointer-events: none;
+}
+
 /* Rows with a child toggle keep it as the rightmost in-flow control; the
    overlaid actions land just left of it, at the link's right edge — the
    same link-relative geometry as toggle-less rows, so one mask fits both. */

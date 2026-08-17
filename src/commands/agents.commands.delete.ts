@@ -64,6 +64,7 @@ type AgentsDeleteGatewayResult = {
   removedBindings: number;
   removed?: Array<{ path: string; method: "trash" | "missing" }>;
   failed?: Array<{ path: string; reason: string }>;
+  purgeFailed?: true;
 };
 
 function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, message: string): void {
@@ -79,6 +80,14 @@ function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, messag
 function logClearedOwnerRefs(runtime: RuntimeEnv, clearedOwnerRefs: readonly string[]): void {
   if (clearedOwnerRefs.length > 0) {
     runtime.log(`Cleared owner references: ${clearedOwnerRefs.join(", ")}`);
+  }
+}
+
+function logSessionPurgeWarning(runtime: RuntimeEnv, agentId: string, purgeFailed: boolean): void {
+  if (purgeFailed) {
+    runtime.error(
+      `Warning: session-store purge failed for deleted agent "${agentId}"; stale shared-store rows may remain.`,
+    );
   }
 }
 
@@ -245,11 +254,13 @@ export async function agentsDeleteCommand(
         clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
         removed: gatewayResult.removed,
         failed: gatewayResult.failed,
+        ...(gatewayResult.purgeFailed ? { purgeFailed: true } : {}),
         transport: "gateway",
       });
     } else {
       runtime.log(`Deleted agent: ${agentId}`);
       logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
+      logSessionPurgeWarning(runtime, agentId, gatewayResult.purgeFailed === true);
       for (const failure of gatewayResult.failed ?? []) {
         runtime.error(
           `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
@@ -286,7 +297,7 @@ export async function agentsDeleteCommand(
   }
 
   // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
-  await purgeAgentSessionStoreEntries(cfg, agentId);
+  const purgeFailed = await purgeAgentSessionStoreEntries(cfg, agentId);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).
@@ -340,9 +351,11 @@ export async function agentsDeleteCommand(
       removedBindings: result.removedBindings,
       removedAllow: result.removedAllow,
       clearedOwnerRefs: result.clearedOwnerRefs.length > 0 ? result.clearedOwnerRefs : undefined,
+      ...(purgeFailed ? { purgeFailed: true } : {}),
     });
   } else {
     runtime.log(`Deleted agent: ${agentId}`);
     logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
+    logSessionPurgeWarning(runtime, agentId, purgeFailed);
   }
 }

@@ -78,6 +78,11 @@ function scenario(): ControlUiMockGatewayScenario {
         additions: 4,
         deletions: 2,
       },
+      "sessions.companion.ask": {
+        answer: "The mobile side chat stayed inside its panel.",
+        ts: Date.UTC(2026, 7, 16, 12, 0),
+      },
+      "sessions.companion.state": { exchanges: [] },
       "sessions.files.list": {
         browser: {
           path: "ui/src/pages/chat",
@@ -872,13 +877,15 @@ suite.define(() => {
       },
       async ({ page }) => {
         await seedSettings(page, "light");
-        await installMockGateway(page, scenario());
+        const gateway = await installMockGateway(page, scenario());
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".chat-group").first().waitFor();
         await page.locator(".chat-side-panel-toggle").click();
         await openFromEmpty(page, "Files");
         await openFromPlus(page, "Terminal");
-        await expect.poll(async () => tabLabels(page)).toEqual(["Files", "Terminal"]);
+        await openFromPlus(page, "Side chat");
+        await selectTab(page, "Side chat");
+        await expect.poll(async () => tabLabels(page)).toEqual(["Files", "Terminal", "Side chat"]);
         await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
 
         const geometry = await sidePanel(page).evaluate((element) => {
@@ -888,6 +895,48 @@ suite.define(() => {
         expect(geometry.left).toBeGreaterThanOrEqual(0);
         expect(geometry.right).toBeLessThanOrEqual(geometry.viewport + 1);
         expect(geometry.width).toBeGreaterThan(300);
+
+        const companion = sidePanel(page).locator("openclaw-chat-session-rail");
+        const companionGeometry = await companion.locator(".chat-session-rail").evaluate((rail) => {
+          const body = rail.closest(".side-panel__body");
+          const bodyRect = body?.getBoundingClientRect();
+          const railRect = rail.getBoundingClientRect();
+          return {
+            bodyBottom: bodyRect?.bottom ?? 0,
+            bodyTop: bodyRect?.top ?? 0,
+            railBottom: railRect.bottom,
+            railTop: railRect.top,
+          };
+        });
+        expect(companionGeometry.railTop).toBeGreaterThanOrEqual(companionGeometry.bodyTop - 1);
+        expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
+
+        const mainComposer = page.locator(".agent-chat__composer-combobox > textarea");
+        await mainComposer.click();
+        expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
+          true,
+        );
+        const input = companion.getByRole("textbox", { name: "Ask the session companion" });
+        await input.fill("Can I use side chat here?");
+        await companion.getByRole("button", { name: "Ask", exact: true }).click();
+        const request = await gateway.waitForRequest("sessions.companion.ask");
+        expect(request.params).toEqual({
+          agentId: "main",
+          question: "Can I use side chat here?",
+          sessionKey,
+        });
+        await companion
+          .getByText("The mobile side chat stayed inside its panel.", { exact: true })
+          .waitFor();
+        const companionActions = sidePanel(page).getByRole("button", {
+          name: "More companion actions",
+        });
+        await companionActions.click();
+        await sidePanel(page)
+          .locator('wa-dropdown-item[value="clear"]')
+          .waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await captureRichPanel(page, "rails-side-chat-mobile-light");
 
         await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();
         await expect

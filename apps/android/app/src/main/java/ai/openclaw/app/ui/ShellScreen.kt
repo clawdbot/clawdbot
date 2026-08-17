@@ -1542,7 +1542,7 @@ internal fun overviewRecentSessionRows(
   sessions
     .take(overviewRecentSessionVisibleLimit)
     .map { session ->
-      val title = displaySessionTitle(session.displayName)
+      val title = sessionPresentationTitle(session) { nativeString("Main thread") }
       RecentSessionListItem(
         key = session.key,
         ownerAgentId = session.ownerAgentId,
@@ -2208,8 +2208,6 @@ internal fun settingsRowDisclosureDescription(
   localizedTitle: String,
   opensRoute: Boolean,
 ): String = if (opensRoute) nativeString("Open \${row.title}", localizedTitle) else localizedTitle
-
-private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main thread")
 
 internal fun gatewaySummary(
   statusText: String,

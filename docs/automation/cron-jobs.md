@@ -301,18 +301,18 @@ envelope continue their ordinary non-app behavior; recreate or reauthorize one
 only when it needs Codex app access. See
 [Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
 
-| Style           | `--session` value   | Runs in                   | Best for                        |
-| --------------- | ------------------- | ------------------------- | ------------------------------- |
-| Main session    | `main`              | Dedicated automation lane | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>`  | Reports, background chores      |
-| Current session | `current`           | Bound at creation time    | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session  | Workflows that build on history |
+| Style           | `--session` value   | Runs in                     | Best for                        |
+| --------------- | ------------------- | --------------------------- | ------------------------------- |
+| Main session    | `main`              | Owning agent's main session | Reminders, system events        |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`    | Reports, background chores      |
+| Current session | `current`           | Bound at creation time      | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session    | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into a scheduler-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but do not append routine automation turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 
@@ -575,7 +575,10 @@ Query-string tokens are rejected.
       `now` or `next-heartbeat`.
     </ParamField>
     <ParamField path="agentId" type="string">
-      Target agent. Required when the configured agent fleet has no implicit or retained legacy owner.
+      Target agent. When supplied, it must name a configured agent. It is required when the configured agent fleet has no implicit or retained legacy owner.
+    </ParamField>
+    <ParamField path="sessionKey" type="string">
+      Target session. Requires `hooks.allowRequestSessionKey: true` and must match `hooks.allowedSessionKeyPrefixes` when configured. Both wake modes can target an explicit session.
     </ParamField>
 
   </Accordion>
@@ -589,7 +592,7 @@ Query-string tokens are rejected.
       -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.6-sol"}'
     ```
 
-    Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `sessionMode` (`isolated` or `persistent`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `accountId`, `model`, `thinking`, `timeoutSeconds`.
+    Fields: `message` (required), `name`, `agentId` (must name a configured agent when supplied), `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `sessionMode` (`isolated` or `persistent`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `accountId`, `model`, `thinking`, `timeoutSeconds`.
 
     Set `sessionMode: "persistent"` only when repeated deliveries should reuse prior context. Direct persistent hooks require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and a non-empty `hooks.allowedSessionKeyPrefixes` allowlist. Omit `sessionMode` or use `"isolated"` for a fresh run session.
 

@@ -201,6 +201,9 @@ describe("sessions.dispatch", () => {
     const dispatch = vi.fn().mockRejectedValue(new Error("remote dispatch reached"));
     const respond = await invoke(
       makeContext({
+        workerEnvironmentService: {
+          supportsExecutionMode: () => true,
+        } as never,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
@@ -216,6 +219,37 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         code: ErrorCodes.UNAVAILABLE,
         message: "remote dispatch reached",
+      }),
+    );
+  });
+
+  it.each([
+    ["node-only", { supportsExecutionMode: () => false }],
+    ["undeclared", { supportsExecutionMode: undefined }],
+  ])("rejects remote-exec before allocation when the profile is %s", async (_name, service) => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        agentRuntimeOverride: "codex",
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerEnvironmentService: service as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "runtime codex requires an SSH-backed cloud worker provider",
       }),
     );
   });
@@ -271,6 +305,39 @@ describe("sessions.dispatch", () => {
         code: ErrorCodes.INVALID_REQUEST,
         message: expect.stringContaining("archived"),
       }),
+    );
+  });
+
+  it("dispatches explicit permission modes through the worker capability gate", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        permissionMode: "workspace",
+        sessionRoot: "/repo/worktree",
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockResolvedValue(activePlacementRecord());
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        placement: expect.objectContaining({ state: "active" }),
+      }),
+      undefined,
     );
   });
 
@@ -626,7 +693,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("classifies workspace preflight operational failures as unavailable", async () => {
+  it("surfaces an execution-context feature mismatch as unavailable", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
@@ -640,7 +707,11 @@ describe("sessions.dispatch", () => {
     });
     const dispatch = vi
       .fn()
-      .mockRejectedValue(Object.assign(new Error("spawn failed"), { code: "ENOENT" }));
+      .mockRejectedValue(
+        new Error(
+          "Worker environment is not dispatchable with the current execution-context contract: ready",
+        ),
+      );
 
     const respond = await invoke(
       makeContext({
@@ -650,7 +721,10 @@ describe("sessions.dispatch", () => {
     );
 
     const error = vi.mocked(respond).mock.calls[0]?.[2];
-    expect(error).toMatchObject({ code: ErrorCodes.UNAVAILABLE, message: "spawn failed" });
+    expect(error).toMatchObject({
+      code: ErrorCodes.UNAVAILABLE,
+      message: expect.stringContaining("current execution-context contract"),
+    });
   });
 
   it("dispatches an existing managed-worktree session and projects placement", async () => {

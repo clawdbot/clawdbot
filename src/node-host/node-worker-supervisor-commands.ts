@@ -1,3 +1,4 @@
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
@@ -69,6 +70,7 @@ type NodeWorkerSupervisorCommandResult =
 function resolveWorkerConnectionEndpoint(params: {
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
 }): WorkerConnectionEndpoint {
   if (!params.gatewayUrl) {
     throw new Error("node worker gateway connection unavailable");
@@ -91,6 +93,7 @@ function resolveWorkerConnectionEndpoint(params: {
     ...(gateway.protocol === "wss:" && params.gatewayTlsFingerprint
       ? { tlsFingerprint: params.gatewayTlsFingerprint }
       : {}),
+    ...(params.gatewayCloudflareAccess ? { cloudflareAccess: params.gatewayCloudflareAccess } : {}),
   });
   if (!endpoint) {
     throw new Error("node worker gateway connection could not form a worker endpoint");
@@ -107,6 +110,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   workspace?: NodeWorkerWorkspaceRuntime;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   signal?: AbortSignal;
 }): Promise<NodeWorkerSupervisorCommandResult> {
   const recognized =
@@ -149,6 +153,9 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
           ...(params.gatewayTlsFingerprint
             ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
             : {}),
+          ...(params.gatewayCloudflareAccess
+            ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
+            : {}),
           signal: params.signal,
         }),
       };
@@ -165,6 +172,9 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
                 url: params.gatewayUrl,
                 ...(params.gatewayTlsFingerprint
                   ? { tlsFingerprint: params.gatewayTlsFingerprint }
+                  : {}),
+                ...(params.gatewayCloudflareAccess
+                  ? { cloudflareAccess: params.gatewayCloudflareAccess }
                   : {}),
               }
             : undefined,

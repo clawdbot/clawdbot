@@ -1,15 +1,15 @@
 // One-shot main job tests cover disabling cron jobs after a single run.
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveAgentMainSessionKey } from "../config/sessions.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatRunResult,
 } from "../infra/heartbeat-wake.js";
 import {
-  consumeSelectedSystemEventEntries,
   drainSystemEventEntries,
-  enqueueSystemEventEntry,
+  enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
@@ -27,10 +27,6 @@ installCronTestHooks({ logger: noopLogger });
 const { makeStorePath } = createCronStoreHarness({
   prefix: "openclaw-cron-runs-one-shot-",
 });
-
-function expectCronRunSessionKey(value: unknown, jobId: string) {
-  expect(value).toMatch(new RegExp(`^agent:main:cron:${jobId}:run:\\d+$`));
-}
 
 function createCronEventHarness() {
   const events: CronEvent[] = [];
@@ -75,25 +71,24 @@ type CronHarnessOptions = {
   withEvents?: boolean;
 };
 
+function resolveHarnessSessionKey(target?: { agentId?: string; sessionKey?: string }): string {
+  return (
+    target?.sessionKey ??
+    resolveAgentMainSessionKey({ cfg: {}, agentId: target?.agentId ?? "main" })
+  );
+}
+
 async function createCronHarness(options: CronHarnessOptions = {}) {
   const store = await makeStorePath();
   const enqueueSystemEvent = options.useRemovableSystemEventQueue
     ? vi.fn((text: string, opts?: Parameters<CronServiceDeps["enqueueSystemEvent"]>[1]) => {
-        if (!opts?.sessionKey) {
-          throw new Error("test removable queue requires a sessionKey");
-        }
-        const event = enqueueSystemEventEntry(text, {
-          sessionKey: opts.sessionKey,
-          contextKey: opts.contextKey,
-          deliveryContext: opts.deliveryContext,
+        const sessionKey = resolveHarnessSessionKey(opts);
+        const remove = enqueueSystemEventWithReceipt(text, {
+          sessionKey,
+          contextKey: opts?.contextKey,
+          deliveryContext: opts?.deliveryContext,
         });
-        return event
-          ? {
-              accepted: true,
-              remove: () =>
-                consumeSelectedSystemEventEntries(opts.sessionKey as string, [event]).length > 0,
-            }
-          : { accepted: false };
+        return remove ? { accepted: true, remove } : { accepted: false };
       })
     : vi.fn();
   const requestHeartbeat = vi.fn();
@@ -244,10 +239,10 @@ function expectMainSystemEventPosted(
   }
   const options = matchingCall[1] as Record<string, unknown>;
   expect(options).toMatchObject({
-    agentId: undefined,
+    agentId: "main",
     contextKey: `cron:${params.jobId}`,
   });
-  expectCronRunSessionKey(options.sessionKey, params.jobId);
+  expect(options.sessionKey).toBeUndefined();
 }
 
 function expectQueuedCronHeartbeat(
@@ -259,16 +254,16 @@ function expectQueuedCronHeartbeat(
     source: "cron",
     intent: "immediate",
     reason: `cron:${params.jobId}`,
-    agentId: undefined,
+    agentId: "main",
     heartbeat: { target: "last" },
   });
-  expectCronRunSessionKey(request?.sessionKey, params.jobId);
+  expect(request?.sessionKey).toBeUndefined();
 }
 
 function getPostedSystemEventSessionKeys(enqueueSystemEvent: ReturnType<typeof vi.fn>) {
-  return enqueueSystemEvent.mock.calls
-    .map(([, options]) => (options as { sessionKey?: string } | undefined)?.sessionKey)
-    .filter((sessionKey): sessionKey is string => Boolean(sessionKey));
+  return enqueueSystemEvent.mock.calls.map(([, options]) =>
+    resolveHarnessSessionKey(options as { agentId?: string; sessionKey?: string } | undefined),
+  );
 }
 
 function expectNoQueuedEvents(sessionKeys: readonly string[]) {
@@ -579,10 +574,8 @@ describe("CronService", () => {
         if (runHeartbeatOnce.mock.calls.length < 3) {
           return { status: "skipped" as const, reason: "disabled" };
         }
-        const sessionKey = opts?.sessionKey;
-        if (sessionKey) {
-          consumedTexts.push(...drainSystemEventEntries(sessionKey).map((event) => event.text));
-        }
+        const sessionKey = resolveHarnessSessionKey(opts);
+        consumedTexts.push(...drainSystemEventEntries(sessionKey).map((event) => event.text));
         return { status: "ran" as const, durationMs: 1 };
       },
     );

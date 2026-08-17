@@ -219,8 +219,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             },
             idempotencyKey,
             request.machineClass,
+            request.executionMode,
           )
-        : await environments.create(request.profileId, idempotencyKey, request.machineClass);
+        : await environments.create(
+            request.profileId,
+            idempotencyKey,
+            request.machineClass,
+            request.executionMode,
+          );
       const provisioned = requireProvisionedEnvironment(environment, expectedEnvironmentId);
       environmentId = provisioned.environmentId;
       ownerEpoch = provisioned.ownerEpoch;

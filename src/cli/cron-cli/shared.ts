@@ -206,20 +206,21 @@ function formatCronStatusForDisplay(job: CronJob): string {
 
 export function handleCronCliError(err: unknown) {
   const missingJob = readCronJobNotFoundError(err);
-  const message = missingJob
-    ? formatLookupMiss({
-        noun: "Automation",
-        value: sanitizeTerminalText(missingJob.jobId),
-        listCommand: "openclaw cron list",
-        valueLabel: "automation id",
-      })
-    : formatErrorMessage(err);
+  const message = missingJob ? formatCronLookupMiss(missingJob.jobId) : formatErrorMessage(err);
   if (isJsonOutputModeActive(process.argv)) {
     throw new Error(message);
   }
   defaultRuntime.error(danger(message));
   defaultRuntime.exit(1);
 }
+
+export const formatCronLookupMiss = (jobId: string) =>
+  formatLookupMiss({
+    noun: "Automation",
+    value: sanitizeTerminalText(jobId),
+    listCommand: "openclaw cron list",
+    valueLabel: "automation id",
+  });
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   // Old/offline gateways should not make successful cron mutations fail after the fact.

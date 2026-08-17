@@ -119,6 +119,8 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     profileId: "development",
     profileSnapshot,
     provisionOperationId: "provision-1",
+    nodeSetupId: null,
+    nodeDeviceId: null,
     sharedHost: false,
     bootstrapReceipt,
     teardownTerminalState: null,

@@ -1113,7 +1113,7 @@ extensions/qa-lab/src/suite-runtime-agent-process.ts	7
 extensions/qa-lab/src/suite-runtime-agent-session.ts	5
 extensions/qa-lab/src/suite-runtime-agent-tools.ts	1
 extensions/qa-lab/src/suite-runtime-gateway.ts	2
-extensions/qa-lab/src/suite-summary.ts	6
+extensions/qa-lab/src/suite-summary.ts	5
 extensions/qa-lab/src/suite-support.ts	1
 extensions/qa-lab/src/test-file-scenario-script-evidence.ts	2
 extensions/qa-lab/src/test-file-scenario-vitest-report.ts	1
@@ -2175,7 +2175,6 @@ src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
 src/agents/tools/terminal-tool.ts	1
 src/agents/tools/tts-tool.ts	1
-src/agents/tools/update-plan-tool.ts	4
 src/agents/tools/video-generate-tool.ts	4
 src/agents/tools/web-fetch.ts	3
 src/agents/tools/web-guarded-fetch.ts	2
@@ -2583,7 +2582,7 @@ src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	5
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-migration-run.ts	8
-src/commands/doctor-session-sqlite-readers.ts	12
+src/commands/doctor-session-sqlite-readers.ts	11
 src/commands/doctor-session-sqlite-recover-report.ts	3
 src/commands/doctor-session-sqlite.ts	3
 src/commands/doctor-session-state-providers.ts	3
@@ -3014,7 +3013,7 @@ src/gateway/server-methods/chat.ts	2
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	7
 src/gateway/server-methods/conversations.ts	4
-src/gateway/server-methods/cron.ts	20
+src/gateway/server-methods/cron.ts	17
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	6
 src/gateway/server-methods/doctor.ts	5
@@ -3791,7 +3790,7 @@ src/sessions/session-upstream-links.ts	2
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
 src/sessions/user-turn-transcript.media-normalize.ts	2
-src/sessions/user-turn-transcript.ts	15
+src/sessions/user-turn-transcript.ts	11
 src/shared/account-enabled.ts	1
 src/shared/assistant-error-format.ts	3
 src/shared/bounded-serial-queue.ts	1
@@ -4175,7 +4174,7 @@ ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
 ui/src/pages/chat/chat-gateway.ts	2
 ui/src/pages/chat/chat-history-retry.ts	1
-ui/src/pages/chat/chat-history.ts	7
+ui/src/pages/chat/chat-history.ts	6
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-board.ts	2
@@ -4247,7 +4246,7 @@ ui/src/pages/chat/route.ts	2
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	2
 ui/src/pages/chat/session-cache.ts	2
-ui/src/pages/chat/stream-reconciliation.ts	18
+ui/src/pages/chat/stream-reconciliation.ts	12
 ui/src/pages/chat/tool-stream.ts	8
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/config-page.ts	1

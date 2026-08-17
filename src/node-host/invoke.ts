@@ -622,6 +622,7 @@ async function dispatchInvoke(
     workspace: runtime.workerWorkspace,
     gatewayUrl: runtime.gatewayUrl,
     gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+    gatewayCloudflareAccess: runtime.gatewayCloudflareAccess,
     signal: runtime.signal,
   });
   if (workerSupervisorResult.handled) {

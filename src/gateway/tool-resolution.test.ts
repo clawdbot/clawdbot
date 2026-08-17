@@ -86,8 +86,8 @@ describe("resolveGatewayScopedTools", () => {
       surface: "loopback",
     });
 
-    expect(unbound.tools.some((tool) => tool.name === "image")).toBe(false);
-    expect(grantBound.tools.some((tool) => tool.name === "image")).toBe(true);
+    expect(unbound.tools.some((tool) => tool.name === "view_image")).toBe(false);
+    expect(grantBound.tools.some((tool) => tool.name === "view_image")).toBe(true);
   });
 
   it("uses the prepared vision fact for the loopback image loader", () => {
@@ -99,9 +99,9 @@ describe("resolveGatewayScopedTools", () => {
       surface: "loopback",
     });
 
-    const imageTool = result.tools.find((tool) => tool.name === "image");
+    const imageTool = result.tools.find((tool) => tool.name === "view_image");
     expect(imageTool).toMatchObject({
-      label: "Inspect Image",
+      label: "View Image",
       catalogMode: "direct-only",
     });
     expect(imageTool?.description).toContain("private model context");
@@ -241,12 +241,14 @@ describe("resolveGatewayScopedTools", () => {
 
     const toolResult = await yieldTool.execute("tool-call-1", {
       message: "waiting on subagents",
+      acknowledgment: "I’m waiting on the subagents.",
     });
 
-    expect(onYield).toHaveBeenCalledWith("waiting on subagents");
+    expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
     expect(toolResult.details).toEqual({
       status: "yielded",
       message: "waiting on subagents",
+      acknowledgment: "I’m waiting on the subagents.",
     });
   });
 });

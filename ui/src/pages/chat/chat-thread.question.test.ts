@@ -47,9 +47,6 @@ function items(question: QuestionPrompt, runActive: boolean, messages: unknown[]
     showToolCalls: true,
     runWorking: runActive,
     runActive,
-    planStatus: runActive
-      ? { steps: [{ step: "Wait for the answer", status: "in_progress" }] }
-      : null,
     questionPrompts: [question],
   });
 }
@@ -64,7 +61,6 @@ describe("question chat items", () => {
     expect(run?.kind).toBe("stream-run");
     expect(run?.kind === "stream-run" ? run.parts.map((part) => part.kind) : []).toEqual([
       "reading-indicator",
-      "plan",
     ]);
   });
 

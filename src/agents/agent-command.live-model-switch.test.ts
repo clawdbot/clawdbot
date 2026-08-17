@@ -141,6 +141,16 @@ const state = vi.hoisted(() => ({
   enqueueExecutionIdentityContextAtAdmissionMock: vi.fn(),
 }));
 
+vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
+  return {
+    ...actual,
+    ensureSessionDiffBaseline: vi.fn(
+      async (params: Parameters<typeof actual.ensureSessionDiffBaseline>[0]) => params.entry,
+    ),
+  };
+});
+
 vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));

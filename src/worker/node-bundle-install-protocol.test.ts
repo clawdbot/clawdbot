@@ -9,7 +9,7 @@ import {
 const build = {
   bundleHash: "a".repeat(64),
   openclawVersion: "2026.8.1",
-  protocolFeatures: ["worker-execution-context-v1"],
+  protocolFeatures: ["worker-execution-context-v2"],
 };
 const input = {
   gatewayNamespace: "gateway-test",

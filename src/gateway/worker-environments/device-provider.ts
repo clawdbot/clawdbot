@@ -24,7 +24,7 @@ type DeviceWorkerRuntimeOptions = {
   now?: () => number;
 };
 
-type DeviceWorkerAvailability = {
+export type DeviceWorkerAvailability = {
   available: boolean;
   issue?: NodeRunnerInventoryIssue;
   unavailableReason?: "unpaired" | "disconnected" | "at-capacity";
@@ -138,6 +138,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
   };
   const provider: WorkerProvider = {
     id: DEVICE_WORKER_PROVIDER_ID,
+    supportedExecutionModes: ["worker-turn"],
     provisionBeforeInstallation: true,
     provision: async (profile, operationId) => {
       const deviceId = requireDeviceId(profile);

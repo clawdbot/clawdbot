@@ -7,10 +7,15 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { copyMarkdownLabel } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatGuardianNotice,
+  ChatQueueItem,
+  ChatStreamSegment,
+} from "../../../lib/chat/chat-types.ts";
 import {
   buildCompanionQuestionPrefill,
   buildMoreDetailsCompanionQuestion,
@@ -22,7 +27,6 @@ import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import type { PlanStatus } from "../tool-stream.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
@@ -63,6 +67,7 @@ export type ChatThreadProps = {
   historyLoading?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
+  guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
@@ -76,7 +81,6 @@ export type ChatThreadProps = {
   runWorking?: boolean;
   startupStatus?: ChatRunStartupStatus | null;
   waitingApproval?: boolean;
-  planStatus?: PlanStatus | null;
   questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
   sessionHost?: UiSessionDefaultsHost | null;
@@ -99,6 +103,7 @@ export type ChatThreadProps = {
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;

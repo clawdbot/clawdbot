@@ -28,10 +28,15 @@ type RuntimeFixture = {
   stop: ReturnType<typeof vi.fn>;
 };
 
+const serviceHealth = {
+  reportFailure: vi.fn(),
+  clearFailure: vi.fn(),
+};
 const serviceContext = {
   config: {},
   stateDir: os.tmpdir(),
   logger: { info() {}, warn() {}, error() {}, debug() {} },
+  serviceHealth,
 } as Parameters<VoiceCallService["start"]>[0];
 
 function createLogger(onError?: (message: string) => void) {
@@ -107,6 +112,8 @@ function expectLifecycleError(result: VoiceCallToolResult, text: string): void {
 describe("voice-call runtime lifecycle", () => {
   beforeEach(() => {
     vi.mocked(createVoiceCallRuntime).mockReset();
+    serviceHealth.reportFailure.mockReset();
+    serviceHealth.clearFailure.mockReset();
   });
 
   afterEach(() => {
@@ -274,9 +281,13 @@ describe("voice-call runtime lifecycle", () => {
 
     expect(generationA.service.start(serviceContext)).toBeUndefined();
     await expect(logged.promise).resolves.toContain("Failed to start runtime: provider boom");
+    expect(serviceHealth.reportFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "provider boom" }),
+    );
 
     await executeCall(generationA.tool());
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
     expect(runtimeA.initiateCall).toHaveBeenCalledTimes(1);
+    expect(serviceHealth.clearFailure).toHaveBeenCalled();
   });
 });

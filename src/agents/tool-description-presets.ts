@@ -11,7 +11,6 @@ export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP sessio
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
 export const AGENTS_WAIT_TOOL_DISPLAY_SUMMARY = "Wait for collector subagents.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
-export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
 export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answer.";
 export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
@@ -55,28 +54,37 @@ export function describeSessionVisibilityScope(
   return SESSION_VISIBILITY_SCOPE_COPY[visibility];
 }
 
+type SessionLinkDescriptionOptions = { sessionLinkBase?: string };
+
+export function describeSessionLinkRule(base: string): string {
+  return `When pointing the user at a session, cite its Control UI URL: main session -> \`${base}/chat/<agentId>\`; any other display session key -> \`${base}/chat/<agentId>/~key/\` + key minus \`agent:<agentId>:\`, with \`:\` replaced by \`/\`.`;
+}
+
 /** Describes the sessions_list tool for model-facing instructions. */
-export function describeSessionsListTool(): string {
+export function describeSessionsListTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "List visible sessions; filter kind/label/agentId/search/activity/archive.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles.",
     "Use before history/send target selection.",
+    ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
 
 /** Describes the sessions_history tool for model-facing instructions. */
-export function describeSessionsHistoryTool(): string {
+export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Read sanitized visible-session history.",
     "Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
+    ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
 
 /** Describes the sessions_search tool for model-facing instructions. */
-export function describeSessionsSearchTool(): string {
+export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Search your own past sessions for matching user and assistant text.",
     "Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+    ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }
 
@@ -145,11 +153,6 @@ export function describeSessionStatusTool(): string {
     '`sessionKey="current"` for current; UI labels are not keys.',
     "`model` overrides; `model=default` resets. Use for active model/session questions.",
   ].join(" ");
-}
-
-/** Describes the update_plan tool for model-facing instructions. */
-export function describeUpdatePlanTool(): string {
-  return "Maintain a user-visible work plan: ordered steps, each pending/in_progress/completed. Use for multi-step work. Send the full list each call; keep statuses current and exactly one `in_progress` until done.";
 }
 
 /** Describes the ask_user tool and its decision-only use policy. */

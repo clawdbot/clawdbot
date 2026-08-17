@@ -328,6 +328,50 @@
   line-break: anywhere;
 }
 
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link {
+  display: inline;
+  padding: 0.1em 0.2em;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  color: var(--link);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.9em;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link:hover,
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link:focus-visible {
+  text-decoration: underline;
+}
+
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link--titled {
+  display: inline-block;
+  max-width: min(28em, 100%);
+  padding: 0.08em 0.45em;
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
+  color: var(--text-strong);
+  font-family: var(--font-body);
+  font-weight: 600;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: -0.12em;
+  white-space: nowrap;
+}
+
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link > code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+}
+
 /* Both chat Markdown renderers enable file links — message bubbles (.chat-text)
    and the Chat Detail Panel (.sidebar-markdown) — and the parser shortens labels
    for both, so presentation has to follow or the panel shows bare basenames with

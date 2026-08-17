@@ -459,6 +459,10 @@ export function buildGatewaySessionRow(params: {
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
+    permissionMode: entry?.permissionMode,
+    ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
+      ? { sessionRoot: entry.sessionRoot }
+      : {}),
     worktree: entry?.worktree,
     execNode: entry?.execNode,
     execCwd: entry?.execCwd,

@@ -12,21 +12,18 @@ import {
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isPathInside } from "../../infra/path-guards.js";
 import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveUserPath } from "../../utils.js";
 import { prepareWorktreeSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import {
@@ -46,11 +43,11 @@ import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCreatedSessionCategory } from "./session-create-category.js";
-import { captureCreatedSessionDiffBaseline } from "./session-create-diff-baseline.js";
 import {
   resolveSessionCreateInitialTurn,
   shouldAttachPendingMessageSeq,
 } from "./session-create-initial-turn.js";
+import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -181,6 +178,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (p.permissionMode === "full" && client !== null && !clientScopes.includes(ADMIN_SCOPE)) {
+      respond(
+        false,
+        undefined,
+        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+      );
+      return;
+    }
     if (requestedCwd && !requestedExecNode && !clientScopes.includes(ADMIN_SCOPE)) {
       const containment = await resolveWorkspacePathContainment(requestedCwd, cfg);
       if (!containment) {
@@ -282,39 +287,27 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
-    if (sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true)) {
-      const targetAgentId = normalizeAgentId(
+    const preparedRoot = prepareSessionCreateFilesystemRoot({
+      cfg,
+      enforceSandboxContainment: Boolean(
+        sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true),
+      ),
+      requestedExecNode,
+      requestedProjectId,
+      sessionCwd,
+      sessionKey,
+      targetAgentId: normalizeAgentId(
         sessionAgentId ??
           parseAgentSessionKey(sessionKey ?? "")?.agentId ??
           explicitlyRequestedAgent.agentId,
-      );
-      const targetSessionKey = sessionKey ?? `agent:${targetAgentId}:dashboard:pending`;
-      const targetRuntime = resolveSandboxRuntimeStatus({
-        cfg,
-        agentId: targetAgentId,
-        sessionKey: targetSessionKey,
-      });
-      // Sandboxed dashboard sessions mount only their configured agent workspace.
-      if (
-        targetRuntime.sandboxed &&
-        !isPathInside(
-          resolveUserPath(resolveAgentWorkspaceDir(cfg, targetAgentId)),
-          resolveUserPath(sessionCwd),
-        )
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            requestedProjectId
-              ? "sessions.create project is outside the sandboxed agent workspace"
-              : "sessions.create cwd is outside the sandboxed agent workspace",
-          ),
-        );
-        return;
-      }
+      ),
+    });
+    if (!preparedRoot.ok) {
+      respond(false, undefined, preparedRoot.error);
+      return;
     }
+    sessionCwd = preparedRoot.value.sessionCwd;
+    const sessionRoot = preparedRoot.value.sessionRoot;
     if (p.worktree === true) {
       // Workspace-contained cwd and registry-authorized projects stay at operator.write;
       // arbitrary host paths still require operator.admin before reaching this block.
@@ -467,8 +460,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             sessionCwd = sessionWorktree.path;
           }
           const preparedWorktree = sessionWorktree;
+          const preparedSessionRoot = fs.realpathSync(preparedWorktree.path);
           return resultOk({
             spawnedCwd: sessionCwd,
+            sessionRoot: preparedSessionRoot,
             worktree: {
               id: preparedWorktree.id,
               branch: preparedWorktree.branch,
@@ -553,6 +548,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             }
           : undefined,
       spawnedCwd: p.worktree === true ? undefined : sessionCwd,
+      sessionRoot: p.worktree === true ? undefined : sessionRoot,
+      permissionMode: p.permissionMode ?? (p.worktree === true ? "workspace" : undefined),
       prepareLifecycle,
       onLifecycleCleanupError: (error) => {
         sessionLog.warn(
@@ -572,19 +569,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       commandSource: "webchat",
       creation: sessionCreation,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+      armSessionDiffBaselineCapture: true,
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
       ...(commitGuard ? { commitGuard } : {}),
       afterCreate: async ({ key, agentId, entry, storePath }) => {
-        // Session persistence already committed under the guard. Closure after
-        // that point may suppress follow-on work, but cannot roll back the session.
         if (!authority.hasActive()) {
           return;
         }
         if (await worktreeTitle?.persist(agentId, entry, key, storePath)) {
           emitSessionsChanged(context, { sessionKey: key, agentId, reason: "chat.title" });
         }
-        await captureCreatedSessionDiffBaseline({ key, agentId, cfg, entry, storePath });
         if (hasInitialTurn) {
           if (!authority.hasActive()) {
             return;
@@ -632,19 +627,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
-    if (created.resetExisting) {
-      await captureCreatedSessionDiffBaseline({
-        key: created.key,
-        agentId: created.agentId,
-        cfg,
-        entry: created.entry,
-        storePath: resolveGatewaySessionStoreTarget({
-          cfg,
-          key: created.key,
-          agentId: created.agentId,
-        }).storePath,
-      });
-    }
     const createdWorktree = sessionWorktree
       ? {
           id: sessionWorktree.id,

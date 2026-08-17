@@ -180,6 +180,7 @@ export const AgentsDeleteResultSchema = closedObject({
       }),
     ),
   ),
+  purgeFailed: Type.Optional(Type.Literal(true)),
 });
 
 /** File metadata and optional content for agent-local editable files. */

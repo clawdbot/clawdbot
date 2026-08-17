@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
@@ -7,7 +6,6 @@ import {
   verifyWorkerAdmissionHandshake,
   type ExpectedWorkerBuild,
 } from "./admission.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentState } from "./state.js";
@@ -133,21 +131,20 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
       }
+      const nodeDeviceId = record.nodeDeviceId;
       const nodeBundle =
-        record.providerId === DEVICE_WORKER_PROVIDER_ID &&
+        typeof nodeDeviceId === "string" &&
         !record.sshEndpoint &&
         record.bootstrapReceipt.installKind === "bundle";
       if (nodeBundle) {
-        const profileSettings = record.profileSnapshot.settings;
-        const deviceId = isRecord(profileSettings) ? profileSettings.device : undefined;
         const sessionId = record.attachedSessionIds[0];
-        if (!nodeTunnels || typeof deviceId !== "string" || !deviceId.trim() || !sessionId) {
-          throw serviceError("invalid_state", "Device worker tunnel runtime is unavailable");
+        if (!nodeTunnels || !sessionId) {
+          throw serviceError("invalid_state", "Node worker tunnel runtime is unavailable");
         }
         startup = nodeTunnels.start({
           environmentId: record.environmentId,
           ownerEpoch: record.ownerEpoch,
-          deviceId: deviceId.trim(),
+          deviceId: nodeDeviceId,
           sessionId,
           expectedBuild: {
             bundleHash: currentBundle.bundleHash,
