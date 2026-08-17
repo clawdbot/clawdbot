@@ -223,6 +223,53 @@ describe("memory host SDK package internals", () => {
     ]);
   });
 
+  it.each([
+    {
+      label: "primary memory file",
+      target: (workspaceDir: string) => path.join(workspaceDir, "USER.md"),
+      extraPaths: (_workspaceDir: string) => undefined,
+    },
+    {
+      label: "workspace memory directory",
+      target: (workspaceDir: string) => path.join(workspaceDir, "memory"),
+      extraPaths: (_workspaceDir: string) => undefined,
+    },
+    {
+      label: "configured extra path",
+      target: (workspaceDir: string) => path.join(workspaceDir, "extra"),
+      extraPaths: (workspaceDir: string) => [path.join(workspaceDir, "extra")],
+    },
+  ])("propagates operational scan failures for $label", async ({ target, extraPaths }) => {
+    const workspaceDir = getTmpDir();
+    const failedPath = target(workspaceDir);
+    const scanError = Object.assign(new Error(`I/O failure: ${failedPath}`), { code: "EIO" });
+    const realLstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(
+      async (...args: Parameters<typeof fs.lstat>): ReturnType<typeof fs.lstat> => {
+        if (path.resolve(String(args[0])) === failedPath) {
+          throw scanError;
+        }
+        return await realLstat(...args);
+      },
+    );
+
+    await expect(listMemoryFiles(workspaceDir, extraPaths(workspaceDir))).rejects.toBe(scanError);
+  });
+
+  it("propagates operational failures while discovering the canonical memory file", async () => {
+    const workspaceDir = getTmpDir();
+    const scanError = Object.assign(new Error(`I/O failure: ${workspaceDir}`), { code: "EIO" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === workspaceDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toBe(scanError);
+  });
+
   it("filters extra directories by glob while preserving symlink skips", async () => {
     const tmpDir = getTmpDir();
     const extraDir = path.join(tmpDir, "extra");
