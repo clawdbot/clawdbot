@@ -170,9 +170,15 @@ describe("connect cli", () => {
     try {
       await runConnect([target]);
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
     }
 
     expect(observedHeaders).toMatchObject({

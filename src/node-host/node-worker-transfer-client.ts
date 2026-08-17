@@ -34,6 +34,12 @@ const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 const transferLog = createSubsystemLogger("node-host/worker-workspace");
 
+export type NodeWorkerTransferGateway = {
+  url: string;
+  tlsFingerprint?: string;
+  cloudflareAccess?: CloudflareAccessCredentials;
+};
+
 async function readResponseBody(response: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;

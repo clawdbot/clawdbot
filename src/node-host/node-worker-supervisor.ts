@@ -474,10 +474,9 @@ class NodeWorkerSupervisor {
       params.descriptor.connectionEndpoint.kind === "websocket"
         ? params.descriptor.connectionEndpoint.cloudflareAccess
         : undefined;
-    const sensitiveValues = [
-      credential,
-      ...(cloudflareAccess ? [cloudflareAccess.clientId, cloudflareAccess.clientSecret] : []),
-    ];
+    const sensitiveValues = cloudflareAccess
+      ? [credential, cloudflareAccess.clientId, cloudflareAccess.clientSecret]
+      : [credential];
     const scrubber = createNodeWorkerCredentialScrubber(sensitiveValues);
     // Turn cancellation can beat the child's admission retry deadline. Retain the
     // producer's latest cause so the durable terminal receipt does not become generic.
