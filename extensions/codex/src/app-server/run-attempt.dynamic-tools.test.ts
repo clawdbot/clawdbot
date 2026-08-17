@@ -3,11 +3,11 @@ import path from "node:path";
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
+  hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -119,18 +119,28 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     ]);
   });
 
-  it("emits the bridge audit start before dynamic tool execution settles", async () => {
-    const completion = createDeferred<{
-      content: Array<{ type: "text"; text: string }>;
-      details: Record<string, never>;
-    }>();
+  it("emits the bridge audit start before dynamic tool implementation begins", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    let startPresentAtImplementation = false;
     const tool = createRuntimeDynamicTool("echo");
-    const execute = vi.fn(async () => await completion.promise);
+    const execute = vi.fn(async () => {
+      startPresentAtImplementation =
+        diagnosticEvents.some(
+          (event) =>
+            event.type === "tool.execution.started" && event.toolCallId === "call-echo-in-flight",
+        ) ||
+        hasPendingInternalDiagnosticEvent(
+          (event) =>
+            event.type === "tool.execution.started" && event.toolCallId === "call-echo-in-flight",
+        );
+      return {
+        content: [{ type: "text" as const, text: "echo done" }],
+        details: {},
+      };
+    });
     tool.execute = execute;
     dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
     const harness = createStartedThreadHarness();
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    let inFlightEventTypes: DiagnosticEventPayload["type"][] | undefined;
     let closeHostCapabilities: (() => void) | undefined;
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
       if ("toolCallId" in event && event.toolCallId === "call-echo-in-flight") {
@@ -147,7 +157,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
 
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
-      const toolResult = harness.handleServerRequest({
+      const toolResult = await harness.handleServerRequest({
         id: "request-echo-in-flight",
         method: "item/tool/call",
         params: {
@@ -159,28 +169,17 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
           arguments: {},
         },
       });
-      await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
-      await flushDiagnosticEvents();
-      inFlightEventTypes = diagnosticEvents.map((event) => event.type);
-
-      completion.resolve({
-        content: [{ type: "text", text: "echo done" }],
-        details: {},
-      });
-      await expect(toolResult).resolves.toMatchObject({ success: true });
+      expect(toolResult).toMatchObject({ success: true });
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
       await flushDiagnosticEvents();
     } finally {
-      completion.resolve({
-        content: [{ type: "text", text: "echo done" }],
-        details: {},
-      });
       closeHostCapabilities?.();
       unsubscribeDiagnostics();
     }
 
-    expect(inFlightEventTypes).toEqual(["tool.execution.started"]);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(startPresentAtImplementation).toBe(true);
     expect(diagnosticEvents.map((event) => event.type)).toEqual([
       "tool.execution.started",
       "tool.execution.completed",
