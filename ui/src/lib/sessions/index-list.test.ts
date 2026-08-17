@@ -3,7 +3,15 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "./index.ts";
 
-type ListParams = { archived?: true | "all"; limit?: number; offset?: number };
+type ListParams = {
+  agentId?: string;
+  archived?: true | "all";
+  boardFace?: "chat" | "dashboard";
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+  limit?: number;
+  offset?: number;
+};
 
 function listResult(keys: string[] = [], totalCount = keys.length, offset = 0): SessionsListResult {
   const nextOffset = offset + keys.length;
@@ -112,8 +120,8 @@ describe("session list requests", () => {
       return listResult(keys.slice(offset, offset + (params?.limit ?? 50)), 4, offset);
     });
     const { sessions } = sessionHarness(request);
-    const archivedScope = { agentId: "main", archivedFilter: "archived" as const };
-    const allScope = { agentId: "main", archivedFilter: "all" as const };
+    const archivedScope = { agentId: "main", archivedFilter: "archived" as const, limit: 2 };
+    const allScope = { agentId: "main", archivedFilter: "all" as const, limit: 1 };
     const observeSnapshot = vi.fn();
     const unsubscribe = sessions.subscribeList(archivedScope, observeSnapshot);
     await sessions.refreshList({ agentId: "main", limit: 1, force: true });
@@ -132,6 +140,68 @@ describe("session list requests", () => {
     expect(sessions.canonicalListRevision).toBe(1);
     expect(observeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ loading: true }));
     unsubscribe();
+    sessions.dispose();
+  });
+
+  it("keeps dashboard and sidebar queries distinct without inventing a dashboard agent", async () => {
+    const request = vi.fn(async (_method: string, params?: ListParams) =>
+      listResult([
+        params?.boardFace === "dashboard"
+          ? "agent:main:dashboard-result"
+          : "agent:main:sidebar-result",
+      ]),
+    );
+    const { sessions } = sessionHarness(request);
+    const dashboardQuery = {
+      limit: 50,
+      boardFace: "dashboard" as const,
+      archivedFilter: "all" as const,
+    };
+    const sidebarQuery = {
+      agentId: "main",
+      limit: 60,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      archivedFilter: "all" as const,
+    };
+    const stopDashboard = sessions.subscribeList(dashboardQuery, () => undefined);
+    const stopSidebar = sessions.subscribeList(sidebarQuery, () => undefined);
+
+    await sessions.refreshList({
+      ...dashboardQuery,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      includeDerivedTitles: false,
+      includeLastMessage: false,
+      force: true,
+    });
+    await sessions.refreshList({ ...sidebarQuery, force: true });
+
+    expect(sessions.listSnapshot(dashboardQuery).result?.sessions[0]?.key).toBe(
+      "agent:main:dashboard-result",
+    );
+    expect(sessions.listSnapshot(sidebarQuery).result?.sessions[0]?.key).toBe(
+      "agent:main:sidebar-result",
+    );
+    expect(request.mock.calls[0]?.[1]).toEqual({
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      limit: 50,
+      archived: "all",
+      boardFace: "dashboard",
+    });
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("agentId");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      agentId: "main",
+      archived: "all",
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      limit: 60,
+    });
+    stopDashboard();
+    stopSidebar();
     sessions.dispose();
   });
 

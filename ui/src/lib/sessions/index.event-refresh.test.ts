@@ -59,6 +59,109 @@ function createHarness(request: GatewayBrowserClient["request"]) {
 }
 
 describe("event-driven session list refresh", () => {
+  it("refreshes exact managed queries by agent and retains appended dashboard windows", async () => {
+    vi.useFakeTimers();
+    const dashboardRows = Array.from({ length: 4 }, (_, index) => ({
+      key: `agent:main:dashboard-${index}`,
+      kind: "direct" as const,
+      boardFace: "dashboard" as const,
+      updatedAt: index + 1,
+    }));
+    const request = vi.fn(
+      async (
+        method: string,
+        params?: {
+          agentId?: string;
+          archived?: "all";
+          boardFace?: "dashboard";
+          includeDerivedTitles?: boolean;
+          includeLastMessage?: boolean;
+          limit?: number;
+          offset?: number;
+        },
+      ) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        if (params?.boardFace !== "dashboard") {
+          return sessionsResult(1);
+        }
+        const rows = params.agentId
+          ? [{ ...dashboardRows[0]!, key: `agent:${params.agentId}:dashboard` }]
+          : dashboardRows;
+        const offset = params.offset ?? 0;
+        const page = rows.slice(offset, offset + (params.limit ?? 50));
+        return {
+          ...sessionsResult(1, page),
+          totalCount: rows.length,
+          hasMore: offset + page.length < rows.length,
+          nextOffset: offset + page.length < rows.length ? offset + page.length : null,
+        };
+      },
+    );
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const allAgentsQuery = {
+      boardFace: "dashboard" as const,
+      archivedFilter: "all" as const,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      limit: 2,
+    };
+    const writerQuery = { ...allAgentsQuery, agentId: "writer" };
+    const stopAll = sessions.subscribeList(allAgentsQuery, () => undefined);
+    const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
+
+    try {
+      await sessions.refreshList({ ...allAgentsQuery, force: true });
+      await sessions.refreshList({ ...allAgentsQuery, offset: 2, append: true, force: true });
+      await sessions.refreshList({ ...writerQuery, force: true });
+      expect(sessions.listSnapshot(allAgentsQuery).result?.sessions).toHaveLength(4);
+      request.mockClear();
+
+      emitEvent(sessionChangedEvent("agent:research:changed"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      const researchDashboardRequests = request.mock.calls.filter(
+        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+      );
+      expect(researchDashboardRequests).toHaveLength(1);
+      expect(researchDashboardRequests[0]?.[1]).toEqual({
+        includeGlobal: true,
+        includeUnknown: true,
+        configuredAgentsOnly: true,
+        limit: 4,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+        archived: "all",
+        boardFace: "dashboard",
+      });
+      expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("offset");
+      expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("agentId");
+      expect(sessions.listSnapshot(allAgentsQuery).result?.sessions).toHaveLength(4);
+      request.mockClear();
+
+      emitEvent(sessionChangedEvent("agent:writer:changed"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      const writerDashboardRequests = request.mock.calls.filter(
+        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+      );
+      expect(writerDashboardRequests).toHaveLength(2);
+      expect(
+        writerDashboardRequests.map(
+          ([, params]) => (params as { agentId?: string } | undefined)?.agentId ?? null,
+        ),
+      ).toEqual([null, "writer"]);
+    } finally {
+      stopAll();
+      stopWriter();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("retains every loaded page when a session event replaces the canonical list", async () => {
     vi.useFakeTimers();
     const rows = Array.from({ length: 120 }, (_, index) => ({
