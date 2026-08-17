@@ -48,7 +48,8 @@ export function isDocumentExtractorCapacityError(
   return (
     typeof value === "object" &&
     value !== null &&
-    (value as { code?: unknown }).code === DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE
+    "code" in value &&
+    value.code === DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE
   );
 }
 

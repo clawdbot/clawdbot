@@ -43,7 +43,7 @@ type PdfExtractionWorker = {
   once(event: "message", listener: (message: unknown) => void): unknown;
   once(event: "error", listener: (error: unknown) => void): unknown;
   once(event: "exit", listener: (code: number) => void): unknown;
-  postMessage(message: PdfExtractionWorkerInput): void;
+  postMessage(message: PdfExtractionWorkerInput, transferList?: readonly []): void;
   removeListener(event: "message", listener: (message: unknown) => void): unknown;
   removeListener(event: "error", listener: (error: unknown) => void): unknown;
   removeListener(event: "exit", listener: (code: number) => void): unknown;
@@ -101,8 +101,12 @@ function toDocumentImage(image: PdfImage): DocumentExtractedImage {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function isPdfPasswordError(err: unknown): boolean {
-  return Boolean(err && typeof err === "object" && (err as { code?: unknown }).code === "password");
+  return isRecord(err) && err.code === "password";
 }
 
 async function openPdfDocument(params: {
@@ -433,10 +437,10 @@ const sharedPdfWorkerPool = new PdfWorkerPool(
 );
 
 function parseWorkerResult(message: unknown): PdfExtractionWorkerResult | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
+  if (!isRecord(message)) {
     return undefined;
   }
-  const candidate = message as Record<string, unknown>;
+  const candidate = message;
   if (
     !Array.isArray(candidate.imageExtractionErrors) ||
     !candidate.imageExtractionErrors.every((entry) => typeof entry === "string")
@@ -450,16 +454,23 @@ function parseWorkerResult(message: unknown): PdfExtractionWorkerResult | undefi
       imageExtractionErrors: candidate.imageExtractionErrors,
     };
   }
+  const result = candidate.result;
   if (
     candidate.status !== "ok" ||
-    !candidate.result ||
-    typeof candidate.result !== "object" ||
-    typeof (candidate.result as { text?: unknown }).text !== "string" ||
-    !Array.isArray((candidate.result as { images?: unknown }).images)
+    !isRecord(result) ||
+    typeof result.text !== "string" ||
+    !Array.isArray(result.images)
   ) {
     return undefined;
   }
-  return candidate as PdfExtractionWorkerResult;
+  return {
+    status: "ok",
+    result: {
+      text: result.text,
+      images: result.images,
+    },
+    imageExtractionErrors: candidate.imageExtractionErrors,
+  };
 }
 
 async function extractPdfContentInWorker(
@@ -568,7 +579,7 @@ async function extractPdfContentInWorker(
           return;
         }
         try {
-          worker.postMessage(workerInput);
+          worker.postMessage(workerInput, []);
         } catch (error) {
           settle(
             () => reject(toErrorObject(error, "PDF extraction worker request failed")),

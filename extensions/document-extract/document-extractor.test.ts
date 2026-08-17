@@ -520,7 +520,7 @@ describe("PDF document extractor", () => {
     );
     const admittedAssertions = pending
       .slice(0, admittedCount)
-      .map((request) => expect(request).rejects.toThrow("test cleanup"));
+      .map((pendingRequest) => expect(pendingRequest).rejects.toThrow("test cleanup"));
     for (const controller of controllers.slice(0, admittedCount)) {
       controller.abort(new Error("test cleanup"));
     }
