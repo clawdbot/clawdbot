@@ -86,9 +86,32 @@ async function callRoute(params: {
   Object.defineProperty(req, "socket", {
     value: { remoteAddress: params.ip ?? "203.0.113.10" },
   });
+  return await callRouteRequest(params.route, req);
+}
+
+async function callRouteRequest(route: OpenClawPluginHttpRouteParams, req: IncomingMessage) {
   const res = new MockResponse() as ServerResponse & MockResponse;
-  await params.route.handler(req, res);
+  await route.handler(req, res);
   return res;
+}
+
+function createPendingAuthRequest(ip: string): IncomingMessage {
+  const req = new Readable({
+    read() {
+      // Keep the body open so the canonical reader owns timeout settlement.
+    },
+  }) as IncomingMessage;
+  req.method = "POST";
+  req.url = "/__openclaw_tg_miniapp/auth";
+  req.headers = { "content-type": "application/json" };
+  Object.defineProperty(req, "socket", { value: { remoteAddress: ip } });
+  return req;
+}
+
+function expectBodyReadListenersCleaned(req: IncomingMessage) {
+  for (const event of ["data", "end", "error", "close"] as const) {
+    expect(req.listenerCount(event), event).toBe(0);
+  }
 }
 
 function config(allowFrom: string[] = ["123456"]): OpenClawConfig {
@@ -313,4 +336,67 @@ describe("registerTelegramMiniAppRoutes", () => {
     expect(last?.statusCode).toBe(429);
     expect(last?.body).toBe("Too many requests");
   });
+
+  it("keeps malformed JSON on the expired-link response", async () => {
+    const route = createRoute(config());
+    const res = await callRoute({
+      route,
+      method: "POST",
+      url: "/__openclaw_tg_miniapp/auth",
+      contentType: "application/json",
+      body: "{",
+      ip: "203.0.113.49",
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toBe("This link expired. Reopen the dashboard from your bot chat.");
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized auth body and closes the request", async () => {
+    const route = createRoute(config());
+    const req = Readable.from(["x".repeat(4097)]) as IncomingMessage;
+    req.method = "POST";
+    req.url = "/__openclaw_tg_miniapp/auth";
+    req.headers = { "content-type": "application/json" };
+    Object.defineProperty(req, "socket", { value: { remoteAddress: "203.0.113.50" } });
+
+    const res = await callRouteRequest(route, req);
+
+    expect(res.statusCode).toBe(413);
+    expect(res.body).toBe("Payload too large");
+    expect(req.destroyed).toBe(true);
+    expectBodyReadListenersCleaned(req);
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+  });
+
+  it("settles an early client close without leaking request-body listeners", async () => {
+    const route = createRoute(config());
+    const req = createPendingAuthRequest("203.0.113.51");
+    const responsePromise = callRouteRequest(route, req);
+
+    req.emit("close");
+    const res = await responsePromise;
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toBe("Connection closed");
+    expectBodyReadListenersCleaned(req);
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+  });
+
+  it("times out a slow auth body and closes the request", async () => {
+    const route = createRoute(config());
+    const req = createPendingAuthRequest("203.0.113.52");
+    try {
+      const res = await callRouteRequest(route, req);
+
+      expect(res.statusCode).toBe(408);
+      expect(res.body).toBe("Request body timeout");
+      expect(req.destroyed).toBe(true);
+      expectBodyReadListenersCleaned(req);
+      expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    } finally {
+      req.destroy();
+    }
+  }, 10_000);
 });
