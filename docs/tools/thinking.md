@@ -63,6 +63,7 @@ title: "Thinking levels"
 
 ## Fast mode (/fast)
 
+- Fast mode is a **provider request-tier** (and some model-alias) switch. It is not reply streaming, not channel typewriter speed, and not `blockStreaming*`. `/status` and session status showing `Fast: on|off|auto` mean the OpenClaw policy flag, not tokens-per-second. On models with no Fast mapping (many OpenAI-compatible and DeepSeek flash routes), enabling Fast changes the status flag but not perceived output speed. For channel bubble cadence, see [Streaming](/concepts/streaming).
 - Levels: `auto|on|off|default`.
 - Directive-only message toggles a session fast-mode override and replies `Fast mode set to auto.`, `Fast mode enabled.`, or `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
@@ -80,7 +81,7 @@ title: "Thinking levels"
 - For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
-- `/status` reports the resolved OpenClaw policy (`on`, `off`, or `auto`) and the selected runtime. It does not report the upstream service tier actually honored or returned for a completed request. See [OpenAI Fast mode](/providers/openai#advanced-configuration) for provider details.
+- `/status` reports the resolved OpenClaw policy (`on`, `off`, or `auto`) and the selected runtime. It does not report the upstream service tier actually honored or returned for a completed request, and it does not measure streaming or channel delivery speed. See [OpenAI Fast mode](/providers/openai#advanced-configuration) for provider details.
 
 ## Verbose directives (/verbose or /v)
 
