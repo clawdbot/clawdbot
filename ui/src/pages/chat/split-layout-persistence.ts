@@ -1,7 +1,5 @@
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
-import type { ChatSplitLayout, ChatSplitPane } from "./split-layout.ts";
-
-type ChatSplitColumn = ChatSplitLayout["columns"][number];
+import type { ChatSplitColumn, ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
 
 export function normalizeSplitLayoutWeights(weights: number[]): number[] {
   const total = weights.reduce((sum, weight) => sum + weight, 0);

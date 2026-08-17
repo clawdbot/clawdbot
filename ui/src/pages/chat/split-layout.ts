@@ -4,15 +4,12 @@ import {
   normalizeSplitLayoutWeights,
   splitLayoutNumericSuffix,
 } from "./split-layout-persistence.ts";
-
-export type ChatSplitPane = { id: string; sessionKey: string };
-type ChatSplitColumn = { id: string; panes: ChatSplitPane[]; paneWeights: number[] };
-export type ChatSplitEdge = "left" | "right" | "up" | "down";
-export type ChatSplitLayout = {
-  columns: ChatSplitColumn[];
-  columnWeights: number[];
-  activePaneId: string;
-};
+import type {
+  ChatSplitColumn,
+  ChatSplitEdge,
+  ChatSplitLayout,
+  ChatSplitPane,
+} from "./split-layout-types.ts";
 
 export function singlePaneLayout(
   columnId: string,

@@ -12,7 +12,7 @@ import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSplitPane } from "./split-layout.ts";
+import type { ChatSplitPane } from "./split-layout-types.ts";
 
 type ChatPagePaneRenderOptions = {
   active: boolean;

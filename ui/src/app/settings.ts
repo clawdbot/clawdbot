@@ -19,7 +19,7 @@ import {
   type SidebarSessionLayouts,
 } from "../pages/chat/sidebar-layout-persistence.ts";
 import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence.ts";
-import type { ChatSplitLayout } from "../pages/chat/split-layout.ts";
+import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
