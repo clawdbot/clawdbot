@@ -1584,7 +1584,7 @@ struct ChatViewModelTests {
         #expect(await fetchedSessions.current() == ["main", "other"])
     }
 
-    @Test func `progress card fetch failure stays silent and clears card`() async throws {
+    @Test func `progress card fetch failure stays silent`() async throws {
         let fetchCalls = AsyncCounter()
         let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
@@ -1599,6 +1599,30 @@ struct ChatViewModelTests {
         }
 
         #expect(await MainActor.run { vm.progressCard == nil })
+        #expect(await MainActor.run { vm.errorText == nil })
+    }
+
+    @Test func `failed refresh keeps the last progress card`() async throws {
+        let fetchCalls = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            fetchProgressCardHook: { _ in
+                if await fetchCalls.increment() == 1 {
+                    return progressCard(revision: 3, markdown: "Durable")
+                }
+                throw CancellationError()
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        try await waitUntil("initial progress card applies") {
+            await MainActor.run { vm.progressCard?.revision == 3 }
+        }
+
+        transport.emit(.progressCardChanged(ProgressCardChangedEvent(
+            sessionkey: "agent:main:main",
+            revision: AnyCodable(4))))
+        try await waitUntil("failed refresh returns") { await fetchCalls.current() == 2 }
+
+        #expect(await MainActor.run { vm.progressCard?.revision } == 3)
         #expect(await MainActor.run { vm.errorText == nil })
     }
 

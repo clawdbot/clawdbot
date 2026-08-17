@@ -56,7 +56,9 @@ extension OpenClawChatViewModel {
                 generation: generation,
                 requestID: requestID)
             else { return }
-            self.applyProgressCard(nil)
+            // Keep the last rendered card on transient failure: the durable
+            // store clears only via a successful null fetch or a null-revision
+            // poke, never via a failed refresh.
             self.logDiagnostic(
                 "chat.ui progress card fetch failed sessionKey=\(session.key) "
                     + "error=\(error.localizedDescription)")
