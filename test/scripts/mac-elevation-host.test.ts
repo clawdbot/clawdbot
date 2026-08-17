@@ -615,6 +615,9 @@ function createArtifactVerificationHarness() {
       "  fi",
       '  if [ -e "$3" ] || [ -L "$3" ]; then exit 1; fi',
       '  /bin/mv "$2" "$3" || exit $?',
+      '  if [ "${TEST_REMOVE_CUA_DRIVER_AFTER_UNSAFE_ENTRY_MOVE:-0}" = "1" ] && echo "$3" | grep -q \'elevation-host[.]quarantined-app[.].*[/]OpenClaw[.]app$\' && [ -L "$3" ]; then',
+      '    /bin/rm -f -- "$(readlink "$3")/Contents/Resources/cua-driver"',
+      "  fi",
       '  if [ "${TEST_RELOAD_ELEVATION_AFTER_QUARANTINE:-0}" = "1" ] && echo "$3" | grep -q \'elevation-host[.]quarantined-launch-agent[.]\'; then',
       "    printf '%s\\n' elevation-loaded >\"$TEST_LAUNCH_STATE_FILE\"",
       "  fi",
@@ -785,6 +788,7 @@ function createInstallRollbackHarness(
     restartAppDuringBootout?: boolean;
     rollbackNonNativeSignatureInvalid?: boolean;
     rollbackCuaDriverKind?: "file" | "symlink";
+    removeCuaDriverAfterUnsafeEntryMove?: boolean;
     signalDuringCustody?: boolean;
     signalDuringRecoveryAppMove?: boolean;
     signalDuringReceiptCommit?: boolean;
@@ -793,6 +797,14 @@ function createInstallRollbackHarness(
     symlinkDamagedAppBeforeCustody?: boolean;
     sameSourceExistingApp?: boolean;
     transientAppRestartReloadsJob?: boolean;
+    unsafeEntryEvidence?:
+      | "job"
+      | "plist"
+      | "plist-program"
+      | "receipt"
+      | "unrelated-plist"
+      | "unrelated-program"
+      | "unrelated-receipt";
   } = {},
 ) {
   const artifact = createArtifactVerificationHarness();
@@ -1026,6 +1038,8 @@ function createInstallRollbackHarness(
       "  fi",
       '  if [[ "$target" == */ai.openclaw.mac.elevation-host && "$state" == "elevation-loaded" ]]; then',
       "    printf '%s\\n' '    pid = 555555'",
+      "    printf '    program = %s/Contents/MacOS/OpenClaw\\n' \"$TEST_INSTALLED_APP_PATH\"",
+      "    printf '%s\\n' '    arguments = {' '        --elevation-host' '    }'",
       "    exit 0",
       "  fi",
       "  printf '%s\\n' 'Could not find service in domain' >&2",
@@ -1046,6 +1060,27 @@ function createInstallRollbackHarness(
       '  plist="${3:-}"',
       '  if [[ "$plist" == *ai.openclaw.mac.elevation-host.plist ]]; then',
       '    if [[ "$TEST_LAUNCHD_BOOTSTRAP_FAILS" == "1" ]]; then',
+      '      if [[ -n "$TEST_UNSAFE_ENTRY_EVIDENCE" ]]; then',
+      '        rollback_app="$(find "$(dirname "$TEST_INSTALLED_APP_PATH")" -maxdepth 1 -type d -name "$(basename "$TEST_INSTALLED_APP_PATH").rollback-elevation-host-*" -print -quit)"',
+      '        [[ -n "$rollback_app" ]] || exit 71',
+      '        /bin/rm -rf -- "$TEST_INSTALLED_APP_PATH"',
+      '        if [[ "$TEST_UNSAFE_ENTRY_EVIDENCE" == unrelated-* ]]; then',
+      '          /bin/mv "$rollback_app" "$TEST_INSTALLED_APP_PATH"',
+      "        else",
+      '          ln -s "$rollback_app" "$TEST_INSTALLED_APP_PATH"',
+      "        fi",
+      '        pending_receipt="$TEST_STATE_DIR/elevation-host-install.pending.json"',
+      '        case "$TEST_UNSAFE_ENTRY_EVIDENCE" in',
+      '          job) /bin/rm -f -- "$TEST_ELEVATION_PLIST" "$pending_receipt"; printf \'%s\\n\' elevation-loaded >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          plist) /bin/rm -f -- "$pending_receipt"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          plist-program) /bin/rm -f -- "$pending_receipt"; /usr/bin/plutil -insert Program -string "$TEST_INSTALLED_APP_PATH/Contents/MacOS/OpenClaw" "$TEST_ELEVATION_PLIST"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          receipt) /bin/rm -f -- "$TEST_ELEVATION_PLIST"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          unrelated-plist) /bin/rm -f -- "$pending_receipt"; /usr/bin/plutil -replace ProgramArguments.0 -string "$TEST_UNRELATED_APP_PATH/Contents/MacOS/OpenClaw" "$TEST_ELEVATION_PLIST"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          unrelated-program) /bin/rm -f -- "$pending_receipt"; /usr/bin/plutil -insert Program -string "$TEST_UNRELATED_APP_PATH/Contents/MacOS/OpenClaw" "$TEST_ELEVATION_PLIST"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      '          unrelated-receipt) /bin/rm -f -- "$TEST_ELEVATION_PLIST"; jq --arg appPath "$TEST_UNRELATED_APP_PATH" \'.appPath = $appPath\' "$pending_receipt" >"$pending_receipt.tmp"; /bin/mv "$pending_receipt.tmp" "$TEST_STATE_DIR/elevation-host-install.json"; /bin/rm -f -- "$pending_receipt"; printf \'%s\\n\' elevation-absent >"$TEST_LAUNCH_STATE_FILE" ;;',
+      "          *) exit 72 ;;",
+      "        esac",
+      "      fi",
       '      if [[ "$TEST_RECREATE_SOURCE_ON_FAILURE" == "1" ]]; then',
       "        printf '%s\\n' replacement-owner >\"$TEST_SOURCE_PLIST\"",
       "      fi",
@@ -1138,6 +1173,10 @@ function createInstallRollbackHarness(
       TEST_FINAL_CDHASH_MISMATCH: options.finalCDHashMismatch ? "1" : "0",
       TEST_FINAL_SIGNATURE_INVALID: options.finalSignatureInvalid ? "1" : "0",
       TEST_INSTALLED_APP_PATH: appPath,
+      TEST_ELEVATION_PLIST: elevationPlist,
+      TEST_STATE_DIR: stateDir,
+      TEST_UNRELATED_APP_PATH: path.join(tempRoot, "UnrelatedOpenClaw.app"),
+      TEST_UNSAFE_ENTRY_EVIDENCE: options.unsafeEntryEvidence ?? "",
       TEST_CUSTODY_SIGNAL: options.hupDuringCustody ? "HUP" : "TERM",
       TEST_CURRENT_CUA_SIGNATURE_INVALID: options.currentCuaSignatureInvalid ? "1" : "0",
       TEST_LAUNCHD_BOOTSTRAP_FAILS: options.launchdBootstrapFails === false ? "0" : "1",
@@ -1172,6 +1211,9 @@ function createInstallRollbackHarness(
         options.replaceMigrationSourceSameContentBeforeInitialCustody ? "1" : "0",
       TEST_REMOVE_INSTALLED_EXECUTABLE_AFTER_READINESS:
         options.removeInstalledExecutableAfterReadiness ? "1" : "0",
+      TEST_REMOVE_CUA_DRIVER_AFTER_UNSAFE_ENTRY_MOVE: options.removeCuaDriverAfterUnsafeEntryMove
+        ? "1"
+        : "0",
       TEST_RESTART_APP_DURING_BOOTOUT: options.restartAppDuringBootout ? "1" : "0",
       TEST_ROLLBACK_NON_NATIVE_SIGNATURE_INVALID: options.rollbackNonNativeSignatureInvalid
         ? "1"
@@ -1957,6 +1999,116 @@ describe("mac elevation host command contract", () => {
       );
     },
   );
+
+  for (const evidence of ["job", "plist", "plist-program", "receipt"] as const) {
+    it.skipIf(process.platform !== "darwin")(
+      `quarantines a symlinked CUA app from exact ${evidence} ownership evidence`,
+      () => {
+        const harness = createInstallRollbackHarness({
+          rollbackCuaDriverKind: "file",
+          unsafeEntryEvidence: evidence,
+        });
+        const result = runInstaller(
+          harness.installerPath,
+          [
+            "install",
+            "--archive",
+            harness.archivePath,
+            "--receipt",
+            harness.receiptPath,
+            ...receiptDigestArgs(harness.receiptPath),
+            "--app",
+            harness.appPath,
+            "--migrate-launch-agent",
+            harness.sourcePlist,
+          ],
+          harness.env,
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Quarantined CUA-bearing elevation app");
+        expect(lstatSync(harness.appPath, { throwIfNoEntry: false })).toBeUndefined();
+        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-absent");
+        const quarantinedApp = quarantinedElevationAppPath(harness.stateDir);
+        expect(quarantinedApp).toBeDefined();
+        expect(lstatSync(quarantinedApp!).isSymbolicLink()).toBe(true);
+        expect(existsSync(path.join(quarantinedApp!, "Contents", "Resources", "cua-driver"))).toBe(
+          true,
+        );
+      },
+    );
+  }
+
+  it.skipIf(process.platform !== "darwin")(
+    "keeps a symlink quarantined when its target changes after the move",
+    () => {
+      const harness = createInstallRollbackHarness({
+        removeCuaDriverAfterUnsafeEntryMove: true,
+        rollbackCuaDriverKind: "file",
+        unsafeEntryEvidence: "job",
+      });
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Quarantined CUA-bearing elevation app");
+      const quarantinedApp = quarantinedElevationAppPath(harness.stateDir);
+      expect(quarantinedApp).toBeDefined();
+      expect(lstatSync(quarantinedApp!).isSymbolicLink()).toBe(true);
+    },
+  );
+
+  for (const evidence of ["unrelated-plist", "unrelated-program", "unrelated-receipt"] as const) {
+    it.skipIf(process.platform !== "darwin")(
+      `preserves an app when only an ${evidence} remains`,
+      () => {
+        const harness = createInstallRollbackHarness({
+          rollbackCuaDriverKind: "file",
+          unsafeEntryEvidence: evidence,
+        });
+        const result = runInstaller(
+          harness.installerPath,
+          [
+            "install",
+            "--archive",
+            harness.archivePath,
+            "--receipt",
+            harness.receiptPath,
+            ...receiptDigestArgs(harness.receiptPath),
+            "--app",
+            harness.appPath,
+            "--migrate-launch-agent",
+            harness.sourcePlist,
+          ],
+          harness.env,
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).not.toContain("Quarantined CUA-bearing elevation app");
+        expect(lstatSync(harness.appPath).isDirectory()).toBe(true);
+        expect(quarantinedElevationAppPath(harness.stateDir)).toBeUndefined();
+        const stalePath =
+          evidence !== "unrelated-receipt"
+            ? harness.elevationPlist
+            : path.join(harness.stateDir, "elevation-host-install.json");
+        expect(existsSync(stalePath)).toBe(true);
+      },
+    );
+  }
 
   for (const setupFailure of ["identity", "mktemp"] as const) {
     it.skipIf(process.platform !== "darwin")(
