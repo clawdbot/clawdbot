@@ -152,31 +152,6 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
     expect(search).not.toHaveBeenCalled();
   });
 
-  it("preserves sibling results when one supplement never settles (timeout)", async () => {
-    registerMemoryCorpusSupplement(
-      "good",
-      buildSupplement(async () => [buildResult({ path: "wiki/healthy.md", snippet: "ok" })]),
-    );
-    registerMemoryCorpusSupplement(
-      "hung",
-      buildSupplement(
-        () =>
-          new Promise<MemoryCorpusSearchResult[]>(() => {
-            // Never resolves or rejects — simulates a stuck network call.
-          }),
-      ),
-    );
-
-    const out = await searchMemoryCorpusSupplements({ query: "any", corpus: "all", timeoutMs: 25 });
-
-    expect(out).toHaveLength(1);
-    expect(out[0]?.path).toBe("wiki/healthy.md");
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain('memory-core: corpus supplement "hung" search failed');
-    expect(message).toContain("did not settle within 25ms");
-  });
-
   it("preserves results when a supplement returns a Promise that rejects with non-Error reason", async () => {
     registerMemoryCorpusSupplement(
       "good",

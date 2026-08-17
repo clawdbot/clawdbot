@@ -607,62 +607,6 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(1);
   });
 
-  it("does not cooldown primary memory when a corpus=all wiki supplement stalls", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.useFakeTimers();
-    try {
-      let searchCalls = 0;
-      setMemorySearchImpl(async () => {
-        searchCalls += 1;
-        return [
-          {
-            path: "MEMORY.md",
-            startLine: 5,
-            endLine: 7,
-            score: 0.9,
-            snippet: "@@ -5,3 @@\nAssistant: noted",
-            source: "memory" as const,
-          },
-        ];
-      });
-      registerMemoryCorpusSupplement("memory-wiki", {
-        search: async () => await new Promise(() => {}),
-        get: async () => null,
-      });
-
-      const tool = createMemorySearchToolOrThrow();
-      // Per-supplement timeout (default 10s, see #77897) rejects the stalled
-      // wiki supplement before the global 15s deadline. With every supplement
-      // failed, corpus=all reports backend unavailability (no silent
-      // memory-only success), but the failure stays supplement-phase, so no
-      // memory cooldown is recorded and the next memory call runs normally.
-      const stalledAllResultPromise = tool.execute("call_all_stalled_wiki", {
-        query: "alpha",
-        corpus: "all",
-      });
-      await vi.advanceTimersByTimeAsync(10_000);
-      const stalledAllResult = await stalledAllResultPromise;
-      const stalledDetails = stalledAllResult.details as {
-        unavailable?: boolean;
-        error?: string;
-      };
-      expect(stalledDetails.unavailable).toBe(true);
-      expect(stalledDetails.error).toContain("all corpus supplement searches failed");
-      expect(stalledDetails.error).toContain("did not settle within 10000ms");
-
-      const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
-        query: "alpha",
-      });
-      const details = memoryResult.details as { results: Array<{ corpus: string; path: string }> };
-      expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
-        ["memory", "MEMORY.md"],
-      ]);
-      expect(searchCalls).toBe(2);
-    } finally {
-      vi.useRealTimers();
-      warnSpy.mockRestore();
-    }
-  });
 
   it("surfaces a memory-corpus warning when corpus=all hits a returned manager error", async () => {
     setMemorySearchManagerImpl(async () => ({ error: "sqlite support missing" }));

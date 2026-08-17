@@ -165,40 +165,6 @@ export function buildMemorySearchUnavailableResult(
   };
 }
 
-const DEFAULT_SUPPLEMENT_SEARCH_TIMEOUT_MS = 10_000;
-
-class SupplementSearchTimeoutError extends Error {
-  constructor(pluginId: string, timeoutMs: number) {
-    super(`supplement "${pluginId}" search did not settle within ${timeoutMs}ms`);
-    this.name = "SupplementSearchTimeoutError";
-  }
-}
-
-async function searchSupplementWithTimeout(
-  pluginId: string,
-  search: Promise<MemoryCorpusSearchResult[]>,
-  timeoutMs: number,
-): Promise<MemoryCorpusSearchResult[]> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race<MemoryCorpusSearchResult[]>([
-      search,
-      new Promise<MemoryCorpusSearchResult[]>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new SupplementSearchTimeoutError(pluginId, timeoutMs));
-        }, timeoutMs);
-        if (typeof timer?.unref === "function") {
-          timer.unref();
-        }
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
@@ -206,8 +172,6 @@ export async function searchMemoryCorpusSupplements(params: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
-  /** Test seam only; production callers use the fixed default. */
-  timeoutMs?: number;
 }): Promise<MemoryCorpusSearchResult[]> {
   if (params.corpus === "memory" || params.corpus === "sessions") {
     return [];
@@ -216,17 +180,12 @@ export async function searchMemoryCorpusSupplements(params: {
   if (supplements.length === 0) {
     return [];
   }
-  // Use allSettled with a per-supplement timeout so a single misbehaving or
-  // hung supplement does not discard sibling results or block the whole call
-  // indefinitely. Invariant: result ⊇ ⋃_{s settles in time} s.search(params).
-  const timeoutMs = params.timeoutMs ?? DEFAULT_SUPPLEMENT_SEARCH_TIMEOUT_MS;
+  // allSettled so a single rejecting supplement does not discard sibling
+  // results. The caller's memory-search deadline owns time bounding; no local
+  // cutoff here, or a supplement settling inside that window loses its result.
   const settled = await Promise.allSettled(
     supplements.map((registration) =>
-      searchSupplementWithTimeout(
-        registration.pluginId,
-        Promise.resolve().then(() => registration.supplement.search(params)),
-        timeoutMs,
-      ),
+      Promise.resolve().then(() => registration.supplement.search(params)),
     ),
   );
   const results: MemoryCorpusSearchResult[] = [];
