@@ -47,7 +47,7 @@ export async function performCustodianAgentHandoff(params: {
   return "exit-setup";
 }
 
-export function pathForCustodianAgentHandoff(
+function pathForCustodianAgentHandoff(
   context: Pick<ApplicationContext, "agents" | "agentSelection" | "basePath" | "gateway">,
   sessionKey: string,
 ): string {
