@@ -1,6 +1,5 @@
 // Feishu plugin module implements comment handler behavior.
 import { resolveInboundReplyDispatchCounts } from "openclaw/plugin-sdk/channel-inbound";
-import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -20,6 +19,8 @@ import {
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
 import { resolveFeishuDmIngressAccess } from "./policy.js";
+// Feishu plugin module implements comment handler behavior.
+import { bindFeishuLifecycleToReplyOptions } from "./reply-options.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 type HandleFeishuCommentEventParams = {
@@ -311,7 +312,7 @@ export async function handleFeishuCommentEvent(
           dispatcherOptions,
           delivery,
           ...(params.turnAdoptionLifecycle
-            ? { replyOptions: bindIngressLifecycleToReplyOptions(params.turnAdoptionLifecycle) }
+            ? { replyOptions: bindFeishuLifecycleToReplyOptions(params.turnAdoptionLifecycle) }
             : {}),
         }),
       },

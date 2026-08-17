@@ -3,10 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import {
-  bindIngressLifecycleToReplyOptions,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -20,6 +17,7 @@ import * as dedup from "./dedup.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { createFeishuDurableIngress, type FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
+import { bindFeishuLifecycleToReplyOptions } from "./reply-options.js";
 
 type MessageReceiveHandlerContext = Parameters<typeof createFeishuMessageReceiveHandler>[0];
 type HandleMessageParams = Parameters<MessageReceiveHandlerContext["handleMessage"]>[0];
@@ -452,7 +450,7 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     harness.handleMessage.mockImplementationOnce(async (turn) => {
       const replyOptions = {
         abortSignal: turn.turnAdoptionLifecycle
-          ? bindIngressLifecycleToReplyOptions(turn.turnAdoptionLifecycle).abortSignal
+          ? bindFeishuLifecycleToReplyOptions(turn.turnAdoptionLifecycle).abortSignal
           : undefined,
       };
       pipelineSignal = replyOptions.abortSignal;

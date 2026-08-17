@@ -5,10 +5,7 @@ import {
   resolveEnvelopeFormatOptions,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  bindIngressLifecycleToReplyOptions,
-  resolveAgentOutboundIdentity,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   ensureConfiguredBindingRouteReady,
@@ -83,6 +80,7 @@ import {
 } from "./policy.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+import { bindFeishuLifecycleToReplyOptions } from "./reply-options.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
@@ -1628,14 +1626,14 @@ export async function handleFeishuMessage(params: {
             ? {
                 admission: { kind: "observeOnly" as const, reason: "broadcast-observer" },
                 delivery: { deliver: async () => ({ visibleReplySent: false }) },
-                replyOptions: bindIngressLifecycleToReplyOptions(paramsLocal.lifecycle),
+                replyOptions: bindFeishuLifecycleToReplyOptions(paramsLocal.lifecycle),
               }
             : {
                 dispatcherOptions: paramsLocal.variant.dispatcher.dispatcherOptions,
                 delivery: paramsLocal.variant.dispatcher.delivery,
                 replyOptions: {
                   ...paramsLocal.variant.dispatcher.replyOptions,
-                  ...bindIngressLifecycleToReplyOptions(paramsLocal.lifecycle),
+                  ...bindFeishuLifecycleToReplyOptions(paramsLocal.lifecycle),
                 },
               }),
         }),
@@ -1909,7 +1907,7 @@ export async function handleFeishuMessage(params: {
             replyOptions: {
               ...replyOptions,
               ...(turnAdoptionLifecycle
-                ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
+                ? bindFeishuLifecycleToReplyOptions(turnAdoptionLifecycle)
                 : {}),
             },
           }),

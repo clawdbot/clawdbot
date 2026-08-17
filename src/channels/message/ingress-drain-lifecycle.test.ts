@@ -34,11 +34,7 @@ describe("channel ingress drain lifecycle", () => {
     expect("onFailed" in bound.turnAdoptionLifecycle).toBe(false);
     expect("onCancelled" in bound.turnAdoptionLifecycle).toBe(false);
     expect("onAdopted" in bound).toBe(false);
-    // The top-level abortSignal is the same signal core initial-dispatch
-    // cancellation reads (replyOptions.abortSignal); the drain aborts it only
-    // pre-adoption, so an adopted run is never cancelled through this surface.
-    expect(bound.abortSignal).toBe(abort.signal);
-    expect(Object.keys(bound)).toEqual(["abortSignal", "turnAdoptionLifecycle"]);
+    expect(Object.keys(bound)).toEqual(["turnAdoptionLifecycle"]);
     bound.turnAdoptionLifecycle.onDeferred();
     await bound.turnAdoptionLifecycle.onAbandoned();
     expect(calls).toEqual(["deferred", "abandoned"]);
