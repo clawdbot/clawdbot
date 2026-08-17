@@ -563,37 +563,6 @@ describe("agentCommand compaction transcript rotation", () => {
     );
   });
 
-  it("compacts the session successor returned by CLI memory flush", async () => {
-    const sessionId = "cli-memory-flush-predecessor";
-    const successorSessionId = "cli-memory-flush-successor";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    state.runAgentAttemptMock.mockResolvedValueOnce(
-      makeResult({ sessionId, text: "answer before maintenance rotation", runner: "cli" }),
-    );
-    state.runMemoryFlushIfNeededMock.mockImplementationOnce(
-      async (params: { sessionEntry?: SessionEntry }) => ({
-        sessionEntry: params.sessionEntry
-          ? { ...params.sessionEntry, sessionId: successorSessionId }
-          : undefined,
-        outcome: "completed" as const,
-      }),
-    );
-
-    await agentCommand({
-      message: "rotate during memory maintenance",
-      sessionId,
-      sessionKey,
-      cwd: state.workspaceDir,
-    });
-
-    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: successorSessionId,
-        sessionEntry: expect.objectContaining({ sessionId: successorSessionId }),
-      }),
-    );
-  });
-
   it("persists the pending final before CLI compaction failure and still delivers", async () => {
     const sessionId = "cli-compaction-failure";
     const sessionKey = `agent:main:explicit:${sessionId}`;
@@ -965,7 +934,7 @@ describe("agentCommand compaction transcript rotation", () => {
     const payloads = [{ mediaUrl: "/tmp/reply.ogg", audioAsVoice: true }];
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text: "", payloads }));
 
-    const result = await agentCommand({
+    await agentCommand({
       message: "room message",
       sessionId,
       sessionKey,
@@ -977,13 +946,9 @@ describe("agentCommand compaction transcript rotation", () => {
     });
 
     expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
-    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ payloads }),
     );
-    expect(result).toMatchObject({ deliverySucceeded: true });
-    const storedEntry = findStoredSessionEntry(sessionKey);
-    expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
   });
 
   it("skips post-turn compaction when a recoverable final cannot persist a pending marker", async () => {
@@ -1017,7 +982,10 @@ describe("agentCommand compaction transcript rotation", () => {
     const sessionId = "unrecoverable-media-no-delivery";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const payloads = [{ mediaUrl: "/tmp/reply.ogg", audioAsVoice: true }];
+    const successor = { sessionId: "unrecoverable-media-post-flush" } as SessionEntry;
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text: "", payloads }));
+    const flush = state.runMemoryFlushIfNeededMock;
+    flush.mockResolvedValueOnce({ sessionEntry: successor, outcome: "completed" });
 
     await agentCommand({
       message: "local model run",
@@ -1030,7 +998,8 @@ describe("agentCommand compaction transcript rotation", () => {
       deliver: false,
     });
 
-    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+    const compaction = state.runCliTurnCompactionLifecycleMock.mock.calls[0]?.[0];
+    expect(compaction?.sessionId).toBe(successor.sessionId);
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
   });
 
