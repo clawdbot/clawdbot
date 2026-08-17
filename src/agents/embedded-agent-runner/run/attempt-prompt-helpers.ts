@@ -498,6 +498,7 @@ export function resolveAttemptMediaTaskSystemPromptAddition(params: {
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "sessionTarget"
+  | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
   | "messageChannel"
@@ -606,7 +607,7 @@ export function buildAfterTurnRuntimeContext(params: {
     ...resolveContextEngineCapabilities({
       config: params.attempt.config,
       sessionKey: params.attempt.sessionKey,
-      agentId: params.activeAgentId,
+      explicitAgentId: params.attempt.contextEngineAgentId,
       authProfileId: params.attempt.authProfileId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.after-turn",

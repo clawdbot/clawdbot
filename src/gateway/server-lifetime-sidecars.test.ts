@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
-import { publishGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 describe("gateway lifetime sidecars", () => {
   test("keeps pre-published sidecars reachable by shutdown", async () => {
@@ -7,17 +8,17 @@ describe("gateway lifetime sidecars", () => {
     const sessionChange = { stop: vi.fn(async () => {}) };
     const worker = { stop: vi.fn(async () => {}) };
 
-    const sidecars = publishGatewayLifetimeSidecars({
-      registered: [metadataListener, sessionChange],
-      published: [worker, metadataListener],
-      closeStarted: false,
-      stopAfterCloseStarted: vi.fn(),
+    let sidecars: GatewayPostReadySidecarHandle[] = [metadataListener, sessionChange];
+    const owner = createGatewaySidecarStopOwner({
+      getRegistered: () => sidecars,
+      setRegistered: (next) => {
+        sidecars = next;
+      },
     });
+    owner.publish([worker, metadataListener]);
     expect(sidecars).toEqual([metadataListener, sessionChange, worker]);
 
-    for (const sidecar of sidecars) {
-      await sidecar.stop();
-    }
+    await owner.stop();
     expect(metadataListener.stop).toHaveBeenCalledOnce();
     expect(sessionChange.stop).toHaveBeenCalledOnce();
     expect(worker.stop).toHaveBeenCalledOnce();

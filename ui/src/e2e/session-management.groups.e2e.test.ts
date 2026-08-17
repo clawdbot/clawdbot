@@ -855,9 +855,10 @@ suite.define(() => {
       await captureUiProof(page, "sidebar-session-dropped-into-group.png");
 
       const ungrouped = page.locator('[data-session-section="ungrouped"]');
+      const ungroupedHead = ungrouped.locator(":scope > .sidebar-recent-sessions__head");
       await gamma
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-11"]')
-        .dragTo(ungrouped);
+        .dragTo(ungroupedHead, { targetPosition: { x: 4, y: 2 } });
       const ungroupedPatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:session-11" && params.category === null,

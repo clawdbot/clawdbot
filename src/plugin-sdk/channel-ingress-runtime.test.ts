@@ -129,9 +129,10 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(second.cancellationCount).toBe(1);
   });
 
-  it("fails claims with the exact error after terminal settlement adoption fails", async () => {
+  it("fans failed settlement into modern failure and legacy abandonment", async () => {
     const failed = vi.fn(async () => {});
     const abandoned = vi.fn(async () => {});
+    const legacyAbandoned = vi.fn(async () => {});
     const combined = fanInChannelIngressLifecycles([
       {
         abortSignal: new AbortController().signal,
@@ -143,6 +144,13 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
         onFailed: failed,
         onAbandoned: abandoned,
       },
+      {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: legacyAbandoned,
+      },
     ]);
 
     await expect(combined.settle()).rejects.toThrow("adoption failed");
@@ -151,6 +159,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
 
     expect(failed).toHaveBeenCalledExactlyOnceWith(failure);
     expect(abandoned).not.toHaveBeenCalled();
+    expect(legacyAbandoned).toHaveBeenCalledOnce();
   });
 
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {

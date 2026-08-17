@@ -73,7 +73,6 @@ export function expectChannelSurfaceContract(params: {
     expect(
       [
         messaging?.normalizeTarget,
-        messaging?.parseExplicitTarget,
         messaging?.inferTargetChatType,
         messaging?.buildCrossContextPresentation,
         messaging?.hasStructuredReplyPayload,

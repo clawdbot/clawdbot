@@ -88,6 +88,14 @@ function createApprovalText(id = "approval-123"): string {
   ].join("\n");
 }
 
+function createApprovalPrompt(id = "approval-123") {
+  return {
+    approvalId: id,
+    approvalKind: "exec" as const,
+    allowedDecisions: ["allow-once", "deny"] as const,
+  };
+}
+
 describe("sendMessageIMessage receipts", () => {
   let openClawState: OpenClawTestState;
 
@@ -3244,6 +3252,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt(),
       createClient: createClientLocal,
       runCliJson,
       service: "sms",
@@ -3272,6 +3281,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt("approval-default"),
       client,
       runCliJson,
       resolveSentMessageGuidImpl,
@@ -3296,6 +3306,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt("approval-homebrew"),
       client,
       cliPath: "/opt/homebrew/bin/imsg",
       runCliJson,
@@ -3331,6 +3342,7 @@ describe("sendMessageIMessage receipts", () => {
             },
           },
         },
+        approvalPrompt: createApprovalPrompt("approval-remote"),
         client,
         cliPath: "/Users/me/.openclaw/scripts/imsg",
         runCliJson,
@@ -3363,6 +3375,7 @@ describe("sendMessageIMessage receipts", () => {
       const rejection = expect(
         sendMessageIMessage("chat_id:42", approvalText, {
           config: IMESSAGE_TEST_CFG,
+          approvalPrompt: createApprovalPrompt("approval-ssh-wrapper"),
           client,
           cliPath: wrapperPath,
           runCliJson,
@@ -3474,6 +3487,7 @@ describe("sendMessageIMessage receipts", () => {
     const rejection = expect(
       sendMessageIMessage("chat_id:42", approvalText, {
         config: IMESSAGE_TEST_CFG,
+        approvalPrompt: createApprovalPrompt(),
         client,
         runCliJson,
         dbPath: "/Users/me/Library/Messages/chat.db",
@@ -3503,7 +3517,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
-      approvalKind: "exec",
+      approvalPrompt: createApprovalPrompt(),
       client,
       dbPath: "/Users/me/Library/Messages/chat.db",
       resolveSentMessageGuidImpl,
@@ -3538,6 +3552,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalPrompt: createApprovalPrompt(),
       client,
     });
 

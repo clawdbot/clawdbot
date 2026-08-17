@@ -103,7 +103,7 @@ Available groups:
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`                                                                                                                                                     |
-| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                     |
+| `group:media`      | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                |
 | `group:openclaw`   | most built-in OpenClaw tools (excludes the `read`/`write`/`edit`/`apply_patch`/`exec`/`process` fs and runtime primitives, `canvas`, and provider plugins)                                                                                               |
 | `group:plugins`    | all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
 
@@ -149,6 +149,7 @@ In `"non-main"` mode, group/channel keys are _not_ main. Use the main session ke
 
 ## Related
 
+- [Session permission modes](/gateway/permission-modes) -- session roots and escalation reviewers
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Elevated Mode](/tools/elevated)

@@ -12,7 +12,7 @@ export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
     attention.kind === "question"
       ? icons.hand
       : attention.kind === "approval"
-        ? icons.key
+        ? icons.shieldQuestion
         : attention.kind === "agent"
           ? resolveSessionAttentionIcon(attention.icon)
           : icons.alertTriangle;

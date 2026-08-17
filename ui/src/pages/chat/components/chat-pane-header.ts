@@ -19,7 +19,6 @@ import { isCloudWorkerPlacementState } from "../../../components/session-row-bad
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
-import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
@@ -44,6 +43,7 @@ type ChatPaneHeaderProps = {
   title: string;
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
+  ownerViewing?: boolean;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -69,6 +69,8 @@ type ChatPaneHeaderProps = {
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
+  placementMoving?: boolean;
+  placementMoveDisabledReason?: string;
   placementReclaimDisabledReason?: string;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
@@ -80,6 +82,7 @@ type ChatPaneHeaderProps = {
   onMenuOpenChange: (open: boolean) => void;
   onMenuAction: (action: ChatPaneHeaderAction) => void;
   onOpenParentSession: (sessionKey: string) => void;
+  onPlacementMove?: () => void;
   onPlacementReclaim?: () => void;
   onBranchSelect: (leafEntryId: string) => void;
   onOpenSplitView?: () => void;
@@ -443,10 +446,26 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
       ${renderSessionOwnerChip(
-        props.showOwnerChip ? props.session?.createdActor : undefined,
+        props.showOwnerChip
+          ? (props.session?.owner?.actor ?? props.session?.createdActor)
+          : undefined,
         "header",
-        "created",
+        props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
+        props.ownerViewing,
       )}
+      ${props.showOwnerChip && props.session?.participants?.length
+        ? html`<openclaw-viewer-facepile
+            class="chat-pane__participants"
+            .staticUsers=${props.session.participants.map((participant) => ({
+              id: participant.id ?? "",
+              name: participant.label,
+              avatarUrl: participant.avatarUrl,
+              watchedSessions: [],
+            }))}
+            .maxVisible=${4}
+            variant="session"
+          ></openclaw-viewer-facepile>`
+        : nothing}
       ${renderChatPanePlacement(props)} ${props.presence ?? nothing} ${props.faceControl ?? nothing}
       ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
@@ -519,7 +538,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${compactSessionActions ? nothing : html`${props.panelActions} ${props.discussionAction}`}
+        ${props.panelActions} ${compactSessionActions ? nothing : props.discussionAction}
         ${props.catalog || compactSessionActions
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}

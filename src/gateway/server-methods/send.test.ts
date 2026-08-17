@@ -94,14 +94,24 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
 let sendHandlers: typeof import("./send.js").sendHandlers;
 
-function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
+function resolveAgentIdFromSessionKeyForTests(params: {
+  sessionKey?: string;
+  agentId?: string;
+}): string {
+  const explicitAgentId = params.agentId?.trim().toLowerCase();
   if (typeof params.sessionKey === "string") {
     const match = params.sessionKey.match(/^agent:([^:]+)/i);
     if (match?.[1]) {
-      return match[1];
+      const sessionAgentId = match[1].toLowerCase();
+      if (explicitAgentId && explicitAgentId !== sessionAgentId) {
+        throw new Error(
+          `agent "${explicitAgentId}" does not match session key agent "${sessionAgentId}"`,
+        );
+      }
+      return sessionAgentId;
     }
   }
-  return "main";
+  return explicitAgentId ?? "main";
 }
 
 function messageActionContextFromSessionKeyForTests(sessionKey: string): {
@@ -139,11 +149,12 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveSessionAgentId: ({
     sessionKey,
+    agentId,
   }: {
     sessionKey?: string;
     config?: unknown;
     agentId?: string;
-  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
+  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey, agentId }),
   resolveAgentConfig: () => undefined,
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
@@ -1393,8 +1404,8 @@ describe("gateway send mirroring", () => {
   });
 
   it("does not send after delegated authority closes during session preparation", async () => {
-    const preparation = createDeferred<undefined>();
-    mocks.ensureOutboundSessionEntry.mockReturnValueOnce(preparation.promise);
+    const preparation = createDeferred<null>();
+    mocks.resolveOutboundSessionRoute.mockReturnValueOnce(preparation.promise);
     let authorityActive = true;
     const context = {
       ...makeContext(),
@@ -1411,14 +1422,15 @@ describe("gateway send mirroring", () => {
       agentRuntimeClient("agent:main:slack:channel:C1"),
       context,
     );
-    await vi.waitFor(() => expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledOnce());
     authorityActive = false;
-    preparation.resolve(undefined);
+    preparation.resolve(null);
 
     const { respond } = await request;
     expect(firstRespondCall(respond)[0]).toBe(false);
     expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
   });
 
   it("cancels a prepared terminal receipt when authority closes before action dispatch", async () => {

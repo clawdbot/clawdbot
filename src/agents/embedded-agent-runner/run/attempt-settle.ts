@@ -238,6 +238,7 @@ export async function runEmbeddedAttemptSettledPhase(
         toolResultPromptProjectionState,
       },
       execution: {
+        mediaOwnerAgentId: input.setup.sessionAgentId,
         effectiveFsWorkspaceOnly: input.setup.effectiveFsWorkspaceOnly,
         effectiveWorkspace: input.setup.effectiveWorkspace,
         sandbox: input.setup.sandbox,
@@ -545,6 +546,7 @@ export async function runEmbeddedAttemptSettledPhase(
       promptCache: sessionRuntimeState.promptCache,
       contextBudgetStatus,
       yieldDetected: input.lifecycle.readYieldState().yieldDetected,
+      yieldAcknowledgment: input.lifecycle.readYieldState().yieldAcknowledgment,
       didDeliverSourceReplyViaMessageTool: hasDeliveredSourceReply(),
     },
     clientToolCallSlots,

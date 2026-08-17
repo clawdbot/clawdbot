@@ -25,6 +25,7 @@ type CallGatewayFromCliRuntimeExtra = {
     typeof callGateway
   >[0]["requiredStoredDeviceAuthScopes"];
   requireLocalBackendSharedAuth?: boolean;
+  sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
 };
 
 type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
@@ -83,6 +84,7 @@ export async function callGatewayFromCliRuntime(
         useStoredDeviceAuth: extra?.useStoredDeviceAuth,
         requiredStoredDeviceAuthScopes: extra?.requiredStoredDeviceAuthScopes,
         requireLocalBackendSharedAuth: extra?.requireLocalBackendSharedAuth,
+        sharedStateMode: extra?.sharedStateMode,
         signal: extra?.signal,
         timeoutMs,
         localPortOverride: opts.localPortOverride,

@@ -62,6 +62,19 @@ describe("OpenClawTerminalPanel", () => {
     await i18n.setLocale("en");
   });
 
+  it("uses the shared surface empty state before an embedded session opens", async () => {
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.available = true;
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const empty = panel.renderRoot.querySelector("openclaw-panel-empty-state");
+    await empty?.updateComplete;
+    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Terminal");
+    expect(empty?.querySelector("svg")).not.toBeNull();
+  });
+
   it("restores persisted open state when a mounted tag upgrades lazily", async () => {
     localStorage.setItem(
       "openclaw.terminal.panel.v1",
@@ -78,9 +91,50 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
   });
 
-  it.each(["bottom", "right"] as const)(
-    "toggles main content placement back to the persisted %s dock",
-    async (dock) => {
+  it("does not append an automatic restore behind a persisted explicit catalog intent", async () => {
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
+    );
+    const catalog = { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" };
+    sessionStorage.setItem(
+      "openclaw.terminal.actions.v1",
+      JSON.stringify([{ kind: "catalog", agentId: "research", catalog }]),
+    );
+    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        return (method === "terminal.open" ? terminalOpenResult("catalog-session") : {}) as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    panel.agentId = "research";
+    document.body.append(panel);
+
+    await waitForFast(() =>
+      expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).toBeNull(),
+    );
+
+    expect(requests.filter((entry) => entry.method === "terminal.open")).toEqual([
+      {
+        method: "terminal.open",
+        params: { agentId: "research", cols: 100, rows: 30, catalog },
+      },
+    ]);
+  });
+
+  it.each([
+    { dock: "bottom", label: "Dock to bottom" },
+    { dock: "right", label: "Dock to right" },
+  ] as const)(
+    "moves the persisted $dock dock into main content and back by destination",
+    async ({ dock, label }) => {
       localStorage.setItem(
         "openclaw.terminal.panel.v1",
         JSON.stringify({ open: true, dock, height: 320, width: 520 }),
@@ -100,7 +154,6 @@ describe("OpenClawTerminalPanel", () => {
       expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
         open: true,
         dock: "main",
-        previousDock: dock,
       });
 
       panel.remove();
@@ -108,17 +161,15 @@ describe("OpenClawTerminalPanel", () => {
       restored.available = true;
       document.body.append(restored);
       await restored.updateComplete;
-      restored.renderRoot
-        .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
-        ?.click();
+      // Destinations only: the occupied main placement drops out of the
+      // cluster, and leaving it is an explicit destination pick.
+      expect(restored.renderRoot.querySelector('[aria-label="Fill main content area"]')).toBeNull();
+      restored.renderRoot.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.click();
       await restored.updateComplete;
 
       expect(restored.renderRoot.querySelector(".tp")?.classList.contains(`tp--${dock}`)).toBe(
         true,
       );
-      expect(
-        restored.renderRoot.querySelector('[aria-label="Fill main content area"]')?.classList,
-      ).not.toContain("is-active");
       restored.remove();
     },
   );
@@ -374,14 +425,17 @@ describe("OpenClawTerminalPanel", () => {
     document.body.append(panel);
     const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
 
-    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:terminal-toggle", {
+        detail: { agentId: "research", catalog },
+      }),
+    );
 
     await panel.updateComplete;
     expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
     expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
       open: true,
       dock: "main",
-      previousDock: "bottom",
     });
 
     await waitForFast(() => {
@@ -394,9 +448,7 @@ describe("OpenClawTerminalPanel", () => {
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["persisted-1"]),
     );
-    panel.renderRoot
-      .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
-      ?.click();
+    panel.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Dock to bottom"]')?.click();
     await panel.updateComplete;
     expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--bottom")).toBe(true);
   });
@@ -665,13 +717,17 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(createGhosttyTerminalMock).toHaveBeenCalledOnce());
     const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
 
-    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:terminal-toggle", {
+        detail: { agentId: "research", catalog },
+      }),
+    );
     firstBoot.resolve(createTerminalController());
 
     await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.open",
-        params: { agentId: undefined, cols: 100, rows: 30, catalog },
+        params: { agentId: "research", cols: 100, rows: 30, catalog },
       });
     });
     expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(2);

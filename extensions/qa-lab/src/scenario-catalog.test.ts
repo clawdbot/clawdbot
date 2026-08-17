@@ -245,6 +245,7 @@ describe("qa scenario catalog", () => {
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
       "matrix-restart-resume",
+      "message-delivery-decision-inspection",
       "qa-channel-reconnect-dedupe",
       "remember-across-conversations",
       "remember-across-reset-private",

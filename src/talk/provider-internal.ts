@@ -43,6 +43,7 @@ type InternalRealtimeVoiceProviderApi = {
   resolveBrowserSessionCapabilities?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
+    agentId?: string;
     /** Effective per-session model after request overrides. */
     model?: string;
   }) => InternalRealtimeVoiceProviderCapabilities;
@@ -98,12 +99,14 @@ export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
+  agentId?: string;
   model?: string;
 }): InternalRealtimeVoiceProviderCapabilities | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveBrowserSessionCapabilities?.(
     {
       cfg: params.cfg,
       providerConfig: params.providerConfig,
+      agentId: params.agentId,
       model: params.model,
     },
   );

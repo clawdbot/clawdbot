@@ -19,6 +19,19 @@
   gap: 9px;
 }
 
+.workboard-automation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  text-decoration: none;
+}
+
+.workboard-automation-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
 .workboard-board-glyph--header {
   width: 28px;
   height: 28px;

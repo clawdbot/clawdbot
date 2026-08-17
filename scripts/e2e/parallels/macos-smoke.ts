@@ -291,6 +291,7 @@ class MacosSmoke {
   private modelTimeoutSeconds: number;
   private updateDevTimeoutSeconds: number;
   private devTargetCommit: string | undefined;
+  private options: MacosOptions;
 
   private status = {
     freshAgent: "skip",
@@ -309,7 +310,8 @@ class MacosSmoke {
     upgradeVersion: "skip",
   };
 
-  constructor(private options: MacosOptions) {
+  constructor(options: MacosOptions) {
+    this.options = options;
     this.auth = resolveProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,

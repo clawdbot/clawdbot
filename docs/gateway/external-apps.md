@@ -69,10 +69,13 @@ host-neutral suspension handshake:
    `openclaw gateway resume <suspensionId>`.
 
 A prepared Gateway accepts authenticated WebSocket connects, but fences every
-method except `gateway.suspend.*`. Controllers may reconnect after thaw and
-call resume. The [Admin HTTP RPC plugin](/plugins/admin-http-rpc) remains
-available for hosts that cannot speak WebSocket at all. If every control path
-is lost, the two-minute lease expiry reopens admission automatically.
+method except `gateway.suspend.*` and one exact predecessor-bound restart. That
+exception requires a non-safe `gateway.restart.request` whose `target` matches
+the live Gateway lock; safe and untargeted restart requests remain fenced.
+Controllers may reconnect after thaw and call resume. The
+[Admin HTTP RPC plugin](/plugins/admin-http-rpc) remains available for hosts
+that cannot speak WebSocket at all. If every control path is lost, the
+two-minute lease expiry reopens admission automatically.
 
 The RPC contract is:
 

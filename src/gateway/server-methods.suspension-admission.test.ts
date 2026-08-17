@@ -28,7 +28,7 @@ function dispatch(params: {
   method: string;
   scope: "operator.read" | "operator.write" | "operator.admin";
   handler: GatewayRequestHandler;
-  requestParams?: Record<string, unknown>;
+  requestParams?: unknown;
   context?: Parameters<typeof handleGatewayRequest>[0]["context"];
 }) {
   const respond = vi.fn();
@@ -350,6 +350,82 @@ describe("gateway request suspension admission", () => {
       expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
     );
     suspension?.release();
+  });
+
+  it.each([undefined, false])(
+    "admits an exact targeted restart with safe=%s on an owned root",
+    async (safe) => {
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.commit()).toBe(true);
+      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        respond(true, { ok: true });
+      });
+
+      const restarted = dispatch({
+        method: "gateway.restart.request",
+        scope: "operator.admin",
+        handler,
+        requestParams: {
+          ...(safe === undefined ? {} : { safe }),
+          target: { pid: process.pid, ownerId: "gateway-owner", port: 18_789 },
+          restartIntent: { waitMs: 5_000 },
+        },
+      });
+      await restarted.request;
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(restarted.respond).toHaveBeenCalledWith(true, { ok: true });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(suspension?.release()).toBe(true);
+    },
+  );
+
+  it.each([
+    ["untargeted", { reason: "operator" }],
+    [
+      "safe targeted",
+      {
+        safe: true,
+        target: { pid: process.pid, ownerId: "gateway-owner", port: 18_789 },
+      },
+    ],
+    ["malformed target", { target: { pid: process.pid, ownerId: "", port: 18_789 } }],
+    [
+      "malformed intent",
+      {
+        target: { pid: process.pid, ownerId: "gateway-owner", port: 18_789 },
+        restartIntent: { force: true, waitMs: 1 },
+      },
+    ],
+  ])("rejects %s restart requests while suspension is prepared", async (_name, requestParams) => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const handler = vi.fn<GatewayRequestHandler>();
+
+    const blocked = dispatch({
+      method: "gateway.restart.request",
+      scope: "operator.admin",
+      handler,
+      requestParams,
+    });
+    await blocked.request;
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(blocked.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: expect.objectContaining({
+          method: "gateway.restart.request",
+          reason: "gateway-suspending",
+          phase: "prepared",
+        }),
+      }),
+    );
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(suspension?.release()).toBe(true);
   });
 
   it("keeps suspension status reachable while prepared", async () => {

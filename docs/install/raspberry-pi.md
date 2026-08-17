@@ -91,7 +91,7 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
 
   <Step title="Install OpenClaw">
     ```bash
-    curl -fsSL https://openclaw.ai/install.sh | bash
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
     ```
   </Step>
 

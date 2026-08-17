@@ -36,7 +36,7 @@ export type ProviderUsageStatus = Pick<
 
 type ProviderUsageCacheEntry = {
   agentDir: string;
-  configRef: object;
+  configRef: OpenClawConfig;
   credentialKey: string;
   providerKey: string;
   refreshedAt: number;
@@ -46,7 +46,7 @@ type ProviderUsageCacheEntry = {
 
 type ProviderUsageRefresh = {
   agentDir: string;
-  configRef: object;
+  configRef: OpenClawConfig;
   credentialKey: string;
   providerKey: string;
   promise: Promise<UsageSummary>;
@@ -158,7 +158,7 @@ function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSumm
 function scheduleProviderUsageRefresh(params: {
   agentId: string;
   agentDir: string;
-  configRef: object;
+  configRef: OpenClawConfig;
   credentialKey: string;
   providerIds: UsageProviderId[];
   providerKey: string;
@@ -176,6 +176,7 @@ function scheduleProviderUsageRefresh(params: {
   const promise = loadProviderUsageSummary({
     providers: params.providerIds,
     agentDir: params.agentDir,
+    config: params.configRef,
     timeoutMs: 3500,
   })
     .then((usage) => {
@@ -222,7 +223,7 @@ function scheduleProviderUsageRefresh(params: {
 type ProviderUsageCacheParams = {
   agentId: string;
   agentDir: string;
-  configRef: object;
+  configRef: OpenClawConfig;
   credentialKey: string;
   forceRefresh?: boolean;
   providerIds: UsageProviderId[];

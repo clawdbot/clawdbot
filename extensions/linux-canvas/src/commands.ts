@@ -1,4 +1,5 @@
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LinuxCanvasIpcClient, type LinuxCanvasIpcTransport } from "./ipc-client.js";
 import {
   linuxCanvasSocketExists,
@@ -185,4 +186,3 @@ export function createLinuxCanvasCommands(
     return registration;
   });
 }
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

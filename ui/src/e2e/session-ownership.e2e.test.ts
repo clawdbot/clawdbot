@@ -493,9 +493,9 @@ suite.define(() => {
         label: `Member ${index + 1}`,
       })),
     ];
-    const channelIdentities = [
-      { type: "human" as const, id: "channel:chn_design", label: "Design" },
-      { type: "human" as const, id: "discord:channel:operations", label: "Operations" },
+    const nonHumanIdentities = [
+      { type: "agent" as const, id: "agent-design", label: "Design" },
+      { type: "system" as const, id: "system-operations", label: "Operations" },
     ];
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "agent:main:ada",
@@ -544,7 +544,7 @@ suite.define(() => {
         "session.members.list": {
           sessionKey: "agent:main:ada",
           members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
-          identities: [...humanIdentities, ...channelIdentities],
+          identities: [...humanIdentities, ...nonHumanIdentities],
           role: "owner",
           allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
         },
@@ -677,7 +677,9 @@ suite.define(() => {
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
     ).toHaveCount(30);
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-channel-icon")).toHaveCount(2);
+    // Agent and system identities render the non-human icon from identity.type,
+    // not from an ID-string heuristic; owner-chip presentation is human-only.
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
     expect(
       await longNameItem.locator(".chat-pane__sharing-member-label").getAttribute("title"),
     ).toBe(longMemberLabel);

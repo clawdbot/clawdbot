@@ -20,7 +20,6 @@ import {
   createSandboxedReadTool,
   createSandboxedWriteTool,
   wrapToolMemoryFlushAppendOnlyWrite,
-  wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -840,7 +839,7 @@ describe("FS tools with workspaceOnly=false", () => {
     const edit = createHostWorkspaceEditTool(workspaceDir, { workspaceOnly });
     const tools = [read, write, edit];
     return workspaceOnly
-      ? tools.map((tool) => wrapToolWorkspaceRootGuard(tool, workspaceDir))
+      ? tools.map((tool) => wrapToolWorkspaceRootGuardWithOptions(tool, workspaceDir))
       : tools;
   };
 

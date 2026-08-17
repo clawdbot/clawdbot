@@ -8,7 +8,6 @@ export {
   listActiveMemoryPublicArtifacts,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
-  listRegisteredMemoryEmbeddingProviders,
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime.js";

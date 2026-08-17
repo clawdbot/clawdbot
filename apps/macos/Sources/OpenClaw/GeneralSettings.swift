@@ -29,7 +29,6 @@ struct GeneralSettings: View {
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
-    @State private var computerControlPermissions = ComputerControlPermissionSnapshot.probe()
     @State private var cookieSyncManager = CookieSyncManager.shared
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
@@ -73,12 +72,6 @@ struct GeneralSettings: View {
         }
         .onChange(of: self.computerControlProviderRaw) { _, _ in
             self.state.applyComputerControlHostState()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            self.refreshComputerControlPermissions()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openclawPermissionsChanged)) { _ in
-            self.refreshComputerControlPermissions()
         }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
@@ -148,17 +141,10 @@ struct GeneralSettings: View {
 
                 self.computerControlProviderRow
 
-                SettingsCardRow(
-                    title: "Computer Control access",
-                    subtitle: .verbatim(self.computerControlPermissions.diagnostic.detailText))
-                {
-                    Label {
-                        Text(verbatim: self.computerControlPermissions.diagnostic.statusText)
-                    } icon: {
-                        Image(systemName: self.computerControlPermissionIcon)
-                    }
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(self.computerControlPermissionColor)
+                if self.computerControlEnabled {
+                    ComputerControlReadinessView(
+                        provider: self.selectedComputerControlProvider,
+                        cuaDriverAvailable: self.cuaDriverBundled)
                 }
 
                 SettingsCardToggleRow(
@@ -377,33 +363,12 @@ struct GeneralSettings: View {
     private func updateActiveWork(active: Bool) {
         guard !self.isPreview else { return }
         if active {
-            self.refreshComputerControlPermissions()
             self.refreshGatewayStatus()
             if self.page == .connection {
                 self.gatewayDiscovery.start()
             }
         } else {
             self.gatewayDiscovery.stop()
-        }
-    }
-
-    private func refreshComputerControlPermissions() {
-        guard self.page == .general, self.isActive, !self.isPreview else { return }
-        self.computerControlPermissions = .probe()
-    }
-
-    private var computerControlPermissionIcon: String {
-        switch self.computerControlPermissions.diagnostic {
-        case .granted: "checkmark.circle.fill"
-        case .missing: "exclamationmark.circle.fill"
-        case .accessibilityGrantMayBeStale: "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var computerControlPermissionColor: Color {
-        switch self.computerControlPermissions.diagnostic {
-        case .granted: .green
-        case .missing, .accessibilityGrantMayBeStale: .orange
         }
     }
 
@@ -906,12 +871,13 @@ extension GeneralSettings {
         CuaDriverArtifact.bundledExecutableURL != nil
     }
 
+    private var selectedComputerControlProvider: ComputerControlProvider {
+        ComputerControlProvider.current()
+    }
+
     private var computerControlProviderBinding: Binding<ComputerControlProvider> {
         Binding(
-            get: {
-                let selected = ComputerControlProvider(rawValue: self.computerControlProviderRaw) ?? .peekaboo
-                return selected == .cua && !self.cuaDriverBundled ? .peekaboo : selected
-            },
+            get: { self.selectedComputerControlProvider },
             set: { provider in
                 guard provider != .cua || self.cuaDriverBundled else { return }
                 self.computerControlProviderRaw = provider.rawValue

@@ -68,7 +68,7 @@ on:
         default: true
         type: boolean
       publish_docker_only:
-        description: Publish Docker only after independently verifying an already-published extended-stable npm package
+        description: Publish Docker only after independently verifying an already-published beta or extended-stable npm package
         required: true
         default: false
         type: boolean
@@ -184,8 +184,8 @@ jobs:
               echo "publish_docker_only requires publish_openclaw_npm=false." >&2
               exit 1
             fi
-            if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]]; then
-              echo "publish_docker_only is reserved for an already-published extended-stable release." >&2
+            if [[ "${RELEASE_NPM_DIST_TAG}" != "beta" && "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]]; then
+              echo "publish_docker_only supports already-published beta or extended-stable releases only." >&2
               exit 1
             fi
           fi
@@ -2480,14 +2480,15 @@ jobs:
       - name: Verify exact npm and selector readback matches preflight bytes
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_TARBALL_SHA256: ${{ needs.resolve_release_target.outputs.preflight_tarball_sha256 }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           exact_version="$(npm view "openclaw@${version}" version)"
-          selector_version="$(npm view openclaw@extended-stable version)"
+          selector_version="$(npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version)"
           if [[ "${exact_version}" != "${version}" || "${selector_version}" != "${version}" ]]; then
-            echo "npm exact-version or extended-stable selector readback does not match ${version}." >&2
+            echo "npm exact-version or ${RELEASE_NPM_DIST_TAG} selector readback does not match ${version}." >&2
             exit 1
           fi
           tarball_url="$(npm view "openclaw@${version}" dist.tarball)"

@@ -19,6 +19,8 @@ import type {
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  ensureOpenClawAgentDatabaseSchema,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -456,6 +458,31 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
   };
 }
 
+function seedSchemaOnlyLegacyAgentDatabase(
+  stateDir: string,
+  options: { agentId?: string | null } = {},
+): string {
+  const databasePath = path.join(stateDir, "agent", "openclaw-agent.sqlite");
+  fsSync.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const database = new DatabaseSync(databasePath);
+  try {
+    ensureOpenClawAgentDatabaseSchema(database, {
+      agentId: "openclaw",
+      env: createEnv(stateDir),
+      path: databasePath,
+      register: false,
+    });
+    if (options.agentId !== undefined) {
+      database
+        .prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'")
+        .run(options.agentId);
+    }
+  } finally {
+    database.close();
+  }
+  return databasePath;
+}
+
 type VoiceWakeRoutingTestDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "voicewake_routing_config" | "voicewake_routing_routes"
@@ -876,6 +903,210 @@ describe("state migrations", () => {
     expect(result.notices).toEqual([
       expect.stringContaining("legacy main rows have no unambiguous configured owner"),
     ]);
+  });
+
+  it("ignores a schema-only legacy agent database without selecting an owner", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, blocker: {}, digest: {} } },
+    };
+    const databasePath = seedSchemaOnlyLegacyAgentDatabase(stateDir);
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.notices ?? []).not.toContain(
+      "Deferred legacy agent/session migration: select an agent owner",
+    );
+    expect(fsSync.existsSync(databasePath)).toBe(true);
+    expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(database.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()).toEqual({
+        count: 0,
+      });
+      expect(database.prepare("SELECT COUNT(*) AS count FROM auth_profile_store").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([null, "", "   "])(
+    "keeps a schema-only legacy agent database with invalid owner %j blocking",
+    async (agentId) => {
+      const root = await createTempDir();
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, blocker: {}, digest: {} } },
+      };
+      const databasePath = seedSchemaOnlyLegacyAgentDatabase(stateDir, { agentId });
+
+      const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+      expect(automatic.warnings).toContainEqual(
+        expect.stringContaining("agent schema owner is missing or blank"),
+      );
+      expect(automatic.notices ?? []).not.toContain(
+        "Deferred legacy agent/session migration: select an agent owner",
+      );
+      expect(fsSync.existsSync(databasePath)).toBe(true);
+      expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
+
+      resetAutoMigrateLegacyStateForTest();
+      const doctor = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: true,
+      });
+      expect(doctor.warnings).toContainEqual(
+        expect.stringContaining("agent schema owner is missing or blank"),
+      );
+      expect(doctor.notices ?? []).not.toContain(
+        "Deferred legacy agent/session migration: select an agent owner",
+      );
+    },
+  );
+
+  it.each([
+    ["without a system agent", undefined],
+    ["with a missing system agent", { systemAgent: { agentId: "missing" } }],
+  ] as const)(
+    "keeps unresolved legacy agent files advisory at startup and actionable in Doctor %s",
+    async (_label, defaults) => {
+      const root = await createTempDir();
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults,
+          entries: { main: {}, blocker: {}, digest: {} },
+        },
+      };
+      const legacyAgentPath = path.join(stateDir, "agent", "settings.json");
+      fsSync.mkdirSync(path.dirname(legacyAgentPath), { recursive: true });
+      fsSync.writeFileSync(legacyAgentPath, '{"legacy":true}\n');
+
+      const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+      expect(automatic.warnings).toEqual([]);
+      expect(automatic.notices).toContain(
+        "Deferred legacy agent/session migration: select an agent owner",
+      );
+      expect(fsSync.readFileSync(legacyAgentPath, "utf8")).toBe('{"legacy":true}\n');
+
+      resetAutoMigrateLegacyStateForTest();
+      const doctor = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: true,
+      });
+      expect(doctor.warnings).toContain(
+        "Deferred legacy agent/session migration: select an agent owner",
+      );
+      expect(doctor.notices ?? []).not.toContain(
+        "Deferred legacy agent/session migration: select an agent owner",
+      );
+      expect(fsSync.readFileSync(legacyAgentPath, "utf8")).toBe('{"legacy":true}\n');
+    },
+  );
+
+  it.each([
+    {
+      label: "the configured system agent",
+      targetAgentId: "main",
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, blocker: {}, digest: {} },
+        },
+      } as OpenClawConfig,
+    },
+    {
+      label: "the legacy compatibility owner before the configured system agent",
+      targetAgentId: "legacy",
+      cfg: {
+        agents: {
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { legacy: { default: true }, main: {} },
+        },
+      } as OpenClawConfig,
+    },
+  ])("migrates legacy shared agent and session state to $label", async ({ cfg, targetAgentId }) => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const legacySessionsDir = path.join(stateDir, "sessions");
+    const legacyAgentDir = path.join(stateDir, "agent");
+    await fs.mkdir(legacySessionsDir, { recursive: true });
+    await fs.mkdir(legacyAgentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(legacySessionsDir, "sessions.json"),
+      JSON.stringify({ legacy: { sessionId: "legacy-session", updatedAt: 1 } }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(legacySessionsDir, "legacy-session.jsonl"), "{}\n", "utf8");
+    await fs.writeFile(path.join(legacyAgentDir, "settings.json"), '{"legacy":true}\n', "utf8");
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      now: () => 1234,
+    });
+
+    expect(result.warnings).not.toContain(
+      "Deferred legacy agent/session migration: select an agent owner",
+    );
+    expect(result.notices ?? []).not.toContain(
+      "Deferred legacy agent/session migration: select an agent owner",
+    );
+    await expect(
+      fs.readFile(
+        path.join(stateDir, "agents", targetAgentId, "sessions", "legacy-session.jsonl"),
+        "utf8",
+      ),
+    ).resolves.toBe("{}\n");
+    await expect(
+      fs.readFile(path.join(stateDir, "agents", targetAgentId, "agent", "settings.json"), "utf8"),
+    ).resolves.toContain('"legacy":true');
+    await expectMissingPath(path.join(legacySessionsDir, "sessions.json"));
+    await expectMissingPath(legacyAgentDir);
+  });
+
+  it("keeps unreadable legacy agent databases blocking", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, blocker: {}, digest: {} } },
+    };
+    const databasePath = path.join(stateDir, "agent", "openclaw-agent.sqlite");
+    fsSync.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fsSync.writeFileSync(databasePath, "not a SQLite database");
+    const settingsPath = path.join(stateDir, "agent", "settings.json");
+    fsSync.writeFileSync(settingsPath, '{"legacy":true}\n');
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("Failed inspecting legacy agent database"),
+    );
+    expect(result.notices ?? []).not.toContain(
+      "Deferred legacy agent/session migration: select an agent owner",
+    );
+    expect(fsSync.readFileSync(databasePath, "utf8")).toBe("not a SQLite database");
+    expect(fsSync.readFileSync(settingsPath, "utf8")).toBe('{"legacy":true}\n');
   });
 
   it("detects no plugin-state migration warnings after the startup lease creates fresh state", async () => {
@@ -4611,6 +4842,52 @@ describe("state migrations", () => {
     expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
     expect(result.warnings).toStrictEqual([]);
     await expectMissingPath(legacyStorePath);
+  });
+
+  it("keeps a path-safe Unicode legacy session attached to its transcript", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const sessionId = "volume-main-हिन्दी-会議-000000";
+    const transcriptName = `${sessionId}.jsonl`;
+    const legacySessionsDir = path.join(stateDir, "sessions");
+    const legacyStorePath = path.join(legacySessionsDir, "sessions.json");
+    const targetSessionsDir = path.join(stateDir, "agents", "worker-1", "sessions");
+    const targetStorePath = path.join(targetSessionsDir, "sessions.json");
+    await fs.writeFile(
+      legacyStorePath,
+      `${JSON.stringify(
+        {
+          unicode: {
+            sessionFile: path.join(legacySessionsDir, transcriptName),
+            sessionId,
+            updatedAt: 100,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const transcript = `${JSON.stringify({ type: "session", sessionId })}\n`;
+    await fs.writeFile(path.join(legacySessionsDir, transcriptName), transcript, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, now: () => 1234 });
+
+    const migratedStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      { sessionId?: string }
+    >;
+    expect(migratedStore["agent:worker-1:unicode"]?.sessionId).toBe(sessionId);
+    await expect(fs.readFile(path.join(targetSessionsDir, transcriptName), "utf8")).resolves.toBe(
+      transcript,
+    );
+    await expectMissingPath(legacyStorePath);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("defers when an invalid legacy winner would replace an existing target key", async () => {

@@ -461,11 +461,15 @@ class ChatControllerReconnectRestoreTest {
       reconnect(controller)
 
       assertEquals(
-        listOf(
-          ChatPlanStep("Inspect", ChatPlanStepStatus.Completed),
-          ChatPlanStep("Reconnect", ChatPlanStepStatus.InProgress),
+        ChatPlanSnapshot(
+          steps =
+            listOf(
+              ChatPlanStep("Inspect", ChatPlanStepStatus.Completed),
+              ChatPlanStep("Reconnect", ChatPlanStepStatus.InProgress),
+            ),
+          explanation = "Restore checklist",
         ),
-        controller.planSteps.value,
+        controller.planSnapshot.value,
       )
     }
 
@@ -473,11 +477,12 @@ class ChatControllerReconnectRestoreTest {
   fun historyPlanReconciliationContract() =
     runTest {
       val retainedSteps = listOf(ChatPlanStep("Retained", ChatPlanStepStatus.InProgress))
+      val retainedPlan = ChatPlanSnapshot(steps = retainedSteps, explanation = "Retained explanation")
 
       data class Case(
         val name: String,
         val history: String,
-        val expectedSteps: List<ChatPlanStep>,
+        val expectedPlan: ChatPlanSnapshot,
         val staleAfterLivePlan: Boolean = false,
         val snapshotForNewLiveRun: ChatPlanSnapshot? = null,
         val gatewayScopeChange: Boolean = false,
@@ -494,9 +499,14 @@ class ChatControllerReconnectRestoreTest {
                 inFlightPlan =
                   ChatPlanSnapshot(
                     steps = listOf(ChatPlanStep("Replacement", ChatPlanStepStatus.Completed)),
+                    explanation = "Replacement explanation",
                   ),
               ),
-            expectedSteps = listOf(ChatPlanStep("Replacement", ChatPlanStepStatus.Completed)),
+            expectedPlan =
+              ChatPlanSnapshot(
+                steps = listOf(ChatPlanStep("Replacement", ChatPlanStepStatus.Completed)),
+                explanation = "Replacement explanation",
+              ),
           ),
           Case(
             name = "legacy-preserve",
@@ -505,7 +515,7 @@ class ChatControllerReconnectRestoreTest {
                 emptyList(),
                 inFlightRun = "run-retained" to "working",
               ),
-            expectedSteps = retainedSteps,
+            expectedPlan = retainedPlan,
           ),
           Case(
             name = "superseded",
@@ -516,9 +526,14 @@ class ChatControllerReconnectRestoreTest {
                 inFlightPlan =
                   ChatPlanSnapshot(
                     steps = listOf(ChatPlanStep("Next run", ChatPlanStepStatus.InProgress)),
+                    explanation = "Next explanation",
                   ),
               ),
-            expectedSteps = listOf(ChatPlanStep("Next run", ChatPlanStepStatus.InProgress)),
+            expectedPlan =
+              ChatPlanSnapshot(
+                steps = listOf(ChatPlanStep("Next run", ChatPlanStepStatus.InProgress)),
+                explanation = "Next explanation",
+              ),
           ),
           Case(
             name = "active-preserve",
@@ -528,7 +543,7 @@ class ChatControllerReconnectRestoreTest {
                 hasActiveRun = true,
                 activeRunIds = listOf("run-retained"),
               ),
-            expectedSteps = retainedSteps,
+            expectedPlan = retainedPlan,
           ),
           Case(
             name = "terminal-clear",
@@ -538,7 +553,7 @@ class ChatControllerReconnectRestoreTest {
                 hasActiveRun = false,
                 activeRunIds = emptyList(),
               ),
-            expectedSteps = emptyList(),
+            expectedPlan = ChatPlanSnapshot(steps = emptyList()),
           ),
           Case(
             name = "no-evidence-preserve",
@@ -548,7 +563,7 @@ class ChatControllerReconnectRestoreTest {
                 hasActiveRun = null,
                 activeRunIds = null,
               ),
-            expectedSteps = retainedSteps,
+            expectedPlan = retainedPlan,
           ),
           Case(
             name = "stale-response-does-not-clobber-newer-live-plan",
@@ -558,7 +573,11 @@ class ChatControllerReconnectRestoreTest {
                 hasActiveRun = false,
                 activeRunIds = emptyList(),
               ),
-            expectedSteps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
+            expectedPlan =
+              ChatPlanSnapshot(
+                steps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
+                explanation = "New live explanation",
+              ),
             staleAfterLivePlan = true,
           ),
           Case(
@@ -569,17 +588,26 @@ class ChatControllerReconnectRestoreTest {
                 inFlightRun = "run-previous" to "stale",
                 inFlightPlan = ChatPlanSnapshot(steps = emptyList()),
               ),
-            expectedSteps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
+            expectedPlan =
+              ChatPlanSnapshot(
+                steps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
+                explanation = "New live explanation",
+              ),
             staleAfterLivePlan = true,
           ),
           Case(
             name = "snapshot-for-newer-owned-run-is-accepted",
             history = history(emptyList()),
-            expectedSteps = listOf(ChatPlanStep("Matching snapshot", ChatPlanStepStatus.Completed)),
+            expectedPlan =
+              ChatPlanSnapshot(
+                steps = listOf(ChatPlanStep("Matching snapshot", ChatPlanStepStatus.Completed)),
+                explanation = "Matching explanation",
+              ),
             staleAfterLivePlan = true,
             snapshotForNewLiveRun =
               ChatPlanSnapshot(
                 steps = listOf(ChatPlanStep("Matching snapshot", ChatPlanStepStatus.Completed)),
+                explanation = "Matching explanation",
               ),
           ),
           Case(
@@ -590,12 +618,12 @@ class ChatControllerReconnectRestoreTest {
                 inFlightRun = "run-retained" to "working",
                 inFlightPlan = ChatPlanSnapshot(steps = emptyList()),
               ),
-            expectedSteps = emptyList(),
+            expectedPlan = ChatPlanSnapshot(steps = emptyList()),
           ),
           Case(
             name = "gateway-scope-change-clears",
             history = history(emptyList()),
-            expectedSteps = emptyList(),
+            expectedPlan = ChatPlanSnapshot(steps = emptyList()),
             gatewayScopeChange = true,
           ),
         )
@@ -610,7 +638,7 @@ class ChatControllerReconnectRestoreTest {
             history(
               emptyList(),
               inFlightRun = "run-retained" to "working",
-              inFlightPlan = ChatPlanSnapshot(steps = retainedSteps),
+              inFlightPlan = retainedPlan,
             ),
           )
         }
@@ -633,7 +661,7 @@ class ChatControllerReconnectRestoreTest {
           val runId = requireNotNull(gateway.lastRunId)
           controller.handleGatewayEvent(
             "agent",
-            """{"sessionKey":"main","runId":"$runId","seq":1,"ts":10,"stream":"plan","data":{"phase":"update","steps":[{"step":"New live plan","status":"in_progress"}]}}""",
+            """{"sessionKey":"main","runId":"$runId","seq":1,"ts":10,"stream":"plan","data":{"phase":"update","explanation":"New live explanation","steps":[{"step":"New live plan","status":"in_progress"}]}}""",
           )
           releaseHistory.complete(
             testCase.snapshotForNewLiveRun?.let { plan ->
@@ -656,7 +684,7 @@ class ChatControllerReconnectRestoreTest {
           runCurrent()
         }
 
-        assertEquals(testCase.name, testCase.expectedSteps, controller.planSteps.value)
+        assertEquals(testCase.name, testCase.expectedPlan, controller.planSnapshot.value)
       }
     }
 

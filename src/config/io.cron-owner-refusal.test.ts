@@ -31,7 +31,7 @@ const deps = (
     activeGateway ? { ...activeGateway, createdAt: new Date(0).toISOString() } : undefined,
   ),
   loadLegacyCronRepairState: vi.fn(async () => (jobs ? state(jobs) : null)),
-  materializeLegacyDefaultCronJobOwners: vi.fn(() => 0),
+  materializeLegacyDefaultCronJobOwners: vi.fn(async () => 0),
 });
 const cfg = { agents: { entries: { ops: {} } } };
 
@@ -124,7 +124,7 @@ it("materializes a proven retained owner before the commit recheck", async () =>
       ]),
     ),
   );
-  injected.materializeLegacyDefaultCronJobOwners.mockImplementationOnce(() => {
+  injected.materializeLegacyDefaultCronJobOwners.mockImplementationOnce(async () => {
     injected.loadLegacyCronRepairState.mockResolvedValue(
       state([
         { id: "ownerless", agentId: "ops" },
@@ -161,7 +161,7 @@ it("keeps ambiguous and failed owner handoffs as typed refusals", async () => {
   expect(ambiguous.materializeLegacyDefaultCronJobOwners).not.toHaveBeenCalled();
 
   const failed = deps(undefined, [{ id: "ownerless" }]);
-  failed.materializeLegacyDefaultCronJobOwners.mockImplementationOnce(() => {
+  failed.materializeLegacyDefaultCronJobOwners.mockImplementationOnce(async () => {
     throw new Error("database is temporarily read-only");
   });
   const failure = prepareCronOwnerWriteRefusal(

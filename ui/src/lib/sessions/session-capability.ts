@@ -1,5 +1,9 @@
 import type { GatewaySessionMessageSubscription } from "@openclaw/gateway-client/browser";
-import type { SessionsRecoverResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionOwner,
+  SessionsAssignOwnerParams,
+  SessionsRecoverResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
@@ -19,6 +23,7 @@ import type {
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
+import type { SessionGroupSettings } from "./custom-groups.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type {
@@ -36,11 +41,14 @@ export type SessionState = {
   deletedSessions: readonly SessionDeleteTarget[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
+  /** New Session defaults associated with each gateway-owned group. */
+  groupSettings: readonly SessionGroupSettings[];
   /** Gateway-owned sidebar section order; pinned is intentionally absent. */
   sectionOrder: readonly string[];
 };
 
 export type SessionGroupMutationResult = "completed" | "stale";
+export type SessionGroupDefaultsStatus = "idle" | "loading" | "ready" | "unavailable";
 
 export type SessionListOptions = {
   agentId?: string;
@@ -49,6 +57,7 @@ export type SessionListOptions = {
   activeMinutes?: number;
   search?: string;
   creatorId?: string;
+  involvingMe?: boolean;
   offset?: number;
   limit?: number;
   includeGlobal?: boolean;
@@ -66,21 +75,19 @@ export type SessionRefreshOptions = SessionListOptions & {
   backgroundHydrate?: boolean;
 };
 
-export type SessionListScope = Pick<SessionListOptions, "agentId" | "archivedFilter">;
+export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
 export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
 
 export type SessionDeleteOptions = {
   agentId?: string;
   deleteTranscript?: boolean;
+  expectedSessionId?: string;
   archivedOnly?: boolean;
 };
 
-export type SessionDeleteTarget = {
+export type SessionDeleteTarget = SessionDeleteOptions & {
   key: string;
-  agentId?: string;
-  deleteTranscript?: boolean;
-  archivedOnly?: boolean;
 };
 
 /** Dirty/unpushed checkouts survive session deletion; callers surface them. */
@@ -156,6 +163,7 @@ export type SessionCapability = {
   ) => () => void;
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
   setCreatorFilter: (creatorId: string | null) => Promise<void>;
+  setInvolvingMeFilter: (enabled: boolean) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
@@ -172,6 +180,11 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
+  assignOwner: (
+    key: string,
+    owner: SessionsAssignOwnerParams["owner"],
+    options?: { agentId?: string | null },
+  ) => Promise<SessionOwner | null>;
   setModelOverride: (key: string, value: string | null | undefined) => void;
   retireModelOverride: (key: string) => void;
   /** Keep optimistic row changes in the published snapshot through later publishes. */
@@ -244,8 +257,14 @@ export type SessionCapability = {
     leafEntryId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsBranchesSwitchResult>;
-  /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
-  groupsLoad: () => Promise<void>;
+  /** Loads one connection-owned group catalog; null means the attempt retired or failed. */
+  groupsLoad: () => Promise<readonly SessionGroupSettings[] | null>;
+  /** Generation of the catalog/defaults snapshot used by group-target routes. */
+  groupsGeneration: () => number;
+  /** Whether group defaults are current enough for a group-target route. */
+  groupsStatus: () => SessionGroupDefaultsStatus;
+  /** Invalidates the connection-owned group catalog before an explicit route retry. */
+  groupsInvalidate: () => void;
   /** Replaces the group catalog; stale means the initiating connection retired. */
   groupsPut: (
     names: readonly string[],
@@ -253,6 +272,11 @@ export type SessionCapability = {
   ) => Promise<SessionGroupMutationResult>;
   /** Renames a group; stale means the initiating connection retired before reconciliation. */
   groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
+  /** Updates the New Session defaults for one group. */
+  groupsUpdate: (
+    name: string,
+    defaults: { cwd: string | null; worktree: boolean },
+  ) => Promise<SessionGroupMutationResult>;
   /** Deletes a group; stale means the initiating connection retired before reconciliation. */
   groupsDelete: (name: string) => Promise<SessionGroupMutationResult>;
   subscribeCreated: (listener: (key: string) => void) => () => void;

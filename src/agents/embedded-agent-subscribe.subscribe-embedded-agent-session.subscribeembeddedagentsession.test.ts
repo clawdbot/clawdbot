@@ -1679,7 +1679,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("notifies the runner once when a heartbeat response tool result is recorded", async () => {
+  it("notifies the runner once when a heartbeat response tool result is accepted", async () => {
     const { session, emit } = createStubSessionHarness();
     const onHeartbeatToolResponse = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
@@ -1691,7 +1691,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     const result = {
       details: {
-        status: "recorded",
+        status: "accepted",
         outcome: "no_change",
         notify: false,
         summary: "Nothing needs attention.",

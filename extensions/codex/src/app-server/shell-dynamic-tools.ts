@@ -29,8 +29,8 @@ export function createNodeExecDynamicTool(
     ...execTool,
     name: CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     description: pinnedNode
-      ? "Run a shell command on the OpenClaw configured remote node for this session. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use node_process for follow-up on backgrounded node_exec sessions. Use Codex's native shell for local app-server work."
-      : "Run a shell command on an OpenClaw remote node. Select the node by name or id when multiple nodes are available. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use node_process for follow-up on backgrounded node_exec sessions. Use Codex's native shell for local app-server work.",
+      ? "Run a shell command on the OpenClaw configured remote node for this session. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use remote-node background-session control for follow-up when available. Use Codex's native shell for local app-server work."
+      : "Run a shell command on an OpenClaw remote node. Select the node by name or id when multiple nodes are available. This tool always uses OpenClaw host=node internally and follows the existing node exec approval and allowlist policy. Use remote-node background-session control for follow-up when available. Use Codex's native shell for local app-server work.",
     parameters: hideNodeExecDynamicToolParameters(execTool.parameters, {
       hideNode: Boolean(pinnedNode),
     }),
@@ -48,7 +48,7 @@ export function createNodeExecDynamicTool(
             ? Object.assign({}, item, {
                 text: item.text.replace(
                   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-                  "Use node_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+                  "Use remote-node background-session control (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up when available.",
                 ),
               })
             : item,
@@ -65,7 +65,7 @@ export function createNodeProcessDynamicTool(
     ...processTool,
     name: CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME,
     description:
-      "Manage node_exec sessions that were started on OpenClaw remote nodes: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for node_exec follow-up; use Codex's native shell session handling for local app-server work.",
+      "Manage background shell sessions on OpenClaw remote nodes: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for remote-node follow-up; use Codex's native shell session handling for local app-server work.",
   };
 }
 

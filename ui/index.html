@@ -313,8 +313,7 @@
     </section>
     <script>
       (function () {
-        var tagName = "openclaw-app";
-        var app = document.querySelector(tagName);
+        var app = document.querySelector("openclaw-app");
         var fallback = document.getElementById("openclaw-mount-fallback");
         if (!app || !fallback) return;
 
@@ -330,6 +329,7 @@
         var recoveryAttempt = 0;
         var recoveryInFlight = false;
         var recoveryNavigation = false;
+        var appStarted = false;
 
         try {
           var initialUrl = new URL(window.location.href);
@@ -339,19 +339,6 @@
             window.history.replaceState(null, "", initialUrl.href);
           }
         } catch (e) {}
-
-        function appMounted() {
-          try {
-            return Boolean(
-              app.isConnected &&
-              window.customElements &&
-              typeof window.customElements.get === "function" &&
-              window.customElements.get(tagName),
-            );
-          } catch (e) {
-            return false;
-          }
-        }
 
         function hideFallback() {
           fallback.hidden = true;
@@ -364,14 +351,14 @@
 
         function scheduleRecovery() {
           window.clearTimeout(recoveryTimer);
-          if (appMounted() || recoveryAttempt >= maxRecoveryAttempts) return;
+          if (appStarted || recoveryAttempt >= maxRecoveryAttempts) return;
           var retryDelay = Math.min(delay, 1000 * Math.pow(2, recoveryAttempt));
           recoveryTimer = window.setTimeout(retryCurrentDocument, retryDelay);
         }
 
         function finishRecoveryAttempt() {
           recoveryInFlight = false;
-          if (appMounted()) return;
+          if (appStarted) return;
           if (recoveryAttempt >= maxRecoveryAttempts) {
             setSummary(
               "The gateway is still unavailable. Try again, then check the troubleshooting guide if the problem persists.",
@@ -386,7 +373,7 @@
 
         function retryCurrentDocument() {
           if (
-            appMounted() ||
+            appStarted ||
             recoveryInFlight ||
             recoveryAttempt >= maxRecoveryAttempts ||
             typeof window.fetch !== "function"
@@ -414,7 +401,7 @@
             })
             .then(function (response) {
               if (!response.ok) throw new Error("gateway unavailable");
-              window.location.replace(documentUrl.href);
+              if (!appStarted) window.location.replace(documentUrl.href);
             })
             .catch(function () {
               finishRecoveryAttempt();
@@ -425,7 +412,7 @@
         }
 
         function showFallback() {
-          if (appMounted()) return;
+          if (appStarted) return;
           retryCurrentDocument();
           fallback.hidden = false;
           document.body.classList.add("openclaw-mount-fallback-active");
@@ -445,16 +432,16 @@
 
         armFallbackTimer();
 
-        if (window.customElements && typeof window.customElements.whenDefined === "function") {
-          window.customElements.whenDefined(tagName).then(
-            function () {
-              window.clearTimeout(timer);
-              window.clearTimeout(recoveryTimer);
-              hideFallback();
-            },
-            function () {},
-          );
-        }
+        window.addEventListener(
+          "openclaw-control-ui-rendered",
+          function () {
+            appStarted = true;
+            window.clearTimeout(timer);
+            window.clearTimeout(recoveryTimer);
+            hideFallback();
+          },
+          { once: true },
+        );
 
         if (retry) {
           retry.addEventListener("click", function () {

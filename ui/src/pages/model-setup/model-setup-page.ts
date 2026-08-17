@@ -14,6 +14,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -52,10 +53,7 @@ export type ModelSetupRouteData = {
 };
 
 function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" && error.trim() ? error : t("modelSetup.errors.requestFailed");
+  return formatUiError(error, t("modelSetup.errors.requestFailed"));
 }
 
 type BoundModelResult<T> =

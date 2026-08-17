@@ -8,7 +8,6 @@ import {
 } from "./index.js";
 import {
   defaultApiRegistry,
-  getApiProvider,
   streamSimple as streamSimpleDefault,
 } from "./internal/default-runtime.js";
 
@@ -45,7 +44,6 @@ describe("LLM API registry", () => {
     );
 
     const provider = registry.getApiProvider("test-api");
-    expect(provider).toBeDefined();
     expect(() => provider?.streamSimple({ ...model, api: "other-api" }, { messages: [] })).toThrow(
       "Mismatched api: other-api expected test-api",
     );
@@ -81,8 +79,6 @@ describe("LLM API registry", () => {
       },
       TEST_SOURCE_ID,
     );
-
-    expect(getApiProvider("test-api")).toBeDefined();
 
     streamSimpleDefault(model, { messages: [] });
 

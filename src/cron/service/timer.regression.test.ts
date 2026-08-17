@@ -13,7 +13,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
-  HEARTBEAT_SKIP_LANES_BUSY,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_PREEMPTED,
   type HeartbeatRunResult,
 } from "../../infra/heartbeat-wake.js";
@@ -1188,7 +1188,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("keeps scheduling after setup timeout when no restart handler is installed", async () => {
+  it("keeps scheduling after setup timeout without a notification handler", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -1226,7 +1226,6 @@ describe("cron service timer regressions", () => {
       now += 60_100;
       await timerPromise;
 
-      expect(state.restartRecoveryPending).toBe(false);
       expect(state.timer).not.toBeNull();
     } finally {
       vi.useRealTimers();
@@ -1410,24 +1409,25 @@ describe("cron service timer regressions", () => {
       );
 
       now = scheduledAt + 2_000;
-      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY });
+      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
       await vi.advanceTimersByTimeAsync(0);
       await timerPromise;
 
-      const expectedSessionKey = `agent:main:cron:main-session-cancel-boundary:run:${scheduledAt}`;
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
         "queued downstream work",
         expect.objectContaining({
+          agentId: "main",
           contextKey: "cron:main-session-cancel-boundary",
-          sessionKey: expectedSessionKey,
         }),
       );
+      expect(enqueueSystemEvent.mock.calls[0]?.[1]).not.toHaveProperty("sessionKey");
       expect(requestHeartbeat).toHaveBeenCalledWith(
         expect.objectContaining({
+          agentId: "main",
           reason: "cron:main-session-cancel-boundary",
-          sessionKey: expectedSessionKey,
         }),
       );
+      expect(requestHeartbeat.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
     } finally {
       resetActiveCronTaskRunsForTests();
       resetTaskRegistryControlRuntimeForTests();
@@ -1593,7 +1593,7 @@ describe("cron service timer regressions", () => {
       expect(isCronJobActive(cronJob.id)).toBe(true);
 
       now = scheduledAt + 2_000;
-      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY });
+      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
       await vi.advanceTimersByTimeAsync(0);
       await timerPromise;
 
@@ -1784,7 +1784,7 @@ describe("cron service timer regressions", () => {
     };
     const runHeartbeatOnce = vi
       .fn<() => Promise<HeartbeatRunResult>>()
-      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY })
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
       .mockResolvedValueOnce({ status: "ran", durationMs: 12 });
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
@@ -2479,44 +2479,11 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(state.restartRecoveryPending).toBe(false);
       expect(state.timer).not.toBeNull();
       expect(scheduledStarted).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("skips new manual runs while restart recovery is pending", async () => {
-    const store = timerRegressionFixtures.makeStorePath();
-    const scheduledAt = Date.parse("2026-05-10T08:58:30.000Z");
-    const manualJob = createDueIsolatedJob({
-      id: "manual-blocked-by-recovery",
-      nowMs: scheduledAt,
-      nextRunAtMs: scheduledAt,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [manualJob] });
-
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => scheduledAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-    });
-    state.restartRecoveryPending = true;
-
-    const result = await runManualCronJob(state, manualJob.id, "force");
-
-    expect(result).toEqual({
-      ok: true,
-      ran: false,
-      reason: "restart-recovery-pending",
-    });
-    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
   });
 
   it("does not persist stale startup catch-up outcomes after the old service stops", async () => {
@@ -2719,7 +2686,6 @@ describe("cron service timer regressions", () => {
       now += 60_100;
       await manualRun;
       await firstScheduledStarted.promise;
-      expect(state.restartRecoveryPending).toBe(false);
 
       finishFirstScheduled.resolve();
       await timerRun;

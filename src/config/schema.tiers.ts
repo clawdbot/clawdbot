@@ -166,7 +166,10 @@ wizard.accessMode wizard.appRecommendations
   .trim()
   .split(/\s+/);
 
-const ADVANCED_TUNING_PATHS = new Set(["agents.defaults.heartbeat.every"]);
+const ADVANCED_TUNING_PATHS = new Set([
+  "agents.defaults.heartbeat.every",
+  "session.maintenance.preserveRecent",
+]);
 const CHANNEL_KERNEL_TIER_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
 
 function isPluginOwnedChannelTierPath(path: string): boolean {

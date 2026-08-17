@@ -49,10 +49,18 @@ describe("cua-computer plugin registration", () => {
   it("registers the screen and dangerous computer node-host commands", () => {
     const commands: OpenClawPluginNodeHostCommand[] = [];
     const policies: OpenClawPluginNodeInvokePolicy[] = [];
+    const registerTool = vi.fn();
+    const registerCli = vi.fn();
+    const registerNodeCliFeature = vi.fn();
+    const registerService = vi.fn();
     plugin.register({
       pluginConfig: {},
       registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => commands.push(command),
       registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => policies.push(policy),
+      registerTool,
+      registerCli,
+      registerNodeCliFeature,
+      registerService,
     } as unknown as OpenClawPluginApi);
 
     expect(commands.map(({ command, cap, dangerous }) => ({ command, cap, dangerous }))).toEqual([
@@ -62,6 +70,11 @@ describe("cua-computer plugin registration", () => {
     expect(policies).toHaveLength(1);
     expect(policies[0]).toMatchObject({ commands: ["computer.act"], dangerous: true });
     expect(policies[0]?.defaultPlatforms).toBeUndefined();
+    expect(commands.every((command) => command.agentTool === undefined)).toBe(true);
+    expect(registerTool).not.toHaveBeenCalled();
+    expect(registerCli).not.toHaveBeenCalled();
+    expect(registerNodeCliFeature).not.toHaveBeenCalled();
+    expect(registerService).not.toHaveBeenCalled();
   });
 
   it("accepts the retired driver path as a no-op while keeping both schemas strict", () => {
@@ -124,7 +137,10 @@ describe("cua-computer plugin registration", () => {
     const invokeNode = vi.fn(async () => refusal);
 
     await expect(
-      policies[0]!.handle({ invokeNode } as unknown as OpenClawPluginNodeInvokePolicyContext),
+      policies[0]!.handle({
+        invokeNode,
+        risk: { level: "ordinary", family: "input" },
+      } as unknown as OpenClawPluginNodeInvokePolicyContext),
     ).resolves.toEqual(refusal);
     expect(invokeNode).toHaveBeenCalledOnce();
   });

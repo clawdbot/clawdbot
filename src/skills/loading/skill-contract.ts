@@ -4,6 +4,8 @@ import type { SourceInfo } from "../../agents/sessions/source-info.js";
 
 export interface Skill {
   name: string;
+  /** Human-readable title from the first Markdown H1, falling back to the identifier. */
+  displayName?: string;
   description: string;
   /** Additional loading guidance rendered with the location in full and compact catalogs. */
   locationNote?: string;
@@ -31,6 +33,23 @@ export function escapeSkillXml(str: string): string {
 }
 
 const COMPACT_DESCRIPTION_MAX_CHARS = 220;
+const SKILL_FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u;
+const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/mu;
+
+function humanizeSkillIdentifier(value: string): string {
+  return value
+    .trim()
+    .split(/[-_]+/u)
+    .filter(Boolean)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+}
+
+export function resolveSkillDisplayName(content: string, fallbackName: string): string {
+  const body = content.replace(SKILL_FRONTMATTER_BLOCK, "");
+  const heading = body.match(SKILL_TITLE_HEADING)?.[1]?.trim();
+  return heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
+}
 
 function truncateSkillDescription(description: string, maxChars: number): string {
   const normalized = description.replace(/\s+/g, " ").trim();

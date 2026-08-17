@@ -3,6 +3,7 @@ import {
   resolveApprovalOverGateway,
   type ApprovalResolveResult,
 } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -230,7 +231,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
   const handleLegacy = async (approvalCallback: LegacyApprovalCallback): Promise<void> => {
     const { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender } =
       resolveApprovalAuthorizations();
-    const approvalKinds: Array<"exec" | "plugin"> = [];
+    const approvalKinds: ChannelApprovalKind[] = [];
     if (execApprovalAuthorizedSender || pluginApprovalAuthorizedSender) {
       approvalKinds.push("exec");
     }

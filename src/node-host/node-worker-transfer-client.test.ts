@@ -392,7 +392,7 @@ describe("node worker transfer client", () => {
       },
     );
     const gatewayUrl = (await listen(target)).replace(/^ws/u, "wss");
-    const proxySockets = new Set<Duplex>();
+    const proxyTunnels = new Set<{ client: Duplex; upstream: Duplex }>();
     let connectCount = 0;
     const proxy = createHttpServer();
     proxy.on("connect", (req, clientSocket, head) => {
@@ -406,10 +406,19 @@ describe("node worker transfer client", () => {
         upstream.pipe(clientSocket);
         clientSocket.pipe(upstream);
       });
-      proxySockets.add(clientSocket);
-      proxySockets.add(upstream);
-      clientSocket.once("close", () => proxySockets.delete(clientSocket));
-      upstream.once("close", () => proxySockets.delete(upstream));
+      const tunnel = { client: clientSocket, upstream };
+      proxyTunnels.add(tunnel);
+      // A CONNECT tunnel owns both socket halves. Once either half closes or
+      // errors, retire the pair so teardown cannot reset an unowned peer.
+      const closeTunnel = () => {
+        proxyTunnels.delete(tunnel);
+        clientSocket.destroy();
+        upstream.destroy();
+      };
+      clientSocket.once("close", closeTunnel);
+      clientSocket.once("error", closeTunnel);
+      upstream.once("close", closeTunnel);
+      upstream.once("error", closeTunnel);
     });
     const proxyUrl = (await listen(proxy)).replace(/^ws/u, "http");
     const proxyHandle = installGlobalProxy({ mode: "managed", proxyUrl });
@@ -427,10 +436,24 @@ describe("node worker transfer client", () => {
       ).resolves.toBe(manifestRef);
       expect(connectCount).toBe(1);
     } finally {
+      const tunnelClosures = [...proxyTunnels].flatMap((tunnel) =>
+        [tunnel.client, tunnel.upstream].map(
+          (socket) =>
+            new Promise<void>((resolve) => {
+              if (socket.destroyed) {
+                resolve();
+                return;
+              }
+              socket.once("close", resolve);
+            }),
+        ),
+      );
       proxyHandle.stop();
-      for (const socket of proxySockets) {
-        socket.destroy();
+      for (const tunnel of proxyTunnels) {
+        tunnel.client.destroy();
+        tunnel.upstream.destroy();
       }
+      await Promise.all(tunnelClosures);
       proxy.closeAllConnections();
       target.closeAllConnections();
       await Promise.all([
