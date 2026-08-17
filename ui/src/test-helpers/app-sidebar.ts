@@ -75,6 +75,7 @@ export type SidebarLifecycleState = HTMLElement & {
     home: string;
     entries: Array<{ name: string; path: string; type: "directory" | "file" }>;
   }>;
+  inspectSessionGroupRepository(path?: string): Promise<"git" | "not_git" | "unavailable">;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
