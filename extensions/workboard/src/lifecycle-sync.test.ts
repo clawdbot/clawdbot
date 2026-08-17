@@ -123,7 +123,7 @@ describe("Workboard gateway lifecycle sync", () => {
 
     expect(request).toHaveBeenCalledWith(
       "cron.run",
-      { id: "job-categorize-planning", mode: "force" },
+      { id: "job-categorize-planning", mode: "if-enabled" },
       { scopes: ["operator.admin"] },
     );
     expect(info).toHaveBeenCalledWith(
@@ -159,7 +159,7 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(activeRequest).not.toHaveBeenCalled();
     expect(generationRequest).toHaveBeenCalledWith(
       "cron.run",
-      { id: "job-categorize-planning", mode: "force" },
+      { id: "job-categorize-planning", mode: "if-enabled" },
       { scopes: ["operator.admin"] },
     );
   });
@@ -258,6 +258,32 @@ describe("Workboard gateway lifecycle sync", () => {
 
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("workboard automation nudge failed"));
+  });
+
+  it("logs disabled automation skips without affecting lifecycle sync", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
+    const sessionKey = "agent:main:subagent:workboard-planning-card-disabled";
+    const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+    const request = vi.fn().mockResolvedValue({ ok: true, ran: false, reason: "disabled" });
+    const warn = vi.fn();
+    const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
+    const context = { logger: { info: vi.fn(), warn } } as never;
+    await service.start(context);
+
+    await expect(
+      syncWorkboardSubagentEnded({
+        store,
+        event: { targetSessionKey: sessionKey, endedAt: card.updatedAt + 1, outcome: "ok" },
+        onMatched: service.nudge,
+      }),
+    ).resolves.toBe(1);
+    await service.stop?.(context);
+
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
+    expect(warn).toHaveBeenCalledWith(
+      "workboard automation nudge skipped for board planning: job job-categorize-planning disabled",
+    );
   });
 
   it("moves a linked running card to review from the subagent hook without UI involvement", async () => {

@@ -1579,7 +1579,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("bundled plugin runtime force-runs a persisted automation", async () => {
+  test("bundled plugin runtime runs enabled automations and skips disabled ones", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-plugin-runtime-",
       cronEnabled: true,
@@ -1608,31 +1608,34 @@ describe("gateway server cron", () => {
         getRuntimeConfig: cronState.getRuntimeConfig,
       } as never;
 
-      const runRes = await withPluginRuntimeGatewayRequestScope(
-        {
-          context,
-          client: {
-            connect: { scopes: ["operator.read"] },
-            internal: {
-              agentRuntimeIdentity: {
-                kind: "agentRuntime",
-                agentId: "foreign-agent",
-                sessionKey: "agent:foreign-agent:main",
-                turnSourceAccountId: "default",
+      const runThroughPlugin = async (id: string) =>
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            context,
+            client: {
+              connect: { scopes: ["operator.read"] },
+              internal: {
+                agentRuntimeIdentity: {
+                  kind: "agentRuntime",
+                  agentId: "foreign-agent",
+                  sessionKey: "agent:foreign-agent:main",
+                  turnSourceAccountId: "default",
+                },
               },
-            },
-          } as never,
-          isWebchatConnect: () => false,
-          pluginId: "workboard",
-          pluginOrigin: "bundled",
-        },
-        async () =>
-          await runtime.gateway.request(
-            "cron.run",
-            { id: jobId, mode: "force" },
-            { scopes: ["operator.admin"] },
-          ),
-      );
+            } as never,
+            isWebchatConnect: () => false,
+            pluginId: "workboard",
+            pluginOrigin: "bundled",
+          },
+          async () =>
+            await runtime.gateway.request(
+              "cron.run",
+              { id, mode: "if-enabled" },
+              { scopes: ["operator.admin"] },
+            ),
+        );
+
+      const runRes = await runThroughPlugin(jobId);
 
       expect(runRes).toMatchObject({ ok: true, enqueued: true });
       await expect(finishedRun).resolves.toMatchObject({
@@ -1645,6 +1648,27 @@ describe("gateway server cron", () => {
       expect((runsRes.payload as { entries?: Array<{ jobId?: string }> }).entries).toEqual([
         expect.objectContaining({ jobId }),
       ]);
+
+      const disabledAddRes = await directCronReq(cronState, "cron.add", {
+        name: "disabled plugin runtime nudge",
+        enabled: false,
+        schedule: { kind: "cron", expr: "0 3 1 1 *", tz: "America/Los_Angeles" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "disabled plugin runtime nudge" },
+      });
+      const disabledJobId = expectCronJobIdFromResponse(disabledAddRes);
+      await expect(runThroughPlugin(disabledJobId)).resolves.toMatchObject({
+        ok: true,
+        ran: false,
+        reason: "disabled",
+      });
+      const disabledRuns = await directCronReq(cronState, "cron.runs", {
+        id: disabledJobId,
+        limit: 5,
+      });
+      expect(disabledRuns.ok).toBe(true);
+      expect((disabledRuns.payload as { entries?: unknown[] }).entries).toEqual([]);
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }

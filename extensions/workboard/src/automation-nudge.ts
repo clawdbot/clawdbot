@@ -85,9 +85,16 @@ export function createWorkboardAutomationNudgeService(params: {
     try {
       const result = await params.gateway.request(
         "cron.run",
-        { id: jobId, mode: "force" },
+        { id: jobId, mode: "if-enabled" },
         { scopes: ["operator.admin"] },
       );
+      if (isRecord(result) && result.ran === false) {
+        const reason = typeof result.reason === "string" ? result.reason : "not-run";
+        state.logger.warn(
+          `workboard automation nudge skipped for board ${boardId}: job ${jobId} ${reason}`,
+        );
+        return;
+      }
       const runId = isRecord(result) && typeof result.runId === "string" ? result.runId : undefined;
       state.logger.info(
         `workboard automation nudge requested for board ${boardId}: job ${jobId}${runId ? ` run ${runId}` : ""}`,
