@@ -128,13 +128,16 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       // The command palette exposes the same toggle from anywhere.
       await page.locator(".shell-chrome-controls__search").click();
       await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
-      const paletteItem = page.getByRole("option", { name: "Ask OpenClaw" });
-      await paletteItem.waitFor();
+      // Select via keyboard: async session-search results can reflow the list
+      // mid-click on slow runners, silently dropping a positional click.
+      const activeItem = page.locator(".cmd-palette__item--active", { hasText: "Ask OpenClaw" });
+      await activeItem.waitFor();
       await page.screenshot({
         animations: "disabled",
         path: path.join(artifactDir, "03-palette-item.png"),
       });
-      await paletteItem.click();
+      await page.keyboard.press("Enter");
+      await panel.locator("section.cp").waitFor();
       await panel.getByText("Channel repaired.").waitFor();
 
       // The server-confirmed session id persists and is reused after a full reload.
