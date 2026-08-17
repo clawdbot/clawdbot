@@ -127,6 +127,7 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
+  js-yaml: 4.3.1
   "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.147.0
   "@anthropic-ai/sdk": 0.115.0
   "@opentelemetry/core": 2.10.0
