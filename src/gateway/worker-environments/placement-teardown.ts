@@ -14,7 +14,7 @@ type PlacementTeardownStore = Pick<
 >;
 
 /** Close the workspace-result fence, then advance the exact drained owner into reconciliation. */
-export function completeDrainedWorkspaceTeardown(params: {
+function completeDrainedWorkspaceTeardown(params: {
   placements: PlacementTeardownStore;
   turnClaim: WorkerSessionTurnClaim;
   environmentId: string;

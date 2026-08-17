@@ -89,7 +89,7 @@ function normalizeOperationId(value: string): string {
   return operationId;
 }
 
-export function normalizeWorkerPlacementMoveTarget(
+function normalizeWorkerPlacementMoveTarget(
   target: WorkerPlacementMoveTarget,
 ): WorkerPlacementMoveTarget {
   switch (target.kind) {
@@ -103,7 +103,7 @@ export function normalizeWorkerPlacementMoveTarget(
   throw new Error("Worker placement move target is invalid");
 }
 
-export function normalizeWorkerPlacementMoveSource(
+function normalizeWorkerPlacementMoveSource(
   source: WorkerPlacementMoveSource,
 ): WorkerPlacementMoveSource {
   return {

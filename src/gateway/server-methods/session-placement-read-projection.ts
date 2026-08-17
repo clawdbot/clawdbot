@@ -6,7 +6,7 @@ import {
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export function projectSessionPlacementFields(params: {
+function projectSessionPlacementFields(params: {
   context: GatewayRequestContext;
   sessionId: string | undefined;
   placements?: ReadonlyMap<string, WorkerSessionPlacementRecord>;
