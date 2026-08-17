@@ -56,6 +56,8 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
   </Accordion>
   <Accordion title="Deep phase">
     - Ranks candidates with weighted scoring and threshold gates (`minScore`, `minRecallCount`, `minUniqueQueries` must all pass).
+    - `minRecallCount` counts literal interactive recalls (default `0`); set it above zero to require that evidence in addition to daily recurrence.
+    - `minUniqueQueries` counts distinct query hashes (default `3`); raw recall-day and signal counts alone do not satisfy this gate. Daily ingestion produces a day-specific query hash, so a recurring daily claim can meet the default after three days.
     - Rehydrates snippets from live daily files before writing, so stale/deleted snippets are skipped.
     - Passes gated owner and agent-derived candidates to a consolidation subagent with the current `MEMORY.md`.
     - Rewrites `MEMORY.md` only when the result preserves enough prior entries, includes candidate source references, and fits the bootstrap budget.

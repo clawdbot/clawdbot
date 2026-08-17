@@ -21,7 +21,7 @@ describe("memory-core manifest config schema", () => {
                 deep: {
                   properties: {
                     minScore: { default: 0.75 },
-                    minRecallCount: { default: 3 },
+                    minRecallCount: { default: 0 },
                     minUniqueQueries: { default: 3 },
                   },
                 },

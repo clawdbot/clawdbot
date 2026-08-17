@@ -44,7 +44,9 @@ export const DEFAULT_MEMORY_DEEP_DREAMING_LIMIT = 10;
 // Deterministic calibration scores 3-day/3-query durable facts at 0.750-0.756,
 // versus repeated filler at 0.489-0.549 and high-relevance one-offs at 0.529-0.606.
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.75;
-export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
+// Daily recurrence is tracked by minUniqueQueries; minRecallCount is an
+// opt-in literal interactive-recall gate so the default daily path remains eligible.
+export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 0;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
 const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;

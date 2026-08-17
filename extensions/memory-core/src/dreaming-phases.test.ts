@@ -2590,8 +2590,6 @@ describe("memory-core dreaming phases", () => {
 
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
     expect(ranked).toHaveLength(1);
@@ -2608,8 +2606,6 @@ describe("memory-core dreaming phases", () => {
     const applied = await applyShortTermPromotions({
       workspaceDir,
       candidates: ranked,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
     expect(applied.applied).toBe(1);

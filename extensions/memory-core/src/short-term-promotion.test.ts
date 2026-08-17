@@ -1751,7 +1751,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("enforces default thresholds during apply even when candidates are passed directly", async () => {
+  it("enforces the default query threshold during apply even when candidates are passed directly", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const applied = await applyShortTermPromotions({
         workspaceDir,
@@ -1787,7 +1787,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      expect(applied.rejectedCandidates[0]?.reason).toContain("signal threshold");
+      expect(applied.rejectedCandidates[0]?.reason).toContain("query threshold");
     });
   });
 
