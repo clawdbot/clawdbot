@@ -105,21 +105,16 @@ type WorkspaceIcon = {
 /** `null` records a resolved absence so a workspace without an icon never re-scans. */
 type WorkspaceIconResolution = WorkspaceIcon | null;
 
-/**
- * The snapshot travels wrapped because a published absence resolves to `null`:
- * a bare promise handed to a waiter is adopted by `resolve`, flattening that
- * absence into the falsy value an expired wait produces, so a workspace with
- * no icon would answer 503 instead of its stable 404.
- */
-type SessionWorkspaceIconWait =
-  | { status: "published"; prepared: Promise<WorkspaceIconResolution> }
-  | { status: "unavailable" };
+type SessionWorkspaceIconSnapshot = {
+  prepared: Promise<WorkspaceIconResolution>;
+  resolution?: WorkspaceIconResolution;
+};
 
-/** Notified with the session's snapshot the moment preparation publishes it. */
-type SessionWorkspaceIconWaiter = (wait: SessionWorkspaceIconWait) => void;
+/** Observes the session snapshot chosen for one admitted HTTP request. */
+type SessionWorkspaceIconWaiter = (snapshot: SessionWorkspaceIconSnapshot) => void;
 
 let workspaceIconCache = new Map<string, Promise<WorkspaceIconResolution>>();
-let sessionWorkspaceIconCache = new Map<string, Promise<WorkspaceIconResolution>>();
+let sessionWorkspaceIconCache = new Map<string, SessionWorkspaceIconSnapshot>();
 const sessionWorkspaceIconWaiters = new Map<string, Set<SessionWorkspaceIconWaiter>>();
 
 export function clearWorkspaceIconCacheForTest(): void {
@@ -243,16 +238,19 @@ function publishSessionWorkspaceIcon(
   sessionKey: string,
   prepared: Promise<WorkspaceIconResolution>,
 ): void {
+  const snapshot: SessionWorkspaceIconSnapshot = { prepared };
   sessionWorkspaceIconCache.delete(sessionKey);
-  sessionWorkspaceIconCache.set(sessionKey, prepared);
+  sessionWorkspaceIconCache.set(sessionKey, snapshot);
   pruneMapToMaxSize(sessionWorkspaceIconCache, SESSION_WORKSPACE_ICON_CACHE_MAX_ENTRIES);
-  const waiters = sessionWorkspaceIconWaiters.get(sessionKey);
-  if (!waiters) {
-    return;
-  }
-  sessionWorkspaceIconWaiters.delete(sessionKey);
-  for (const waiter of waiters) {
-    waiter({ status: "published", prepared });
+  void prepared.then((icon) => {
+    // A newer startup or bounded-cache eviction owns this key now.
+    if (sessionWorkspaceIconCache.get(sessionKey) !== snapshot) {
+      return;
+    }
+    snapshot.resolution = icon;
+  });
+  for (const waiter of sessionWorkspaceIconWaiters.get(sessionKey) ?? []) {
+    waiter(snapshot);
   }
 }
 
@@ -279,56 +277,78 @@ export async function prepareSessionWorkspaceIcon(params: {
 }
 
 /**
- * Waits for the producer to publish this session's snapshot, reporting
- * `unavailable` at the deadline, on client disconnect, or when admission is
- * saturated, so a key no `chat.startup` is preparing answers promptly instead
- * of holding the request open.
+ * Waits for this session's snapshot to resolve, whether the request arrived
+ * before or after publication. The deadline, disconnect cleanup, and admission
+ * bounds therefore own every unresolved HTTP request through one lifecycle.
  */
-function awaitSessionWorkspaceIconPublish(
+function awaitSessionWorkspaceIcon(
   sessionKey: string,
   res: ServerResponse,
-): Promise<SessionWorkspaceIconWait> {
+): Promise<WorkspaceIconResolution | undefined> {
   const existing = sessionWorkspaceIconWaiters.get(sessionKey);
   const saturated = existing
     ? existing.size >= SESSION_WORKSPACE_ICON_MAX_WAITS_PER_SESSION
     : sessionWorkspaceIconWaiters.size >= SESSION_WORKSPACE_ICON_MAX_WAITING_SESSIONS;
   if (saturated) {
-    return Promise.resolve({ status: "unavailable" });
+    return Promise.resolve(undefined);
   }
   const waiters = existing ?? new Set<SessionWorkspaceIconWaiter>();
   sessionWorkspaceIconWaiters.set(sessionKey, waiters);
   return new Promise((resolve) => {
     // Every exit runs through here, so the timer, the disconnect listener, and
     // the admission slot this request holds are always released together.
-    const settle: SessionWorkspaceIconWaiter = (wait) => {
+    let settled = false;
+    const settle = (resolution: WorkspaceIconResolution | undefined) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       clearTimeout(deadline);
       res.off("close", abandon);
-      waiters.delete(settle);
+      waiters.delete(observe);
       // Only drop the bucket this waiter belongs to; a later request may have
       // installed a fresh one for the same session key.
       if (waiters.size === 0 && sessionWorkspaceIconWaiters.get(sessionKey) === waiters) {
         sessionWorkspaceIconWaiters.delete(sessionKey);
       }
-      resolve(wait);
+      resolve(resolution);
     };
-    const abandon = () => settle({ status: "unavailable" });
-    waiters.add(settle);
+    let observed = false;
+    const observe: SessionWorkspaceIconWaiter = (snapshot) => {
+      if (observed) {
+        return;
+      }
+      observed = true;
+      if (snapshot.resolution !== undefined) {
+        settle(snapshot.resolution);
+        return;
+      }
+      void snapshot.prepared.then(settle);
+    };
+    const abandon = () => settle(undefined);
+    waiters.add(observe);
     res.once("close", abandon);
     const deadline = setTimeout(abandon, SESSION_WORKSPACE_ICON_PUBLISH_WAIT_MS);
     // A decorative icon request must never hold the Gateway process open.
     deadline.unref?.();
+    // Registration and this second read share one synchronous turn, so a
+    // publish cannot land between them without either path observing it.
+    const cached = readPreparedSessionWorkspaceIcon(sessionKey);
+    if (cached) {
+      observe(cached);
+    }
   });
 }
 
 function readPreparedSessionWorkspaceIcon(
   sessionKey: string,
-): Promise<WorkspaceIconResolution> | undefined {
-  const prepared = sessionWorkspaceIconCache.get(sessionKey);
-  if (prepared) {
+): SessionWorkspaceIconSnapshot | undefined {
+  const snapshot = sessionWorkspaceIconCache.get(sessionKey);
+  if (snapshot) {
     sessionWorkspaceIconCache.delete(sessionKey);
-    sessionWorkspaceIconCache.set(sessionKey, prepared);
+    sessionWorkspaceIconCache.set(sessionKey, snapshot);
   }
-  return prepared;
+  return snapshot;
 }
 
 /** `matched` claims the response so a malformed key 404s instead of reaching the SPA. */
@@ -420,23 +440,22 @@ export async function handleWorkspaceIconHttpRequest(
   }
   // The header can paint before this session's chat.startup lands, so a miss
   // waits for the producer instead of reporting one the browser cannot fix.
-  // Read and registration share one tick: no publish can land between them.
   const cached = readPreparedSessionWorkspaceIcon(parsed.sessionKey);
-  const wait: SessionWorkspaceIconWait = cached
-    ? { status: "published", prepared: cached }
-    : await awaitSessionWorkspaceIconPublish(parsed.sessionKey, res);
-  if (wait.status === "unavailable") {
+  const icon =
+    cached?.resolution !== undefined
+      ? cached.resolution
+      : await awaitSessionWorkspaceIcon(parsed.sessionKey, res);
+  if (icon === undefined) {
     // No snapshot arrived: never opened, aged out of the bounded cache until a
-    // new chat.startup republishes it, or the wait pool was full. A published
-    // absence 404s below instead. Uncacheable, so the folder fallback cannot
-    // freeze into the workspace's answer.
+    // new chat.startup republishes it, preparation exceeded the deadline, or
+    // the wait pool was full. A resolved absence 404s below instead.
+    // Uncacheable, so the folder fallback cannot freeze into the answer.
     res.statusCode = 503;
     res.setHeader("cache-control", "no-store");
     res.setHeader("retry-after", "1");
     res.end("workspace icon snapshot is not ready");
     return true;
   }
-  const icon = await wait.prepared;
   if (!icon) {
     res.setHeader("cache-control", "no-store");
     respondNotFound(res);

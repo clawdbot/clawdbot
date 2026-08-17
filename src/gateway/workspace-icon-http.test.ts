@@ -15,6 +15,25 @@ const mocks = vi.hoisted(() => ({
   resolveLocalSessionWorkspaceRoot: vi.fn(),
 }));
 
+const iconReadControl = vi.hoisted(() => ({
+  gate: null as Promise<void> | null,
+}));
+
+vi.mock("../infra/boundary-file-read.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/boundary-file-read.js")>();
+  return {
+    ...actual,
+    readFileDescriptorBounded: async (
+      ...args: Parameters<typeof actual.readFileDescriptorBounded>
+    ) => {
+      if (iconReadControl.gate) {
+        await iconReadControl.gate;
+      }
+      return actual.readFileDescriptorBounded(...args);
+    },
+  };
+});
+
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
   resolveOpenAiCompatibleHttpOperatorScopes: (...args: unknown[]) => mocks.resolveScopes(...args),
@@ -400,6 +419,73 @@ describe("handleWorkspaceIconHttpRequest", () => {
     const response = await responsePromise;
     expect(response.status).toBe(200);
     expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
+  });
+
+  it("bounds requests waiting on a cached pending preparation", async () => {
+    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    let releaseRead = () => {};
+    iconReadControl.gate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:cached-pending" });
+    const held = Array.from({ length: 4 }, () => openIconRequest("agent:main:cached-pending"));
+    await settleRequests();
+    const refused = openIconRequest("agent:main:cached-pending");
+
+    try {
+      const settled = vi.fn();
+      void refused.status.then(settled);
+      await settleRequests();
+      expect(settled).toHaveBeenCalledWith(503);
+    } finally {
+      releaseRead();
+      iconReadControl.gate = null;
+      await preparation;
+      for (const request of held) {
+        request.abort();
+      }
+      refused.abort();
+      await Promise.all([...held, refused].map((request) => request.status));
+    }
+  });
+
+  it("releases a cached pending wait when its client disconnects", async () => {
+    const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    let releaseRead = () => {};
+    iconReadControl.gate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:cached-abort" });
+    const abandoned = Array.from({ length: 4 }, () => openIconRequest("agent:main:cached-abort"));
+
+    try {
+      await settleRequests();
+      for (const request of abandoned) {
+        request.abort();
+      }
+      await settleRequests();
+
+      const admitted = openIconRequest("agent:main:cached-abort");
+      const settled = vi.fn();
+      void admitted.status.then(settled);
+      await settleRequests();
+      expect(settled).not.toHaveBeenCalled();
+
+      releaseRead();
+      iconReadControl.gate = null;
+      await preparation;
+      await expect(admitted.status).resolves.toBe(200);
+    } finally {
+      releaseRead();
+      iconReadControl.gate = null;
+      await preparation;
+      for (const request of abandoned) {
+        request.abort();
+      }
+      await Promise.all(abandoned.map((request) => request.status));
+    }
   });
 
   it("records the fallback when preparation fails", async () => {
