@@ -25,6 +25,15 @@ export function assertNoCronShellExecution(value: unknown): void {
       "automation command payloads cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
     );
   }
+  // Host-shell precheck is a persisted unattended exec surface. Agents must
+  // not create/edit it via the automations tool (same boundary as command payloads).
+  const precheck = isRecord(value.precheck) ? value.precheck : undefined;
+  const precheckCommand = precheck?.command;
+  if (typeof precheckCommand === "string" && precheckCommand.trim().length > 0) {
+    throw new Error(
+      "automation precheck host-shell gates cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
+    );
+  }
   const schedule = isRecord(value.schedule) ? value.schedule : undefined;
   if (schedule?.kind === "on-exit") {
     throw new Error(
