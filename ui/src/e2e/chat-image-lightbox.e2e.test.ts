@@ -1,6 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -9,6 +9,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -30,6 +31,15 @@ async function newContext(options: Parameters<Browser["newContext"]>[0]) {
 async function closeContext(context: BrowserContext) {
   openContexts.delete(context);
   await context.close().catch(() => {});
+}
+
+async function waitForLightboxAnimations(page: Page): Promise<void> {
+  await page.locator("openclaw-image-lightbox wa-dialog").evaluate(async (dialogAdapter) => {
+    const nativeDialog = dialogAdapter.shadowRoot?.querySelector("dialog");
+    await Promise.all(
+      (nativeDialog?.getAnimations({ subtree: true }) ?? []).map((animation) => animation.finished),
+    );
+  });
 }
 
 describeControlUiE2e("Control UI image lightbox", () => {
@@ -155,6 +165,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
           ),
         )
         .toBeGreaterThan(0);
+      await waitForLightboxAnimations(page);
       const desktopBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       expect(desktopBox?.width ?? 0).toBeGreaterThan(1000);
       expect(desktopBox?.height ?? 0).toBeGreaterThan(700);
@@ -174,7 +185,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
         .poll(() => transcriptTrigger.evaluate((element) => element.matches(":focus")))
         .toBe(true);
 
-      await page.locator(".chat-workspace-toggle").click();
+      await openChatSidePanelType(page, "Files");
       const artifactRow = page.locator(".chat-workspace-rail__file-open", {
         hasText: "openclaw-banner.png",
       });
@@ -212,14 +223,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
       await page.setViewportSize({ height: 844, width: 390 });
       await sidebarTrigger.click();
       await sidebarDialog.waitFor({ state: "visible" });
-      await page.locator("openclaw-image-lightbox wa-dialog").evaluate(async (dialogAdapter) => {
-        const nativeDialog = dialogAdapter.shadowRoot?.querySelector("dialog");
-        await Promise.all(
-          (nativeDialog?.getAnimations({ subtree: true }) ?? []).map(
-            (animation) => animation.finished,
-          ),
-        );
-      });
+      await waitForLightboxAnimations(page);
       const mobileBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       const mobileImageLayout = await page
         .locator("openclaw-image-lightbox .stage")

@@ -35,6 +35,12 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - Native CSS nesting: opportunistic only — nest when already rewriting a section; no conversion sweeps.
 - `@layer` is deliberately not used: the shared light-DOM stylesheet's precedence relies on import order plus specificity, page CSS imports lazily per component, and measured `no-descending-specificity` hits are within-file — layering the import manifest would flip unlayered-vs-layered precedence across ~48 lazily imported page files for no measured win. Revisit only with computed-style parity proof across all routes on the mocked dev server (PR #123156/#123160 show the evidence pattern).
 
+## Gateway Coupling
+
+- The Control UI ships from and with its Gateway: one install, one version (product decision, 2026-08-16). UI code never carries gateway-version compatibility — no fallbacks to older methods when a current core method is missing, no version-conditional behavior for older gateways.
+- Method-advertisement checks (`isGatewayMethodAdvertised`) remain only as feature gates for config/plugin-dependent surfaces, never as version compat.
+- The handshake rejects gateway-served same-origin skew. The admission-exempt paths (`pnpm ui:dev`, custom `gateway.controlUi.root`, cross-origin/connection-settings dialing) are unsupported for version mismatch without enforcement: they carry no compat code and fail visibly at the first missing method, by design. Tightening admission to reject them at connect is a server-side product change owned separately.
+
 ## Live Verification
 
 - The Gateway serves the prebuilt bundle from `dist/control-ui`; editing `ui/src` changes nothing live until `pnpm ui:build`. Confirm the served `/assets/index-*.js` hash changed before trusting a live result.

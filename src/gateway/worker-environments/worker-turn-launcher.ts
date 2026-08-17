@@ -14,17 +14,23 @@ import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js"
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
-import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import {
+  STALE_WORKER_BUILD_REASON,
+  StaleWorkerBuildError,
+  supportsWorkerExecutionContextLaunch,
+} from "./admission.js";
+import { placementTurnOwner } from "./placement-record.js";
 import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
-import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
+import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
 import {
   claimWorkerTurn,
+  rejectPendingWorkerResult,
   releaseClaimIfOwned,
   requireActivePlacement,
   resolvePlacementIdentity,
@@ -61,7 +67,7 @@ type WorkerTurnLauncherOptions = {
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
   resolveWorkspacePath: (identity: ReturnType<typeof resolvePlacementIdentity>) => Promise<string>;
-  recoverPendingWorkspaceResult: (environmentId: string) => Promise<void>;
+  reconcileActivePlacement: (environmentId: string) => Promise<void>;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
@@ -90,6 +96,7 @@ async function executeWorkerTurn(params: {
   onHandoff: () => void;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;
+  reconcileActivePlacement: (environmentId: string) => Promise<void>;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   turn: SessionPlacementTurnParams;
   turnClaim: WorkerSessionTurnClaim;
@@ -99,6 +106,11 @@ async function executeWorkerTurn(params: {
   const modelRef = assertSupportedTurn(turn);
   const environment = params.environments.get(placement.environmentId);
   const bootstrapReceipt = environment?.bootstrapReceipt;
+  // Provider reconciliation records current-build teardown before placement repair. Consume
+  // that fact before launch so canonical reconciliation can persist the same cause.
+  if (environment?.error === STALE_WORKER_BUILD_REASON) {
+    throw new StaleWorkerBuildError();
+  }
   if (
     !environment ||
     environment.state !== "attached" ||
@@ -171,11 +183,7 @@ async function executeWorkerTurn(params: {
     model: modelRef.model,
   });
 
-  const credential = await params.environments.acquireTurnCredential({
-    environmentId: placement.environmentId,
-    ownerEpoch: placement.activeOwnerEpoch,
-    sessionId: placement.sessionId,
-  });
+  const credential = await params.environments.acquireTurnCredential(params.turnClaim);
   const tunnel = await waitForTurnOperation({
     operation: params.environments.startTunnel({
       environmentId: placement.environmentId,
@@ -205,7 +213,7 @@ async function executeWorkerTurn(params: {
     messages: initialMessages,
     build: (agentRuntimeIdentityToken, windowedMessages) =>
       parseWorkerLaunchPlan({
-        version: 3,
+        version: 4,
         admission: {
           environmentId: placement.environmentId,
           credential: credential.credential,
@@ -223,6 +231,12 @@ async function executeWorkerTurn(params: {
           prompt: turn.prompt,
           suppressPromptTranscript: true,
           workspaceDir: placement.remoteWorkspaceDir,
+          ...(turn.permissionMode
+            ? {
+                permissionMode: turn.permissionMode,
+                workerContainmentRoot: placement.remoteWorkspaceDir,
+              }
+            : {}),
           modelRef,
           inferenceOptions: reasoning ? { reasoning } : {},
           ...(turn.extraSystemPrompt === undefined ? {} : { systemPrompt: turn.extraSystemPrompt }),
@@ -274,7 +288,7 @@ async function executeWorkerTurn(params: {
   };
   const processPromise = tunnel.launchTurn({
     plan,
-    placementGeneration: placement.generation,
+    turnClaim: params.turnClaim,
     timeoutMs: turn.timeoutMs,
     signal: turn.abortSignal
       ? AbortSignal.any([turn.abortSignal, handoffAbort.signal])
@@ -448,6 +462,18 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         routablePlacement = await options.redispatchReclaimed(routablePlacement);
       }
       const identity = resolvePlacementIdentity(claim, routablePlacement);
+      if (
+        routablePlacement.state === "draining" &&
+        options.placements
+          .listPendingWorkspaceResults()
+          .some((pending) => pending.sessionId === identity.sessionId)
+      ) {
+        await rejectPendingWorkerResult({
+          placements: options.placements,
+          sessionId: identity.sessionId,
+          ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+        });
+      }
       let placement = requireActivePlacement(routablePlacement);
       // The placement owns the managed worktree. Callers can carry a default or stale
       // workspace path, but remote results must only reconcile into that canonical root.
@@ -459,11 +485,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           ...identity,
           claimId: randomUUID(),
           runId: claim.runId,
-          owner: {
-            kind: "local",
-            environmentId: placement.environmentId,
-            ownerEpoch: placement.activeOwnerEpoch,
-          },
+          owner: placementTurnOwner(placement),
         });
         const refreshed = options.placements.get(claim.sessionId);
         if (
@@ -499,6 +521,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           },
           placement,
           placements: options.placements,
+          reconcileActivePlacement: options.reconcileActivePlacement,
           localWorkspaceDir,
           workspaceOperations: options.workspaceOperations,
           turn,
@@ -509,22 +532,38 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           : await executeWorkerTurn(executionParams);
         return result;
       } catch (error) {
+        if (error instanceof StaleWorkerBuildError) {
+          await options.reconcileActivePlacement(placement.environmentId);
+          const reconciled = options.placements.get(placement.sessionId);
+          if (reconciled) {
+            requireActivePlacement(reconciled);
+          }
+        }
         const pendingWorkspaceResult = options.placements
           .listPendingWorkspaceResults()
-          .some(
+          .find(
             (pending) =>
               pending.sessionId === turnClaim.sessionId &&
               pending.claimId === turnClaim.claimId &&
               pending.runId === turnClaim.runId,
           );
         if (pendingWorkspaceResult) {
-          // A recovery sweep owns the still-live worker claim. Teardown here
-          // could discard the terminal event's durably fenced file results.
-          options.placements.handoffWorkspaceResultRecovery(turnClaim);
-          await options.recoverPendingWorkspaceResult(placement.environmentId);
+          if (turnClaim.owner.kind === "local") {
+            // The Gateway-owned run is already terminal. Atomically record the
+            // reconciliation failure before teardown so reclaim cannot see live work.
+            options.placements.failWorkspaceResultAndReleaseTurn(pendingWorkspaceResult, error);
+          } else {
+            // A recovery sweep owns the still-live worker claim. Teardown here
+            // could discard the terminal event's durably fenced file results.
+            options.placements.handoffWorkspaceResultRecovery(turnClaim);
+          }
+          await options.reconcileActivePlacement(placement.environmentId);
           throw error;
         }
-        if (error instanceof WorkerRunnerUnavailableError && !handedOff) {
+        if (
+          error instanceof WorkerRunnerCapacityError ||
+          (error instanceof WorkerRunnerUnavailableError && !handedOff)
+        ) {
           await releaseClaimIfOwned(options.placements, turnClaim);
           throw error;
         }

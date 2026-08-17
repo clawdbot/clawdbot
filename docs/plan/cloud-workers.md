@@ -88,7 +88,7 @@ RPCs: `environments.create`, `environments.destroy`, extended `environments.list
 No bespoke worker artifact, and no dependence on npm availability:
 
 - Canonical install for all modes: a gateway-produced, content-hashed worker bundle (the gateway's own build output packed as a tarball), pushed over SSH and installed on the box. This covers dev builds and unreleased commits by construction.
-- `npm i -g openclaw@<exact gateway version>` is an optimization when the gateway runs a released version; never `latest`.
+- On npm 12 or npm 11.16+, `npm i -g openclaw@<exact gateway version> --allow-scripts=openclaw` is an optimization when the gateway runs a released version; never `latest`. On npm 11.12 and earlier, omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
 - Bootstrap is idempotent; a warm lease with a matching bundle hash skips install. Raw machines may need a networked toolchain phase (Node runtime) — part of the setup phase, closed afterwards.
 - Handshake verifies worker build hash, protocol feature set, and runtime compatibility. The existing gateway version/protocol checks are insufficient for this (SSH-tunneled nodes are exempted from exact-version rejection), so worker admission does its own exact-build check.
 

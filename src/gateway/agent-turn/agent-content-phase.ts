@@ -30,6 +30,8 @@ import {
   logAttachmentFailure,
   parseMessageWithAttachments,
   type ChatAttachment,
+  type ChatImageContent,
+  type OffloadedRef,
 } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
@@ -53,9 +55,10 @@ type AgentContentPhaseResult = {
   requestedSessionKey?: string;
   effectiveTranscriptInputText: string;
   message: string;
-  images: Array<{ type: "image"; data: string; mimeType: string }>;
+  images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
   media: MediaFact[];
+  offloadedRefs: OffloadedRef[];
   replyTo: string;
   recipientChannel?: string;
   recipientAccountId?: string;
@@ -89,6 +92,7 @@ export async function prepareAgentContentPhase(params: {
   let images: AgentContentPhaseResult["images"] = [];
   let imageOrder: PromptImageOrderEntry[] = [];
   let media: MediaFact[] = [];
+  let offloadedRefs: OffloadedRef[] = [];
   let agentId = params.agentId;
   let requestedSessionKey = params.requestedSessionKey;
 
@@ -133,6 +137,7 @@ export async function prepareAgentContentPhase(params: {
       images = parsed.images;
       imageOrder = parsed.imageOrder;
       media = parsed.media;
+      offloadedRefs = parsed.offloadedRefs;
     } catch (err) {
       logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
       params.respond(
@@ -243,6 +248,7 @@ export async function prepareAgentContentPhase(params: {
     images,
     imageOrder,
     media,
+    offloadedRefs,
     replyTo,
     recipientChannel,
     recipientAccountId,

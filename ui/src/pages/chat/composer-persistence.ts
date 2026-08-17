@@ -79,6 +79,11 @@ export type ChatComposerPersistResult =
   | { status: "conflict" }
   | ({ status: "storage-failed" } & ChatComposerDraftRetry);
 
+export type StoredChatQueueReplacement = {
+  id: string;
+  expected: ChatQueueItem;
+};
+
 type ChatComposerPersistOptions = {
   agentId?: string;
   draft?: string;
@@ -161,7 +166,8 @@ function queueItemVersionMatches(
     stored.sendAttempts === canonicalExpected.sendAttempts &&
     stored.sendState === canonicalExpected.sendState &&
     stored.agentId === canonicalExpected.agentId &&
-    stored.sessionKey === canonicalExpected.sessionKey,
+    stored.sessionKey === canonicalExpected.sessionKey &&
+    stored.orderKey === canonicalExpected.orderKey,
   );
 }
 
@@ -431,7 +437,7 @@ export function admitStoredChatComposerQueueItem(
   sessionKey: string,
   item: ChatQueueItem,
   agentId?: string,
-  replacesId?: string,
+  replaces?: StoredChatQueueReplacement,
 ): boolean {
   const storage = getSafeSessionStorage();
   if (!storage || !sessionKey.trim()) {
@@ -460,7 +466,17 @@ export function admitStoredChatComposerQueueItem(
     // by the write that stores the replacement, so a rejected write leaves the
     // original queued instead of losing both copies. Filtering before the cap
     // check also keeps a replacement admissible on a full queue.
-    const queue = (session?.queue ?? []).filter((entry) => entry.id !== replacesId);
+    const storedQueue = session?.queue ?? [];
+    if (
+      replaces &&
+      !storedQueue.some(
+        (entry) =>
+          entry.id === replaces.id && queueItemVersionMatches(entry, replaces.expected, scope),
+      )
+    ) {
+      return false;
+    }
+    const queue = storedQueue.filter((entry) => entry.id !== replaces?.id);
     const existing = queue.find((entry) => entry.id === serialized.id);
     if (existing) {
       if (!queueItemsEqual(existing, serialized, scope)) {
@@ -490,15 +506,28 @@ export function admitStoredChatComposerQueueItem(
   }
 }
 
-export function updateStoredChatComposerQueueItem(
+/**
+ * Batch compare-and-set for durable queue rows. A caller passing several rows
+ * (a reorder permutation) gets one fresh read, one validation pass over every
+ * expected row, one full-document write, and one read-back verification — so
+ * the whole set commits or none of it does. A mid-batch storage failure can
+ * never leave a permutation half-applied the way a per-row write loop would.
+ */
+export function updateStoredChatComposerQueueItems(
   state: ChatComposerScope,
   sessionKey: string,
-  expected: ChatQueueItem,
-  next: ChatQueueItem,
+  updates: readonly { expected: ChatQueueItem; next: ChatQueueItem }[],
   agentId?: string,
 ): boolean {
+  if (updates.length === 0) {
+    return true;
+  }
   const storage = getSafeSessionStorage();
-  if (!storage || !sessionKey.trim() || expected.id !== next.id) {
+  if (
+    !storage ||
+    !sessionKey.trim() ||
+    updates.some(({ expected, next }) => expected.id !== next.id)
+  ) {
     return false;
   }
   try {
@@ -507,40 +536,59 @@ export function updateStoredChatComposerQueueItem(
     const scope = resolveComposerStorageScope(
       state,
       sessionKey,
-      agentId ?? expected.agentId ?? next.agentId,
+      agentId ?? updates[0]!.expected.agentId ?? updates[0]!.next.agentId,
       store.mainAlias,
     );
-    const serializedNext = serializeQueueItemForScope(next, scope);
-    if (!serializedNext) {
-      return false;
-    }
     const { session, storeSessionKey } = resolveStoredComposerSession(
       store,
       state,
       sessionKey,
       scope.agentScope === UNRESOLVED_GLOBAL_AGENT_SCOPE ? undefined : scope.agentScope,
     );
-    const queue = session?.queue ?? [];
-    const index = queue.findIndex((entry) => entry.id === expected.id);
-    const stored = queue[index];
-    if (!stored || !queueItemVersionMatches(stored, expected, scope)) {
-      return false;
+    const nextQueue = (session?.queue ?? []).slice();
+    for (const { expected, next } of updates) {
+      const index = nextQueue.findIndex((entry) => entry.id === expected.id);
+      const stored = index >= 0 ? nextQueue[index] : undefined;
+      const serializedNext =
+        stored && queueItemVersionMatches(stored, expected, scope)
+          ? serializeQueueItemForScope(next, scope)
+          : null;
+      if (!serializedNext) {
+        // A missing or stale row rejects the whole batch before anything is written.
+        return false;
+      }
+      nextQueue[index] = serializedNext;
     }
-    const nextQueue = queue.slice();
-    nextQueue[index] = serializedNext;
     writeStoredComposerSession(store, storeSessionKey, session, nextQueue);
     writeStore(storage, target, store);
     notifyStoredChatOutboxChanges();
-    const persisted = resolveStoredComposerSession(
-      readStore(storage, target),
-      state,
-      sessionKey,
-      scope.agentScope === UNRESOLVED_GLOBAL_AGENT_SCOPE ? undefined : scope.agentScope,
-    ).session?.queue?.find((entry) => entry.id === serializedNext.id);
-    return Boolean(persisted && queueItemsEqual(persisted, serializedNext, scope));
+    const persistedQueue =
+      resolveStoredComposerSession(
+        readStore(storage, target),
+        state,
+        sessionKey,
+        scope.agentScope === UNRESOLVED_GLOBAL_AGENT_SCOPE ? undefined : scope.agentScope,
+      ).session?.queue ?? [];
+    return updates.every(({ next }) => {
+      const serializedNext = serializeQueueItemForScope(next, scope);
+      const persisted = persistedQueue.find((entry) => entry.id === next.id);
+      return Boolean(
+        persisted && serializedNext && queueItemsEqual(persisted, serializedNext, scope),
+      );
+    });
   } catch {
     return false;
   }
+}
+
+export function updateStoredChatComposerQueueItem(
+  state: ChatComposerScope,
+  sessionKey: string,
+  expected: ChatQueueItem,
+  next: ChatQueueItem,
+  agentId?: string,
+): boolean {
+  return updateStoredChatComposerQueueItems(state, sessionKey, [{ expected, next }], agentId);
 }
 
 export function removeStoredChatComposerQueueItem(

@@ -375,10 +375,10 @@ describe("doctor runtime tool schema checks", () => {
         "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
     });
     expect(mocks.createOpenClawCodingTools).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", toolPolicyAuditLogLevel: "debug" }),
+      expect.objectContaining({ agentId: "main" }),
     );
     expect(mocks.createOpenClawCodingTools).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "worker", toolPolicyAuditLogLevel: "debug" }),
+      expect.objectContaining({ agentId: "worker" }),
     );
     expect(mocks.loadModelCatalog).toHaveBeenCalledTimes(2);
     expect(mocks.loadModelCatalog).toHaveBeenNthCalledWith(

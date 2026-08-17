@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -30,7 +31,7 @@ const tempDirs: string[] = [];
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() =>
   vi.fn(
-    (params: { turnSourceChannel?: string | null; approvalKind?: "exec" | "plugin" }) =>
+    (params: { turnSourceChannel?: string | null; approvalKind?: ChannelApprovalKind }) =>
       params.approvalKind === "plugin" && params.turnSourceChannel === "tui",
   ),
 );

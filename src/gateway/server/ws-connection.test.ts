@@ -77,6 +77,7 @@ async function connectTestWs(
     socket?: GatewayWsTestSocket;
     clients?: Set<unknown>;
     options?: Partial<Parameters<typeof attachGatewayWsConnectionHandler>[0]>;
+    trustedProxies?: string[];
   } = {},
 ) {
   const logWsControl = createGatewayWsTestLogger();
@@ -87,6 +88,7 @@ async function connectTestWs(
     host: params.host,
     options: { ...params.options, logWsControl: logWsControl as never },
     socket: params.socket,
+    trustedProxies: params.trustedProxies,
   });
   await waitForLazyMessageHandler();
 
@@ -240,9 +242,11 @@ describe("attachGatewayWsConnectionHandler", () => {
     const { passed } = await connectTestWs({
       host: "10.0.0.2:18789",
       headers: {
+        "x-forwarded-for": "203.0.113.10",
         "x-forwarded-host": "gateway.example.com",
         "x-forwarded-proto": "https",
       },
+      trustedProxies: ["127.0.0.1"],
       options: {
         gatewayHost: "10.0.0.2",
         port: 18789,
@@ -421,15 +425,46 @@ describe("attachGatewayWsConnectionHandler", () => {
     const socket = createGatewayWsTestSocket();
     const { passed } = await connectTestWs({ socket });
     const handlerParams = passed as {
-      send: (frame: unknown) => void;
+      send: (frame: unknown) => { kind: string };
     };
     socket.send.mockClear();
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
 
-    handlerParams.send({ type: "res", id: "req-slow", ok: true, payload: { ok: true } });
+    expect(
+      handlerParams.send({ type: "res", id: "req-slow", ok: true, payload: { ok: true } }),
+    ).toEqual({ kind: "unavailable" });
 
     expect(socket.send).not.toHaveBeenCalled();
     expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+  });
+
+  it("distinguishes serialization failure from unavailable transports", async () => {
+    const socket = createGatewayWsTestSocket();
+    const { passed } = await connectTestWs({ socket });
+    const handlerParams = passed as {
+      send: (frame: unknown) => { kind: string; error?: unknown };
+    };
+    socket.send.mockClear();
+
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    expect(handlerParams.send(cyclic)).toMatchObject({
+      kind: "serialization",
+      error: expect.any(TypeError),
+    });
+    expect(socket.send).not.toHaveBeenCalled();
+
+    socket.send.mockImplementationOnce(() => {
+      throw new Error("socket unavailable");
+    });
+    expect(handlerParams.send({ type: "event", event: "tick" })).toEqual({
+      kind: "unavailable",
+    });
+
+    socket.emit("close", 1000, Buffer.from("done"));
+    expect(handlerParams.send({ type: "event", event: "tick" })).toEqual({
+      kind: "unavailable",
+    });
   });
 
   it("keeps handshake phase advancement monotonic", async () => {

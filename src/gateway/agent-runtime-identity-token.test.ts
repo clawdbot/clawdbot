@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +40,32 @@ function readExecApprovals(): {
   socket?: { token?: string };
 } {
   return readExecApprovalsSnapshot().file;
+}
+
+function rewriteSignedPayload(
+  token: string,
+  mutate: (payload: Record<string, unknown>) => void,
+): string {
+  const [payloadPart] = token.split(".");
+  if (!payloadPart) {
+    throw new Error("missing payload");
+  }
+  const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8")) as Record<
+    string,
+    unknown
+  >;
+  mutate(payload);
+  const rewritten = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const secret = readExecApprovals().socket?.token;
+  if (!secret) {
+    throw new Error("missing signing secret");
+  }
+  const signature = createHmac("sha256", secret)
+    .update("openclaw:gateway-agent-runtime-identity-token:v1")
+    .update("\0")
+    .update(rewritten)
+    .digest("base64url");
+  return `${rewritten}.${signature}`;
 }
 
 async function importRuntimeTokenModule(): Promise<
@@ -193,6 +220,33 @@ describe("agent runtime identity token", () => {
         turnSourceLocal: true,
       }),
     ).rejects.toThrow("cannot be both local and channel-bound");
+  });
+
+  it("preserves the signed payload structural acceptance boundary", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      ...operationalRun(),
+    });
+
+    const withUnknownField = rewriteSignedPayload(token, (payload) => {
+      payload.futurePayloadField = { version: 2 };
+    });
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(withUnknownField),
+    ).resolves.toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+
+    const withInvalidKnownField = rewriteSignedPayload(token, (payload) => {
+      payload.turnSourceLocal = false;
+    });
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(withInvalidKnownField),
+    ).resolves.toBeUndefined();
   });
 
   it("omits execution identity from a different operational run", async () => {

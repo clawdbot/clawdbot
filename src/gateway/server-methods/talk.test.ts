@@ -616,7 +616,7 @@ describe("talk.catalog handler", () => {
       expect.objectContaining({ surface: "gateway-relay" }),
     );
     expect(mocks.resolveRealtimeVoiceProviderCapabilities).toHaveBeenCalledWith(
-      expect.objectContaining({ surface: "gateway-relay" }),
+      expect.objectContaining({ agentId: expect.any(String), surface: "gateway-relay" }),
     );
     expect(isConfigured).toHaveBeenCalledWith(expect.not.objectContaining({ surface: "bridge" }));
     const catalog = expectRespondOk(respond);
@@ -2976,7 +2976,7 @@ describe("talk.client.create handler", () => {
       expect.objectContaining({ providerConfigOverrides: { model: "gpt-live-1" } }),
     );
     expect(mocks.resolveRealtimeVoiceProviderCapabilities).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-live-1" }),
+      expect.objectContaining({ agentId: "main", model: "gpt-live-1" }),
     );
     const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
     expectRecordFields(createInput, {

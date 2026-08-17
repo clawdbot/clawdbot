@@ -1,7 +1,6 @@
 import { isAbortError } from "../../infra/abort-signal.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
-import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 
 export class DispatchReplyOperationAbortedError extends Error {
   constructor() {
@@ -70,21 +69,21 @@ export function createAbortAwareDispatcher(params: {
     (send: (payload: ReplyPayload) => boolean) =>
     (payload: ReplyPayload): boolean =>
       params.isAborted() ? false : send(payload);
+  const getCancelledCounts = params.dispatcher.getCancelledCounts;
   const dispatcher: ReplyDispatcher = {
     sendToolResult: sendIfActive(params.dispatcher.sendToolResult),
     sendBlockReply: sendIfActive(params.dispatcher.sendBlockReply),
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),
+    ...(params.dispatcher.supportsSettledReceipt ? { supportsSettledReceipt: true } : {}),
     waitForIdle: () => params.dispatcher.waitForIdle(),
     getQueuedCounts: () => params.dispatcher.getQueuedCounts(),
-    getFailedCounts: () => readDispatcherFailedCounts(params.dispatcher),
+    ...(getCancelledCounts ? { getCancelledCounts: () => getCancelledCounts() } : {}),
+    getFailedCounts: () => params.dispatcher.getFailedCounts(),
     markComplete: () => {
       if (!params.isAborted()) {
         params.dispatcher.markComplete();
       }
     },
   };
-  if (params.dispatcher.getCancelledCounts) {
-    dispatcher.getCancelledCounts = () => params.dispatcher.getCancelledCounts!();
-  }
   return dispatcher;
 }

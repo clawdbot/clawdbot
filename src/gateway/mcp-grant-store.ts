@@ -29,11 +29,13 @@ export type McpLoopbackRequestContext = {
   cwd?: string;
   modelProvider?: string;
   modelId?: string;
+  modelHasVision?: boolean;
   messageProvider?: string;
   clientCaps?: string[];
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string;
+  replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   accountId?: string;
   inboundEventKind?: InboundEventKind;

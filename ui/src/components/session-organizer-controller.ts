@@ -1,5 +1,4 @@
-import type { ReactiveControllerHost } from "lit";
-import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSidebarEntry,
   SIDEBAR_NAV_ROUTES,
@@ -34,42 +33,16 @@ import {
   type SidebarSessionPatch,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
+
+export type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
 type SessionGroupDefaultsDialogOpener =
   (typeof import("./session-group-defaults-dialog.ts"))["showSessionGroupDefaultsDialog"];
-
-export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
-  readonly sessionData: Pick<
-    SessionDataController,
-    | "beginSessionMutation"
-    | "isSessionMutationScopeCurrent"
-    | "publishSessionMutationError"
-    | "refreshSidebarSessions"
-    | "resetForStatusFilter"
-    | "sessionMutationError"
-  >;
-  readonly onUpdateSidebarEntries?: (entries: string[]) => void;
-  sessionsGrouping: SidebarSessionsGrouping;
-  sessionsShowCron: boolean;
-  sessionsShowSystem: boolean;
-  sessionsStatusFilter: SidebarSessionStatusFilter;
-  clearSessionSelection(): void;
-  findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
-  knownSessionGroups(): string[];
-  listSessionGroupFolders(path?: string): Promise<FsListDirResult>;
-  sessionGroupDefaults(name: string): { cwd: string; worktree: boolean } | null;
-  knownSessionCatalogIds(): string[];
-  knownSectionOrder(): string[];
-  pruneSidebarSessionEntry(key: string): void;
-  reconciledSidebarZone(): { sidebarEntries: readonly string[] };
-  replaceCurrentSession(sessionKey: string): void;
-  selectSession(sessionKey: string): void;
-  sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
-}
 
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
 export class SessionOrganizerController {
@@ -186,6 +159,18 @@ export class SessionOrganizerController {
     }
     const operations = await this.loadOperations(scope);
     await operations?.stopCloudWorker(this.host, session, scope);
+  }
+
+  async assignSessionOwner(
+    session: SidebarRecentSession,
+    owner: Pick<SessionOwnerOption, "type" | "id">,
+  ): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.assignSessionOwner(this.host, session, owner, scope);
   }
 
   async deleteSession(session: SidebarRecentSession): Promise<void> {
@@ -419,7 +404,10 @@ export class SessionOrganizerController {
     const nextLabel =
       (await showInputDialog?.({
         title: t("sessionsView.renameSessionPrompt"),
-        defaultValue: session.label,
+        // The stored label, not the resolved display name: pre-filling the
+        // derived string persists it on submit and it then outranks every
+        // later derivation. Matches the Sessions page rename.
+        defaultValue: normalizeOptionalString(session.userLabel) ?? "",
       })) ?? null;
     if (nextLabel === null) {
       return;

@@ -5,7 +5,6 @@ import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.j
 import {
   createDeliveryState,
   deliverFallback,
-  deliverProgressCollapseSummary,
   finalizePendingAnswerBlockDraft,
 } from "./bot-message-dispatch-delivery.js";
 import {
@@ -289,7 +288,6 @@ export const dispatchTelegramMessage = async (
     cfg,
     runtime,
     replyToMode,
-    streamMode,
     telegramCfg,
     telegramDeps: injectedTelegramDeps,
     retryDispatchErrors = false,
@@ -407,15 +405,6 @@ export const dispatchTelegramMessage = async (
         runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
       }
       await cleanupDrafts(turn, isDispatchSuperseded());
-      if (
-        streamMode === "progress" &&
-        turn.sawProgressFinal &&
-        !turn.dispatchError &&
-        !turn.hadErrorReplyFailureOrSkip &&
-        !isDispatchSuperseded()
-      ) {
-        await deliverProgressCollapseSummary(turn);
-      }
     }
   } finally {
     dispatchWasSuperseded = isDispatchSuperseded();

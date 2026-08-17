@@ -8,6 +8,7 @@ import {
   resolveCodexAppServerLocalHomeDir,
 } from "./app-server/auth-start-options.js";
 import {
+  readCodexPluginConfig,
   resolveCodexAppServerUserHomeDir,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./app-server/config.js";
@@ -23,7 +24,7 @@ export type { CodexCatalogHome } from "./session-catalog-types.js";
 type CatalogHomeCandidate = {
   codexHome: string;
   label: string;
-  usesProcessHomeFallback: boolean;
+  usesProcessHomeFallback?: boolean;
 };
 
 function canonicalCatalogHome(value: string): string {
@@ -33,6 +34,18 @@ function canonicalCatalogHome(value: string): string {
   } catch {
     return resolved;
   }
+}
+
+function existingCatalogHomeCandidates(value: string, label?: string): CatalogHomeCandidate[] {
+  const codexHome = canonicalCatalogHome(value);
+  try {
+    if (!fs.statSync(codexHome).isDirectory()) {
+      return [];
+    }
+  } catch {
+    return [];
+  }
+  return [{ codexHome, label: `Local Codex · ${label ?? path.basename(codexHome)}` }];
 }
 
 function catalogHomeId(codexHome: string): string {
@@ -51,6 +64,7 @@ function resolveCodexCatalogHomes(params: {
 }): CodexCatalogHome[] {
   const { config, env, ownerAgentId, pluginConfig } = params;
   const ownerAgentDir = resolveAgentDir(config, ownerAgentId, env);
+  const configuredHomes = readCodexPluginConfig(pluginConfig).sessionCatalog?.homes ?? [];
   const base = resolveCodexSupervisionAppServerRuntimeOptions({
     pluginConfig,
     env,
@@ -82,13 +96,15 @@ function resolveCodexCatalogHomes(params: {
       left === ownerAgentId ? -1 : right === ownerAgentId ? 1 : left.localeCompare(right),
     );
     candidates.push(
-      ...agentIds.flatMap((agentId) => {
-        const codexHome = canonicalCatalogHome(
+      ...agentIds.flatMap((agentId) =>
+        existingCatalogHomeCandidates(
           resolveCodexAppServerHomeDir(resolveAgentDir(config, agentId, env)),
-        );
-        return fs.existsSync(codexHome)
-          ? [{ codexHome, label: `Local Codex · ${agentId}`, usesProcessHomeFallback: false }]
-          : [];
+          agentId,
+        ),
+      ),
+      ...configuredHomes.flatMap((entry) => {
+        const { path: home, label } = typeof entry === "string" ? { path: entry } : entry;
+        return existingCatalogHomeCandidates(home, label);
       }),
     );
   }
@@ -119,7 +135,7 @@ function resolveCodexCatalogHomes(params: {
               env: { ...base.start.env, CODEX_HOME: candidate.codexHome },
             },
           },
-      usesProcessHomeFallback: candidate.usesProcessHomeFallback,
+      usesProcessHomeFallback: candidate.usesProcessHomeFallback ?? false,
     });
     if (homes.length >= MAX_HOST_COUNT) {
       break;

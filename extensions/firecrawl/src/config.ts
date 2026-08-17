@@ -1,8 +1,8 @@
 // Firecrawl helper module supports config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-fetch";
-import { resolveSecretInputString, normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { resolveReadOnlyEnvSecretRef } from "openclaw/plugin-sdk/secret-ref-readonly";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 const DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30;
@@ -61,47 +61,14 @@ function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig
   return undefined;
 }
 
-type ConfiguredSecretResolution =
-  | { status: "available"; value: string }
-  | { status: "missing" }
-  | { status: "blocked" };
-
-function resolveConfiguredSecret(
-  value: unknown,
-  path: string,
-  cfg?: OpenClawConfig,
-): ConfiguredSecretResolution {
-  const resolved = resolveSecretInputString({
+function resolveConfiguredSecret(value: unknown, path: string, cfg?: OpenClawConfig) {
+  return resolveReadOnlyEnvSecretRef({
     value,
     path,
-    defaults: cfg?.secrets?.defaults,
-    mode: "inspect",
+    cfg,
+    expectedEnvId: FIRECRAWL_API_KEY_ENV_VAR,
+    normalizeValue: normalizeSecretInput,
   });
-  if (resolved.status === "available") {
-    const normalized = normalizeSecretInput(resolved.value);
-    return normalized ? { status: "available", value: normalized } : { status: "missing" };
-  }
-  if (resolved.status === "missing") {
-    return { status: "missing" };
-  }
-  if (resolved.ref.source !== "env") {
-    return { status: "blocked" };
-  }
-  const envVarName = resolved.ref.id.trim();
-  if (envVarName !== FIRECRAWL_API_KEY_ENV_VAR) {
-    return { status: "blocked" };
-  }
-  if (
-    !canResolveEnvSecretRefInReadOnlyPath({
-      cfg,
-      provider: resolved.ref.provider,
-      id: envVarName,
-    })
-  ) {
-    return { status: "blocked" };
-  }
-  const envValue = normalizeSecretInput(process.env[envVarName]);
-  return envValue ? { status: "available", value: envValue } : { status: "missing" };
 }
 
 export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {

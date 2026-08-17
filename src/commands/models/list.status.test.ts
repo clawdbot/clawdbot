@@ -6,7 +6,6 @@ import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
@@ -637,7 +636,7 @@ describe("modelsStatusCommand auth overview", () => {
     const catalogStarted = createDeferred();
     const releaseCatalog = createDeferred();
     let replacement: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     mocks.loadModelCatalog.mockImplementationOnce(async () => {
       replacement = getCurrentPluginMetadataSnapshot({
         config,
@@ -672,7 +671,7 @@ describe("modelsStatusCommand auth overview", () => {
     } finally {
       releaseCatalog.resolve();
       await commandPromise.catch(() => {});
-      clearCurrentPluginMetadataSnapshot();
+      clearPluginMetadataLifecycleCaches();
       if (originalLoadModelCatalog) {
         mocks.loadModelCatalog.mockImplementation(originalLoadModelCatalog);
       } else {

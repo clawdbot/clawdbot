@@ -222,12 +222,16 @@ async function runSkillHistoryScanCore(
           )
         ).model
       : undefined;
-  const contextTokens = resolvedModel
-    ? Math.min(
-        resolvedModel.contextTokens ?? resolvedModel.contextWindow,
-        resolvedModel.contextWindow,
-      )
-    : undefined;
+  const contextTokens = (() => {
+    if (!resolvedModel) {
+      return undefined;
+    }
+    const contextWindow = resolvedModel.contextWindow;
+    if (contextWindow === undefined) {
+      return resolvedModel.contextTokens;
+    }
+    return Math.min(resolvedModel.contextTokens ?? contextWindow, contextWindow);
+  })();
   const maxTranscriptChars = resolveSkillHistoryScanTranscriptBudget(contextTokens);
   const maxSessionTranscriptChars = Math.min(
     HISTORY_SCAN_MAX_SESSION_CHARS,

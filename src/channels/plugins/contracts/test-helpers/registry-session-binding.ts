@@ -28,7 +28,6 @@ import {
   type SessionBindingContractChannelId,
 } from "./manifest.js";
 import { importBundledChannelContractArtifact } from "./runtime-artifacts.js";
-import "../../registry.js";
 
 type SessionBindingContractEntry = {
   id: string;
@@ -162,6 +161,7 @@ type ChannelConversationBindingManager = Awaited<
   ReturnType<ChannelConversationBindingManagerFactory>
 >;
 let discordSessionBindingManager: ChannelConversationBindingManager | null = null;
+let feishuSessionBindingManager: ChannelConversationBindingManager | null = null;
 let matrixSessionBindingManager: ChannelConversationBindingManager | null = null;
 let telegramSessionBindingManager: ChannelConversationBindingManager | null = null;
 
@@ -173,10 +173,7 @@ type FeishuContractApi = {
   createFeishuThreadBindingManager: (params: {
     accountId?: string;
     cfg: OpenClawConfig;
-  }) => unknown;
-  feishuThreadBindingTesting: {
-    resetFeishuThreadBindingsForTests: () => void;
-  };
+  }) => ChannelConversationBindingManager;
 };
 
 type IMessageContractApi = {
@@ -251,6 +248,11 @@ async function stopDiscordSessionBindingManager() {
   discordSessionBindingManager = null;
 }
 
+async function stopFeishuSessionBindingManager() {
+  await feishuSessionBindingManager?.stop();
+  feishuSessionBindingManager = null;
+}
+
 async function stopMatrixSessionBindingManager() {
   await matrixSessionBindingManager?.stop();
   matrixSessionBindingManager = null;
@@ -276,8 +278,7 @@ async function prepareDiscordSessionBindingContract() {
 }
 
 async function prepareFeishuSessionBindingContract() {
-  const api = await getContractApi<FeishuContractApi>("feishu");
-  api.feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
+  await stopFeishuSessionBindingManager();
 }
 
 async function prepareIMessageSessionBindingContract() {
@@ -411,11 +412,12 @@ const sessionBindingContractEntries = {
     ensureManager: async () => {
       const { createFeishuThreadBindingManager } =
         await getContractApi<FeishuContractApi>("feishu");
-      createFeishuThreadBindingManager({
+      feishuSessionBindingManager ??= createFeishuThreadBindingManager({
         accountId: "default",
         cfg: baseSessionBindingCfg,
       });
     },
+    stopManager: stopFeishuSessionBindingManager,
   }),
   imessage: createSessionBindingContractEntry({
     id: "imessage",

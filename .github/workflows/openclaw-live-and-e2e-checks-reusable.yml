@@ -860,6 +860,7 @@ jobs:
               add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"
               add_profile_suite live-gateway-advisory-docker-xai-zai "full"
               add_profile_suite live-cli-backend-docker "stable full"
+              add_profile_suite live-cli-cache-docker "stable full"
               add_profile_suite live-acp-bind-docker "stable full"
               add_profile_suite live-codex-harness-docker "stable full"
               add_profile_suite live-codex-harness-gpt56-sol-docker "stable full"
@@ -2802,7 +2803,7 @@ jobs:
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          live_image_extensions="matrix,acpx"
+          live_image_extensions="matrix,acpx,anthropic"
           live_image_tag_suffix="${live_image_extensions//,/-}"
           if [[ "$SHARED_IMAGE_POLICY" == "no-push-artifact" ]]; then
             live_image="openclaw-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
@@ -3623,9 +3624,12 @@ jobs:
             echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
           fi
           case "${{ matrix.suite_id }}" in
-            live-cli-backend-docker)
+            live-cli-backend-docker | live-cli-cache-docker)
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
-              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+              if [[ "${{ matrix.suite_id }}" == "live-cli-cache-docker" ]]; then
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+                echo "OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1" >> "$GITHUB_ENV"
+              elif [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription" >> "$GITHUB_ENV"
               else
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
@@ -3751,6 +3755,12 @@ jobs:
             profiles: full
           - suite_id: live-cli-backend-docker
             label: Docker live CLI backend
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh
+            timeout_minutes: 50
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-cli-cache-docker
+            label: Docker live Claude CLI prompt cache
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh
             timeout_minutes: 50
             profile_env_only: false
@@ -3944,9 +3954,12 @@ jobs:
             echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
           fi
           case "${{ matrix.suite_id }}" in
-            live-cli-backend-docker)
+            live-cli-backend-docker | live-cli-cache-docker)
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
-              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+              if [[ "${{ matrix.suite_id }}" == "live-cli-cache-docker" ]]; then
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+                echo "OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1" >> "$GITHUB_ENV"
+              elif [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription" >> "$GITHUB_ENV"
               else
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"

@@ -208,8 +208,6 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 
-    `runEmbeddedPiAgent(...)` remains as a deprecated compatibility alias for existing plugins. New code should use `runEmbeddedAgent(...)`.
-
     `resolveCliBackendDispatchEligibility({ provider, model, agentId, authProfileId, config, agentDir, workspaceDir })` shares the embedded runner's CLI-backend dispatch decision (route, the backend's declared `subscriptionAuthDispatch` capability, stored credential mode — honoring an explicitly pinned `authProfileId`) with callers that opt embedded runs into `cliBackendDispatch: "subscription-auth"`. It returns `{ provider }` when the run would execute through the CLI backend and `undefined` when it stays on the direct passthrough, so callers can budget timeouts for the run that will actually execute.
 
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
@@ -969,6 +967,30 @@ The handler runs in the Gateway process and does not add a Gateway protocol subs
 returned unsubscribe function and call it during service cleanup. The payload is a lightweight
 change notice; use `api.runtime.agent.session.getSessionEntry(...)` when the plugin needs the full
 current session entry.
+
+Service startup failures from a returned or awaited promise are recorded automatically. A service
+that intentionally starts required work in the background must report later failure and recovery
+through its generation-bound health reporter:
+
+```typescript
+api.registerService({
+  id: "index-worker",
+  start(ctx) {
+    void startIndexWorker().then(
+      () => ctx.serviceHealth?.clearFailure(),
+      (error) => ctx.serviceHealth?.reportFailure(error),
+    );
+  },
+  stop() {
+    stopIndexWorker();
+  },
+});
+```
+
+The reporter is revoked when the service stops or its plugin registry generation is replaced, so a
+late callback from an old generation cannot overwrite current health. Prefer returning the startup
+promise when the service is not usable until that promise settles; use the reporter only for
+deliberately nonblocking work that owns its own stop path.
 
 ## Storing runtime references
 

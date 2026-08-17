@@ -280,7 +280,7 @@ export function renderActivityGroup(
       <div class="chat-group-messages">
         <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
           <button
-            class="chat-activity-group__summary"
+            class="chat-inline-disclosure chat-activity-group__summary"
             type="button"
             aria-expanded=${String(activityExpanded)}
             aria-controls=${activityBodyId}
@@ -294,9 +294,7 @@ export function renderActivityGroup(
             <span class="chat-activity-group__label" title=${groupSummaryLabel}
               >${groupSummaryLabel}</span
             >
-            <span
-              class="collapse-chevron ${activityExpanded ? "" : "collapse-chevron--collapsed"}"
-              aria-hidden="true"
+            <span class="chat-inline-disclosure__chevron" aria-hidden="true"
               >${icons.chevronDown}</span
             >
           </button>

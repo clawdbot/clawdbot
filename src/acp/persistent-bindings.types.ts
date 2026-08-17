@@ -7,8 +7,11 @@ import {
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { sanitizeAgentId } from "../routing/session-key.js";
+import {
+  normalizeAccountId,
+  resolveAgentIdFromSessionKey,
+  sanitizeAgentId,
+} from "../routing/session-key.js";
 
 export { normalizeOptionalString as normalizeText } from "@openclaw/normalization-core/string-coerce";
 

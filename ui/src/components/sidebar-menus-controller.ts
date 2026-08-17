@@ -35,7 +35,7 @@ import type {
   SessionOrganizerController,
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
-import type { SessionCreatorOption } from "./session-owner-chip.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -97,8 +97,14 @@ export interface SidebarMenusControllerHost
   readonly sessionOrganizer: SessionOrganizerController;
   readonly sessionCreatorFilterActive: boolean;
   sessionCreatorFilterId: string | null;
-  readonly sessionCreatorOptions: readonly SessionCreatorOption[];
+  sessionInvolvingMeFilterActive: boolean;
+  readonly sessionCreatorOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
+  readSessionMutationAccess(request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  }): import("../lib/session-method-access.ts").SessionMethodAccess;
   readonly sidebarEntries: readonly string[];
   readonly catalogProjectGrouping: CatalogProjectGrouping;
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;

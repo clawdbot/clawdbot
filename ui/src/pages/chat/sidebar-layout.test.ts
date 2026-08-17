@@ -3,12 +3,14 @@ import {
   SIDEBAR_MIN_WIDTH_PX,
   activatePanel,
   closeSlot,
-  detachPanelToColumn,
   fitSidebarLayout,
-  mergePanelIntoColumn,
   normalizeSidebarLayout,
   openSlot,
-  resizeColumn,
+  reorderPanel,
+  resizeSidebarPanel,
+  setSidebarDock,
+  setSidebarExpanded,
+  setSidebarOpen,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
 
@@ -17,128 +19,156 @@ function openAll(): SidebarLayout {
 }
 
 describe("sidebar layout", () => {
-  it("opens each slot in its own ranked column", () => {
+  it("opens every slot as a tab in one right-side column", () => {
     const layout = openAll();
-    expect(layout.columns.map((column) => column.panels[0]?.slot)).toEqual([
+    expect(layout.columns).toHaveLength(1);
+    expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+      "discussion",
       "chat",
       "detail",
-      "discussion",
     ]);
-    expect(layout.columns.every((column) => column.panels.length === 1)).toBe(true);
-    expect(layout.columns[2]?.panels[0]?.slot).toBe("discussion");
+    expect(layout.columns[0]?.activePanelId).toBe("detail");
+    expect(layout.columns[0]?.height).toBe(360);
     expect(layout.columns[0]?.width).toBe(480);
-    expect(layout.columns[1]?.width).toBe(360);
+    expect(layout.open).toBe(true);
   });
 
-  it("merges panels into a tabbed column and activates the moved panel", () => {
+  it("activates an existing tab without changing its persisted order", () => {
     const layout = openAll();
-    const detail = layout.columns[1]?.panels[0];
-    const discussionColumn = layout.columns[2];
-    expect(detail).toBeDefined();
-    expect(discussionColumn).toBeDefined();
-    const merged = mergePanelIntoColumn(layout, detail!.id, discussionColumn!.id, 0);
-    expect(merged.columns).toHaveLength(2);
-    expect(merged.columns[1]?.panels.map((panel) => panel.slot)).toEqual(["detail", "discussion"]);
-    expect(merged.columns[1]?.activePanelId).toBe(detail!.id);
-    expect(activatePanel(merged, discussionColumn!.activePanelId).columns[1]?.activePanelId).toBe(
-      discussionColumn!.activePanelId,
-    );
-  });
-
-  it("detaches a tab back into its own column", () => {
-    const layout = openAll();
-    const detail = layout.columns[1]?.panels[0];
-    const target = layout.columns[2];
-    const merged = mergePanelIntoColumn(layout, detail!.id, target!.id, 0);
-    const detached = detachPanelToColumn(merged, detail!.id, "right", 1);
-    expect(detached.columns.map((column) => column.panels.map((panel) => panel.slot))).toEqual([
-      ["chat"],
-      ["detail"],
-      ["discussion"],
-    ]);
-  });
-
-  it("adjusts a later same-side boundary after removing the source column", () => {
-    const layout = openAll();
-    const chat = layout.columns[0]!.panels[0]!;
-    const moved = detachPanelToColumn(layout, chat.id, "right", 2);
-    expect(moved.columns.map((column) => column.panels[0]?.slot)).toEqual([
-      "detail",
+    const chat = layout.columns[0]!.panels[1]!;
+    const reopened = openSlot(layout, "chat");
+    expect(reopened.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+      "discussion",
       "chat",
-      "discussion",
+      "detail",
     ]);
+    expect(reopened.columns[0]?.activePanelId).toBe(chat.id);
+    expect(activatePanel(layout, chat.id).columns[0]?.activePanelId).toBe(chat.id);
   });
 
-  it("adjusts insertion indexes when reordering tabs within one column", () => {
+  it("closes one tab and selects its nearest remaining neighbor", () => {
     const layout = openAll();
-    const detail = layout.columns[1]!.panels[0]!;
-    const discussionColumn = layout.columns[2]!;
-    const merged = mergePanelIntoColumn(layout, detail.id, discussionColumn.id, 0);
-    const movedAfter = mergePanelIntoColumn(merged, detail.id, discussionColumn.id, 2);
-    expect(movedAfter.columns[1]?.panels.map((panel) => panel.slot)).toEqual([
+    const withoutDetail = closeSlot(layout, "detail");
+    expect(withoutDetail.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
       "discussion",
-      "detail",
+      "chat",
     ]);
-    const movedBefore = mergePanelIntoColumn(movedAfter, detail.id, discussionColumn.id, 0);
-    expect(movedBefore.columns[1]?.panels.map((panel) => panel.slot)).toEqual([
-      "detail",
-      "discussion",
-    ]);
+    expect(withoutDetail.columns[0]?.activePanelId).toBe("chat");
   });
 
-  it("clamps resized widths at both ends", () => {
-    const layout = openSlot({ columns: [] }, "detail");
+  it("reorders tabs without changing the active surface", () => {
+    const layout = openAll();
+    const [discussion, chat, detail] = layout.columns[0]!.panels;
+    const reordered = reorderPanel(layout, discussion!.id, detail!.id, "after");
+
+    expect(reordered.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+      "chat",
+      "detail",
+      "discussion",
+    ]);
+    expect(reordered.columns[0]?.activePanelId).toBe(detail!.id);
+    expect(layout.columns[0]?.panels[0]?.id).toBe(discussion!.id);
+    expect(chat?.slot).toBe("chat");
+  });
+
+  it("keeps the panel open as a type selector after its final tab closes", () => {
+    const closed = closeSlot(openSlot({ columns: [] }, "detail"), "detail");
+    expect(closed).toEqual({ columns: [], open: true });
+  });
+
+  it("minimizes and expands without discarding tabs", () => {
+    const layout = openAll();
+    expect(setSidebarOpen(layout, false)).toMatchObject({ columns: layout.columns, open: false });
+    expect(setSidebarExpanded(layout, true)).toMatchObject({
+      columns: layout.columns,
+      expanded: true,
+    });
+  });
+
+  it("clamps and fits the single inherited resizable column", () => {
+    const layout = openAll();
     const columnId = layout.columns[0]!.id;
-    expect(resizeColumn(layout, columnId, 1).columns[0]?.width).toBe(SIDEBAR_MIN_WIDTH_PX);
-    expect(resizeColumn(layout, columnId, Number.MAX_VALUE).columns[0]?.width).toBe(1_200);
+    expect(resizeSidebarPanel(layout, columnId, 1).columns[0]?.width).toBe(SIDEBAR_MIN_WIDTH_PX);
+    expect(resizeSidebarPanel(layout, columnId, Number.MAX_VALUE).columns[0]?.width).toBe(1_200);
+    expect(
+      fitSidebarLayout(resizeSidebarPanel(layout, columnId, 1_000), 1_200)?.columns[0]?.width,
+    ).toBe(720);
+    expect(fitSidebarLayout(layout, 560)).toBeNull();
   });
 
-  it("shrinks the widest columns before refusing a region that cannot fit minimums", () => {
-    const fitted = fitSidebarLayout(openAll(), 1_200);
-    expect(fitted).not.toBeNull();
-    expect(fitted!.columns.reduce((sum, column) => sum + column.width, 0)).toBe(876);
-    expect(fitSidebarLayout(openAll(), 1_000)).toBeNull();
+  it("persists and resizes the same panel at the bottom", () => {
+    const layout = setSidebarDock(openAll(), "bottom");
+    const columnId = layout.columns[0]!.id;
+    const resized = resizeSidebarPanel(layout, columnId, 480);
+
+    expect(resized.dock).toBe("bottom");
+    expect(resized.columns[0]?.height).toBe(480);
+    expect(resized.columns[0]?.width).toBe(480);
+    expect(fitSidebarLayout(resized, 560)).toEqual(resized);
   });
 
-  it("removes a column when its last panel closes", () => {
-    expect(closeSlot(openSlot({ columns: [] }, "detail"), "detail")).toEqual({ columns: [] });
-  });
-
-  it("allocates a unique panel id when persisted ids collide with a slot", () => {
-    const layout = normalizeSidebarLayout({
+  it("flattens legacy multi-column layouts in stable order", () => {
+    expect(
+      normalizeSidebarLayout({
+        columns: [
+          {
+            id: "left",
+            side: "left",
+            panels: [{ id: "workspace", slot: "workspace" }],
+            activePanelId: "workspace",
+            width: 420,
+          },
+          {
+            id: "right",
+            side: "right",
+            panels: [
+              { id: "terminal", slot: "terminal" },
+              { id: "detail", slot: "detail" },
+            ],
+            activePanelId: "detail",
+            width: 500,
+          },
+        ],
+      }),
+    ).toEqual({
       columns: [
         {
-          id: "detail-column",
+          id: "left",
           side: "right",
-          panels: [{ id: "chat", slot: "detail" }],
-          activePanelId: "chat",
-          width: 360,
+          panels: [
+            { id: "workspace", slot: "workspace" },
+            { id: "terminal", slot: "terminal" },
+            { id: "detail", slot: "detail" },
+          ],
+          activePanelId: "detail",
+          height: 360,
+          width: 500,
         },
       ],
+      dock: "right",
+      open: true,
+      expanded: false,
     });
-    expect(openSlot(layout, "chat").columns[0]?.panels[0]?.id).toBe("chat-2");
   });
 
-  it("preserves the active tab when a missing panel id uses its slot fallback", () => {
-    const layout = normalizeSidebarLayout({
-      columns: [
-        {
-          id: "tabs",
-          side: "right",
-          panels: [{ id: "detail", slot: "detail" }, { slot: "discussion" }],
-          activePanelId: "discussion",
-          width: 360,
-        },
-      ],
+  it("deduplicates slots and repairs untrusted persisted values", () => {
+    expect(normalizeSidebarLayout(null)).toEqual({ columns: [], open: false, expanded: false });
+    expect(
+      normalizeSidebarLayout({
+        columns: [
+          {
+            id: "review",
+            side: "right",
+            panels: [{ id: "detail", slot: "detail" }],
+          },
+        ],
+      }).columns[0]?.width,
+    ).toBe(480);
+    expect(normalizeSidebarLayout({ columns: "nope" })).toEqual({
+      columns: [],
+      open: false,
+      expanded: false,
     });
-    expect(layout.columns[0]?.activePanelId).toBe("discussion");
-  });
-
-  it("round-trips valid layouts and rejects or repairs untrusted values", () => {
-    const valid = openAll();
-    expect(normalizeSidebarLayout(valid)).toEqual(valid);
-    expect(normalizeSidebarLayout(null)).toEqual({ columns: [] });
-    expect(normalizeSidebarLayout({ columns: "nope" })).toEqual({ columns: [] });
     expect(
       normalizeSidebarLayout({
         columns: [
@@ -154,7 +184,7 @@ describe("sidebar layout", () => {
           },
           {
             id: "same",
-            side: "right",
+            side: "left",
             panels: [
               { id: "same-panel", slot: "discussion" },
               { id: "duplicate-slot", slot: "detail" },
@@ -163,24 +193,26 @@ describe("sidebar layout", () => {
             width: 50_000,
           },
         ],
+        open: false,
+        expanded: true,
       }),
     ).toEqual({
       columns: [
         {
           id: "same",
           side: "right",
-          panels: [{ id: "same-panel", slot: "detail" }],
-          activePanelId: "same-panel",
-          width: SIDEBAR_MIN_WIDTH_PX,
-        },
-        {
-          id: "same-2",
-          side: "right",
-          panels: [{ id: "same-panel-2", slot: "discussion" }],
+          panels: [
+            { id: "same-panel", slot: "detail" },
+            { id: "same-panel-2", slot: "discussion" },
+          ],
           activePanelId: "same-panel-2",
+          height: 360,
           width: 1_200,
         },
       ],
+      dock: "right",
+      open: false,
+      expanded: true,
     });
   });
 });

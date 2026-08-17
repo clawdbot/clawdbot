@@ -115,6 +115,20 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts a Control UI GitHub service credential SecretRef", () => {
+    expect(
+      validateConfigObjectRaw({
+        gateway: {
+          controlUi: {
+            github: {
+              token: { source: "store", provider: "default", id: "CONTROL_UI_GITHUB" },
+            },
+          },
+        },
+      }).ok,
+    ).toBe(true);
+  });
+
   it("accepts media request secret refs for auth, headers, and tls material", () => {
     const result = validateConfigObjectRaw({
       tools: {

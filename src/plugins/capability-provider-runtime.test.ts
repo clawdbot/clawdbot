@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
     plugins: [],
     diagnostics: [],
     embeddingProviders: [],
-    memoryEmbeddingProviders: [],
     speechProviders: [],
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],
@@ -129,7 +128,6 @@ vi.mock("./bundled-compat.js", () => ({
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
 let prepareMediaCapabilityProviders: typeof import("./capability-provider-runtime.js").prepareMediaCapabilityProviders;
-let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-state.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 
@@ -143,7 +141,7 @@ function expectNoResolvedCapabilityProviders(providers: Array<{ id: string }>) {
 
 type CapabilityFixtureRegistry = ReturnType<typeof createEmptyPluginRegistry>;
 type CapabilityFixtureKey =
-  | "memoryEmbeddingProviders"
+  | "embeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -327,7 +325,7 @@ function setBundledCapabilityFixture(
 
 function expectCompatChainApplied(params: {
   key:
-    | "memoryEmbeddingProviders"
+    | "embeddingProviders"
     | "speechProviders"
     | "realtimeTranscriptionProviders"
     | "realtimeVoiceProviders"
@@ -360,13 +358,11 @@ describe("resolvePluginCapabilityProviders", () => {
       resolvePluginCapabilityProvider,
       resolvePluginCapabilityProviders,
     } = await import("./capability-provider-runtime.js"));
-    ({ clearCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-state.js"));
     ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
   });
 
   beforeEach(() => {
-    clearCurrentPluginMetadataSnapshot();
     clearPluginMetadataLifecycleCaches();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
@@ -387,7 +383,7 @@ describe("resolvePluginCapabilityProviders", () => {
   });
 
   afterEach(() => {
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
   });
 
   it("resolves bundled capability plugins from the current metadata snapshot", () => {
@@ -1569,7 +1565,7 @@ describe("resolvePluginCapabilityProviders", () => {
   });
 
   it.each([
-    ["memoryEmbeddingProviders", "memoryEmbeddingProviders"],
+    ["embeddingProviders", "embeddingProviders"],
     ["speechProviders", "speechProviders"],
     ["realtimeTranscriptionProviders", "realtimeTranscriptionProviders"],
     ["realtimeVoiceProviders", "realtimeVoiceProviders"],
@@ -1848,7 +1844,7 @@ describe("resolvePluginCapabilityProviders", () => {
       },
     };
     const loaded = createEmptyPluginRegistry();
-    loaded.memoryEmbeddingProviders.push({
+    loaded.embeddingProviders.push({
       pluginId: "google",
       pluginName: "google",
       source: "test",
@@ -1862,12 +1858,12 @@ describe("resolvePluginCapabilityProviders", () => {
         {
           id: "google",
           origin: "bundled",
-          contracts: { memoryEmbeddingProviders: ["gemini"] },
+          contracts: { embeddingProviders: ["gemini"] },
         },
         {
           id: "openai",
           origin: "bundled",
-          contracts: { memoryEmbeddingProviders: ["openai"] },
+          contracts: { embeddingProviders: ["openai"] },
         },
       ] as never,
       diagnostics: [],
@@ -1878,7 +1874,7 @@ describe("resolvePluginCapabilityProviders", () => {
     );
 
     const provider = resolvePluginCapabilityProvider({
-      key: "memoryEmbeddingProviders",
+      key: "embeddingProviders",
       providerId: "gemini",
       cfg,
     });
@@ -1894,7 +1890,7 @@ describe("resolvePluginCapabilityProviders", () => {
   it("does not load targeted non-speech capability providers when plugins are globally disabled", () => {
     const cfg = { plugins: { enabled: false, allow: ["custom-plugin"] } } as OpenClawConfig;
     const loaded = createEmptyPluginRegistry();
-    loaded.memoryEmbeddingProviders.push({
+    loaded.embeddingProviders.push({
       pluginId: "google",
       pluginName: "google",
       source: "test",
@@ -1908,12 +1904,12 @@ describe("resolvePluginCapabilityProviders", () => {
         {
           id: "google",
           origin: "bundled",
-          contracts: { memoryEmbeddingProviders: ["gemini"] },
+          contracts: { embeddingProviders: ["gemini"] },
         },
         {
           id: "openai",
           origin: "bundled",
-          contracts: { memoryEmbeddingProviders: ["openai"] },
+          contracts: { embeddingProviders: ["openai"] },
         },
       ] as never,
       diagnostics: [],
@@ -1923,7 +1919,7 @@ describe("resolvePluginCapabilityProviders", () => {
     );
 
     const provider = resolvePluginCapabilityProvider({
-      key: "memoryEmbeddingProviders",
+      key: "embeddingProviders",
       providerId: "gemini",
       cfg,
     });

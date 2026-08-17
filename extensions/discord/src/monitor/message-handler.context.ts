@@ -287,14 +287,14 @@ export async function buildDiscordMessageProcessContext(params: {
     if (threadParentId) {
       parentSessionKey = buildAgentSessionKey({
         agentId: route.agentId,
+        mainKey: cfg.session?.mainKey,
         channel: route.channel,
         peer: { kind: "channel", id: threadParentId },
+        groupScope: route.groupScope,
       });
-      modelParentSessionKey = parentSessionKey;
+      modelParentSessionKey = parentSessionKey === baseSessionKey ? undefined : parentSessionKey;
     }
-    if (!threadParentInheritanceEnabled) {
-      parentSessionKey = undefined;
-    }
+    parentSessionKey = threadParentInheritanceEnabled ? modelParentSessionKey : undefined;
   }
   const preflightAudioIndex =
     preflightAudioTranscript === undefined
@@ -322,6 +322,8 @@ export async function buildDiscordMessageProcessContext(params: {
     agentId: route.agentId,
     channel: route.channel,
     cfg,
+    parentSessionKey: route.sessionKey,
+    groupScope: route.groupScope,
     threadParentInheritanceEnabled,
   });
   const deliverTarget = replyPlan.deliverTarget;

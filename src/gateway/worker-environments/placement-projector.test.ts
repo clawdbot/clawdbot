@@ -1,7 +1,13 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { SessionPlacementSchema } from "../../../packages/gateway-protocol/src/index.js";
-import { projectWorkerSessionPlacement } from "./placement-projector.js";
+import {
+  SessionPlacementMoveSchema,
+  SessionPlacementSchema,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  projectWorkerPlacementMove,
+  projectWorkerSessionPlacement,
+} from "./placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 
 const BUNDLE_HASH = "a".repeat(64);
@@ -46,6 +52,27 @@ describe("worker placement projection", () => {
 
     expect(projectWorkerSessionPlacement(active, diskSpace)).toMatchObject({ diskSpace });
     expect(projectWorkerSessionPlacement(active)).not.toHaveProperty("diskSpace");
+  });
+
+  it("projects move status without exposing operation authority", () => {
+    const projected = projectWorkerPlacementMove({
+      operationId: "move:v1:opaque",
+      sessionId: "session-1",
+      source: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+      target: { kind: "device", deviceId: "device-1" },
+      lastError: "device worker is offline",
+      createdAtMs: 100,
+      updatedAtMs: 200,
+    });
+
+    expect(projected).toEqual({
+      target: { kind: "device", deviceId: "device-1" },
+      error: "device worker is offline",
+      updatedAtMs: 200,
+    });
+    expect(Value.Check(SessionPlacementMoveSchema, projected)).toBe(true);
+    expect(projected).not.toHaveProperty("operationId");
+    expect(projected).not.toHaveProperty("source");
   });
 
   it("emits only fields valid for each placement discriminator", () => {

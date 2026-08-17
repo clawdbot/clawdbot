@@ -82,6 +82,23 @@ const readOnlyRetainedTask = {
 
 const readOnlyRetainedResult = "Synthetic retained result copied by a read-only operator.";
 
+const retryBlockedTask = {
+  ...readOnlyRetainedTask,
+  id: "task-retry-blocked",
+  taskId: "task-retry-blocked",
+  title: "Automation report delivery",
+  deliveryStatus: "failed",
+  terminalSummary: "Automation completed; result delivery is blocked.",
+};
+
+const dismissBlockedTask = {
+  ...retryBlockedTask,
+  id: "task-dismiss-blocked",
+  taskId: "task-dismiss-blocked",
+  title: "Automation cleanup delivery",
+  updatedAt: baseTime - 51_000,
+};
+
 const pageTwoSentinel = {
   id: "task-page-two-sentinel",
   taskId: "task-page-two-sentinel",
@@ -113,6 +130,162 @@ const activePageOneTasks = [
 ];
 
 suite.define(() => {
+  it("keeps retry and dismiss outcomes authoritative across a stale refresh and reconnect", async () => {
+    const actionArtifactDir = path.resolve(
+      process.cwd(),
+      ".artifacts/control-ui-e2e/task-action-outcomes",
+    );
+    const rawVideoDir = path.join(actionArtifactDir, "raw-video");
+    await rm(actionArtifactDir, { force: true, recursive: true });
+    await mkdir(rawVideoDir, { recursive: true });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      recordVideo: { dir: rawVideoDir, size: { width: 1440, height: 900 } },
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    const video = page.video();
+    const listResponses = {
+      cases: [
+        {
+          match: { agentId: "main", limit: 500, status: ["queued", "running"] },
+          response: { tasks: [] },
+        },
+        {
+          match: { agentId: "main", limit: 200 },
+          response: { tasks: [retryBlockedTask, dismissBlockedTask] },
+        },
+      ],
+    };
+    const retriedTask = {
+      ...retryBlockedTask,
+      deliveryStatus: "session_queued",
+      terminalOutcome: "succeeded",
+      updatedAt: baseTime + 1_000,
+    };
+    const dismissedTask = {
+      ...dismissBlockedTask,
+      deliveryStatus: "dismissed",
+      updatedAt: baseTime + 2_000,
+    };
+    try {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "tasks.list": listResponses,
+          "tasks.retry": {
+            results: [{ taskId: retryBlockedTask.taskId, ok: true, task: retriedTask }],
+          },
+          "tasks.dismiss": {
+            results: [{ taskId: dismissBlockedTask.taskId, ok: true, task: dismissedTask }],
+          },
+        },
+      });
+
+      const response = await page.goto(`${suite.server.baseUrl}tasks`);
+      expect(response?.status()).toBe(200);
+      const retryRow = page.locator(`[data-task-id="${retryBlockedTask.id}"]`);
+      const dismissRow = page.locator(`[data-task-id="${dismissBlockedTask.id}"]`);
+      await retryRow.waitFor({ state: "visible" });
+      await dismissRow.waitFor({ state: "visible" });
+      await page.screenshot({ path: path.join(actionArtifactDir, "01-blocked.png") });
+
+      await gateway.deferNext("tasks.retry", { taskIds: [retryBlockedTask.taskId] });
+      const retryButton = retryRow.getByRole("button", { name: "Retry delivery" });
+      await retryButton.evaluate((element) => {
+        (element as HTMLButtonElement).click();
+        (element as HTMLButtonElement).click();
+      });
+      await expect.poll(async () => gateway.getRequests("tasks.retry")).toHaveLength(1);
+      await expect.poll(() => retryButton.isDisabled()).toBe(true);
+      await gateway.rejectDeferred("tasks.retry", { message: "Synthetic delivery retry failed" });
+      await expect
+        .poll(() => page.locator(".callout.danger").textContent())
+        .toContain("Synthetic delivery retry failed");
+      await expect.poll(() => retryButton.isEnabled()).toBe(true);
+      await page.screenshot({ path: path.join(actionArtifactDir, "02-retry-failed.png") });
+
+      await gateway.deferNext("tasks.list", {
+        agentId: "main",
+        limit: 500,
+        status: ["queued", "running"],
+      });
+      await gateway.deferNext("tasks.list", { agentId: "main", limit: 200 });
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await expect.poll(async () => gateway.getRequests("tasks.list")).toHaveLength(4);
+
+      await gateway.deferNext("tasks.retry", { taskIds: [retryBlockedTask.taskId] });
+      await gateway.deferNext("tasks.dismiss", { taskIds: [dismissBlockedTask.taskId] });
+      await retryButton.click();
+      await dismissRow.getByRole("button", { name: "Dismiss delivery" }).click();
+      await expect.poll(async () => gateway.getRequests("tasks.retry")).toHaveLength(2);
+      await expect.poll(async () => gateway.getRequests("tasks.dismiss")).toHaveLength(1);
+      await gateway.resolveDeferred("tasks.dismiss", {
+        results: [{ taskId: dismissBlockedTask.taskId, ok: true, task: dismissedTask }],
+      });
+      await gateway.resolveDeferred("tasks.retry", {
+        results: [{ taskId: retryBlockedTask.taskId, ok: true, task: retriedTask }],
+      });
+      await expect
+        .poll(() => retryRow.getByRole("button", { name: "Retry delivery" }).count())
+        .toBe(0);
+      await expect
+        .poll(() => dismissRow.getByRole("button", { name: "Dismiss delivery" }).count())
+        .toBe(0);
+      await page.screenshot({ path: path.join(actionArtifactDir, "03-actions-succeeded.png") });
+
+      await gateway.emitGatewayEvent("task", {
+        action: "deleted",
+        taskId: dismissBlockedTask.taskId,
+      });
+      await dismissRow.waitFor({ state: "detached" });
+      await gateway.resolveDeferred("tasks.list", { tasks: [] });
+      await gateway.resolveDeferred("tasks.list", {
+        tasks: [retryBlockedTask, dismissBlockedTask],
+      });
+
+      await expect
+        .poll(() => retryRow.getByRole("button", { name: "Retry delivery" }).count())
+        .toBe(0);
+      await expect.poll(() => retryRow.locator(".callout.warn").count()).toBe(0);
+      await dismissRow.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("tasks.retry")).toHaveLength(2);
+      expect((await gateway.getRequests("tasks.retry")).map((request) => request.params)).toEqual([
+        { taskIds: [retryBlockedTask.taskId] },
+        { taskIds: [retryBlockedTask.taskId] },
+      ]);
+      expect((await gateway.getRequests("tasks.dismiss"))[0]?.params).toEqual({
+        taskIds: [dismissBlockedTask.taskId],
+      });
+      await page.screenshot({
+        path: path.join(actionArtifactDir, "04-stale-refresh-suppressed.png"),
+      });
+
+      const socketCount = await gateway.getSocketCount();
+      await gateway.closeLatest(1012, "Replace the task action client");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await retryRow.waitFor({ state: "visible" });
+      await expect
+        .poll(() => retryRow.getByRole("button", { name: "Retry delivery" }).count())
+        .toBe(1);
+      await retryRow.getByRole("button", { name: "Retry delivery" }).click();
+      await expect.poll(async () => gateway.getRequests("tasks.retry")).toHaveLength(3);
+      await expect
+        .poll(() => retryRow.getByRole("button", { name: "Retry delivery" }).count())
+        .toBe(0);
+      await page.screenshot({ path: path.join(actionArtifactDir, "05-reconnect-retry.png") });
+    } finally {
+      await context.close();
+      if (video) {
+        await copyFile(
+          await video.path(),
+          path.join(actionArtifactDir, "task-action-outcomes.webm"),
+        );
+      }
+      await rm(rawVideoDir, { force: true, recursive: true });
+    }
+  });
+
   it("renders every active page, applies pushed completion, and cancels a page-two task", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     await mkdir(artifactDir, { recursive: true });

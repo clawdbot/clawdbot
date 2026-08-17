@@ -565,7 +565,7 @@ describe("config write coordinator", () => {
     expect(result).toEqual({
       ok: true,
       value: { ok: true },
-      refresh: { ok: false, error: "Error: refresh unavailable" },
+      refresh: { ok: false, error: "refresh unavailable" },
     });
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
     runtimeConfig.dispose();

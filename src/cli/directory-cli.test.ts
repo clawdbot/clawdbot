@@ -1,6 +1,7 @@
 // Directory CLI tests cover directory command registration and plugin-backed lookups.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { registerDirectoryCli } from "./directory-cli.js";
 
 const runtimeState = await vi.hoisted(async () => {
@@ -175,6 +176,101 @@ describe("registerDirectoryCli", () => {
     });
   });
 
+  it.each([
+    {
+      mode: "human",
+      args: ["directory", "self", "--channel", "demo-directory", "--account", "account-1"],
+    },
+    {
+      mode: "JSON",
+      args: [
+        "directory",
+        "self",
+        "--channel",
+        "demo-directory",
+        "--account",
+        "account-1",
+        "--json",
+      ],
+    },
+  ])("explains an empty implemented self lookup in $mode mode", async ({ mode, args }) => {
+    const self = vi.fn().mockResolvedValue(null);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "demo-directory": {} } },
+      channelId: "demo-directory",
+      plugin: { id: "demo-directory", directory: { self } },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(args, { from: "user" });
+
+    if (mode === "JSON") {
+      expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({
+        status: "unavailable",
+        channel: "demo-directory",
+        accountId: "account-1",
+        reason: "plugin-returned-no-self-identity",
+      });
+    } else {
+      const output = runtimeState.runtimeLogs.join("\n");
+      expect(output).toBe(
+        'No self identity was returned for channel "demo-directory", account "account-1". Verify the account is configured and authenticated, then retry.',
+      );
+    }
+    expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      mode: "human",
+      args: ["directory", "self", "--channel", "demo-directory", "--account", "account-1"],
+    },
+    {
+      mode: "JSON",
+      args: [
+        "directory",
+        "self",
+        "--channel",
+        "demo-directory",
+        "--account",
+        "account-1",
+        "--json",
+      ],
+    },
+  ])("explains an unsupported self lookup in $mode mode", async ({ mode, args }) => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "demo-directory": {} } },
+      channelId: "demo-directory",
+      plugin: {
+        id: "demo-directory",
+        directory: { self: nullChannelDirectorySelf },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(args, { from: "user" });
+
+    if (mode === "JSON") {
+      expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({
+        status: "unavailable",
+        channel: "demo-directory",
+        accountId: "account-1",
+        reason: "self-identity-unsupported",
+      });
+    } else {
+      expect(runtimeState.runtimeLogs.join("\n")).toBe(
+        'Channel "demo-directory" does not expose a self identity.',
+      );
+    }
+    expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
   it("prefers live directory list readers when available", async () => {
     const listPeers = vi.fn().mockResolvedValue([{ id: "user:config", kind: "user" }]);
     const listPeersLive = vi.fn().mockResolvedValue([{ id: "user:live", kind: "user" }]);
@@ -242,6 +338,67 @@ describe("registerDirectoryCli", () => {
     expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
       JSON.stringify([{ id: "channel:config", kind: "group" }], null, 2),
     );
+  });
+
+  it.each([
+    {
+      label: "peers",
+      args: ["directory", "peers", "list", "--channel", "demo-directory", "--account", "account-1"],
+      expected: "No peers found",
+    },
+    {
+      label: "groups",
+      args: [
+        "directory",
+        "groups",
+        "list",
+        "--channel",
+        "demo-directory",
+        "--account",
+        "account-1",
+      ],
+      expected: "No groups found",
+    },
+    {
+      label: "group members",
+      args: [
+        "directory",
+        "groups",
+        "members",
+        "--channel",
+        "demo-directory",
+        "--account",
+        "account-1",
+        "--group-id",
+        "group-1",
+      ],
+      expected: 'No group members found for group "group-1"',
+    },
+  ])("names the query context for empty $label", async ({ args, expected }) => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "demo-directory": {} } },
+      channelId: "demo-directory",
+      plugin: {
+        id: "demo-directory",
+        directory: {
+          listPeers: vi.fn().mockResolvedValue([]),
+          listGroups: vi.fn().mockResolvedValue([]),
+          listGroupMembers: vi.fn().mockResolvedValue([]),
+        },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(args, { from: "user" });
+
+    const output = runtimeState.runtimeLogs.join("\n");
+    expect(output).toContain(expected);
+    expect(output).toContain('channel "demo-directory"');
+    expect(output).toContain('account "account-1"');
+    expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("sanitizes plugin directory entries only for terminal output", async () => {
@@ -342,7 +499,7 @@ describe("registerDirectoryCli", () => {
       ],
       "Channel demo-directory does not support group members listing",
     ],
-  ])("writes JSON errors for unsupported directory %s", async (_label, args, expectedError) => {
+  ])("bubbles JSON errors for unsupported directory %s", async (_label, args, expectedError) => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { "demo-directory": {} } },
       channelId: "demo-directory",
@@ -356,12 +513,11 @@ describe("registerDirectoryCli", () => {
     const program = new Command().name("openclaw");
     registerDirectoryCli(program);
 
-    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(expectedError);
 
-    expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledOnce();
-    expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+    expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
-    expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -384,18 +540,18 @@ describe("registerDirectoryCli", () => {
     const program = new Command().name("openclaw");
     registerDirectoryCli(program);
 
-    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
-
     if (mode === "JSON") {
-      const payload = JSON.parse(runtimeState.runtimeLogs.at(-1) ?? "");
-      expect(payload).toEqual({ error: error.message });
+      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(error.message);
+      expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
       expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
+      expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
     } else {
+      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
       expect(runtimeErrors()).toEqual([error.message]);
       expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
     }
     expect([...runtimeState.runtimeLogs, ...runtimeErrors()].join("\n")).not.toContain(error.name);
-    expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it.each([

@@ -14,10 +14,12 @@ import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+
+type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
 type ReadOnlySqliteSessionSummary = {
   entry: SessionEntry;
@@ -84,20 +86,16 @@ export function countTranscriptEventsForPath(
 export function createTranscriptEventReader(
   transcriptPath: string,
   sessionId: string,
+  allowMalformedPrefix = false,
+  sourceFingerprint = readTranscriptFingerprint(transcriptPath),
 ): (append: (event: TranscriptEvent) => void) => void {
   return (append) => {
-    for (const event of readTranscriptEventsForImport(transcriptPath, sessionId, false)) {
-      append(event as TranscriptEvent);
-    }
-  };
-}
-
-export function createTranscriptEventPrefixReader(
-  transcriptPath: string,
-  sessionId: string,
-): (append: (event: TranscriptEvent) => void) => void {
-  return (append) => {
-    for (const event of readTranscriptEventsForImport(transcriptPath, sessionId, true)) {
+    for (const event of readTranscriptEventsForImport(
+      transcriptPath,
+      sessionId,
+      allowMalformedPrefix,
+      sourceFingerprint,
+    )) {
       append(event as TranscriptEvent);
     }
   };
@@ -107,10 +105,10 @@ function readTranscriptEventsForImport(
   transcriptPath: string,
   sessionId: string,
   allowMalformedPrefix: boolean,
+  sourceFingerprint: TranscriptFileFingerprint,
 ): Iterable<FileEntry> {
   // Production import owns the process-wide Gateway/SQLite-maintenance lock
   // through commit and archive. Fingerprints catch non-cooperating external edits.
-  const sourceFingerprint = readTranscriptFileFingerprint(transcriptPath);
   const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
   assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
   const classificationHeader = {
@@ -196,7 +194,7 @@ type TranscriptFileFingerprint = {
   size: bigint;
 };
 
-function readTranscriptFileFingerprint(transcriptPath: string): TranscriptFileFingerprint {
+export function readTranscriptFingerprint(transcriptPath: string): TranscriptFileFingerprint {
   const stat = fs.statSync(transcriptPath, { bigint: true });
   return {
     ctimeNs: stat.ctimeNs,
@@ -211,7 +209,7 @@ function assertTranscriptFileUnchanged(
   transcriptPath: string,
   expected: TranscriptFileFingerprint,
 ): void {
-  const current = readTranscriptFileFingerprint(transcriptPath);
+  const current = readTranscriptFingerprint(transcriptPath);
   if (
     current.ctimeNs !== expected.ctimeNs ||
     current.dev !== expected.dev ||
@@ -472,6 +470,9 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
 }
 
 export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
+  if (target.sqlitePath) {
+    return resolveOpenClawAgentSqlitePath({ agentId: target.agentId, path: target.sqlitePath });
+  }
   const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
   });
@@ -499,9 +500,7 @@ function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
   }
 }
 
-function* iterateJsonlLinesSync(
-  filePath: string,
-): Generator<{ final: boolean; lineNumber: number; text: string }> {
+function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: number; text: string }> {
   const fd = fs.openSync(filePath, "r");
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
@@ -520,14 +519,14 @@ function* iterateJsonlLinesSync(
         lineNumber += 1;
         const text = part.trim();
         if (text) {
-          yield { final: false, lineNumber, text };
+          yield { lineNumber, text };
         }
       }
     }
     carry += decoder.decode();
     const text = carry.trim();
     if (text) {
-      yield { final: true, lineNumber: lineNumber + 1, text };
+      yield { lineNumber: lineNumber + 1, text };
     }
   } catch (err) {
     throw new Error(`${filePath}:${lineNumber + 1}: ${String(err)}`, { cause: err });
@@ -546,15 +545,8 @@ function sqliteNumber(value: unknown): number {
   return 0;
 }
 
-function parseJsonlLine(line: { final: boolean; lineNumber: number; text: string }): unknown {
-  try {
-    return JSON.parse(line.text);
-  } catch (error) {
-    if (line.final) {
-      return undefined;
-    }
-    throw error;
-  }
+function parseJsonlLine(line: { text: string }): unknown {
+  return JSON.parse(line.text);
 }
 
 // Schema-tolerant session enumeration for transcript-label migration (avoids post-ship columns).

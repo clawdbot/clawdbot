@@ -28,6 +28,7 @@ import type {
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
@@ -94,7 +95,11 @@ async function handleBroadcastAction(
     resolveEffectiveMessageToolsConfig({ cfg: input.cfg, agentId: input.agentId })?.broadcast
       ?.enabled !== false;
   if (!broadcastEnabled) {
-    throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
+    throw new MessageActionDeniedError(
+      "Broadcast is disabled. Set tools.message.broadcast.enabled to true.",
+      "message_broadcast_disabled",
+      "message-broadcast:enabled",
+    );
   }
   const rawTargets = readStringArrayParam(params, "targets", { required: true });
   if (rawTargets.length === 0) {
@@ -143,10 +148,12 @@ async function handleBroadcastAction(
     result?: MessageSendResult;
   }> = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
+  let attemptIndex = 0;
   for (const targetChannel of targetChannels) {
     throwIfAborted(input.abortSignal);
     for (const target of rawTargets) {
       throwIfAborted(input.abortSignal);
+      const receiptDiscriminator = `broadcast:${attemptIndex++}`;
       try {
         const targetAccountId = validateExplicitMessageAccountSelection({
           cfg: input.cfg,
@@ -185,6 +192,11 @@ async function handleBroadcastAction(
       } catch (err) {
         if (isAbortError(err)) {
           throw err;
+        }
+        if (err instanceof MessageActionDeniedError) {
+          // Preserve the owner fact before broadcast converts the failure to result text;
+          // otherwise admitted-run audit would have to infer policy from presentation.
+          input.onActionDenied?.(err, targetChannel, receiptDiscriminator);
         }
         results.push({
           channel: targetChannel,

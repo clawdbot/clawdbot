@@ -51,6 +51,7 @@ type ResolveImageCompressionPolicy = (params: {
   imageCount: number;
   agentDir?: string;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) => Promise<ImageCompressionPolicy>;
 
 type ImageToolProviderDeps = {

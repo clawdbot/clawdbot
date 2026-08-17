@@ -168,6 +168,7 @@ export async function tryReuseCodexLiveThread(
   const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
     buildThreadResumeParams(params.params, {
       threadId: binding.threadId,
+      cwd: params.cwd,
       authProfileId: resumeAuthProfileId,
       model: startModelSelection.model,
       modelProvider: startModelProvider,

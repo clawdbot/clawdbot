@@ -15,18 +15,26 @@ export function resolveEmbeddedRunSkillEntries(params: {
 }): {
   shouldLoadSkillEntries: boolean;
   skillEntries: SkillEntry[];
+  loadSkillEntries: () => SkillEntry[];
 } {
   const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
   const config = resolveSkillRuntimeConfig(params.config);
+  let cachedSkillEntries: SkillEntry[] | undefined;
+  const loadSkillEntries = (): SkillEntry[] => {
+    if (cachedSkillEntries) {
+      return cachedSkillEntries;
+    }
+    cachedSkillEntries = loadWorkspaceSkills(params.workspaceDir, {
+      config,
+      agentId: params.agentId,
+      ...(params.eligibility ? { eligibility: params.eligibility } : {}),
+      ...(params.workspaceOnly === true ? { workspaceOnly: true } : {}),
+    });
+    return cachedSkillEntries;
+  };
   return {
     shouldLoadSkillEntries,
-    skillEntries: shouldLoadSkillEntries
-      ? loadWorkspaceSkills(params.workspaceDir, {
-          config,
-          agentId: params.agentId,
-          ...(params.eligibility ? { eligibility: params.eligibility } : {}),
-          ...(params.workspaceOnly === true ? { workspaceOnly: true } : {}),
-        })
-      : [],
+    skillEntries: shouldLoadSkillEntries ? loadSkillEntries() : [],
+    loadSkillEntries,
   };
 }
