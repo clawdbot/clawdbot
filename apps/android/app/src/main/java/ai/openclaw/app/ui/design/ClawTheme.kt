@@ -1,8 +1,5 @@
 package ai.openclaw.app.ui.design
 
-import ai.openclaw.app.ui.LocalMobileColors
-import ai.openclaw.app.ui.darkMobileColors
-import ai.openclaw.app.ui.lightMobileColors
 import ai.openclaw.app.ui.mobileFontFamily
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
@@ -31,6 +28,7 @@ internal data class ClawColors(
   val surface: Color,
   val surfaceRaised: Color,
   val surfacePressed: Color,
+  val accent: Color,
   val accentSoft: Color,
   val accentBorder: Color,
   val border: Color,
@@ -46,6 +44,9 @@ internal data class ClawColors(
   val warningSoft: Color,
   val danger: Color,
   val dangerSoft: Color,
+  val codeBg: Color,
+  val codeText: Color,
+  val codeBorder: Color,
 )
 
 /**
@@ -97,6 +98,7 @@ private val ClawDarkColors =
     surface = Color(0xFF0A0A0A),
     surfaceRaised = Color(0xFF111111),
     surfacePressed = Color(0xFF1A1A1A),
+    accent = Color(0xFF6EA8FF),
     accentSoft = Color(0xFF1A2A44),
     accentBorder = Color(0xFF5B93E8),
     border = Color(0xFF242424),
@@ -112,6 +114,9 @@ private val ClawDarkColors =
     warningSoft = Color(0xFF2B2412),
     danger = Color(0xFFFF6B6B),
     dangerSoft = Color(0xFF2C1414),
+    codeBg = Color(0xFF111317),
+    codeText = Color(0xFFE8EAEE),
+    codeBorder = Color(0xFF2B2E35),
   )
 
 private val ClawLightColors =
@@ -120,6 +125,7 @@ private val ClawLightColors =
     surface = Color(0xFFFFFEFB),
     surfaceRaised = Color(0xFFFFFFFF),
     surfacePressed = Color(0xFFE9EDF3),
+    accent = Color(0xFF1B5ACB),
     accentSoft = Color(0xFFEAF2FF),
     accentBorder = Color(0xFF174CA9),
     border = Color(0xFFDDE3EC),
@@ -135,6 +141,9 @@ private val ClawLightColors =
     warningSoft = Color(0xFFFFF3DC),
     danger = Color(0xFFB82929),
     dangerSoft = Color(0xFFFFE9E9),
+    codeBg = Color(0xFFEFF3F8),
+    codeText = Color(0xFF172033),
+    codeBorder = Color(0xFFD7DDE7),
   )
 
 private val LocalClawColors = staticCompositionLocalOf { ClawDarkColors }
@@ -176,12 +185,10 @@ internal fun ClawDesignTheme(
   content: @Composable () -> Unit,
 ) {
   val colors = if (dark) ClawDarkColors else ClawLightColors
-  val mobileColors = if (dark) darkMobileColors() else lightMobileColors()
   val typography = clawTypography(mobileFontFamily)
 
   CompositionLocalProvider(
     LocalClawColors provides colors,
-    LocalMobileColors provides mobileColors,
     LocalClawSpacing provides ClawSpacing(),
     LocalClawRadii provides ClawRadii(),
     LocalClawTypography provides typography,
