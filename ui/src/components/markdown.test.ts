@@ -359,7 +359,7 @@ describe("toSanitizedMarkdownHtml", () => {
       const fragment = htmlFragment(html);
 
       expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("code");
-      expect(fragment.querySelector(".code-block-copy svg")).toBeInstanceOf(SVGElement);
+      expect(fragment.querySelector(".code-block-copy__idle")).toBeInstanceOf(HTMLSpanElement);
       expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe("code");
     });
 

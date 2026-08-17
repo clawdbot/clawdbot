@@ -169,7 +169,7 @@ export function renderMarkdownCodeBlock(
   const encodingAttr = blockArt
     ? ` data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}"`
     : "";
-  const copyButton = `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="code-block-copy__done" aria-hidden="true">✓</span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
+  const copyButton = `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true">✓</span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
   const header = renderCodeBlockHeader(lang, copyButton);
 
   const trimmed = text.trim();

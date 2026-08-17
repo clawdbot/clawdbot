@@ -643,7 +643,7 @@
 }
 
 .chat-group.user .chat-text :where(.code-block-wrapper) {
-  border-color: color-mix(in srgb, var(--text) 12%, transparent);
+  border: 0;
   background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
