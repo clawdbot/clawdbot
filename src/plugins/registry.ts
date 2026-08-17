@@ -57,9 +57,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const gatewayMethods = state.registry.gatewayMethodDescriptors
       .filter((entry) => entry.owner.kind === "plugin" && entry.owner.pluginId === pluginId)
       .map((entry) => entry.name);
-    for (const [key, value] of Object.entries(state.registry)) {
+    for (const [registryKey, value] of Object.entries(state.registry)) {
       // Plugin records and diagnostics are operator-visible load outcomes, not registrations.
-      if (key === "plugins" || key === "diagnostics") {
+      if (registryKey === "plugins" || registryKey === "diagnostics") {
         continue;
       }
       if (Array.isArray(value)) {
