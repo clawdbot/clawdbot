@@ -175,6 +175,12 @@ const rootEntries = [
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
+  // Critical Apply staged contract/schema roots are intentionally private until
+  // service/package/Gateway integration lands in a later PR. Model them as roots
+  // so production deadcode checks keep the files audited without forcing an
+  // activation/export surface in this contract-only slice.
+  "src/critical-apply/contracts.ts!",
+  "src/critical-apply/validators.ts!",
   // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
   // Jiti virtualizes openclaw/plugin-sdk/agent-sessions through this cycle-safe barrel.
   "src/agents/sessions/extension-sdk.ts!",

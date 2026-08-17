@@ -13,7 +13,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
-  return Number.isInteger(value) && (value as number) >= 0;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 export function hasOnlyZeroCriticalApplySideEffects(

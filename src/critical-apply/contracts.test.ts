@@ -11,7 +11,9 @@ import {
   validateCriticalApplyTransactionShape,
 } from "./validators.js";
 
-function validTransaction(overrides: Partial<CriticalApplyTransaction> = {}): CriticalApplyTransaction {
+function validTransaction(
+  overrides: Partial<CriticalApplyTransaction> = {},
+): CriticalApplyTransaction {
   return {
     schema: CRITICAL_APPLY_CONTRACT_VERSION,
     id: "m10-fixture",
