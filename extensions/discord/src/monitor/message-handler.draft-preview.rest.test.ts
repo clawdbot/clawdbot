@@ -8,7 +8,7 @@ describe("Discord draft preview REST lifecycle", () => {
     const rest = new RequestClient("test-token", {
       queueRequests: false,
       fetch: async (input, init) => {
-        const url = new URL(String(input));
+        const url = new URL(input instanceof Request ? input.url : input);
         requests.push(`${init?.method ?? "GET"} ${url.pathname.replace("/api/v10", "")}`);
         if (init?.method === "POST") {
           return Response.json({ id: "preview-error" });
