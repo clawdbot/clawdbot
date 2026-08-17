@@ -35,7 +35,10 @@ import {
   setDefaultCreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager.js";
 import { assignSafeServerNames, sanitizeServerName } from "./agent-bundle-mcp-names.js";
-import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
+import {
+  resolveSessionMcpRequestSignal,
+  runWithoutSessionMcpRequestSignal,
+} from "./agent-bundle-mcp-request-context.js";
 import {
   loadSessionMcpConfig,
   resolveSessionMcpConfigSummary,
@@ -449,19 +452,12 @@ export function createSessionMcpRuntime(params: {
     return true;
   };
   const localRequestTimeouts = new WeakSet<object>();
-  const resolveRequestSignal = (explicitSignal?: AbortSignal): AbortSignal | undefined => {
-    const contextSignal = getSessionMcpRequestSignal();
-    if (!explicitSignal || explicitSignal === contextSignal) {
-      return explicitSignal ?? contextSignal;
-    }
-    return contextSignal ? AbortSignal.any([explicitSignal, contextSignal]) : explicitSignal;
-  };
   const runMcpRequest = async <T>(
     session: BundleMcpSession,
     request: (signal: AbortSignal) => Promise<T>,
     parentSignal?: AbortSignal,
   ): Promise<T> => {
-    const requestSignal = resolveRequestSignal(parentSignal);
+    const requestSignal = resolveSessionMcpRequestSignal(parentSignal);
     const abortController = new AbortController();
     const onParentAbort = () => abortController.abort(requestSignal?.reason);
     if (requestSignal?.aborted) {
@@ -497,7 +493,7 @@ export function createSessionMcpRuntime(params: {
     request: () => Promise<T>,
     options?: McpRequestOptions,
   ): Promise<T> => {
-    const requestSignal = resolveRequestSignal(options?.signal);
+    const requestSignal = resolveSessionMcpRequestSignal(options?.signal);
     const tracksFailureBackoff = options?.failureBackoff !== "ignore";
     const nowMs = Date.now();
     const backoff = serverBackoff.get(serverName);
@@ -568,7 +564,7 @@ export function createSessionMcpRuntime(params: {
     kind: "prompts" | "resources",
     options?: Pick<McpRequestOptions, "signal">,
   ) => {
-    const callerSignal = resolveRequestSignal(options?.signal);
+    const callerSignal = resolveSessionMcpRequestSignal(options?.signal);
     return collectMcpPaginatedItems({
       label: `MCP ${kind === "resources" ? "resource" : "prompt"} listing`,
       itemLabel: kind,
@@ -1028,7 +1024,9 @@ export function createSessionMcpRuntime(params: {
       failIfDisposed();
       options?.signal?.throwIfAborted();
 
-      const refresh = catalogInFlight ?? startCatalogRefresh(retryBaseCatalog);
+      const refresh =
+        catalogInFlight ??
+        runWithoutSessionMcpRequestSignal(() => startCatalogRefresh(retryBaseCatalog));
       // Caller cancellation only detaches this wait. Generation invalidation or
       // runtime disposal owns cancellation of the shared refresh itself.
       const waitSignal = options?.signal
@@ -1058,13 +1056,14 @@ export function createSessionMcpRuntime(params: {
   const getCatalog = async (
     options?: Pick<McpRequestOptions, "signal">,
   ): Promise<McpToolCatalog> => {
+    const requestSignal = resolveSessionMcpRequestSignal(options?.signal);
     failIfDisposed();
-    options?.signal?.throwIfAborted();
+    requestSignal?.throwIfAborted();
     if (catalog && !catalogRetryIsDue()) {
       return catalog;
     }
     if (!catalog) {
-      return loadCatalog(undefined, options);
+      return loadCatalog(undefined, requestSignal ? { signal: requestSignal } : undefined);
     }
 
     const staleCatalog = catalog;

@@ -380,7 +380,7 @@ describe("MCP App standalone host", () => {
   });
 
   it.each(["fetch", "body"] as const)(
-    "leaves the stalled standalone view %s to the server deadline and page lifecycle",
+    "shows a visible timeout when the standalone view %s stalls",
     async (stallPhase) => {
       vi.useFakeTimers();
       try {
@@ -388,10 +388,13 @@ describe("MCP App standalone host", () => {
         expect(host.fetch).toHaveBeenCalledOnce();
         expect(host.getRequestSignal()).toBeDefined();
         await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-        expect(host.getRequestSignal()?.aborted).toBe(false);
-        expect(host.replaceChildren).not.toHaveBeenCalled();
-        host.emit("pagehide");
         expect(host.getRequestSignal()?.aborted).toBe(true);
+        expect(host.replaceChildren).toHaveBeenCalledWith(
+          expect.objectContaining({
+            className: "error",
+            textContent: "MCP App view timed out; reload to try again",
+          }),
+        );
       } finally {
         vi.useRealTimers();
       }

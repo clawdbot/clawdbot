@@ -181,6 +181,7 @@ describe("MCP App gateway bridge", () => {
         sandboxOrigin: "https://apps.example.com",
         html: "<html>demo</html>",
         toolInput: { city: "Paris" },
+        operationTimeoutMs: 10 * 60_000,
         standaloneUrl: "/__openclaw__/mcp-app#ticket",
         standaloneExpiresAtMs: 1_800_000_120_000,
         messageSupported: true,

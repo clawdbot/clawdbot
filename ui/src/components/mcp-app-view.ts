@@ -8,6 +8,7 @@ import {
   type ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
@@ -34,6 +35,7 @@ type McpAppViewPayload = {
   toolResult: unknown;
   messageSupported?: boolean;
   updateModelContextSupported?: boolean;
+  operationTimeoutMs: number;
 };
 
 type HostContext = NonNullable<
@@ -198,6 +200,7 @@ export class McpAppView extends LitElement {
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
+    timeoutMs?: number,
   ): Promise<unknown> {
     try {
       const requestParams = {
@@ -205,8 +208,12 @@ export class McpAppView extends LitElement {
         viewId: binding.viewId,
         ...params,
       };
-      return await (signal
-        ? binding.client.request(method, requestParams, { signal })
+      const hasRequestOptions = signal !== undefined || timeoutMs !== undefined;
+      return await (hasRequestOptions
+        ? binding.client.request(method, requestParams, {
+            ...(signal ? { signal } : {}),
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          })
         : binding.client.request(method, requestParams));
     } catch (error) {
       if (isMcpAppViewExpiredError(error)) {
@@ -373,8 +380,12 @@ export class McpAppView extends LitElement {
         { hostContext: hostContext(mount, this.height) },
       );
       createdResources.bridge = bridge;
+      // The Gateway owns the authoritative operation deadline. Keep the local
+      // transport watchdog behind it so server timeout/error responses can win.
+      const operationTimeoutMs =
+        addTimerTimeoutGraceMs(payload.operationTimeoutMs) ?? payload.operationTimeoutMs;
       const request = (method: string, params: Record<string, unknown>) =>
-        this.request(binding, method, params);
+        this.request(binding, method, params, undefined, operationTimeoutMs);
       const handleRequestTeardown = () => {
         void this.teardown();
       };

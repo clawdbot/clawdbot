@@ -26,6 +26,7 @@ import {
 export { createMcpAppStandaloneTicket, mcpAppStandaloneTesting, verifyMcpAppStandaloneTicket };
 
 const MCP_APP_STABLE_PROTOCOL_VERSION = "2026-01-26";
+const MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS = 30_000;
 const MCP_APP_OPERATION_MAX_BODY_BYTES = 256 * 1024;
 
 function resolveTicketActiveView(
@@ -77,7 +78,11 @@ function sendText(res: ServerResponse, statusCode: number, body: string): void {
   res.end(body);
 }
 
-function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: string }): void {
+function runStandaloneMcpAppHost(config: {
+  protocolVersion: string;
+  viewPath: string;
+  initialLoadTimeoutMs: number;
+}): void {
   type StandaloneElement = { className: string; textContent: string };
   type StandaloneFrame = StandaloneElement & {
     contentWindow?: { postMessage(message: unknown, targetOrigin: string): void };
@@ -196,8 +201,8 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     consume: (response: Response, signal: AbortSignal) => Promise<T>,
     timeoutMs?: number,
   ): Promise<T> => {
-    // The server-owned active-view deadline governs bootstrap. Operations add
-    // the advertised client watchdog; page lifecycle owns both request kinds.
+    // Bootstrap and operations have separate network watchdogs. The initial
+    // fetch cannot rely on a server deadline if it never reaches the handler.
     const controller = new AbortController();
     const timeout =
       timeoutMs === undefined
@@ -421,6 +426,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       }
       return (await response.json()) as ViewPayload;
     },
+    config.initialLoadTimeoutMs,
   )
     .then((view) => {
       payload = view;
@@ -443,6 +449,7 @@ function standaloneHostHtml(): { html: string; scriptHash: string } {
   const serializedConfig = JSON.stringify({
     protocolVersion: MCP_APP_STABLE_PROTOCOL_VERSION,
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
+    initialLoadTimeoutMs: MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS,
   });
   const clientSource = `;(() => { const __name = (target) => target; (${runStandaloneMcpAppHost.toString()})(${serializedConfig}); })();`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");

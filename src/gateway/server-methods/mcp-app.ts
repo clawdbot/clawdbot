@@ -132,6 +132,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           ...(view.csp ? { csp: view.csp } : {}),
           toolInput: view.toolInput,
           toolResult: view.toolResult,
+          operationTimeoutMs: view.operationTimeoutMs,
           ...(standalone
             ? {
                 standaloneUrl: standalone.url,

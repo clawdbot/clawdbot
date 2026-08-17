@@ -201,12 +201,20 @@ describe("Codex native MCP Apps", () => {
       threadId: "thread-1",
       attempt: createAttempt(),
     });
+    const siblingRuntime = createNativeMcpRuntime({
+      client,
+      threadId: "thread-2",
+      attempt: createAttempt(),
+    });
 
     await expect(runtime.callTool("sample", "charge", {})).rejects.toBe(failure);
     expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledWith(
       client,
     );
     await expect(runtime.callTool("sample", "charge", {})).rejects.toThrow(
+      "Codex native MCP tool calls are unavailable after an indeterminate cancellation",
+    );
+    await expect(siblingRuntime.callTool("sample", "charge", {})).rejects.toThrow(
       "Codex native MCP tool calls are unavailable after an indeterminate cancellation",
     );
     expect(request).toHaveBeenCalledTimes(1);

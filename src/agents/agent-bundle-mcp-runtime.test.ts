@@ -14,6 +14,10 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import {
+  getSessionMcpRequestSignal,
+  runWithSessionMcpRequestSignal,
+} from "./agent-bundle-mcp-request-context.js";
 import { waitForSessionMcpRequest } from "./agent-bundle-mcp-runtime-shared.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
@@ -2491,7 +2495,7 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("keeps a runtime-owned paginated catalog refresh alive after its operation waiter aborts", async () => {
+  it("detaches a cancelled materialized tool from a runtime-owned catalog refresh", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-catalog-deadline-");
     const serverPath = path.join(tempDir, "catalog-deadline.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -2518,11 +2522,17 @@ process.on("SIGINT", shutdown);`,
       },
     });
 
+    let materialized: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
     try {
-      await expect(runtime.getCatalog()).resolves.toMatchObject({
+      materialized = await materializeBundleMcpToolsForRun({ runtime });
+      expect(runtime.peekCatalog()).toMatchObject({
         tools: [{ toolName: "initial_tool-1" }],
       });
-      await runtime.callTool("paged", "initial_tool-1", {});
+      const tool = expectDefined(
+        materialized.tools.find((entry) => entry.name === "paged__initial_tool-1"),
+        "materialized paged tool",
+      );
+      await tool.execute("invalidate-catalog", {}, undefined);
       await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await waitForPredicate(
         () => runtime.peekCatalog() === null,
@@ -2530,8 +2540,21 @@ process.on("SIGINT", shutdown);`,
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
 
-      await expect(runtime.getCatalog({ signal: AbortSignal.timeout(120) })).rejects.toThrow(
-        /abort/i,
+      const initialListCount = (
+        (await fs.readFile(logPath, "utf8")).match(/tools\/list cursor/g) ?? []
+      ).length;
+      const waiter = new AbortController();
+      const cancelledCall = tool.execute("cancelled-refresh-waiter", {}, waiter.signal);
+      await waitForPredicate(
+        async () =>
+          ((await fs.readFile(logPath, "utf8")).match(/tools\/list cursor/g) ?? []).length >
+          initialListCount,
+        "replacement catalog refresh to start",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      waiter.abort(new Error("materialized tool cancelled during catalog refresh"));
+      await expect(cancelledCall).rejects.toThrow(
+        "materialized tool cancelled during catalog refresh",
       );
       const completedCatalog = await runtime.getCatalog();
 
@@ -2543,6 +2566,7 @@ process.on("SIGINT", shutdown);`,
       );
       expect(runtime.peekCatalog()).toBe(completedCatalog);
     } finally {
+      await materialized?.dispose();
       await runtime.dispose();
     }
   });
@@ -4342,7 +4366,7 @@ describe("requester-scoped MCP connection resolution", () => {
     },
   );
 
-  it("keeps a combined catalog load alive after its operation waiter aborts", async () => {
+  it("keeps a combined catalog load alive after its AsyncLocal operation waiter aborts", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     resolverTesting.setMcpServerConnectionResolversForTest([
       {
@@ -4356,6 +4380,7 @@ describe("requester-scoped MCP connection resolution", () => {
       releaseCatalog = resolve;
     });
     let catalogLoadCount = 0;
+    const partRequestSignals: Array<AbortSignal | undefined> = [];
     const createRuntime: RuntimeFactory = (params) => {
       const serverName = params.includeServerNames?.has("user-mail") ? "user-mail" : "shared";
       const catalog = {
@@ -4376,6 +4401,7 @@ describe("requester-scoped MCP connection resolution", () => {
         peekCatalog: () => currentCatalog,
         getCatalog: async (options) => {
           catalogLoadCount += 1;
+          partRequestSignals.push(getSessionMcpRequestSignal());
           await waitForSessionMcpRequest(catalogGate, options?.signal);
           currentCatalog = catalog;
           return catalog;
@@ -4398,7 +4424,17 @@ describe("requester-scoped MCP connection resolution", () => {
       messageChannel: "telegram",
     });
 
-    await expect(runtime.getCatalog({ signal: AbortSignal.timeout(20) })).rejects.toThrow(/abort/i);
+    const waiter = new AbortController();
+    const cancelledCatalog = runWithSessionMcpRequestSignal(waiter.signal, () =>
+      runtime.getCatalog(),
+    );
+    await waitForPredicate(
+      () => catalogLoadCount === 2,
+      "both combined catalog parts to start",
+      LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+    );
+    waiter.abort(new Error("combined operation catalog waiter aborted"));
+    await expect(cancelledCatalog).rejects.toThrow("combined operation catalog waiter aborted");
     const backgroundCatalog = runtime.getCatalog();
     releaseCatalog?.();
 
@@ -4406,6 +4442,7 @@ describe("requester-scoped MCP connection resolution", () => {
       servers: { shared: {}, "user-mail": {} },
     });
     expect(catalogLoadCount).toBe(2);
+    expect(partRequestSignals).toEqual([undefined, undefined]);
 
     await manager.disposeAll();
   });

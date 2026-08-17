@@ -79,6 +79,7 @@ function appViewPayload() {
     toolResult: { content: [{ type: "text", text: "ready" }] },
     messageSupported: false,
     updateModelContextSupported: false,
+    operationTimeoutMs: 10 * 60_000,
   };
 }
 

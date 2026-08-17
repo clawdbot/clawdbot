@@ -27,6 +27,11 @@ type NativeMcpCallToolResult = {
   _meta?: JsonValue;
 };
 
+// Retained views from different turns can share one physical app-server client.
+// Once a written tool call is indeterminate, every runtime on that client must
+// reject later mutations until graceful retirement replaces the connection.
+const clientsWithIndeterminateToolCalls = new WeakSet<CodexAppServerClient>();
+
 function readMcpAppResourceUri(item: CodexThreadItem): string | undefined {
   const appContext = asOptionalRecord(item.appContext);
   const uri =
@@ -69,7 +74,6 @@ export function createNativeMcpRuntime(params: {
   // a second client here would lose server-local state between render and click.
   let catalog: McpToolCatalog | null = null;
   let statuses: CodexMcpServerStatus[] | undefined;
-  let toolCallsFenced = false;
   const createdAt = Date.now();
   const request = <T = JsonValue | undefined>(
     method: string,
@@ -143,7 +147,7 @@ export function createNativeMcpRuntime(params: {
       runtime.lastUsedAt = Date.now();
     },
     callTool: async (serverName, toolName, input, options) => {
-      if (toolCallsFenced) {
+      if (clientsWithIndeterminateToolCalls.has(params.client)) {
         throw new Error(
           "Codex native MCP tool calls are unavailable after an indeterminate cancellation",
         );
@@ -164,7 +168,7 @@ export function createNativeMcpRuntime(params: {
           isCodexAppServerIndeterminateRequestCancellationError(error) ||
           isCodexAppServerIndeterminateTransportError(error)
         ) {
-          toolCallsFenced = true;
+          clientsWithIndeterminateToolCalls.add(params.client);
           retireSharedCodexAppServerClientIfCurrent(params.client);
         }
         throw error;

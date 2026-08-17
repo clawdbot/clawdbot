@@ -1,4 +1,8 @@
 /** Combined session MCP runtime facade for static + requester partitions. */
+import {
+  resolveSessionMcpRequestSignal,
+  runWithoutSessionMcpRequestSignal,
+} from "./agent-bundle-mcp-request-context.js";
 import { waitForSessionMcpRequest } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
@@ -113,14 +117,15 @@ export function createCombinedSessionMcpRuntime(params: {
   const loadCatalog = async (
     options?: Pick<McpRequestOptions, "signal">,
   ): Promise<McpToolCatalog> => {
-    options?.signal?.throwIfAborted();
+    const requestSignal = resolveSessionMcpRequestSignal(options?.signal);
+    requestSignal?.throwIfAborted();
     if (cachedCatalog && !cachedCatalog.diagnostics?.length && cachedCatalogIsCurrent()) {
       return cachedCatalog;
     }
     if (catalogInFlight) {
-      return await waitForSessionMcpRequest(catalogInFlight, options?.signal);
+      return await waitForSessionMcpRequest(catalogInFlight, requestSignal);
     }
-    const load = (async () => {
+    const load = runWithoutSessionMcpRequestSignal(async () => {
       // The combined catalog belongs to the runtime. Individual operation
       // deadlines only detach their waiters; parts keep warming shared caches.
       let retriedAfterSupersession = false;
@@ -151,7 +156,7 @@ export function createCombinedSessionMcpRuntime(params: {
         cachedCatalog = mergeMcpToolCatalogs(catalogs);
         return cachedCatalog;
       }
-    })();
+    });
     let trackedLoad: Promise<McpToolCatalog>;
     trackedLoad = (async () => {
       try {
@@ -163,7 +168,7 @@ export function createCombinedSessionMcpRuntime(params: {
       }
     })();
     catalogInFlight = trackedLoad;
-    return await waitForSessionMcpRequest(trackedLoad, options?.signal);
+    return await waitForSessionMcpRequest(trackedLoad, requestSignal);
   };
 
   // Fresh combined facades have an empty owner map until the catalog is loaded.

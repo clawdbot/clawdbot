@@ -132,6 +132,7 @@ describe("mcp-app-view localization", () => {
       toolResult: { content: [{ type: "text", text: "ready" }] },
       messageSupported,
       updateModelContextSupported,
+      operationTimeoutMs: 45_000,
     }));
     const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
     Reflect.set(view, "context", {
@@ -182,6 +183,10 @@ describe("mcp-app-view localization", () => {
           content?: Array<{ type: string; text?: string }>;
           structuredContent?: Record<string, unknown>;
         }) => Promise<Record<string, never>>;
+        oncalltool?: (params: {
+          name: string;
+          arguments?: Record<string, unknown>;
+        }) => Promise<unknown>;
         onsizechange?: (params: { height?: number }) => void;
         setHostContext: ReturnType<typeof vi.fn>;
         teardownResource: ReturnType<typeof vi.fn>;
@@ -308,11 +313,42 @@ describe("mcp-app-view localization", () => {
         content: [{ type: "text", text: "selected item" }],
       }),
     ).resolves.toEqual({});
-    expect(request).toHaveBeenLastCalledWith("mcp.app.updateModelContext", {
-      sessionKey: "agent:main:main",
-      viewId: expect.any(String),
-      content: [{ type: "text", text: "selected item" }],
-    });
+    expect(request).toHaveBeenLastCalledWith(
+      "mcp.app.updateModelContext",
+      {
+        sessionKey: "agent:main:main",
+        viewId: expect.any(String),
+        content: [{ type: "text", text: "selected item" }],
+      },
+      { timeoutMs: 50_000 },
+    );
+  });
+
+  it("keeps authenticated operation watchdogs behind the server deadline", async () => {
+    const { bridge, request } = await mountBridge(`view-deadline-${crypto.randomUUID()}`);
+
+    await expect(
+      bridge.oncalltool?.({ name: "slow_app_companion", arguments: {} }),
+    ).resolves.toBeDefined();
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "mcp.app.view",
+      {
+        sessionKey: "agent:main:main",
+        viewId: expect.any(String),
+      },
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+    expect(request).toHaveBeenLastCalledWith(
+      "mcp.app.callTool",
+      {
+        sessionKey: "agent:main:main",
+        viewId: expect.any(String),
+        toolName: "slow_app_companion",
+        arguments: {},
+      },
+      { timeoutMs: 50_000 },
+    );
   });
 
   it("pushes live theme and container changes and cleans up their observers", async () => {
