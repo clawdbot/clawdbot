@@ -1,15 +1,27 @@
 // Purpose-scoped local agent runtime identity token for Gateway clients.
 import { createHmac } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  parseExecutionIdentityAdmissionToken,
+  type ExecutionIdentityAdmissionToken,
+} from "../audit/execution-identity-admission.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
+import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
 const AGENT_RUNTIME_IDENTITY_TOKEN_KIND = "agent-runtime";
@@ -25,11 +37,31 @@ export type AgentRuntimeIdentity = {
   kind: "agentRuntime";
   agentId: string;
   sessionKey: string;
+  operationalRunInstance: OperationalRunInstanceRef;
+  delegatedAuthority: AgentRuntimeDelegatedAuthority;
+  approvalOwnerPluginId?: string;
+  executionIdentity?: ExecutionIdentityAdmissionToken;
+  turnSourceChannel?: string;
+  /** Explicit admission fact; omission is unknown, never inferred from session routing. */
+  turnSourceLocal?: true;
+  turnSourceTo?: string;
   turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  cronToolsAllowCapture?: "final-executable-surface";
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
+
+export type AgentRuntimeDelegatedAuthority = AgentRunDelegatedAuthority &
+  (
+    | { kind: "local" }
+    | {
+        kind: "worker";
+        turnClaim: WorkerSessionTurnClaim;
+      }
+  );
 
 export type AgentRuntimeSessionSpawnContext = {
   completionOwnerSessionKey?: string;
@@ -44,37 +76,180 @@ type AgentRuntimeIdentityTokenPayload = {
   kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND;
   agentId: string;
   sessionKey: string;
+  operationalRunInstance: OperationalRunInstanceRef;
+  delegatedAuthority: AgentRuntimeDelegatedAuthority;
+  approvalOwnerPluginId?: string;
+  executionIdentity?: ExecutionIdentityAdmissionToken;
+  turnSourceChannel?: string;
+  turnSourceLocal?: true;
+  turnSourceTo?: string;
   turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  cronToolsAllowCapture?: "final-executable-surface";
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
 
-function decodeStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
-    return undefined;
-  }
-  return value.map((entry) => entry.trim()).filter(Boolean);
-}
+const normalizedRequiredStringSchema = z
+  .string()
+  .transform(normalizeOptionalString)
+  .pipe(z.string());
+const ignoredOptionalStringSchema = z.unknown().transform(normalizeOptionalString).optional();
+const safeNonNegativeIntegerSchema = z
+  .number()
+  .refine(Number.isSafeInteger)
+  .refine((value) => value >= 0);
+const operationalRunInstanceSchema = z.object({
+  instanceId: normalizedRequiredStringSchema,
+  runId: normalizedRequiredStringSchema,
+});
+const workerTurnClaimSchema = z
+  .object({
+    sessionId: normalizedRequiredStringSchema,
+    claimId: normalizedRequiredStringSchema,
+    runId: normalizedRequiredStringSchema,
+    placementGeneration: safeNonNegativeIntegerSchema,
+    owner: z.object({
+      kind: z.literal("worker"),
+      environmentId: normalizedRequiredStringSchema,
+      ownerEpoch: safeNonNegativeIntegerSchema,
+    }),
+  })
+  .transform(
+    (claim): WorkerSessionTurnClaim => ({
+      sessionId: claim.sessionId,
+      claimId: claim.claimId,
+      runId: claim.runId,
+      placementGeneration: claim.placementGeneration,
+      owner: claim.owner,
+    }),
+  );
+const delegatedAuthoritySchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("local"),
+    lifecycleGeneration: normalizedRequiredStringSchema,
+    claimId: normalizedRequiredStringSchema,
+    operationalRunInstance: operationalRunInstanceSchema,
+  }),
+  z.object({
+    kind: z.literal("worker"),
+    lifecycleGeneration: normalizedRequiredStringSchema,
+    claimId: normalizedRequiredStringSchema,
+    operationalRunInstance: operationalRunInstanceSchema,
+    turnClaim: workerTurnClaimSchema,
+  }),
+]);
+const stringListSchema = z
+  .array(z.string())
+  .transform((entries) => entries.map((entry) => entry.trim()).filter(Boolean));
+const sessionSpawnContextSchema = z
+  .object({
+    completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
+    inheritedToolPolicy: z.object({
+      version: z.literal(1),
+      allow: stringListSchema,
+      deny: stringListSchema,
+    }),
+  })
+  .transform(
+    (context): AgentRuntimeSessionSpawnContext => ({
+      ...(context.completionOwnerSessionKey
+        ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
+        : {}),
+      inheritedToolPolicy: context.inheritedToolPolicy,
+    }),
+  );
+const cronCreatorAuthorityGrantSchema = z
+  .object({
+    runId: normalizedRequiredStringSchema,
+    token: normalizedRequiredStringSchema,
+  })
+  .transform((grant): CronCreatorAuthorityGrant => grant);
+const messageActionToolContextSchema = z
+  .object({
+    currentChannelId: ignoredOptionalStringSchema,
+    currentChatType: z
+      .unknown()
+      .transform((value) => normalizeChatType(typeof value === "string" ? value : undefined))
+      .optional(),
+    currentMessagingTarget: ignoredOptionalStringSchema,
+    currentGraphChannelId: ignoredOptionalStringSchema,
+    currentChannelProvider: ignoredOptionalStringSchema,
+    currentThreadTs: ignoredOptionalStringSchema,
+    currentMessageId: z.union([z.string(), z.number()]).optional(),
+    currentSourceTurnId: ignoredOptionalStringSchema,
+    replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
+    hasRepliedRef: z.object({ value: z.boolean() }).optional(),
+    sameChannelThreadRequired: z.boolean().optional().catch(undefined),
+    skipCrossContextDecoration: z.boolean().optional().catch(undefined),
+  })
+  .transform(
+    (context): InternalChannelThreadingToolContext => ({
+      ...context,
+      currentChannelProvider: context.currentChannelProvider as ChannelId | undefined,
+    }),
+  );
+const messageActionContextSchema = z.object({
+  expiresAtMs: z.number().finite(),
+  sourceReplyFinal: z.boolean().optional(),
+  sourceReplyToolCallId: normalizedRequiredStringSchema.optional(),
+  sessionId: ignoredOptionalStringSchema,
+  sourceReplySessionKey: ignoredOptionalStringSchema,
+  requesterAccountId: ignoredOptionalStringSchema,
+  requesterSenderId: ignoredOptionalStringSchema,
+  toolContext: messageActionToolContextSchema.optional(),
+});
+const cronSelfManagementContextSchema = z.object({
+  jobId: normalizedRequiredStringSchema,
+  expiresAtMs: z.number().finite(),
+});
+const agentRuntimeIdentityTokenPayloadSchema = z.object({
+  kind: z.literal(AGENT_RUNTIME_IDENTITY_TOKEN_KIND),
+  agentId: z.string(),
+  sessionKey: z.string(),
+  operationalRunInstance: operationalRunInstanceSchema,
+  delegatedAuthority: delegatedAuthoritySchema,
+  approvalOwnerPluginId: z.string().optional().catch(undefined),
+  executionIdentity: z.unknown().optional(),
+  turnSourceChannel: z.string().optional().catch(undefined),
+  turnSourceLocal: z.literal(true).optional(),
+  turnSourceTo: z.string().optional().catch(undefined),
+  turnSourceAccountId: z.string().optional().catch(undefined),
+  turnSourceThreadId: z.union([z.string(), z.number()]).optional().catch(undefined),
+  messageActionContext: messageActionContextSchema.optional(),
+  cronSelfManagementContext: cronSelfManagementContextSchema.optional(),
+  cronToolsAllowCapture: z.literal("final-executable-surface").optional(),
+  cronCreatorAuthorityGrant: cronCreatorAuthorityGrantSchema.optional(),
+  sessionSpawnContext: sessionSpawnContextSchema.optional(),
+});
 
-function decodeSessionSpawnContext(value: unknown): AgentRuntimeSessionSpawnContext | undefined {
-  if (!isRecord(value) || !isRecord(value.inheritedToolPolicy)) {
+function decodeDelegatedAuthority(
+  value: z.infer<typeof delegatedAuthoritySchema>,
+  operationalRunInstance: OperationalRunInstanceRef,
+): AgentRuntimeDelegatedAuthority | undefined {
+  const { lifecycleGeneration, claimId } = value;
+  const { instanceId, runId } = value.operationalRunInstance;
+  if (
+    !lifecycleGeneration ||
+    !claimId ||
+    instanceId !== operationalRunInstance.instanceId ||
+    runId !== operationalRunInstance.runId
+  ) {
     return undefined;
   }
-  const policy = value.inheritedToolPolicy;
-  const allow = decodeStringList(policy.allow);
-  const deny = decodeStringList(policy.deny);
-  if (policy.version !== 1 || !allow || !deny) {
-    return undefined;
-  }
-  const completionOwnerSessionKey = normalizeOptionalString(value.completionOwnerSessionKey);
-  if (value.completionOwnerSessionKey !== undefined && !completionOwnerSessionKey) {
-    return undefined;
-  }
-  return {
-    ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
-    inheritedToolPolicy: { version: 1, allow, deny },
+  const owner = {
+    operationalRunInstance,
+    lifecycleGeneration,
+    claimId,
   };
+  if (value.kind === "local") {
+    return { kind: "local", ...owner };
+  }
+  return value.turnClaim.runId === operationalRunInstance.runId
+    ? { kind: "worker", ...owner, turnClaim: value.turnClaim }
+    : undefined;
 }
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
@@ -104,190 +279,174 @@ function encodePayload(payload: AgentRuntimeIdentityTokenPayload): string {
 }
 
 function decodeMessageActionContext(
-  value: unknown,
+  value: z.infer<typeof messageActionContextSchema>,
   nowMs: number,
 ): AgentRuntimeMessageActionContext | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.expiresAtMs !== "number" ||
-    !Number.isFinite(value.expiresAtMs) ||
-    nowMs >= value.expiresAtMs
-  ) {
+  if (nowMs >= value.expiresAtMs) {
     return undefined;
   }
-  const rawToolContext = value.toolContext;
-  const sourceReplyFinal = value.sourceReplyFinal;
-  const sourceReplyToolCallId = normalizeOptionalString(value.sourceReplyToolCallId);
-  if (sourceReplyFinal !== undefined && typeof sourceReplyFinal !== "boolean") {
-    return undefined;
-  }
-  if (value.sourceReplyToolCallId !== undefined && !sourceReplyToolCallId) {
-    return undefined;
-  }
-  if (rawToolContext !== undefined && !isRecord(rawToolContext)) {
-    return undefined;
-  }
-  const rawCurrentChatType = rawToolContext?.currentChatType;
-  const currentChatType = normalizeChatType(
-    typeof rawCurrentChatType === "string" ? rawCurrentChatType : undefined,
-  );
-  const currentMessageId = rawToolContext?.currentMessageId;
-  const replyToMode = rawToolContext?.replyToMode;
-  const hasRepliedRef = rawToolContext?.hasRepliedRef;
-  if (
-    (currentMessageId !== undefined &&
-      typeof currentMessageId !== "string" &&
-      typeof currentMessageId !== "number") ||
-    (replyToMode !== undefined &&
-      replyToMode !== "off" &&
-      replyToMode !== "first" &&
-      replyToMode !== "all" &&
-      replyToMode !== "batched") ||
-    (hasRepliedRef !== undefined &&
-      (!isRecord(hasRepliedRef) || typeof hasRepliedRef.value !== "boolean"))
-  ) {
-    return undefined;
-  }
-  const readOptionalBoolean = (key: string): boolean | undefined => {
-    const candidate = rawToolContext?.[key];
-    return typeof candidate === "boolean" ? candidate : undefined;
-  };
-  const toolContext: InternalChannelThreadingToolContext | undefined = rawToolContext
-    ? ({
-        currentChannelId: normalizeOptionalString(rawToolContext.currentChannelId),
-        currentChatType,
-        currentMessagingTarget: normalizeOptionalString(rawToolContext.currentMessagingTarget),
-        currentGraphChannelId: normalizeOptionalString(rawToolContext.currentGraphChannelId),
-        currentChannelProvider: normalizeOptionalString(rawToolContext.currentChannelProvider) as
-          | ChannelId
-          | undefined,
-        currentThreadTs: normalizeOptionalString(rawToolContext.currentThreadTs),
-        currentMessageId,
-        currentSourceTurnId: normalizeOptionalString(rawToolContext.currentSourceTurnId),
-        replyToMode:
-          replyToMode === "off" ||
-          replyToMode === "first" ||
-          replyToMode === "all" ||
-          replyToMode === "batched"
-            ? replyToMode
-            : undefined,
-        hasRepliedRef:
-          isRecord(hasRepliedRef) && typeof hasRepliedRef.value === "boolean"
-            ? { value: hasRepliedRef.value }
-            : undefined,
-        sameChannelThreadRequired: readOptionalBoolean("sameChannelThreadRequired"),
-        skipCrossContextDecoration: readOptionalBoolean("skipCrossContextDecoration"),
-      } satisfies InternalChannelThreadingToolContext)
-    : undefined;
   const context = {
     expiresAtMs: value.expiresAtMs,
-    sessionId: normalizeOptionalString(value.sessionId),
-    sourceReplySessionKey: normalizeOptionalString(value.sourceReplySessionKey),
-    requesterAccountId: normalizeOptionalString(value.requesterAccountId),
-    requesterSenderId: normalizeOptionalString(value.requesterSenderId),
-    toolContext,
+    sessionId: value.sessionId,
+    sourceReplySessionKey: value.sourceReplySessionKey,
+    requesterAccountId: value.requesterAccountId,
+    requesterSenderId: value.requesterSenderId,
+    toolContext: value.toolContext,
   };
-  if (sourceReplyFinal === true) {
-    if (!sourceReplyToolCallId) {
+  if (value.sourceReplyFinal === true) {
+    if (!value.sourceReplyToolCallId) {
       return undefined;
     }
-    return { ...context, sourceReplyFinal: true, sourceReplyToolCallId };
+    return {
+      ...context,
+      sourceReplyFinal: true,
+      sourceReplyToolCallId: value.sourceReplyToolCallId,
+    };
   }
   return {
     ...context,
-    ...(sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
-    ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
+    ...(value.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
+    ...(value.sourceReplyToolCallId ? { sourceReplyToolCallId: value.sourceReplyToolCallId } : {}),
   };
 }
 
 function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenPayload | undefined {
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object") {
+    const result = agentRuntimeIdentityTokenPayloadSchema.safeParse(parsed);
+    if (!result.success) {
       return undefined;
     }
-    const raw = parsed as {
-      kind?: unknown;
-      agentId?: unknown;
-      sessionKey?: unknown;
-      turnSourceAccountId?: unknown;
-      messageActionContext?: unknown;
-      cronSelfManagementContext?: unknown;
-      sessionSpawnContext?: unknown;
-    };
-    if (
-      raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND ||
-      typeof raw.agentId !== "string" ||
-      typeof raw.sessionKey !== "string"
-    ) {
-      return undefined;
-    }
+    const raw = result.data;
     const agentId = normalizeAgentId(raw.agentId);
     const sessionKey = raw.sessionKey.trim();
-    const turnSourceAccountId = normalizeOptionalAccountId(
-      typeof raw.turnSourceAccountId === "string" ? raw.turnSourceAccountId : undefined,
-    );
-    if (!agentId || !sessionKey) {
+    const approvalOwnerPluginId = normalizeOptionalString(raw.approvalOwnerPluginId);
+    const operationalInstanceId = raw.operationalRunInstance.instanceId;
+    const operationalRunId = raw.operationalRunInstance.runId;
+    const turnSourceAccountId = normalizeOptionalAccountId(raw.turnSourceAccountId);
+    const turnSourceChannel = normalizeOptionalString(raw.turnSourceChannel);
+    const turnSourceLocal = raw.turnSourceLocal;
+    if (turnSourceLocal && turnSourceChannel) {
       return undefined;
     }
-    const messageActionContext =
-      raw.messageActionContext === undefined
-        ? undefined
-        : decodeMessageActionContext(raw.messageActionContext, nowMs);
+    const turnSourceTo = normalizeOptionalString(raw.turnSourceTo);
+    const turnSourceThreadId = raw.turnSourceThreadId;
+    if (!agentId || !sessionKey || !operationalInstanceId || !operationalRunId) {
+      return undefined;
+    }
+    const operationalRunInstance = Object.freeze({
+      instanceId: operationalInstanceId,
+      runId: operationalRunId,
+    });
+    const delegatedAuthority = decodeDelegatedAuthority(
+      raw.delegatedAuthority,
+      operationalRunInstance,
+    );
+    if (!delegatedAuthority) {
+      return undefined;
+    }
+    const messageActionContext = raw.messageActionContext
+      ? decodeMessageActionContext(raw.messageActionContext, nowMs)
+      : undefined;
     if (raw.messageActionContext !== undefined && !messageActionContext) {
       return undefined;
     }
-    const rawCronSelfManagement = raw.cronSelfManagementContext;
-    const cronSelfManagementJobId =
-      isRecord(rawCronSelfManagement) && typeof rawCronSelfManagement.jobId === "string"
-        ? rawCronSelfManagement.jobId.trim()
-        : "";
-    const cronSelfManagementExpiresAtMs = isRecord(rawCronSelfManagement)
-      ? rawCronSelfManagement.expiresAtMs
-      : undefined;
     const cronSelfManagementContext =
-      cronSelfManagementJobId &&
-      typeof cronSelfManagementExpiresAtMs === "number" &&
-      Number.isFinite(cronSelfManagementExpiresAtMs) &&
-      nowMs < cronSelfManagementExpiresAtMs
-        ? {
-            jobId: cronSelfManagementJobId,
-            expiresAtMs: cronSelfManagementExpiresAtMs,
-          }
+      raw.cronSelfManagementContext && nowMs < raw.cronSelfManagementContext.expiresAtMs
+        ? raw.cronSelfManagementContext
         : undefined;
-    if (rawCronSelfManagement !== undefined && !cronSelfManagementContext) {
+    if (raw.cronSelfManagementContext !== undefined && !cronSelfManagementContext) {
       return undefined;
     }
-    const sessionSpawnContext =
-      raw.sessionSpawnContext === undefined
-        ? undefined
-        : decodeSessionSpawnContext(raw.sessionSpawnContext);
-    if (raw.sessionSpawnContext !== undefined && !sessionSpawnContext) {
+    const sessionSpawnContext = raw.sessionSpawnContext;
+    const cronToolsAllowCapture = raw.cronToolsAllowCapture;
+    const cronCreatorAuthorityGrant = raw.cronCreatorAuthorityGrant;
+    if (cronCreatorAuthorityGrant && !cronToolsAllowCapture) {
       return undefined;
+    }
+    let executionIdentity: ExecutionIdentityAdmissionToken | undefined;
+    if (raw.executionIdentity !== undefined) {
+      try {
+        executionIdentity = parseExecutionIdentityAdmissionToken(raw.executionIdentity);
+      } catch {
+        return undefined;
+      }
+    }
+    if (executionIdentity?.runId !== operationalRunId) {
+      executionIdentity = undefined;
     }
     return {
       kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
       agentId,
       sessionKey,
+      operationalRunInstance,
+      delegatedAuthority,
+      ...(approvalOwnerPluginId ? { approvalOwnerPluginId } : {}),
+      ...(turnSourceChannel ? { turnSourceChannel } : {}),
+      ...(turnSourceLocal ? { turnSourceLocal } : {}),
+      ...(turnSourceTo ? { turnSourceTo } : {}),
       ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
+      ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
       ...(messageActionContext ? { messageActionContext } : {}),
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+      ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
+      ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
+      ...(executionIdentity ? { executionIdentity } : {}),
     };
   } catch {
     return undefined;
   }
 }
 
-/** Mint an opaque token that lets trusted local agent-tool clients identify their agent. */
-export async function mintAgentRuntimeIdentityToken(params: {
+export type AgentRuntimeIdentityTokenParams = {
   agentId: string;
   sessionKey: string;
+  operationalRunInstance: OperationalRunInstanceRef;
+  approvalOwnerPluginId?: string;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
+  turnSourceChannel?: string;
+  turnSourceLocal?: true;
+  turnSourceTo?: string;
   turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
+  cronToolsAllowCapture?: "final-executable-surface";
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
-}): Promise<string> {
+  workerTurnClaim?: WorkerSessionTurnClaim;
+};
+
+function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTokenParams): string {
+  const operationalInstanceId = normalizeOptionalString(params.operationalRunInstance.instanceId);
+  const operationalRunId = normalizeOptionalString(params.operationalRunInstance.runId);
+  if (!operationalInstanceId || !operationalRunId) {
+    throw new Error("agent runtime identity requires an operational run instance");
+  }
+  const activeAuthority = getActiveAgentRunDelegatedAuthority({
+    instanceId: operationalInstanceId,
+    runId: operationalRunId,
+  });
+  if (!activeAuthority) {
+    throw new Error("agent runtime identity requires active delegated run authority");
+  }
+  if (
+    params.workerTurnClaim &&
+    (params.workerTurnClaim.owner.kind !== "worker" ||
+      params.workerTurnClaim.runId !== operationalRunId)
+  ) {
+    throw new Error("worker delegated authority disagrees with the operational run");
+  }
+  const delegatedAuthority: AgentRuntimeDelegatedAuthority = params.workerTurnClaim
+    ? { kind: "worker", ...activeAuthority, turnClaim: params.workerTurnClaim }
+    : { kind: "local", ...activeAuthority };
+  if (
+    params.cronCreatorAuthorityGrant &&
+    params.cronToolsAllowCapture !== "final-executable-surface"
+  ) {
+    throw new Error("cron creator authority grants require final tool-surface provenance");
+  }
   if (
     params.messageActionContext?.sourceReplyFinal === true &&
     !normalizeOptionalString(params.messageActionContext.sourceReplyToolCallId)
@@ -306,6 +465,15 @@ export async function mintAgentRuntimeIdentityToken(params: {
       }
     : undefined;
   const turnSourceAccountId = normalizeOptionalAccountId(params.turnSourceAccountId);
+  const turnSourceChannel = normalizeOptionalString(params.turnSourceChannel);
+  if (params.turnSourceLocal === true && turnSourceChannel) {
+    throw new Error("agent runtime turn source cannot be both local and channel-bound");
+  }
+  const turnSourceTo = normalizeOptionalString(params.turnSourceTo);
+  const turnSourceThreadId =
+    typeof params.turnSourceThreadId === "string"
+      ? normalizeOptionalString(params.turnSourceThreadId)
+      : params.turnSourceThreadId;
   const cronSelfManagementJobId = normalizeOptionalString(params.cronSelfManagementJobId);
   const cronSelfManagementContext = cronSelfManagementJobId
     ? {
@@ -313,15 +481,51 @@ export async function mintAgentRuntimeIdentityToken(params: {
         expiresAtMs: Date.now() + CRON_SELF_MANAGEMENT_TOKEN_TTL_MS,
       }
     : undefined;
-  const payload = encodePayload({
+  return encodePayload({
     kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
     agentId: normalizeAgentId(params.agentId),
     sessionKey: params.sessionKey.trim(),
+    operationalRunInstance: {
+      instanceId: operationalInstanceId,
+      runId: operationalRunId,
+    },
+    delegatedAuthority,
+    ...(normalizeOptionalString(params.approvalOwnerPluginId)
+      ? { approvalOwnerPluginId: normalizeOptionalString(params.approvalOwnerPluginId) }
+      : {}),
+    ...(turnSourceChannel ? { turnSourceChannel } : {}),
+    ...(params.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
+    ...(turnSourceTo ? { turnSourceTo } : {}),
     ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
+    ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
     ...(messageActionContext ? { messageActionContext } : {}),
     ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
+    ...(params.cronToolsAllowCapture === "final-executable-surface"
+      ? { cronToolsAllowCapture: params.cronToolsAllowCapture }
+      : {}),
+    ...(params.cronCreatorAuthorityGrant
+      ? { cronCreatorAuthorityGrant: params.cronCreatorAuthorityGrant }
+      : {}),
     ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
+    ...(params.executionIdentityToken?.runId === operationalRunId
+      ? { executionIdentity: params.executionIdentityToken }
+      : {}),
   });
+}
+
+/** Measure the exact ASCII token size without reading signing credentials or minting a bearer. */
+export function measureAgentRuntimeIdentityTokenBytes(
+  params: AgentRuntimeIdentityTokenParams,
+): number {
+  const payload = prepareAgentRuntimeIdentityTokenPayload(params);
+  return Buffer.byteLength(`${payload}.${signPayload("", payload)}`, "utf8");
+}
+
+/** Mint an opaque token that lets trusted local agent-tool clients identify their agent. */
+export async function mintAgentRuntimeIdentityToken(
+  params: AgentRuntimeIdentityTokenParams,
+): Promise<string> {
+  const payload = prepareAgentRuntimeIdentityTokenPayload(params);
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
   return `${payload}.${signature}`;
 }
@@ -351,11 +555,55 @@ export async function verifyAgentRuntimeIdentityToken(
     kind: "agentRuntime",
     agentId: payload.agentId,
     sessionKey: payload.sessionKey,
+    operationalRunInstance: payload.operationalRunInstance,
+    delegatedAuthority: payload.delegatedAuthority,
+    ...(payload.approvalOwnerPluginId
+      ? { approvalOwnerPluginId: payload.approvalOwnerPluginId }
+      : {}),
+    ...(payload.executionIdentity ? { executionIdentity: payload.executionIdentity } : {}),
+    ...(payload.turnSourceChannel ? { turnSourceChannel: payload.turnSourceChannel } : {}),
+    ...(payload.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
+    ...(payload.turnSourceTo ? { turnSourceTo: payload.turnSourceTo } : {}),
     ...(payload.turnSourceAccountId ? { turnSourceAccountId: payload.turnSourceAccountId } : {}),
+    ...(payload.turnSourceThreadId !== undefined
+      ? { turnSourceThreadId: payload.turnSourceThreadId }
+      : {}),
     ...(payload.messageActionContext ? { messageActionContext: payload.messageActionContext } : {}),
     ...(payload.cronSelfManagementContext
       ? { cronSelfManagementContext: payload.cronSelfManagementContext }
       : {}),
+    ...(payload.cronToolsAllowCapture
+      ? { cronToolsAllowCapture: payload.cronToolsAllowCapture }
+      : {}),
+    ...(payload.cronCreatorAuthorityGrant
+      ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
+      : {}),
     ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
   };
+}
+
+export type AgentRuntimeApprovalAuthorityValidator = (identity: AgentRuntimeIdentity) => boolean;
+
+type WorkerTurnClaimValidator = {
+  validateTurnClaim(claim: WorkerSessionTurnClaim): boolean;
+};
+
+function validateAgentRuntimeDelegatedAuthority(
+  authority: AgentRuntimeDelegatedAuthority,
+  placements?: WorkerTurnClaimValidator,
+): boolean {
+  if (!validateAgentRunDelegatedAuthority(authority)) {
+    return false;
+  }
+  return authority.kind === "local"
+    ? true
+    : placements?.validateTurnClaim?.(authority.turnClaim) === true;
+}
+
+/** Builds the use-time approval gate from the run owner and canonical worker store. */
+export function createAgentRuntimeApprovalAuthorityValidator(
+  placements?: WorkerTurnClaimValidator,
+): AgentRuntimeApprovalAuthorityValidator {
+  return (identity) =>
+    validateAgentRuntimeDelegatedAuthority(identity.delegatedAuthority, placements);
 }

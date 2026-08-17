@@ -1,0 +1,26 @@
+title: Bundled source overlay discovery
+
+scenario:
+  id: bundled-source-overlay-discovery
+  surface: plugins
+  category: plugins.bundled-plugins
+  coverage:
+    primary:
+      - plugins.bundled-source-overlays
+  objective: Verify mounted bundled source overlays override packaged bundles while ordinary copied source directories remain inert.
+  successCriteria:
+    - A mounted bundled source plugin is discovered before the matching packaged bundle.
+    - Discovery reports the packaged candidate shadowed by the mounted source overlay.
+    - A copied source plugin directory without mount evidence does not override the packaged bundle.
+  docsRefs:
+    - docs/cli/plugins.md
+    - docs/plugins/plugin-inventory.md
+    - docs/plugins/architecture-internals.md
+  codeRefs:
+    - src/plugins/bundled-source-overlays.ts
+    - src/plugins/discovery.ts
+    - src/plugins/discovery.test.ts
+  execution:
+    kind: vitest
+    path: src/plugins/discovery.test.ts
+    summary: Run bundled discovery coverage for mounted source overlays and inert copied source directories.

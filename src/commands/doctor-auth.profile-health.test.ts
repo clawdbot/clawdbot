@@ -22,7 +22,8 @@ const authProfileMocks = vi.hoisted(() => ({
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles.js", () => ({
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
   ensureAuthProfileStore: authProfileMocks.ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource: authProfileMocks.hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource: authProfileMocks.hasLocalAuthProfileStoreSource,
@@ -245,7 +246,10 @@ describe("noteAuthProfileHealth", () => {
   });
 
   it.each([
-    ["auth_permanent", "Refresh or replace credentials, then retry."],
+    [
+      "auth_permanent",
+      "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:disabled'`.",
+    ],
     ["unknown", "Wait for cooldown or switch provider."],
   ] satisfies Array<[AuthProfileFailureReason, string]>)(
     "maps disabled %s profiles to their production health hint",
@@ -257,7 +261,9 @@ describe("noteAuthProfileHealth", () => {
       authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
       authProfileMocks.ensureAuthProfileStore.mockReturnValue({
         version: 1,
-        profiles: {},
+        profiles: {
+          "openai:disabled": { type: "api_key", provider: "openai", key: "secret" },
+        },
         usageStats: {
           "openai:disabled": {
             disabledUntil: now + 5 * 60_000,
@@ -275,6 +281,86 @@ describe("noteAuthProfileHealth", () => {
       expect(findings).toEqual([expect.objectContaining({ fixHint: expectedHint })]);
     },
   );
+
+  it("reports a session-expired Claude CLI profile with its exact re-login action", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "secret",
+          refresh: "secret",
+          expires: now + 60_000,
+        },
+      },
+      usageStats: {
+        "anthropic:claude-cli": {
+          cooldownUntil: now + 5 * 60_000,
+          cooldownReason: "session_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: "Auth profile anthropic:claude-cli is cooldown:session_expired (5m).",
+        fixHint:
+          "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
+      }),
+    ]);
+  });
+
+  it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const mainDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockReturnValue(true);
+    authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(now + 5 * 60_000);
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "google-gemini-cli:legacy": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "secret",
+          refresh: "secret",
+          expires: now + 3 * 24 * 60 * 60_000,
+        },
+      },
+      usageStats: {
+        "google-gemini-cli:legacy": {
+          cooldownUntil: now + 5 * 60_000,
+          cooldownReason: "session_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: { list: [{ id: "main", default: true, agentDir: mainDir }] },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        target: "google-gemini-cli:legacy",
+        fixHint: expect.stringContaining("--provider google`"),
+      }),
+    ]);
+    expect(findings[0]?.fixHint).not.toContain("--provider google-gemini-cli");
+  });
 
   it("maps cooldown profiles to cooldown guidance", async () => {
     const now = 1_700_000_000_000;

@@ -1,11 +1,11 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { writeGatewayRestartIntentSync } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
@@ -75,13 +75,6 @@ async function waitForTransportReady(
     gateway: env.gateway,
     timeoutMs,
   });
-}
-
-async function waitForQaChannelReady(
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
-  timeoutMs = 45_000,
-) {
-  await waitForTransportReady(env, timeoutMs);
 }
 
 async function waitForConfigRestartSettle(
@@ -368,7 +361,7 @@ async function runConfigMutation(params: {
       continue;
     }
   }
-  throw toQaErrorObject(
+  throw toErrorObject(
     lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`),
     "Non-Error thrown",
   );
@@ -448,6 +441,5 @@ export {
   restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
-  waitForQaChannelReady,
   waitForTransportReady,
 };

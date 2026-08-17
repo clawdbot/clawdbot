@@ -38,7 +38,7 @@ import {
   extractSlackMpimRetainedBotNonce,
   extractAllUserTexts,
   extractAllRequestTexts,
-  extractLatestImageUserTurn,
+  extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import {
@@ -167,7 +167,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   const userExactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
+  const currentImageRequest = extractCurrentImageRequest(input, body);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -218,14 +218,14 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     return "HEARTBEAT_OK";
   }
   if (
-    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
+    /roundtrip image inspection check/i.test(currentImageRequest.text) &&
+    currentImageRequest.imageInputCount > 0
   ) {
     return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
   }
   if (
-    /image understanding check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
+    /image understanding check/i.test(currentImageRequest.text) &&
+    currentImageRequest.imageInputCount > 0
   ) {
     return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }

@@ -67,6 +67,19 @@ struct GatewayModelsCompatibilityTests {
     }
 
     @Test
+    func `device pair setup results decode older gateway payloads`() throws {
+        let result = try JSONDecoder().decode(
+            DevicePairSetupCodeResult.self,
+            from: Data(
+                #"{"setupCode":"opaque-code","gatewayUrl":"wss://gateway.example","auth":"token","urlSource":"gateway.remote.url"}"#
+                    .utf8))
+
+        #expect(result.setupid == nil)
+        #expect(result.expiresatms == nil)
+        #expect(result.setupcode == "opaque-code")
+    }
+
+    @Test
     func `generated models ignore additive gateway fields`() throws {
         let result = try JSONDecoder().decode(
             SessionsGroupsListResult.self,
@@ -74,6 +87,34 @@ struct GatewayModelsCompatibilityTests {
 
         #expect(result.groups.isEmpty)
         #expect(result.sectionorder == nil)
+    }
+
+    @Test
+    func `session compaction checkpoint preserves canonical token version casing`() throws {
+        let checkpoint = SessionCompactionCheckpoint(
+            checkpointid: "checkpoint-1",
+            sessionkey: "main",
+            sessionid: "session-1",
+            createdat: 1,
+            reason: AnyCodable("manual"),
+            tokensVersion: 1,
+            precompaction: [:],
+            postcompaction: [:])
+
+        #expect(checkpoint.tokensVersion == 1)
+
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(checkpoint))
+        let encodedJSON = try #require(encoded as? [String: Any])
+        #expect(encodedJSON.keys.contains("tokensVersion"))
+        #expect(!encodedJSON.keys.contains("tokensversion"))
+
+        let decoded = try JSONDecoder().decode(
+            SessionCompactionCheckpoint.self,
+            from: Data(
+                #"{"checkpointId":"checkpoint-2","sessionKey":"main","sessionId":"session-2","createdAt":2,"reason":"manual","tokensVersion":1,"preCompaction":{},"postCompaction":{}}"#
+                    .utf8))
+
+        #expect(decoded.tokensVersion == 1)
     }
 
     @Test

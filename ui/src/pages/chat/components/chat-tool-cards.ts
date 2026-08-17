@@ -1,4 +1,5 @@
 // Control UI chat module implements tool cards behavior.
+import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { icons, type IconName } from "../../../components/icons.ts";
@@ -32,7 +33,9 @@ export {
   type WidgetPromptEventDetail,
 } from "./widget-card.ts";
 
-type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+type FullMessageRequest = NonNullable<
+  Extract<SidebarContent, { kind: "markdown" }>["fullMessageRequest"]
+>;
 
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   if (event.detail === 0) {
@@ -189,13 +192,13 @@ export function renderRawOutputToggle(text: string) {
   return html`
     <div class="chat-tool-card__raw">
       <button
-        class="chat-tool-card__raw-toggle"
+        class="chat-inline-disclosure chat-tool-card__raw-toggle"
         type="button"
         aria-expanded="false"
         @click=${handleRawDetailsToggle}
       >
         <span>${t("chat.toolCards.rawDetails")}</span>
-        <span class="chat-tool-card__raw-toggle-icon">${icons.chevronDown}</span>
+        <span class="chat-inline-disclosure__chevron" aria-hidden="true">${icons.chevronDown}</span>
       </button>
       <div class="chat-tool-card__raw-body" hidden>
         ${renderToolDataBlock({ label: t("chat.toolCards.toolOutput"), text })}
@@ -227,10 +230,25 @@ const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
 };
 
 const MUTATION_VERB_KEYS = {
-  edit: {
+  update: {
     running: "chat.toolCards.verbs.editing",
     succeeded: "chat.toolCards.verbs.edited",
     fallback: "chat.toolCards.verbs.edit",
+  },
+  add: {
+    running: "chat.toolCards.verbs.creating",
+    succeeded: "chat.toolCards.verbs.created",
+    fallback: "chat.toolCards.verbs.create",
+  },
+  delete: {
+    running: "chat.toolCards.verbs.deleting",
+    succeeded: "chat.toolCards.verbs.deleted",
+    fallback: "chat.toolCards.verbs.delete",
+  },
+  mixed: {
+    running: "chat.toolCards.verbs.changing",
+    succeeded: "chat.toolCards.verbs.changed",
+    fallback: "chat.toolCards.verbs.change",
   },
   write: {
     running: "chat.toolCards.verbs.writing",
@@ -239,12 +257,21 @@ const MUTATION_VERB_KEYS = {
   },
 } as const;
 
-function resolveToolRowVerb(
-  kind: ToolCallView["kind"],
-  outcome: ToolCardOutcome,
-): string | undefined {
-  if (kind === "edit" || kind === "write") {
-    const keys = MUTATION_VERB_KEYS[kind];
+function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB_KEYS | undefined {
+  if (view.kind === "write") {
+    return "write";
+  }
+  if (view.kind !== "edit") {
+    return undefined;
+  }
+  const operations = new Set(view.fileOperations?.map(({ operation }) => operation));
+  return operations.size > 1 ? "mixed" : (operations.values().next().value ?? "update");
+}
+
+function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): string | undefined {
+  const mutation = resolveMutationVerbKind(view);
+  if (mutation) {
+    const keys = MUTATION_VERB_KEYS[mutation];
     const key =
       outcome === "running"
         ? keys.running
@@ -253,7 +280,7 @@ function resolveToolRowVerb(
           : keys.fallback;
     return t(key);
   }
-  const key = TOOL_ROW_VERB_KEYS[kind];
+  const key = TOOL_ROW_VERB_KEYS[view.kind];
   return key ? t(key) : undefined;
 }
 
@@ -287,12 +314,18 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     `;
   }
 
-  const verb = resolveToolRowVerb(view.kind, outcome);
+  const verb = resolveToolRowVerb(view, outcome);
   if (verb && view.target) {
+    const stat =
+      outcome === "succeeded"
+        ? view.stat
+        : outcome === "running" && (view.kind === "edit" || view.kind === "write")
+          ? card.liveDiffStat
+          : undefined;
     return html`
       <span class="chat-tool-row__verb">${verb}</span>
       <span class="chat-tool-row__target">${view.target}</span>
-      ${outcome === "succeeded" && view.stat ? renderDiffStatChips(view.stat) : nothing}
+      ${stat ? renderDiffStatChips(stat) : nothing}
       ${view.targetDetail
         ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
         : nothing}
@@ -304,10 +337,9 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     card,
     displayLabel: display.label,
     displayDetail: display.detail,
-    isError: outcome === "failed",
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const argumentPreview = outcome === "failed" ? undefined : toolArgumentPreview(card.args);
+  const argumentPreview = toolArgumentPreview(card.args);
   const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
   const aiTitle = getToolCallTitle(card.name, card.args);
   if (aiTitle) {
@@ -442,10 +474,10 @@ function renderArgsKeyValueList(args: Record<string, unknown>) {
 }
 
 function canRenderArgsAsKeyValue(args: unknown): args is Record<string, unknown> {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
+  if (!isRecord(args)) {
     return false;
   }
-  const keys = Object.keys(args as Record<string, unknown>);
+  const keys = Object.keys(args);
   return keys.length > 0 && keys.length <= KV_MAX_KEYS;
 }
 
@@ -461,22 +493,20 @@ function extraArgsBeyondRowTarget(
   args: unknown,
   kind: ToolCallView["kind"],
 ): Record<string, unknown> | null {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
+  if (!isRecord(args)) {
     return null;
   }
   const summarized = ROW_SUMMARIZED_ARG_KEYS[kind];
   if (!summarized) {
-    return args as Record<string, unknown>;
+    return args;
   }
-  const extras = Object.fromEntries(
-    Object.entries(args as Record<string, unknown>).filter(([key]) => !summarized.has(key)),
-  );
+  const extras = Object.fromEntries(Object.entries(args).filter(([key]) => !summarized.has(key)));
   return Object.keys(extras).length > 0 ? extras : null;
 }
 
 function resolveToolWorkspaceFilePath(card: ToolCard, view: ToolCallView): string | null {
-  if (card.args && typeof card.args === "object" && !Array.isArray(card.args)) {
-    const args = card.args as Record<string, unknown>;
+  const args = asNullableRecord(card.args);
+  if (args) {
     for (const key of ["path", "file_path", "filePath", "notebook_path"]) {
       const value = args[key];
       if (typeof value === "string" && value.trim()) {
@@ -537,12 +567,7 @@ function resolveCollapsedToolSummaryParts(params: {
   card: ToolCard;
   displayLabel: string;
   displayDetail: string | undefined;
-  isError: boolean;
 }): { label: string; name?: string } {
-  if (params.isError) {
-    return { label: t("chat.toolCards.toolError"), name: params.displayLabel };
-  }
-
   const displayDetail = params.displayDetail?.trim();
   if (displayDetail) {
     return { label: params.displayLabel, name: displayDetail };
@@ -568,7 +593,7 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
   if (view.kind === "command" && view.command) {
     return `$ ${firstCommandLine(view.command)}`;
   }
-  const verb = resolveToolRowVerb(view.kind, resolveToolCardOutcome(card, runActive));
+  const verb = resolveToolRowVerb(view, resolveToolCardOutcome(card, runActive));
   if (verb && view.target) {
     return `${verb} ${view.target}`;
   }
@@ -605,9 +630,9 @@ export function renderToolCard(
         : ""}"
     >
       <button
-        class="chat-tool-msg-summary chat-tool-row ${isError
-          ? "chat-tool-msg-summary--error"
-          : ""} ${isRunning ? "chat-tool-row--running" : ""}"
+        class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
+          ? "chat-tool-row--running"
+          : ""}"
         type="button"
         aria-expanded=${String(opts.expanded)}
         @click=${(event: MouseEvent) => {
@@ -618,6 +643,7 @@ export function renderToolCard(
       >
         <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
         ${renderToolRowContent(card, view, outcome)}
+        <span class="chat-inline-disclosure__chevron" aria-hidden="true">${icons.chevronDown}</span>
         ${isError
           ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
           : nothing}
@@ -717,10 +743,7 @@ export function renderExpandedToolCardContent(
   // args (workdir, timeout, env…) stay visible as key-value rows so identical
   // commands in different contexts remain distinguishable in the audit trail.
   if (view.kind === "command" && view.command && !card.preview) {
-    const argsRecord =
-      card.args && typeof card.args === "object" && !Array.isArray(card.args)
-        ? (card.args as Record<string, unknown>)
-        : null;
+    const argsRecord = asNullableRecord(card.args);
     const extraArgs = Object.fromEntries(
       Object.entries(argsRecord ?? {}).filter(([key]) => key !== "command"),
     );

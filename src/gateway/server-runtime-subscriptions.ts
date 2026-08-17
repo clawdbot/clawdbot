@@ -1,8 +1,16 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-config.js";
+import {
+  isAuditLedgerEnabled,
+  isExecutionIdentityCollectionEnabled,
+  resolveAuditMessageMode,
+} from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
+import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
+import {
+  configureChannelAdmissionDecisionSink,
+  configureChannelAdmissionEvidenceCollection,
+} from "../channels/message-access/admission-evidence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { onAgentAuditEvent, onAgentRuntimeEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
@@ -12,7 +20,9 @@ import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
+import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
 import {
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
@@ -26,8 +36,11 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionObserver } from "./session-observer.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -42,6 +55,16 @@ function dispatchEventHandler<TEvent>(params: {
     .catch((error: unknown) => {
       params.log.warn(params.failureMessage, { ...params.context, error });
     });
+}
+
+function terminalTaskId(event: TaskRegistryObserverEvent): string | undefined {
+  if (event.kind !== "upserted" || !isTerminalTaskStatus(event.task.status)) {
+    return undefined;
+  }
+  if (event.previous && isTerminalTaskStatus(event.previous.status)) {
+    return undefined;
+  }
+  return event.task.taskId;
 }
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
@@ -62,6 +85,7 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
+  terminalSessions: Pick<TerminalSessionManager, "closeAgentSessions">;
 }) {
   // The worker always runs retention maintenance. audit.enabled only controls
   // producer subscriptions, so disabling collection cannot strand expired rows.
@@ -71,6 +95,15 @@ export function startGatewayEventSubscriptions(params: {
   const auditRecorder = createAuditEventRecorder({
     messageMode: auditEnabled ? auditMessageMode : "off",
   });
+  const clearExecutionIdentityAdmissionSink = configureExecutionIdentityAdmissionSink(
+    auditRecorder.recordExecutionIdentity,
+  );
+  const clearChannelAdmissionEvidenceCollection = configureChannelAdmissionEvidenceCollection(
+    isExecutionIdentityCollectionEnabled(runtimeConfig),
+  );
+  const clearChannelAdmissionDecisionSink = configureChannelAdmissionDecisionSink(
+    auditRecorder.recordExecutionDecision,
+  );
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
     subscribers: params.sessionMessageSubscribers,
@@ -78,6 +111,7 @@ export function startGatewayEventSubscriptions(params: {
     broadcastToConnIds: params.broadcastToConnIds,
   });
   const sessionCompanion = createSessionCompanion({
+    contextReader: defaultSessionCompanionContextReader,
     getConfig: getRuntimeConfig,
     sessionObserver,
   });
@@ -125,6 +159,7 @@ export function startGatewayEventSubscriptions(params: {
                   entry.projectSessionActive = false;
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = false;
+                  markChatAbortTerminalPersistenceError(entry, undefined);
                   queueMicrotask(() => {
                     const current = params.chatAbortControllers.get(candidateRunId);
                     if (
@@ -151,6 +186,7 @@ export function startGatewayEventSubscriptions(params: {
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = true;
                   entry.projectSessionTerminalPersistence = undefined;
+                  markChatAbortTerminalPersistenceError(entry, undefined);
                 }
               }
             },
@@ -167,6 +203,9 @@ export function startGatewayEventSubscriptions(params: {
                 if (entry) {
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersistence = persistence;
+                  void persistence.catch((error: unknown) => {
+                    markChatAbortTerminalPersistenceError(entry, error);
+                  });
                   if (entry.registrationCleanupRequested === true) {
                     void persistence
                       .catch(() => undefined)
@@ -212,7 +251,10 @@ export function startGatewayEventSubscriptions(params: {
               resolveVisibleActiveSessionRunState({
                 context: params,
                 ...session,
-                defaultAgentId: resolveDefaultAgentId(getRuntimeConfig()),
+                defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(
+                  getRuntimeConfig(),
+                  session.requestedKey,
+                ),
               }),
           }),
       );
@@ -322,6 +364,9 @@ export function startGatewayEventSubscriptions(params: {
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
+    clearExecutionIdentityAdmissionSink();
+    clearChannelAdmissionEvidenceCollection();
+    clearChannelAdmissionDecisionSink();
     await agentEventHandlerLoader
       .peek()
       ?.then((handler) => handler.dispose())
@@ -354,21 +399,35 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   let taskObserverDisposed = false;
+  const lastTaskSummaryById = new Map<string, string>();
   const taskObservers = {
     onEvent: (event: TaskRegistryObserverEvent) => {
       let payload: TaskEventPayload;
       switch (event.kind) {
-        case "upserted":
-          payload = { action: "upserted", task: mapTaskSummary(event.task) };
+        case "upserted": {
+          const task = mapTaskSummary(event.task);
+          const summary = JSON.stringify(task);
+          if (lastTaskSummaryById.get(task.id) === summary) {
+            return;
+          }
+          lastTaskSummaryById.set(task.id, summary);
+          payload = { action: "upserted", task };
           break;
+        }
         case "deleted":
+          lastTaskSummaryById.delete(event.taskId);
           payload = { action: "deleted", taskId: event.taskId };
           break;
         case "restored":
+          lastTaskSummaryById.clear();
           payload = { action: "restored" };
           break;
       }
       params.broadcast("task", payload, { dropIfSlow: true });
+      const taskId = terminalTaskId(event);
+      if (taskId) {
+        params.terminalSessions.closeAgentSessions(taskId);
+      }
     },
   };
   const taskObserverRuntimePromise = import("../tasks/task-registry.store.js").then((module) => {

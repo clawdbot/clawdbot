@@ -4,8 +4,10 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -35,15 +37,21 @@ async function runSystemGatewayCommand(
   action: () => Promise<unknown>,
   successText?: string,
 ): Promise<void> {
+  const machineOutput = opts.json || successText === undefined;
   try {
     const result = await action();
-    if (opts.json || successText === undefined) {
+    if (machineOutput) {
       defaultRuntime.writeJson(result);
     } else {
       defaultRuntime.log(successText);
     }
   } catch (err) {
-    defaultRuntime.error(danger(String(err)));
+    const message = formatErrorMessage(err);
+    if (machineOutput) {
+      defaultRuntime.writeJson(formatCliJsonFailure(message));
+    } else {
+      defaultRuntime.error(danger(message));
+    }
     defaultRuntime.exit(1);
   }
 }
@@ -117,37 +125,26 @@ export function registerSystemCli(program: Command) {
     });
   });
 
-  addGatewayClientOptions(
-    heartbeat
-      .command("enable")
-      .description("Enable heartbeats")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: SystemGatewayOpts) => {
-    await runSystemGatewayCommand(opts, async () => {
-      return await callGatewayFromCli(
-        "set-heartbeats",
-        opts,
-        { enabled: true },
-        { expectFinal: false },
-      );
+  for (const [name, enabled] of [
+    ["enable", true],
+    ["disable", false],
+  ] as const) {
+    addGatewayClientOptions(
+      heartbeat
+        .command(name)
+        .description(`${enabled ? "Enable" : "Disable"} heartbeats`)
+        .option("--json", "Output JSON", false),
+    ).action(async (opts: SystemGatewayOpts) => {
+      await runSystemGatewayCommand(opts, async () => {
+        return await callGatewayFromCli(
+          "set-heartbeats",
+          opts,
+          { enabled },
+          { expectFinal: false },
+        );
+      });
     });
-  });
-
-  addGatewayClientOptions(
-    heartbeat
-      .command("disable")
-      .description("Disable heartbeats")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: SystemGatewayOpts) => {
-    await runSystemGatewayCommand(opts, async () => {
-      return await callGatewayFromCli(
-        "set-heartbeats",
-        opts,
-        { enabled: false },
-        { expectFinal: false },
-      );
-    });
-  });
+  }
 
   addGatewayClientOptions(
     system

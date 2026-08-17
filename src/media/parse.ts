@@ -34,7 +34,7 @@ type SplitMediaFromOutputOptions = {
   extractMediaDirectives?: boolean;
 };
 
-const FILE_URL_PREFIX_RE = /^file:\/\//i;
+const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
 
 /** Converts file URLs into plain local paths before downstream media validation. */
 function normalizeMediaSource(src: string): string {

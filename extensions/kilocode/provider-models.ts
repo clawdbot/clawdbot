@@ -63,6 +63,7 @@ interface GatewayModelEntry {
     output_modalities?: string[];
   };
   top_provider?: {
+    context_length?: number | null;
     max_completion_tokens?: number | null;
   };
   pricing: GatewayModelPricing;
@@ -111,7 +112,11 @@ function toModelDefinition(entry: GatewayModelEntry): ModelDefinitionConfig {
       cacheRead: toPricePerMillion(entry.pricing.input_cache_read),
       cacheWrite: toPricePerMillion(entry.pricing.input_cache_write),
     },
-    contextWindow: asPositiveSafeInteger(entry.context_length) ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
+    // The primary provider window bounds real requests; the catalog-wide value can be larger.
+    contextWindow:
+      asPositiveSafeInteger(entry.top_provider?.context_length) ??
+      asPositiveSafeInteger(entry.context_length) ??
+      KILOCODE_DEFAULT_CONTEXT_WINDOW,
     maxTokens:
       asPositiveSafeInteger(entry.top_provider?.max_completion_tokens) ??
       KILOCODE_DEFAULT_MAX_TOKENS,
@@ -191,10 +196,6 @@ function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[
 }
 
 export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
-  if (process.env.NODE_ENV === "test" || process.env.VITEST) {
-    return buildStaticCatalog();
-  }
-
   const provider = await buildLiveModelProviderConfig({
     providerId: "kilocode",
     endpoint: KILOCODE_MODELS_URL,

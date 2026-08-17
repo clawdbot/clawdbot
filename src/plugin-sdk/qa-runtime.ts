@@ -1,13 +1,7 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
 import { createServer } from "node:net";
-import path from "node:path";
 // QA runtime helpers register and execute plugin QA scenarios from local files.
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { formatErrorMessage } from "./error-runtime.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
-import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
+import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
@@ -67,20 +61,12 @@ function isMissingQaRuntimeError(error: unknown) {
   );
 }
 
-/** Load the bundled QA lab runtime surface, throwing when the private bundle is absent. */
-export function loadQaRuntimeModule(): QaRuntimeSurface {
-  const env = resolvePrivateQaBundledPluginsEnv();
-  return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
-    dirName: "qa-lab",
-    artifactBasename: "runtime-api.js",
-    ...(env ? { env } : {}),
-  });
-}
+const loadQaLabRuntimeModule = loadQaRunnerRuntimeModule as unknown as () => QaRuntimeSurface;
+export { loadQaLabRuntimeModule as loadQaRuntimeModule };
 
-/** Check whether the bundled QA lab runtime surface is present without hiding other load errors. */
-export function isQaRuntimeAvailable(): boolean {
+function isQaRuntimeAvailableStrict(): boolean {
   try {
-    loadQaRuntimeModule();
+    loadQaLabRuntimeModule();
     return true;
   } catch (error) {
     if (isMissingQaRuntimeError(error)) {
@@ -89,6 +75,8 @@ export function isQaRuntimeAvailable(): boolean {
     throw error;
   }
 }
+
+export { isQaRuntimeAvailableStrict as isQaRuntimeAvailable };
 
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (
@@ -109,35 +97,6 @@ export type QaDockerFetchLike = (
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
-
-/** Append a formatted live-lane issue while preserving the caller-owned issue list. */
-export function appendQaLiveLaneIssue(issues: string[], label: string, error: unknown) {
-  issues.push(`${label}: ${formatErrorMessage(error)}`);
-}
-
-/** Format a live-lane failure message that includes artifact labels and paths. */
-export function buildQaLiveLaneArtifactsError(params: {
-  heading: string;
-  artifacts: Record<string, string>;
-  details?: string[];
-}) {
-  return [
-    params.heading,
-    ...(params.details ?? []),
-    "Artifacts:",
-    ...Object.entries(params.artifacts).map(([label, filePath]) => `- ${label}: ${filePath}`),
-  ].join("\n");
-}
-
-/** Print live-transport QA artifact paths with a lane label for CI log parsers. */
-export function printLiveTransportQaArtifacts(
-  laneLabel: string,
-  artifacts: Record<string, string>,
-) {
-  for (const [label, filePath] of Object.entries(artifacts)) {
-    process.stdout.write(`${laneLabel} ${label}: ${filePath}\n`);
-  }
-}
 
 function describeQaDockerError(error: unknown) {
   if (error instanceof Error) {
@@ -459,68 +418,5 @@ export function createQaDockerRuntime(params: {
     resolveHostPort: resolveQaDockerHostPort,
     waitForDockerServiceHealth,
     waitForHealth,
-  };
-}
-
-type ProcessWriteCallback = (err?: Error | null) => void;
-
-/** Tee stdout and stderr into a private artifact file until the returned stop hook runs. */
-export async function startLiveTransportQaOutputTee(params: {
-  fileName: string;
-  outputDir: string;
-}) {
-  await fsp.mkdir(params.outputDir, { recursive: true });
-  const outputPath = path.join(params.outputDir, params.fileName);
-  const output = fs.createWriteStream(outputPath, {
-    encoding: "utf8",
-    flags: "a",
-    mode: 0o600,
-  });
-  let outputError: Error | null = null;
-  output.on("error", (error) => {
-    outputError ??= error;
-  });
-  const originalStdoutWrite = Reflect.get(process.stdout, "write");
-  const originalStderrWrite = Reflect.get(process.stderr, "write");
-  const boundStdoutWrite = originalStdoutWrite.bind(process.stdout);
-  const boundStderrWrite = originalStderrWrite.bind(process.stderr);
-  let stopped = false;
-
-  const tee = (originalWrite: typeof process.stdout.write) =>
-    function writeWithTee(
-      this: NodeJS.WriteStream,
-      chunk: string | Uint8Array,
-      encodingOrCallback?: BufferEncoding | ProcessWriteCallback,
-      callback?: ProcessWriteCallback,
-    ) {
-      if (!stopped && !outputError) {
-        output.write(chunk);
-      }
-      return Reflect.apply(originalWrite, this, [chunk, encodingOrCallback, callback]) as boolean;
-    };
-
-  process.stdout.write = tee(boundStdoutWrite) as typeof process.stdout.write;
-  process.stderr.write = tee(boundStderrWrite) as typeof process.stderr.write;
-
-  return {
-    outputPath,
-    async stop() {
-      if (stopped) {
-        return;
-      }
-      stopped = true;
-      process.stdout.write = originalStdoutWrite;
-      process.stderr.write = originalStderrWrite;
-      if (outputError) {
-        throw outputError;
-      }
-      await new Promise<void>((resolve, reject) => {
-        output.once("error", reject);
-        output.end(resolve);
-      });
-      if (outputError) {
-        throw toErrorObject(outputError, "Non-Error thrown");
-      }
-    },
   };
 }

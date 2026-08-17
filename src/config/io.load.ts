@@ -26,7 +26,7 @@ import {
   warnIfConfigFromFuture,
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.js";
+import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -64,7 +64,10 @@ export function loadConfigFromContext(
       deps.env,
       deps.lowerPrecedenceEnv,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
+    const contextBudgetMigration = migrateLegacyContextBudgetConfig(
+      readResolution.resolvedConfigRaw,
+    );
+    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
     const effectiveConfigRaw = rosterMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;
@@ -75,7 +78,11 @@ export function loadConfigFromContext(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
     }
-    for (const diagnostic of rosterMigration.diagnostics) {
+    for (const diagnostic of [
+      ...contextBudgetMigration.changes.map(({ message }) => message),
+      ...contextBudgetMigration.warnings.map(({ message }) => message),
+      ...rosterMigration.diagnostics,
+    ]) {
       deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }
     warnOnConfigMiskeys(validationConfigRaw, deps.logger);
@@ -155,8 +162,7 @@ export function loadConfigFromContext(
         configPath,
         raw,
         parsed,
-        validateBackupSync: (backup) =>
-          context.resolveSuspiciousRecoveryBackupCandidate(backup.parsed) !== null,
+        prepareBackup: context.prepareRecoveryBackupCandidate,
       });
       if (recovery.raw !== raw) {
         restoreEnvChangesIfUnchanged({
@@ -171,7 +177,7 @@ export function loadConfigFromContext(
       context,
       validated.config,
       effectiveConfigRaw,
-      pluginMetadata.getSnapshot(),
+      pluginMetadata.getManifestRegistry(),
     );
     context.observeLoadConfigSnapshot(
       createConfigFileSnapshot({

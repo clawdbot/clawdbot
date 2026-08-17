@@ -527,6 +527,19 @@ describe("configured plugin install release step", () => {
         })
       ).channelIds,
     ).toStrictEqual([]);
+
+    expect(
+      (
+        await collectReleaseConfiguredPluginIdsThroughDoctor({
+          cfg: {
+            channels: {
+              Matrix: { enabled: false, accessToken: "test" },
+            },
+          },
+          env: { MATRIX_ACCESS_TOKEN: "test" },
+        })
+      ).channelIds,
+    ).toStrictEqual([]);
   });
 
   it("marks the release step complete when there is nothing to install", async () => {
@@ -550,6 +563,7 @@ describe("configured plugin install release step", () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: ['Installed missing configured plugin "codex".'],
       warnings: [],
+      pluginInventoryChanged: true,
     });
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {
@@ -571,6 +585,7 @@ describe("configured plugin install release step", () => {
     expect(repairCall.env).toEqual({});
     expect(result.touchedConfig).toBe(true);
     expect(result.completed).toBe(true);
+    expect(result.pluginInventoryChanged).toBe(true);
   });
 
   it("surfaces non-fatal repair notices without blocking release repair completion", async () => {

@@ -21,7 +21,7 @@ import {
 } from "./prepared-batch.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 
-export class OutboundPayloadPreparationError extends Error {
+class OutboundPayloadPreparationError extends Error {
   readonly sourceIndex: number;
   readonly payload: ReplyPayload;
 
@@ -48,6 +48,7 @@ function throwIfPreparationAborted(
 async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
   return await createChannelHandler({
     cfg: params.cfg,
+    agentId: params.session?.agentId,
     channel: params.channel,
     to: params.to,
     deps: params.deps,
@@ -121,6 +122,7 @@ export async function prepareOutboundPayloadBatch(
 ): Promise<PreparedOutboundBatch> {
   const directiveOptions = await resolveChannelOutboundDirectiveOptions({
     cfg: params.cfg,
+    agentId: params.session?.agentId,
     channel: params.channel,
   });
   const plan = createOutboundPayloadPlan(params.payloads, {

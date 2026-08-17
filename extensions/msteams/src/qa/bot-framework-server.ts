@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type MSTeamsQaOutboundActivity = {
   activity: Record<string, unknown>;
@@ -74,7 +75,7 @@ export async function startMSTeamsQaBotFrameworkServer(options: ServerOptions) {
       sendJson(response, 200, { id: activityId });
     })().catch((error: unknown) => {
       sendJson(response, 500, {
-        error: error instanceof Error ? error.message : String(error),
+        error: coerceErrorMessage(error),
       });
     });
   });

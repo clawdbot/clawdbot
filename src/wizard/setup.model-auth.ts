@@ -12,8 +12,6 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
-type KeepCurrentAuthChoice =
-  typeof import("../commands/auth-choice-prompt.js").KEEP_CURRENT_AUTH_CHOICE;
 type PreparedAuthChoiceResult = Awaited<
   ReturnType<typeof import("../commands/auth-choice.js").prepareAuthChoice>
 >;
@@ -27,13 +25,6 @@ export type SetupModelAuthCandidate = {
 const loadAuthChoiceModule = createLazyRuntimeModule(() => import("../commands/auth-choice.js"));
 
 const loadModelPickerModule = createLazyRuntimeModule(() => import("../commands/model-picker.js"));
-
-function isAuthChoiceSelected(
-  value: AuthChoice | KeepCurrentAuthChoice,
-  keepCurrentAuthChoice: KeepCurrentAuthChoice | undefined,
-): value is AuthChoice {
-  return keepCurrentAuthChoice === undefined || value !== keepCurrentAuthChoice;
-}
 
 async function resolveAuthChoiceModelSelectionPolicy(params: {
   authChoice: string;
@@ -58,9 +49,11 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     env: params.env,
   });
 
-  const [{ resolveManifestProviderAuthChoice }, { resolvePluginSetupProvider }] = await Promise.all(
-    [import("../plugins/provider-auth-choices.js"), import("../plugins/setup-registry.js")],
-  );
+  const [{ resolveManifestProviderAuthChoice }, { resolvePluginSetupProviderCore }] =
+    await Promise.all([
+      import("../plugins/provider-auth-choices.js"),
+      import("../plugins/setup-registry.js"),
+    ]);
   const manifestChoice = resolveManifestProviderAuthChoice(params.authChoice, {
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -68,7 +61,7 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     includeUntrustedWorkspacePlugins: false,
   });
   if (manifestChoice) {
-    const setupProvider = resolvePluginSetupProvider({
+    const setupProvider = resolvePluginSetupProviderCore({
       provider: manifestChoice.providerId,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -143,23 +136,38 @@ export async function runSetupModelAuthStep(params: {
   let persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"] =
     params.stagedCandidate?.persistAuthProfiles ?? (async () => {});
   const authChoiceFromPrompt = opts.authChoice === undefined;
-  let authChoice: AuthChoice | KeepCurrentAuthChoice | undefined = opts.authChoice;
+  let authChoice: AuthChoice | undefined = opts.authChoice;
   let authStore:
     | ReturnType<(typeof import("../agents/auth-profiles.runtime.js"))["ensureAuthProfileStore"]>
     | undefined;
   let promptAuthChoiceGrouped:
     | (typeof import("../commands/auth-choice-prompt.js"))["promptAuthChoiceGrouped"]
     | undefined;
-  let keepCurrentAuthChoice: KeepCurrentAuthChoice | undefined;
+  let isKeepCurrentAuthChoice:
+    | (typeof import("../commands/auth-choice-prompt.js"))["isKeepCurrentAuthChoice"]
+    | undefined;
+  let detectedProviderIds: ReadonlySet<string> | undefined;
   if (authChoiceFromPrompt) {
-    const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
-    const authChoicePromptModule = await import("../commands/auth-choice-prompt.js");
-    promptAuthChoiceGrouped = authChoicePromptModule.promptAuthChoiceGrouped;
-    keepCurrentAuthChoice = authChoicePromptModule.KEEP_CURRENT_AUTH_CHOICE;
+    const [
+      { ensureAuthProfileStore },
+      { promptAuthChoiceGrouped: promptAuthChoice, isKeepCurrentAuthChoice: isKeepCurrentChoice },
+      { detectAvailableSetupProviderIds },
+    ] = await Promise.all([
+      import("../agents/auth-profiles.runtime.js"),
+      import("../commands/auth-choice-prompt.js"),
+      import("../plugins/provider-setup-availability.js"),
+    ]);
+    promptAuthChoiceGrouped = promptAuthChoice;
+    isKeepCurrentAuthChoice = isKeepCurrentChoice;
     const target = resolveOnboardingAgentTarget(nextConfig);
     authStore = ensureAuthProfileStore(params.agentDir ?? target.agentDir, {
       allowKeychainPrompt: false,
       readOnly: true,
+    });
+    detectedProviderIds = await detectAvailableSetupProviderIds({
+      config: nextConfig,
+      workspaceDir: target.workspaceDir,
+      env,
     });
   }
   while (true) {
@@ -172,12 +180,13 @@ export async function runSetupModelAuthStep(params: {
         config: nextConfig,
         workspaceDir: target.workspaceDir,
         allowKeepCurrentProvider: true,
+        detectedProviderIds,
       });
     }
     if (authChoice === undefined) {
       throw new WizardCancelledError(t("wizard.setup.authChoiceRequired"));
     }
-    if (!isAuthChoiceSelected(authChoice, keepCurrentAuthChoice)) {
+    if (isKeepCurrentAuthChoice?.(authChoice)) {
       break;
     }
 
@@ -324,6 +333,7 @@ export async function runSetupModelAuthStep(params: {
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
       agentId: validationTarget.agentId,
       agentDir: validationTarget.agentDir,
+      pendingAuthProfiles: authProfiles,
       validateCatalog: false,
     });
     break;

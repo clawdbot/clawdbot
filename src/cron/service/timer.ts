@@ -7,7 +7,7 @@ export { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
 export { executeJobCoreWithTimeout } from "./timer-job-runner.js";
 export { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-scheduler.js";
 export { applyJobResult } from "./timer-outcomes.js";
-export { applyTriggerRunResult } from "./timer-outcomes.js";
+export { applyTriggerRunResult } from "./timer-trigger.js";
 export { applyScriptRunResult } from "./timer-outcomes.js";
 export { applyTriggerNoFireResult } from "./timer-outcomes.js";
 export { armTimer } from "./timer-scheduler.js";

@@ -564,6 +564,7 @@ const toolsTestState = vi.hoisted(() => {
   return {
     resolveToolsImpl: defaultResolveTools,
     resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
+    resolveRuntimeModelContextMock: vi.fn(async (_params: unknown) => ({})),
     threadingContext: {
       currentChannelId: "channel-123",
       currentMessageId: "message-456",
@@ -574,6 +575,8 @@ const toolsTestState = vi.hoisted(() => {
 
 vi.mock("../../agents/tools-effective-inventory.js", () => ({
   resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
+  resolveEffectiveToolInventoryRuntimeModelContextAsync: (params: unknown) =>
+    toolsTestState.resolveRuntimeModelContextMock(params),
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
@@ -626,6 +629,8 @@ describe("handleToolsCommand", () => {
     vi.mocked(resolveSessionAgentId).mockReturnValue("main");
     toolsTestState.resolveToolsMock.mockReset();
     toolsTestState.resolveToolsImpl = () => makeDefaultInventory();
+    toolsTestState.resolveRuntimeModelContextMock.mockReset();
+    toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({});
     setActivePluginRegistry(createTestRegistry([]));
   });
 
@@ -775,6 +780,43 @@ describe("handleToolsCommand", () => {
 
     expect(result?.reply?.text).toContain("exec");
     expect(result?.reply?.text).toContain("Use /tools verbose for descriptions.");
+  });
+
+  it("prepares dynamic model context before resolving the tool inventory", async () => {
+    const runtimeModel = {
+      id: "chat-latest",
+      name: "chat-latest",
+      provider: "openai",
+      api: "openai-responses",
+    };
+    toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({
+      modelApi: "openai-responses",
+      runtimeModel,
+    });
+    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
+      await loadToolsHarness();
+    const params = buildCommandTestParamsLocal("/tools compact", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.agentId = "main";
+    params.provider = "openai";
+    params.model = "chat-latest";
+
+    const result = await handleToolsCommandLocal(params, true);
+
+    expect(result?.reply?.text).toContain("exec");
+    expect(toolsTestState.resolveRuntimeModelContextMock).toHaveBeenCalledWith({
+      cfg: params.cfg,
+      agentId: "main",
+      agentDir: undefined,
+      workspaceDir: "/tmp",
+      modelProvider: "openai",
+      modelId: "chat-latest",
+    });
+    expect(resolveToolsArg(resolveToolsMock)).toMatchObject({
+      modelApi: "openai-responses",
+      runtimeModel,
+    });
   });
 
   it("ignores unauthorized senders", async () => {

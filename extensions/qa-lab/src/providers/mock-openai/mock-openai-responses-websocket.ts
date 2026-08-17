@@ -1,23 +1,12 @@
 import type { Server } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
-
-export type QaMockResponsesDispatchResult = {
-  events: StreamEvent[];
-  failure?: {
-    status: number;
-    type: string;
-    message: string;
-  };
-  onResponseSent?: () => void;
-  previewPauseMs?: number;
-};
+import type { QaMockProviderDispatchResult, ResponsesInputItem } from "./mock-openai-contracts.js";
 
 type QaMockResponsesWebSocketDispatch = (params: {
   body: Record<string, unknown>;
   raw: string;
-}) => Promise<QaMockResponsesDispatchResult>;
+}) => Promise<QaMockProviderDispatchResult>;
 
 type QaMockResponsesWebSocketHistory = {
   id: string;
@@ -200,12 +189,16 @@ export function attachQaMockResponsesWebSocketServer(params: {
               status: dispatched.failure.status,
               error: {
                 type: dispatched.failure.type,
+                ...(dispatched.failure.code ? { code: dispatched.failure.code } : {}),
                 message: dispatched.failure.message,
               },
             });
             return;
           }
           const { events } = dispatched;
+          if (dispatched.responsePauseMs !== undefined) {
+            await sleep(dispatched.responsePauseMs);
+          }
           const completion = events.find((event) => event.type === "response.completed");
           if (completion?.type === "response.completed") {
             if (!events.some((event) => event.type === "response.created")) {

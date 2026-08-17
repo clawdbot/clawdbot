@@ -1,11 +1,14 @@
 // Shared api.github.com plumbing for Control UI GitHub surfaces (link
 // previews, session pull request chips): pinned origin, manual redirects,
 // bounded bodies, and normalized upstream error statuses.
-export { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createHash } from "node:crypto";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
+export { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
-export const GITHUB_JSON_MAX_BYTES = 256 * 1024;
+const GITHUB_JSON_MAX_BYTES = 256 * 1024;
 export const GITHUB_REQUEST_TIMEOUT_MS = 8_000;
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_API_MAX_REDIRECTS = 3;
@@ -21,25 +24,38 @@ export class ControlUiGitHubError extends Error {
 }
 
 export function requiredString(record: Record<string, unknown>, key: string): string {
-  const value = record[key];
-  if (typeof value !== "string" || !value.trim()) {
+  const value = readNonBlankString(record[key]);
+  if (value === undefined) {
     throw new ControlUiGitHubError(502, `GitHub response omitted ${key}`);
   }
   return value;
 }
 
-export function optionalString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
+export function readOptionalGitHubString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  return readNonBlankString(record[key]);
 }
 
 export function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(record[key]);
 }
 
-export function githubApiToken(): string | undefined {
-  return process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim() || undefined;
+export function githubApiToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim() || undefined;
+}
+
+/** Captures the effective token and a non-secret cache scope from the same env snapshot. */
+export function resolveGitHubApiCredentialScope(env: NodeJS.ProcessEnv = process.env): {
+  token: string | undefined;
+  cacheScope: string;
+} {
+  const token = githubApiToken(env);
+  return {
+    token,
+    cacheScope: token ? createHash("sha256").update(token).digest("hex") : "anonymous",
+  };
 }
 
 function githubApiHeaders(token?: string): Record<string, string> {
@@ -119,16 +135,6 @@ export async function readBoundedResponse(response: Response, maxBytes: number):
   }
 }
 
-export function upstreamErrorStatus(status: number): number {
-  if (status === 404) {
-    return 404;
-  }
-  if (status === 403 || status === 429) {
-    return 429;
-  }
-  return 502;
-}
-
 // GitHub reports quota exhaustion as 429 or as 403 with exhausted-quota
 // headers; a bare 403 is a permission response and must stay distinguishable
 // so callers can degrade optional fetches instead of flagging rate limits.
@@ -142,25 +148,36 @@ function isGitHubRateLimitResponse(response: Response): boolean {
   );
 }
 
-function jsonErrorStatus(response: Response): number {
+function githubResponseErrorStatus(response: Response): number {
   if (isGitHubRateLimitResponse(response)) {
     return 429;
   }
-  if (response.status === 404 || response.status === 403) {
+  if (response.status === 401 || response.status === 403 || response.status === 404) {
     return response.status;
   }
   return 502;
 }
 
-/** Fetch a GitHub API JSON document with bounded size and normalized errors. */
-export async function fetchGitHubJson(
-  rawUrl: string,
-  fetchImpl: typeof fetch,
-  token?: string,
-): Promise<unknown> {
-  const response = await fetchGitHubApi(rawUrl, fetchImpl, token);
+// Optional host auth raises quota and unlocks private-repo reads, but an
+// unusable credential must not disable public GitHub data that works anonymously.
+export async function withOptionalGitHubAuth<T>(
+  token: string | undefined,
+  request: (token: string | undefined) => Promise<T>,
+): Promise<T> {
+  try {
+    return await request(token);
+  } catch (error) {
+    const status = error instanceof ControlUiGitHubError ? error.statusCode : 0;
+    if (token && [401, 403, 429].includes(status)) {
+      return request(undefined);
+    }
+    throw error;
+  }
+}
+
+export async function readGitHubJsonResponse(response: Response): Promise<unknown> {
   if (!response.ok) {
-    const status = jsonErrorStatus(response);
+    const status = githubResponseErrorStatus(response);
     await discardResponse(response);
     throw new ControlUiGitHubError(status, `GitHub request failed (${response.status})`);
   }
@@ -170,4 +187,15 @@ export async function fetchGitHubJson(
   } catch {
     throw new ControlUiGitHubError(502, "GitHub response was not valid JSON");
   }
+}
+
+/** Fetch a GitHub API JSON document with bounded size and normalized errors. */
+export function fetchGitHubJson(
+  rawUrl: string,
+  fetchImpl: typeof fetch,
+  token?: string,
+): Promise<unknown> {
+  return withOptionalGitHubAuth(token, async (requestToken) =>
+    readGitHubJsonResponse(await fetchGitHubApi(rawUrl, fetchImpl, requestToken)),
+  );
 }

@@ -243,6 +243,8 @@ send_skills_flow() {
 }
 
 send_guided_skip_ui_flow() {
+  wait_for_log "What should we call your first agent?" 120 || return $?
+  send $'\r' 0.8
   wait_for_log "How should I set things up?" 120 || return $?
   send $'\r' 0.8
   wait_for_log "Use Current model?" 120 || return $?
@@ -304,6 +306,7 @@ run_case_guided_skip_ui() {
     send_guided_skip_ui_flow
 
   validate_guided_skip_ui_log "$WIZARD_LOG_PATH" "$mock_request_log"
+  echo "QA_ASSERT cli.guided-onboarding pass"
   openclaw_e2e_stop_process "$mock_openai_pid"
   mock_openai_pid=""
 }
@@ -336,6 +339,54 @@ run_case_local_basic() {
 
 }
 
+run_case_local_auth_refs() {
+  set_isolated_openclaw_env local-auth-refs
+  export OPENAI_API_KEY="sk-openclaw-onboard-auth-ref-e2e"
+  export OPENCLAW_GATEWAY_TOKEN="openclaw-onboard-gateway-ref-e2e"
+
+  openclaw_e2e_run_logged local-auth-refs node "$OPENCLAW_ENTRY" onboard \
+    --non-interactive \
+    --accept-risk \
+    --flow quickstart \
+    --mode local \
+    --auth-choice openai-api-key \
+    --secret-input-mode ref \
+    --gateway-auth token \
+    --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
+    --skip-channels \
+    --skip-skills \
+    --skip-daemon \
+    --skip-ui \
+    --skip-health
+
+  node scripts/e2e/lib/release-scenarios/assertions.mjs \
+    assert-openai-env-ref \
+    "$OPENAI_API_KEY"
+  assert_onboard_config local-auth-refs
+  echo "QA_ASSERT cli.gateway-auth-storage.token-ref pass"
+}
+
+run_case_local_password() {
+  set_isolated_openclaw_env local-password
+
+  openclaw_e2e_run_logged local-password node "$OPENCLAW_ENTRY" onboard \
+    --non-interactive \
+    --accept-risk \
+    --flow quickstart \
+    --mode local \
+    --auth-choice skip \
+    --gateway-auth password \
+    --gateway-password "openclaw-onboard-password-e2e" \
+    --skip-channels \
+    --skip-skills \
+    --skip-daemon \
+    --skip-ui \
+    --skip-health
+
+  assert_onboard_config local-password
+  echo "QA_ASSERT cli.gateway-auth-storage.password pass"
+}
+
 run_case_remote_non_interactive() {
   set_isolated_openclaw_env remote-non-interactive
   # Smoke test non-interactive remote config write.
@@ -347,6 +398,7 @@ run_case_remote_non_interactive() {
     --skip-health
 
   assert_onboard_config remote-non-interactive
+  echo "QA_ASSERT cli.remote-onboarding pass"
 }
 
 run_case_reset() {
@@ -366,6 +418,7 @@ run_case_reset() {
     --skip-health
 
   assert_onboard_config reset
+  echo "QA_ASSERT cli.targeted-reconfiguration.reset pass"
 }
 
 run_case_channels() {
@@ -384,6 +437,7 @@ run_case_skills() {
   run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
 
   assert_onboard_config skills
+  echo "QA_ASSERT cli.targeted-reconfiguration.skills pass"
 }
 
 validate_local_basic_log() {
@@ -391,11 +445,29 @@ validate_local_basic_log() {
   openclaw_e2e_assert_log_not_contains "$log_path" "systemctl --user unavailable"
 }
 
+run_selected_cases() {
+  local selected_cases="${OPENCLAW_ONBOARD_E2E_CASES:-guided-skip-ui,local-basic,remote-non-interactive,reset,channels,skills}"
+  local case_name
+  local -a cases=()
+  IFS="," read -r -a cases <<<"$selected_cases"
+  for case_name in "${cases[@]}"; do
+    case "$case_name" in
+      guided-skip-ui) run_case_guided_skip_ui ;;
+      local-basic) run_case_local_basic ;;
+      local-auth-refs) run_case_local_auth_refs ;;
+      local-password) run_case_local_password ;;
+      remote-non-interactive) run_case_remote_non_interactive ;;
+      reset) run_case_reset ;;
+      channels) run_case_channels ;;
+      skills) run_case_skills ;;
+      *)
+        echo "Unknown onboarding E2E case: $case_name" >&2
+        return 2
+        ;;
+    esac
+  done
+}
+
 if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
-  run_case_guided_skip_ui
-  run_case_local_basic
-  run_case_remote_non_interactive
-  run_case_reset
-  run_case_channels
-  run_case_skills
+  run_selected_cases
 fi

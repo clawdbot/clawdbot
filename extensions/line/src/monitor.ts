@@ -4,6 +4,7 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
@@ -52,6 +53,7 @@ interface MonitorLineProviderOptions {
   accountId?: string;
   config: OpenClawConfig;
   runtime: RuntimeEnv;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   abortSignal?: AbortSignal;
   webhookUrl?: string;
   webhookPath?: string;
@@ -133,6 +135,7 @@ export async function monitorLineProvider(
     accountId,
     config,
     runtime,
+    buildContext,
     abortSignal,
     webhookPath,
     statusSink,
@@ -153,6 +156,7 @@ export async function monitorLineProvider(
     channelSecret: secret,
     accountId,
     runtime,
+    buildContext,
     config,
     onMessage: async (ctx, deliveryControl) => {
       if (!ctx) {
@@ -431,13 +435,7 @@ export async function monitorLineProvider(
   const { unregister: unregisterHttp } = await registerLineWebhookTarget(registrationParams, bot);
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
-  statusSink?.({
-    connected: true,
-    lifecycle: "ready",
-    lastConnectedAt: Date.now(),
-    lastError: null,
-    terminalDisconnect: undefined,
-  });
+  statusSink?.(channelReadyPatch());
 
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
@@ -452,7 +450,7 @@ export async function monitorLineProvider(
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
     stopPromise = bot.stop().finally(() => {
-      statusSink?.({ running: false, connected: false, lifecycle: "stopped" });
+      statusSink?.(channelStoppedPatch());
     });
     return stopPromise;
   };

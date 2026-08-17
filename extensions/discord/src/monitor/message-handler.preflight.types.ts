@@ -1,5 +1,9 @@
 // Discord type declarations define plugin contracts.
 import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -10,11 +14,13 @@ import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import type { DiscordChannelInfo, DiscordMediaInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
-
-export type { DiscordSenderIdentity } from "./sender-identity.js";
 import type { DiscordThreadChannel } from "./threading.js";
 
+export type { DiscordSenderIdentity } from "./sender-identity.js";
+
 type LoadedConfig = OpenClawConfig;
+type BuildChannelInboundContext =
+  typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
@@ -27,6 +33,7 @@ type DiscordMessagePreflightSharedFields = {
   accountId: string;
   token: string;
   runtime: RuntimeEnv;
+  buildContext?: BuildChannelInboundContext;
   botUserId?: string;
   abortSignal?: AbortSignal;
   guildHistories: Map<string, DiscordHistoryEntry[]>;
@@ -57,6 +64,11 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   isGroupDm: boolean;
 
   commandAuthorized: boolean;
+  channelIngress: ResolvedChannelMessageIngress;
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+    conversation?: { parentId?: string; threadId?: string },
+  ) => Promise<ResolvedChannelMessageIngress>;
   baseText: string;
   messageText: string;
   preflightAudioTranscript?: string;

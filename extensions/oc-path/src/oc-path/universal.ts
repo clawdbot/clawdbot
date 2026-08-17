@@ -27,7 +27,7 @@ import { appendJsonlOcPath as appendJsonlLine, setJsonlOcPath } from "./jsonl/ed
 import { emitJsonl } from "./jsonl/emit.js";
 import { resolveJsonlOcPath } from "./jsonl/resolve.js";
 import type { OcPath } from "./oc-path.js";
-import { formatOcPath, hasWildcard, OcPathError, parseArrayIndexSegment } from "./oc-path.js";
+import { formatOcPath, isPattern, OcPathError, parseArrayIndexSegment } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
 import type { YamlAst } from "./yaml/ast.js";
 import { insertYamlOcPath, setYamlOcPath } from "./yaml/edit.js";
@@ -146,7 +146,7 @@ function detectInsertion(path: OcPath): InsertionInfo | null {
 export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
   // Single-match verb: wildcards belong to findOcPaths. Throw with a
   // structured code so consumers can route to the right verb.
-  if (hasWildcard(path)) {
+  if (isPattern(path)) {
     throw new OcPathError(
       `resolveOcPath received a wildcard pattern; use findOcPaths instead: ${formatOcPath(path)}`,
       formatOcPath(path),
@@ -426,7 +426,7 @@ export function setOcPath(
   value: string,
   options: SetOcPathOptions = {},
 ): SetResult {
-  if (hasWildcard(path)) {
+  if (isPattern(path)) {
     return {
       ok: false,
       reason: "wildcard-not-allowed",

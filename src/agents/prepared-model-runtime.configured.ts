@@ -2,6 +2,10 @@ import {
   collectConfiguredModelRefs,
   type ConfiguredModelRef,
 } from "@openclaw/model-catalog-core/configured-model-refs";
+import {
+  buildModelCatalogMergeKey,
+  parseModelCatalogRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { MODEL_APIS } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -125,15 +129,12 @@ export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
 }): string[] {
   const providerIds = new Set<string>();
   for (const { value } of params.configuredModelRefs ?? collectConfiguredModelRefs(params.config)) {
-    const separator = value.indexOf("/");
-    if (separator <= 0 || separator >= value.length - 1) {
+    const parsed = parseModelCatalogRef(value);
+    if (!parsed) {
       continue;
     }
-    const provider = normalizeProviderId(value.slice(0, separator));
-    const modelId = value.slice(separator + 1).trim();
+    const { provider, modelId } = parsed;
     if (
-      !provider ||
-      !modelId ||
       hasConfiguredInlineProviderModel(
         params.config,
         provider,
@@ -164,16 +165,12 @@ export function prepareConfiguredRuntimeModels(params: {
   const prepared: PreparedConfiguredRuntimeModel[] = [];
   const seen = new Set<string>();
   for (const { value } of params.configuredModelRefs ?? collectConfiguredModelRefs(params.config)) {
-    const separator = value.indexOf("/");
-    if (separator <= 0 || separator >= value.length - 1) {
+    const parsed = parseModelCatalogRef(value);
+    if (!parsed) {
       continue;
     }
-    const provider = normalizeProviderId(value.slice(0, separator));
-    const modelId = value.slice(separator + 1).trim();
-    if (!provider || !modelId) {
-      continue;
-    }
-    const key = `${provider}\0${modelId.toLowerCase()}`;
+    const { modelId, provider } = parsed;
+    const key = buildModelCatalogMergeKey(provider, modelId);
     if (seen.has(key)) {
       continue;
     }

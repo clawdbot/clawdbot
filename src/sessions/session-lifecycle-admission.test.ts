@@ -1,6 +1,8 @@
 // Tests lifecycle/work admission ordering across canonical keys and backing ids.
+import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   resetGatewayWorkAdmission,
@@ -11,7 +13,6 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
   consumeSessionWorkAdmissionHandoff,
-  getCurrentSessionWorkAdmissionRelease,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
   getSessionWorkAdmissionRelease,
@@ -21,14 +22,6 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "./session-lifecycle-admission.js";
-
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 it("counts one multi-identity admission once", async () => {
   const admission = await beginSessionWorkAdmission({
@@ -44,95 +37,6 @@ it("counts one multi-identity admission once", async () => {
   expect(getActiveSessionWorkAdmissionCount()).toBe(0);
 });
 
-it("exposes completion only to the matching admitted session turn", async () => {
-  const scope = "store-self-archive-release";
-  const sessionKey = "agent:main:self-archive";
-  const sessionId = "session-self-archive";
-  const admission = await beginSessionWorkAdmission({
-    scope,
-    identities: [sessionKey, sessionId],
-    assertAllowed: () => {},
-  });
-  let settled = false;
-  let release: Promise<void> | undefined;
-
-  try {
-    expect(
-      getCurrentSessionWorkAdmissionRelease({ scope, identities: [sessionKey] }),
-    ).toBeUndefined();
-
-    await admission.run(async () => {
-      expect(
-        getCurrentSessionWorkAdmissionRelease({ scope, identities: ["agent:main:other"] }),
-      ).toBeUndefined();
-      release = getCurrentSessionWorkAdmissionRelease({
-        scope,
-        identities: [sessionKey, sessionId],
-      });
-      expect(release).toBeInstanceOf(Promise);
-      void release?.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-    });
-
-    expect(settled).toBe(false);
-  } finally {
-    admission.release();
-  }
-
-  await release;
-  await Promise.resolve();
-  expect(settled).toBe(true);
-});
-
-it("waits for every nested admission that owns the same session", async () => {
-  const scope = "store-self-archive-nested";
-  const sessionKey = "agent:main:nested-self-archive";
-  const outerAdmission = await beginSessionWorkAdmission({
-    scope,
-    identities: [sessionKey, "outer-session"],
-    assertAllowed: () => {},
-  });
-  let release: Promise<void> | undefined;
-  let settled = false;
-
-  try {
-    await outerAdmission.run(async () => {
-      const innerAdmission = await beginSessionWorkAdmission({
-        scope,
-        identities: [sessionKey, "inner-session"],
-        assertAllowed: () => {},
-      });
-
-      try {
-        await innerAdmission.run(async () => {
-          release = getCurrentSessionWorkAdmissionRelease({
-            scope,
-            identities: [sessionKey],
-          });
-          void release?.then(() => {
-            settled = true;
-          });
-        });
-      } finally {
-        innerAdmission.release();
-      }
-
-      await Promise.resolve();
-      expect(settled).toBe(false);
-    });
-    expect(settled).toBe(false);
-  } finally {
-    outerAdmission.release();
-  }
-
-  await release;
-  await Promise.resolve();
-  expect(settled).toBe(true);
-});
-
 it("waits for a competing session admission outside the caller context", async () => {
   const scope = "store-competing-self-archive";
   const sessionKey = "agent:main:competing-self-archive";
@@ -145,9 +49,6 @@ it("waits for a competing session admission outside the caller context", async (
   let release: Promise<void> | undefined;
 
   try {
-    expect(
-      getCurrentSessionWorkAdmissionRelease({ scope, identities: [sessionKey] }),
-    ).toBeUndefined();
     release = getSessionWorkAdmissionRelease({ scope, identities: [sessionKey] });
     expect(release).toBeInstanceOf(Promise);
     void release?.then(() => {
@@ -262,6 +163,70 @@ it("counts one multi-identity lifecycle mutation once across module instances", 
     await mutation;
   }
   expect(second.getActiveSessionLifecycleMutationCount()).toBe(0);
+});
+
+it("keeps a same-identity mutation queued until finalization completes", async () => {
+  const target = { scope: "store-finalize-order", identities: ["session-finalize-order"] };
+  const finalizeStarted = createDeferred();
+  const releaseFinalize = createDeferred();
+  let secondRan = false;
+  const first = runExclusiveSessionLifecycleMutation({
+    ...target,
+    run: async () => {},
+    finalize: async () => {
+      finalizeStarted.resolve();
+      await releaseFinalize.promise;
+    },
+  });
+  await finalizeStarted.promise;
+
+  const second = runExclusiveSessionLifecycleMutation({
+    ...target,
+    run: async () => {
+      secondRan = true;
+    },
+  });
+  await waitForImmediate();
+  expect(secondRan).toBe(false);
+
+  releaseFinalize.resolve();
+  await Promise.all([first, second]);
+});
+
+it("finalizes a lifecycle mutation when its run throws", async () => {
+  const runError = new Error("lifecycle run failed");
+  const finalize = vi.fn(async () => {});
+
+  await expect(
+    runExclusiveSessionLifecycleMutation({
+      scope: "store-finalize-run-error",
+      identities: ["session-finalize-run-error"],
+      run: async () => {
+        throw runError;
+      },
+      finalize,
+    }),
+  ).rejects.toBe(runError);
+  expect(finalize).toHaveBeenCalledOnce();
+});
+
+it("releases lifecycle state when finalization throws", async () => {
+  const target = { scope: "store-finalize-error", identities: ["session-finalize-error"] };
+  const finalizeError = new Error("lifecycle finalizer failed");
+
+  await expect(
+    runExclusiveSessionLifecycleMutation({
+      ...target,
+      run: async () => {},
+      finalize: async () => {
+        throw finalizeError;
+      },
+    }),
+  ).rejects.toBe(finalizeError);
+  expect(isSessionLifecycleMutationActive(target.scope, target.identities)).toBe(false);
+  await expect(
+    runExclusiveSessionLifecycleMutation({ ...target, run: async () => "next" }),
+  ).resolves.toBe("next");
 });
 
 it("counts a cross-store lifecycle mutation once and fences every target", async () => {

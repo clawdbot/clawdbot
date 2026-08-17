@@ -141,6 +141,57 @@ describe("resolveSidebarSessionSubtitle", () => {
     expect(resolve(1_999).subtitle).toBe("Finished with warnings");
     expect(resolve(2_000).subtitle).toBe("~/Projects/openclaw");
   });
+
+  it("prefers the durable final reply over a stale idle digest and backing path", () => {
+    const session = {
+      ...workSession(),
+      lastMessagePreview: "The final reply is durable.",
+      lastReadAt: 1_999,
+      observerDigest: {
+        headline: "Still implementing the repair",
+        health: "done" as const,
+        updatedAt: 2_000,
+        revision: 2,
+      },
+    };
+
+    expect(
+      resolveSidebarSessionSubtitle({
+        session,
+        hasDisplay: false,
+        displaySubtitle: undefined,
+        sidebarLiveActivity: true,
+        narrationLine: undefined,
+        observerDigest: null,
+      }).subtitle,
+    ).toBe("The final reply is durable.");
+  });
+
+  it("does not let a prior last-message preview displace running activity", () => {
+    const session = {
+      ...workSession(),
+      hasActiveRun: true,
+      activeRunIds: ["run-1"],
+      lastMessagePreview: "Reply from the previous run",
+    };
+
+    expect(
+      resolveSidebarSessionSubtitle({
+        session,
+        hasDisplay: false,
+        displaySubtitle: undefined,
+        sidebarLiveActivity: true,
+        narrationLine: "Running the focused tests",
+        observerDigest: {
+          runId: "run-1",
+          headline: "Implementing the repair",
+          health: "on-track",
+          updatedAt: 2_000,
+          revision: 1,
+        },
+      }).subtitle,
+    ).toBe("Implementing the repair");
+  });
 });
 
 describe("observer digest freshness reconciliation", () => {

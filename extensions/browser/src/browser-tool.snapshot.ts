@@ -90,6 +90,7 @@ export async function executeSnapshotAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  signal?: AbortSignal;
   onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
@@ -168,6 +169,7 @@ export async function executeSnapshotAction(params: {
       : await browserSnapshot(baseUrl, {
           ...query,
           profile,
+          signal: params.signal,
         });
   let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
   try {
@@ -241,7 +243,8 @@ export async function executeSnapshotAction(params: {
         label: "browser:snapshot",
         path: snapshot.imagePath,
         extraText: wrappedSnapshot,
-        details: safeDetails,
+        // Keep model-only screenshots out of automatic channel delivery.
+        details: { ...safeDetails, media: { outbound: false } },
         imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
@@ -307,6 +310,7 @@ export async function appendNavigatedPageState(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const hostFallbackWasActive = params.proxyRequest?.isHostFallbackActive?.() ?? false;
   let snapshot: AgentToolResult<unknown>;
@@ -316,17 +320,22 @@ export async function appendNavigatedPageState(params: {
       baseUrl: params.baseUrl,
       profile: params.profile,
       proxyRequest: params.proxyRequest,
+      signal: params.signal,
     });
   } catch (err) {
     // Cancellation must keep aborting the whole tool call; only genuine
     // snapshot failures degrade, because page state is feedback on an
     // already-successful mutation and must not fail the action.
+    params.signal?.throwIfAborted();
     if (err instanceof Error && err.name === "AbortError") {
       throw err;
     }
     return withPageStateUnavailableHint(
       params.result,
-      neutralizeMediaDirectives(formatErrorMessage(err)),
+      wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
+        source: "browser",
+        includeWarning: false,
+      }),
     );
   }
   if (!hostFallbackWasActive && params.proxyRequest?.isHostFallbackActive?.()) {

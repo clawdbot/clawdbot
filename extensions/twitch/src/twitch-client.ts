@@ -3,6 +3,7 @@ import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
@@ -39,13 +40,7 @@ export class TwitchClientManager {
   }
 
   private publishReady(): void {
-    this.statusSink?.({
-      connected: true,
-      lifecycle: "ready",
-      lastConnectedAt: Date.now(),
-      lastError: null,
-      terminalDisconnect: undefined,
-    });
+    this.statusSink?.(channelReadyPatch());
   }
 
   private publishRecovering(lastError: string): void {

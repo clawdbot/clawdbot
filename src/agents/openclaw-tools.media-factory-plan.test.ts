@@ -637,7 +637,7 @@ describe("optional media tool factory planning", () => {
 
   it("defers PDF model resolution from the tool-prep hot path", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, []);
+    installSnapshot(config, createImageAndPdfPlugins());
     const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
 
     const tools = await createOpenClawToolsForTest({

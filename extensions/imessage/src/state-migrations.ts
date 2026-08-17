@@ -6,7 +6,7 @@ import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channe
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fileExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
@@ -131,7 +131,7 @@ function readReplyCounterValue(value: unknown): number | null {
     return null;
   }
   const counter = (value as { counter?: unknown }).counter;
-  return typeof counter === "number" && Number.isFinite(counter) ? counter : null;
+  return asFiniteNumber(counter) ?? null;
 }
 
 function shouldReplaceReplyCounter(existingValue: unknown, incomingValue: unknown): boolean {

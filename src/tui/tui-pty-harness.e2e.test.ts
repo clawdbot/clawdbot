@@ -1,55 +1,37 @@
 // Exercises the fake-backend TUI PTY harness and visible terminal output.
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { sleep } from "../utils/sleep.js";
+import { exerciseTuiCommandSurface } from "./tui-pty-command-surfaces-test-support.js";
 import {
   approveWorkspaceSkill,
   COMPACT_TERMINAL_SIZES,
+  disposeActiveTuiFixtures,
   exerciseFragmentedUnicodePrompt,
+  exerciseNarrowTerminalRendering,
+  exerciseTerminalOutputSafety,
   objectFieldEquals,
   readFixtureLog,
-  waitForFixtureLogEntry,
-  writeTuiPtyFixtureScript,
+  startTuiFixture,
+  waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
-import { sleep, startPty, type PtyRun } from "./tui-pty-test-support.js";
-
-const activeRuns: PtyRun[] = [];
+import {
+  exerciseStreamingRendering,
+  exerciseToolCardRendering,
+  streamingPrefixFrame,
+  toolFrame,
+} from "./tui-pty-rendering-test-support.js";
 const STARTUP_TIMEOUT_MS = 20_000;
-const OUTPUT_TIMEOUT_MS = 2_000;
-const EXIT_TIMEOUT_MS = 4_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;
 
-async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
-  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
-  const scriptPath = await writeTuiPtyFixtureScript(tempDir);
-  const logPath = path.join(tempDir, "fixture-log.jsonl");
-  const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
-    activeRuns,
-    cwd: process.cwd(),
-    env: {
-      OPENCLAW_THEME: "dark",
-      OPENCLAW_TUI_PTY_LOG_PATH: logPath,
-      NO_COLOR: undefined,
-      ...opts.env,
-    },
-    exitTimeoutMs: EXIT_TIMEOUT_MS,
-    outputTimeoutMs: OUTPUT_TIMEOUT_MS,
-  });
-
-  return {
-    run,
-    logPath,
-    waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
-      await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
-    cleanup: async () => {
-      await run.dispose();
-      await rm(tempDir, { recursive: true, force: true });
-    },
-  };
-}
+it("rejects rendering oracle false positives", () => {
+  const tokens = Array.from({ length: 64 }, (_, i) => `T${String(i).padStart(3, "0")}`);
+  const promptFrame = [`burst streaming proof ${tokens.join(" ")}`, "local ready | idle"];
+  const reversedTool = ["PTY_BEFORE_TOOL PTY_TOOL_PARTIAL Read File (running)"];
+  expect(streamingPrefixFrame(promptFrame)).toBe(false);
+  expect(toolFrame(reversedTool, false)).toBe(false);
+});
 
 describe.sequential("TUI PTY harness", () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
@@ -104,9 +86,7 @@ describe.sequential("TUI PTY harness", () => {
   }, STARTUP_TEST_TIMEOUT_MS);
 
   afterAll(async () => {
-    for (const run of activeRuns.splice(0)) {
-      await run.dispose();
-    }
+    await disposeActiveTuiFixtures();
     for (const started of [
       fixture,
       compactFooterFixture,
@@ -345,6 +325,60 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "renders each live assistant reply once without replaying stale history",
+    async () => {
+      const liveFixture = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_COLS: "220", OPENCLAW_TUI_PTY_ROWS: "50" },
+      });
+      try {
+        await liveFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await liveFixture.run.write("live reply dedupe proof: first\r", { delay: false });
+        await liveFixture.run.waitForOutput("TUI_LIVE_FIRST");
+        await liveFixture.run.write("live reply dedupe proof: second\r", { delay: false });
+        const rows = await waitForSynchronizedFrameRows(
+          liveFixture.run,
+          (frame) => frame.some((row) => row.includes("TUI_LIVE_SECOND")),
+          STARTUP_TIMEOUT_MS,
+        );
+        const assistantRows = rows.filter(
+          (row) => row.includes("TUI_LIVE_FIRST") || row.includes("TUI_LIVE_SECOND"),
+        );
+        expect(assistantRows).toEqual(["TUI_LIVE_FIRST", "TUI_LIVE_SECOND"]);
+      } finally {
+        await liveFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+  // prettier-ignore
+  const editorInputCases = [
+    ["recalls submitted input history through literal terminal navigation", [["w", "history recall proof\r"], ["s", "history recall proof"], ["o", "PTY_RESPONSE: history recall proof"], ["w", "\u001b[A\u0005 edited\r"], ["s", "history recall proof edited"]]],
+    ["applies literal terminal shortcuts before submitting editor input",
+      [["w", "discard this input"], ["w", "\u0003"], ["o", "cleared input; press ctrl+c again to exit"], ["w", "shortcut kept input\r"], ["s", "shortcut kept input"], ["n", "discard this input"]]],
+    ["handles bracketed paste and rejects the pasted submit while busy",
+      [["w", "\u001b[200~bracketed paste proof\u001b[201~\r"], ["s", "bracketed paste proof"], ["o", "PTY_RESPONSE: bracketed paste proof"], ["w", "slow prompt\r"], ["s", "slow prompt"],
+        ["w", "\u001b[200~busy pasted prompt\u001b[201~\r"], ["o", "agent is busy"], ["o", "PTY_RESPONSE: slow prompt"], ["n", "busy pasted prompt"]]],
+    ["submits fragmented IME text and Kitty AltGr printable bytes", [["w", "日本"], ["w", "語 "], ["w", "\u001b[64::113;7u\u001b[8364::101;7u\r"], ["s", "日本語 @€"], ["o", "PTY_RESPONSE: 日本語 @€"]]],
+  ] as const;
+  it.each(editorInputCases)(
+    "%s",
+    async (_name, steps) => {
+      const tui = await startTuiFixture();
+      try {
+        await tui.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        for (const [action, value] of steps) {
+          // prettier-ignore
+          const sent = (entry: FixtureLogEntry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", value);
+          // prettier-ignore
+          await { w: () => tui.run.write(value, { delay: false }), o: () => tui.run.waitForOutput(value), s: () => tui.waitForLogEntry(sent), n: async () => expect((await readFixtureLog(tui.logPath)).some(sent)).toBe(false) }[action]();
+        }
+      } finally {
+        await tui.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
   it(
     "preserves consecutive backspaces received in the same terminal input chunk",
     async () => {
@@ -598,7 +632,7 @@ describe.sequential("TUI PTY harness", () => {
 
       await fixture.run.write("\x1b[A", { delay: false });
       await fixture.run.write("\r", { delay: false });
-      await fixture.run.waitForOutput("Press Enter again to start this task in a worktree.");
+      await fixture.run.waitForOutput("Press Enter again to start this task.");
       await fixture.run.write("\r", { delay: false });
       await fixture.waitForLogEntry(
         (entry) =>
@@ -658,6 +692,14 @@ describe.sequential("TUI PTY harness", () => {
     TEST_TIMEOUT_MS,
   );
 
+  // Keep these producer-matched cases data-driven because this harness is at its line budget.
+  // prettier-ignore
+  const terminalSafetyCases = [
+    ["renders long Unicode output and copy-safe URLs in narrow real PTY frames", () => exerciseNarrowTerminalRendering(startTuiFixture, STARTUP_TIMEOUT_MS)],
+    ["sanitizes ANSI OSC and C1 payloads across real PTY display boundaries", () => exerciseTerminalOutputSafety(startTuiFixture, STARTUP_TIMEOUT_MS)],
+  ] as const;
+  it.each(terminalSafetyCases)("%s", async (_name, runCase) => runCase(), STARTUP_TEST_TIMEOUT_MS);
+
   it(
     "preserves xAI account limit errors in terminal output",
     async () => {
@@ -690,34 +732,8 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "renders cumulative streamed text below the intervening tool in a real terminal",
-    async () => {
-      const chronologyFixture = await startTuiFixture({
-        env: {
-          OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
-          OPENCLAW_TUI_PTY_VERBOSE_LEVEL: "on",
-        },
-      });
-
-      try {
-        await chronologyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-        await chronologyFixture.run.write("tool chronology proof\r");
-        await chronologyFixture.waitForLogEntry(
-          (entry) => entry.method === "toolChronologyComplete",
-        );
-        await chronologyFixture.run.waitForOutput("PTY_AFTER_TOOL");
-
-        const rendered = chronologyFixture.run.visibleOutput();
-        expect(rendered.lastIndexOf("PTY_BEFORE_TOOL")).toBeLessThan(
-          rendered.lastIndexOf("Read File"),
-        );
-        expect(rendered.lastIndexOf("Read File")).toBeLessThan(
-          rendered.lastIndexOf("PTY_AFTER_TOOL"),
-        );
-      } finally {
-        await chronologyFixture.cleanup();
-      }
-    },
+    "authenticates running partial and completed tool cards in real terminal frames",
+    async () => await exerciseToolCardRendering(startTuiFixture, STARTUP_TIMEOUT_MS),
     STARTUP_TEST_TIMEOUT_MS,
   );
 
@@ -784,18 +800,9 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "renders all 128 ordered chat deltas without losing the final streamed token",
-    async () => {
-      await fixture.run.write("burst streaming proof\r", { delay: false });
-      const burst = await fixture.waitForLogEntry(
-        (entry) => entry.method === "streamBurstComplete" && objectFieldEquals(entry, "count", 128),
-      );
-
-      expect(burst.payload).toMatchObject({ count: 128 });
-      await fixture.run.waitForOutput("PTY_STREAM_BURST:");
-      await fixture.run.waitForOutput("T127");
-    },
-    TEST_TIMEOUT_MS,
+    "authenticates a streamed prefix before the complete ordered final frame",
+    async () => await exerciseStreamingRendering(startTuiFixture, STARTUP_TIMEOUT_MS),
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(
@@ -864,22 +871,14 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
-  it(
-    "renders slash command help",
-    async () => {
-      await fixture.run.write("/help\r", { delay: false });
-      await fixture.run.waitForOutput("Slash commands:");
-      await fixture.run.waitForOutput("/help");
-      await fixture.run.waitForOutput("/verbose <on|off|full>");
-      await fixture.run.waitForOutput("/reasoning <on|off|stream>");
-      await fixture.run.waitForOutput("/goal");
-      await fixture.run.waitForOutput("/goal start <objective>");
-      await fixture.run.waitForOutput("/btw <side question>");
-      await fixture.run.waitForOutput("/queue");
-      await fixture.run.waitForOutput("/stop");
-      await fixture.run.waitForOutput("/exit");
-    },
-    TEST_TIMEOUT_MS,
+  it.each([
+    ["lists and executes slash commands through authenticated real PTY frames", "slash-commands"],
+    ["selects model and session pickers through authenticated real PTY frames", "pickers"],
+    ["updates settings through an authenticated real PTY overlay", "settings"],
+  ] as const)(
+    "%s",
+    (_name, surface) => exerciseTuiCommandSurface(startTuiFixture, surface, STARTUP_TIMEOUT_MS),
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(

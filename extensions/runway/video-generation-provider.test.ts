@@ -210,6 +210,60 @@ describe("runway video generation provider", () => {
     expect(canceled).toHaveBeenCalledOnce();
   });
 
+  it("releases a rejected download body without awaiting a debug-capture tee branch", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-captured-response" }),
+      release: vi.fn(async () => {}),
+    });
+    // The debug proxy clones every captured response, so the caller-facing body is one
+    // branch of a live tee. Cancelling such a branch settles only once both branches
+    // cancel, so awaiting it here would hang the download instead of surfacing the error.
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
+        },
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+    const captureClone = response.clone();
+    const captureReader = captureClone.body?.getReader();
+    await captureReader?.read();
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-captured-response",
+          status: "SUCCEEDED",
+          output: ["https://example.com/invalid.mp4"],
+        }),
+      )
+      .mockResolvedValueOnce(response);
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(
+        Promise.race([
+          buildRunwayVideoGenerationProvider().generateVideo({
+            provider: "runway",
+            model: "gen4.5",
+            prompt: "captured invalid response",
+            cfg: {},
+          }),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => {
+              reject(new Error("Runway download waited for a captured response clone"));
+            }, 500);
+          }),
+        ]),
+      ).rejects.toThrow("Runway generated video download: malformed video response");
+    } finally {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+      await captureReader?.cancel().catch(() => undefined);
+    }
+  });
+
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: streamedJsonResponse({ id: "task-too-large" }),

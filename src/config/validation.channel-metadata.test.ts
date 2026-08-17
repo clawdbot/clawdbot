@@ -242,7 +242,7 @@ function createPluginManifestRecord(
 }
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => mockLoadPluginManifestRegistry(),
+  loadPluginManifestRegistryCore: () => mockLoadPluginManifestRegistry(),
   resolveManifestContractPluginIds: () => [],
 }));
 
@@ -709,20 +709,23 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     },
   );
 
-  it.each(["patterned", "composed"] as const)(
+  it.each(["dynamic", "named", "patterned", "composed"] as const)(
     "accepts core-owned heartbeat visibility for %s accounts",
     (shape) => {
       const registry = createExternalFeishuSchemaRegistry();
       const properties = requireExternalFeishuChannelProperties(registry);
       const account = (properties.accounts as Record<string, unknown>).additionalProperties;
-      properties.accounts =
-        shape === "patterned"
-          ? {
-              type: "object",
-              patternProperties: { "^work$": account },
-              additionalProperties: false,
-            }
-          : { allOf: [{ type: "object", additionalProperties: account }] };
+      const accountsByShape = {
+        dynamic: { type: "object", additionalProperties: account },
+        named: { type: "object", properties: { work: account }, additionalProperties: false },
+        patterned: {
+          type: "object",
+          patternProperties: { "^work$": account },
+          additionalProperties: false,
+        },
+        composed: { allOf: [{ type: "object", additionalProperties: account }] },
+      };
+      properties.accounts = accountsByShape[shape];
       mockLoadPluginManifestRegistry.mockReturnValue(registry);
 
       const result = validateConfigObjectRawWithPlugins({
@@ -735,6 +738,7 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
         },
       });
       expect(result.ok).toBe(true);
+      expect(account).not.toHaveProperty("properties.heartbeatVisibility");
     },
   );
 
@@ -848,16 +852,27 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     }
   });
 
-  it("names the external plugin owner for unsupported channel properties", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
-
+  it.each([
+    {
+      name: "names the external plugin owner for unsupported channel properties",
+      createRegistry: createExternalFeishuSchemaRegistry,
+      rejectedOwner: undefined,
+    },
+    {
+      name: "keeps unsupported property diagnostics assigned to the schema owner",
+      createRegistry: createExternalFeishuSchemaWithCloserMetadataRegistry,
+      rejectedOwner: "workspace-channel-labels",
+    },
+    {
+      name: "keeps schema ownership coupled when closer root metadata preserves a schema",
+      createRegistry: createExternalFeishuSchemaWithRootOnlyShadowRegistry,
+      rejectedOwner: "other-global-feishu",
+    },
+  ] as const)("$name", ({ createRegistry, rejectedOwner }) => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createRegistry());
     const result = validateConfigObjectRawWithPlugins({
       channels: {
-        feishu: {
-          appId: "app-id",
-          appSecret: "secret",
-          unsupportedField: true,
-        },
+        feishu: { appId: "app-id", appSecret: "secret", unsupportedField: true },
       },
     });
 
@@ -870,66 +885,11 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
             'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
         }),
       );
-    }
-  });
-
-  it("keeps unsupported property diagnostics assigned to the schema owner", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(
-      createExternalFeishuSchemaWithCloserMetadataRegistry(),
-    );
-
-    const result = validateConfigObjectRawWithPlugins({
-      channels: {
-        feishu: {
-          appId: "app-id",
-          appSecret: "secret",
-          unsupportedField: true,
-        },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.feishu",
-          message:
-            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
-        }),
-      );
-      expect(result.issues.map((issue) => issue.message)).not.toContain(
-        'invalid config for plugin workspace-channel-labels: must not have additional properties: "unsupportedField"',
-      );
-    }
-  });
-
-  it("keeps schema ownership coupled when closer root metadata preserves a schema", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(
-      createExternalFeishuSchemaWithRootOnlyShadowRegistry(),
-    );
-
-    const result = validateConfigObjectRawWithPlugins({
-      channels: {
-        feishu: {
-          appId: "app-id",
-          appSecret: "secret",
-          unsupportedField: true,
-        },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.feishu",
-          message:
-            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
-        }),
-      );
-      expect(result.issues.map((issue) => issue.message)).not.toContain(
-        'invalid config for plugin other-global-feishu: must not have additional properties: "unsupportedField"',
-      );
+      if (rejectedOwner) {
+        expect(result.issues.map((issue) => issue.message)).not.toContain(
+          `invalid config for plugin ${rejectedOwner}: must not have additional properties: "unsupportedField"`,
+        );
+      }
     }
   });
 

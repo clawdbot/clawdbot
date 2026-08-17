@@ -1,7 +1,7 @@
 /** Tests Code Mode wait, scope, and suspended runs. */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
@@ -402,17 +402,16 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     ).rejects.toThrow("different session");
   });
 
-  it.each(["runId", "sessionId", "sessionKey", "agentId"] as const)(
-    "rejects suspended-run callers missing the owner %s",
-    async (missingIdentity) => {
-      const {
-        config,
-        catalogRef,
-        ctx,
-        tools: codeModeTools,
-      } = createCodeModeHarness({
+  describe("suspended-run owner scope", () => {
+    const missingOwnerIdentities = ["runId", "sessionId", "sessionKey", "agentId"] as const;
+    const rejectionMessages = new Map<(typeof missingOwnerIdentities)[number], string>();
+    let rightfulResult: Record<string, unknown>;
+
+    beforeAll(async () => {
+      const { config, catalogRef, ctx } = createCodeModeHarness({
         agentId: "owner",
       });
+      const codeModeTools = createCodeModeTools(ctx);
       applyCodeModeCatalog({
         tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
         config,
@@ -431,34 +430,46 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       );
       expect(suspended.status).toBe("waiting");
 
-      const missingIdentityWait = expectDefined(
-        createCodeModeTools({
-          config,
-          runtimeConfig: config,
-          catalogRef,
-          ...(missingIdentity === "runId" ? {} : { runId: ctx.runId }),
-          ...(missingIdentity === "sessionId" ? {} : { sessionId: ctx.sessionId }),
-          ...(missingIdentity === "sessionKey" ? {} : { sessionKey: ctx.sessionKey }),
-          ...(missingIdentity === "agentId" ? {} : { agentId: ctx.agentId }),
-        })[1],
-        "Unscoped Code Mode wait test invariant",
-      );
+      for (const missingIdentity of missingOwnerIdentities) {
+        const missingIdentityWait = expectDefined(
+          createCodeModeTools({
+            config,
+            runtimeConfig: config,
+            catalogRef,
+            ...(missingIdentity === "runId" ? {} : { runId: ctx.runId }),
+            ...(missingIdentity === "sessionId" ? {} : { sessionId: ctx.sessionId }),
+            ...(missingIdentity === "sessionKey" ? {} : { sessionKey: ctx.sessionKey }),
+            ...(missingIdentity === "agentId" ? {} : { agentId: ctx.agentId }),
+          })[1],
+          "Unscoped Code Mode wait test invariant",
+        );
+        try {
+          await missingIdentityWait.execute("code-wait-missing-owner", { runId: suspended.runId });
+          throw new Error("expected missing owner identity to reject");
+        } catch (error) {
+          rejectionMessages.set(missingIdentity, String(error));
+        }
+        expect(testing.activeRuns.has(suspended.runId as string)).toBe(true);
+      }
 
-      await expect(
-        missingIdentityWait.execute("code-wait-missing-owner", { runId: suspended.runId }),
-      ).rejects.toThrow(missingIdentity === "runId" ? "different agent run" : "different session");
-      expect(testing.activeRuns.has(suspended.runId as string)).toBe(true);
-
-      const rightfulResult = resultDetails(
+      rightfulResult = resultDetails(
         await expectDefined(codeModeTools[1], "Owner Code Mode wait test invariant").execute(
           "code-wait-rightful-owner",
           { runId: suspended.runId },
         ),
       );
-      expect(rightfulResult.status).toBe("completed");
-      expect(rightfulResult.value).toBe("owner-secret");
-    },
-  );
+    });
+
+    it.each(missingOwnerIdentities)(
+      "rejects suspended-run callers missing the owner %s",
+      (missingIdentity) => {
+        expect(rejectionMessages.get(missingIdentity)).toContain(
+          missingIdentity === "runId" ? "different agent run" : "different session",
+        );
+        expect(rightfulResult).toMatchObject({ status: "completed", value: "owner-secret" });
+      },
+    );
+  });
 
   it("rejects concurrent waits for the same suspended run", async () => {
     const catalogRef = createToolSearchCatalogRef();
@@ -639,7 +650,10 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     );
     expect(first.status).toBe("waiting");
     expect(first.output).toEqual([{ type: "text", text: "before timeout" }]);
-    expect(first.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
+    // The fast call may settle as the snapshot is parked, but the slow call must remain pending.
+    expect(first.pendingToolCalls).toContainEqual(
+      expect.objectContaining({ id: "bridge:callValue:2", method: "callValue" }),
+    );
     const runId = first.runId;
     expect(typeof runId).toBe("string");
     if (typeof runId !== "string") {

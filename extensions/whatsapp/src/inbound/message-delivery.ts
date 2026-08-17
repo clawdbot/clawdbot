@@ -10,8 +10,7 @@ import type {
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime, createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
@@ -30,7 +29,6 @@ import {
 } from "./durable-receive.js";
 import { extractMentionedJids } from "./extract.js";
 import type { WhatsAppGroupMetadataCacheOwner } from "./group-metadata-cache.js";
-import { withDeprecatedWebInboundMessageFlatAliases } from "./message-aliases.js";
 import {
   createWhatsAppInboundMessageDebouncer,
   type WhatsAppQueuedInboundMessage,
@@ -46,7 +44,7 @@ import {
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
-import type { WebInboundMessageInput } from "./types.js";
+import type { WebInboundCallbackMessage } from "./types.js";
 
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
 const WHATSAPP_INGRESS_DRAIN_INTERVAL_MS = 1_000;
@@ -91,7 +89,7 @@ type WhatsAppMessageDeliveryOptions = {
   sock: WASocket;
   socketSession: WhatsAppAttachedSocketSession;
   groupMetadata: WhatsAppGroupMetadataCacheOwner;
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
+  onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
   mediaMaxMb?: number;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
@@ -100,7 +98,7 @@ type WhatsAppMessageDeliveryOptions = {
   /** Bounded reconnect window for offline append auto-replies. */
   appendReplyWindow?: WhatsAppAppendReplyWindow;
   /** Optional debounce gating predicate. */
-  shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
 };
@@ -337,61 +335,59 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
           ]
         : []),
     ];
-    const inboundMessage: WhatsAppQueuedInboundMessage = withDeprecatedWebInboundMessageFlatAliases(
-      {
-        admission: inbound.access.admission,
-        event: {
-          id: inbound.id,
-          timestamp,
-        },
-        payload: {
-          body: enriched.body,
-          commandBody: enriched.commandBody,
-          location: enriched.location ?? undefined,
-          channelStructuredContext:
-            channelStructuredContext.length > 0 ? channelStructuredContext : undefined,
-          media,
-        },
-        platform: {
-          chatJid: inbound.remoteJid,
-          recipientJid: self.e164 ?? "me",
-          pushName: senderName,
-          sender: resolveComparableIdentity({
-            jid: inbound.participantJid,
-            e164: inbound.senderE164 ?? undefined,
-            name: senderName,
-          }),
-          senderJid: inbound.participantJid,
-          senderE164: inbound.senderE164 ?? undefined,
-          senderName,
-          self,
-          selfJid: self.jid ?? undefined,
-          selfLid: self.lid ?? undefined,
-          selfE164: self.e164 ?? undefined,
-          fromMe: Boolean(msg.key?.fromMe),
-          sendComposing,
-          reply,
-          sendMedia,
-        },
-        quote: enriched.replyContext
-          ? {
-              context: enriched.replyContext,
-              id: enriched.replyContext.id,
-              body: enriched.replyContext.body,
-              media: enriched.replyContext.media,
-              sender: {
-                displayName: enriched.replyContext.sender?.label ?? undefined,
-                jid: enriched.replyContext.sender?.jid ?? undefined,
-                e164: enriched.replyContext.sender?.e164 ?? undefined,
-              },
-            }
-          : undefined,
-        group,
-        turnAdoptionLifecycle: durable.turnAdoptionLifecycle,
-        readReceipt: durable.readReceipt,
-        receiveOrder: durable.receiveOrder,
+    const inboundMessage: WhatsAppQueuedInboundMessage = {
+      admission: inbound.access.admission,
+      event: {
+        id: inbound.id,
+        timestamp,
       },
-    );
+      payload: {
+        body: enriched.body,
+        commandBody: enriched.commandBody,
+        location: enriched.location ?? undefined,
+        channelStructuredContext:
+          channelStructuredContext.length > 0 ? channelStructuredContext : undefined,
+        media,
+      },
+      platform: {
+        chatJid: inbound.remoteJid,
+        recipientJid: self.e164 ?? "me",
+        pushName: senderName,
+        sender: resolveComparableIdentity({
+          jid: inbound.participantJid,
+          e164: inbound.senderE164 ?? undefined,
+          name: senderName,
+        }),
+        senderJid: inbound.participantJid,
+        senderE164: inbound.senderE164 ?? undefined,
+        senderName,
+        self,
+        selfJid: self.jid ?? undefined,
+        selfLid: self.lid ?? undefined,
+        selfE164: self.e164 ?? undefined,
+        fromMe: Boolean(msg.key?.fromMe),
+        sendComposing,
+        reply,
+        sendMedia,
+      },
+      quote: enriched.replyContext
+        ? {
+            context: enriched.replyContext,
+            id: enriched.replyContext.id,
+            body: enriched.replyContext.body,
+            media: enriched.replyContext.media,
+            sender: {
+              displayName: enriched.replyContext.sender?.label ?? undefined,
+              jid: enriched.replyContext.sender?.jid ?? undefined,
+              e164: enriched.replyContext.sender?.e164 ?? undefined,
+            },
+          }
+        : undefined,
+      group,
+      turnAdoptionLifecycle: durable.turnAdoptionLifecycle,
+      readReceipt: durable.readReceipt,
+      receiveOrder: durable.receiveOrder,
+    };
     if (inboundMessage.event.id) {
       const admission = requireWhatsAppInboundAdmission(inboundMessage);
       cacheInboundMessageMeta(

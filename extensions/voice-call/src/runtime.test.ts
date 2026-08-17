@@ -1,8 +1,8 @@
-// Voice Call tests cover runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+// Voice Call tests cover runtime plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreConfig } from "./core-bridge.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
@@ -207,12 +207,7 @@ function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
   const registeredToolHandler = firstMockCall(
@@ -297,7 +292,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     const runtime = await createVoiceCallRuntime({
       config: createBaseConfig(),
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: {} as never,
     });
 
@@ -324,7 +319,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
-    const coreConfig = { tts: { provider: "openai" } } as CoreConfig;
+    const coreConfig = { tts: { provider: "openai" } } as OpenClawConfig;
     const fullConfig = {
       plugins: {
         entries: {
@@ -363,7 +358,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     const runtime = await createVoiceCallRuntime({
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       fullConfig,
       agentRuntime: {
         resolveAgentIdentity,
@@ -411,7 +406,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       await expect(
         createVoiceCallRuntime({
           config: createExternalProviderConfig({ provider }),
-          coreConfig: {} as CoreConfig,
+          coreConfig: {} as OpenClawConfig,
           agentRuntime: {} as never,
         }),
       ).rejects.toThrow(`${provider} requires a publicly reachable webhook URL`);
@@ -430,7 +425,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
           provider: "twilio",
           publicUrl,
         }),
-        coreConfig: {} as CoreConfig,
+        coreConfig: {} as OpenClawConfig,
         agentRuntime: {} as never,
       }),
     ).rejects.toThrow("twilio requires a publicly reachable webhook URL");
@@ -443,7 +438,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         provider: "twilio",
         publicUrl: "https://voice.example.com/voice/webhook",
       }),
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: {} as never,
     });
 
@@ -465,7 +460,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         provider: "twilio",
         publicUrl: "https://voice.example.com/voice/webhook",
       }),
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: {} as never,
       logger,
     });
@@ -524,7 +519,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     await createVoiceCallRuntime({
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -599,7 +594,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     await createVoiceCallRuntime({
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -647,7 +642,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     await createVoiceCallRuntime({
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -698,7 +693,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     await createVoiceCallRuntime({
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -751,7 +746,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     await createVoiceCallRuntime({
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -817,7 +812,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     await createVoiceCallRuntime({
       config,
-      coreConfig: {} as CoreConfig,
+      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 

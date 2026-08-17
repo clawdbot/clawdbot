@@ -16,6 +16,7 @@ export type CachedPluginToolDescriptor = {
   descriptor: ToolDescriptor;
   displaySummary?: string;
   requiredClientCaps?: string[];
+  resultContentSource?: AnyAgentTool["resultContentSource"];
   optional: boolean;
 };
 
@@ -159,6 +160,9 @@ export function capturePluginToolDescriptor(params: {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
     ...(params.tool.requiredClientCaps
       ? { requiredClientCaps: [...params.tool.requiredClientCaps] }
+      : {}),
+    ...(params.tool.resultContentSource
+      ? { resultContentSource: params.tool.resultContentSource }
       : {}),
     optional: params.optional,
     descriptor: {

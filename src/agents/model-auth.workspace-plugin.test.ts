@@ -9,7 +9,7 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import {
   hasAvailableAuthForProvider,
-  resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore,
   resolveModelAuthMode,
 } from "./model-auth.js";
 import { hasAuthForModelProvider } from "./model-provider-auth.js";
@@ -85,7 +85,7 @@ describe("workspace plugin model auth evidence", () => {
             source: "workspace cloud credentials",
           });
           await expect(
-            resolveApiKeyForProvider({
+            resolveApiKeyForProviderCore({
               provider: "workspace-cloud",
               cfg,
               workspaceDir,

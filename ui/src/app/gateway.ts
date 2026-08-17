@@ -1,3 +1,4 @@
+import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-contract.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";
@@ -7,6 +8,7 @@ export type ApplicationGatewayPhase =
   | "connecting"
   | "connected"
   | "reconnecting"
+  | "reload-required"
   | "offline";
 
 export type ApplicationGatewaySnapshot = {
@@ -27,6 +29,7 @@ export type ApplicationGatewayConnection = {
   gatewayUrl: string;
   token: string;
   bootstrapToken: string;
+  bootstrapProfile?: ControlUiBootstrapProfileHint;
   password: string;
 };
 

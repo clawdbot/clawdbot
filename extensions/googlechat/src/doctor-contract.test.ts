@@ -2,8 +2,88 @@
 import { describe, expect, it } from "vitest";
 import { resolveGoogleChatAccount } from "./accounts.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
+import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 
 describe("googlechat doctor contract", () => {
+  it.each([
+    {
+      label: "root sender",
+      config: { allowFrom: ["alice@example.com"] },
+      expectedPath: "channels.googlechat.allowFrom: alice@example.com",
+    },
+    {
+      label: "named-account sender",
+      config: { accounts: { work: { allowFrom: ["bob@example.com"] } } },
+      expectedPath: "channels.googlechat.accounts.work.allowFrom: bob@example.com",
+    },
+    {
+      label: "space sender",
+      config: { groups: { "spaces/team": { users: ["carol@example.com"] } } },
+      expectedPath: "channels.googlechat.groups.spaces/team.users: carol@example.com",
+    },
+    {
+      label: "named-account dangerous-name override",
+      config: {
+        dangerouslyAllowNameMatching: true,
+        accounts: {
+          work: {
+            allowFrom: ["dave@example.com"],
+            dangerouslyAllowNameMatching: false,
+          },
+        },
+      },
+      expectedPath: "channels.googlechat.accounts.work.allowFrom: dave@example.com",
+    },
+  ])("warns for mutable $label allowlist entries", ({ config, expectedPath }) => {
+    const warnings = collectGoogleChatMutableAllowlistWarnings({
+      cfg: { channels: { googlechat: config } },
+    });
+
+    expect(warnings).toContain(`- ${expectedPath}`);
+  });
+
+  it.each([
+    {
+      label: "stable sender IDs",
+      config: {
+        allowFrom: ["users/123", "*"],
+        accounts: { work: { allowFrom: ["users/456"] } },
+      },
+    },
+    {
+      label: "explicit dangerous-name opt-in",
+      config: {
+        dangerouslyAllowNameMatching: true,
+        allowFrom: ["alice@example.com"],
+      },
+    },
+    {
+      label: "inherited dangerous-name opt-in",
+      config: {
+        dangerouslyAllowNameMatching: true,
+        accounts: { work: { allowFrom: ["bob@example.com"] } },
+      },
+    },
+  ])("does not warn for $label", ({ config }) => {
+    expect(
+      collectGoogleChatMutableAllowlistWarnings({
+        cfg: { channels: { googlechat: config } },
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not inspect retired nested DM allowlists", () => {
+    expect(
+      collectGoogleChatMutableAllowlistWarnings({
+        cfg: {
+          channels: {
+            googlechat: { dm: { allowFrom: ["retired@example.com"] } },
+          },
+        } as never,
+      }),
+    ).toEqual([]);
+  });
+
   it("removes retired reaction flags", () => {
     const result = normalizeCompatibilityConfig({
       cfg: {

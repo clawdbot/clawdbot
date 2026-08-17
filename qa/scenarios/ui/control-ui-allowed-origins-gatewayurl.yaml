@@ -1,0 +1,36 @@
+title: Control UI allowed origins and explicit gateway URL
+
+scenario:
+  id: control-ui-allowed-origins-gatewayurl
+  surface: control-ui
+  category: control-ui.browser-access-and-trust
+  coverage:
+    primary:
+      - control-ui.allowed-origins-gatewayurl
+  objective: >-
+    Prove real Chromium explicitly confirms a gatewayUrl, connects from the
+    configured browser origin, and receives deterministic visible recovery when
+    the real Gateway rejects an unlisted origin.
+  successCriteria:
+    - The Control UI visibly presents and confirms the explicit gatewayUrl before connecting.
+    - A browser served from the configured allowed origin reaches the connected shell through the real proxy and Gateway.
+    - A browser served from a distinct unlisted origin is rejected by Gateway origin enforcement and renders origin-specific recovery without mounting the shell.
+    - Captured browser Origin headers and Gateway responses or handshake status distinguish UI behavior from server-side enforcement.
+    - The run always writes redacted transport and process-cleanup evidence; when OPENCLAW_CAPTURE_UI_PROOF=1, it also writes screenshots and video under the configured artifact directory.
+  docsRefs:
+    - docs/web/control-ui.md
+    - docs/web/urls.md
+    - docs/gateway/trusted-proxy-auth.md
+  codeRefs:
+    - ui/src/e2e/control-ui-auth-transports.e2e.test.ts
+    - ui/src/components/gateway-url-confirmation.ts
+    - ui/src/components/login-gate.ts
+    - src/gateway/origin-check.ts
+    - src/gateway/server/ws-connection/connect-admission.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/control-ui-auth-transports.e2e.test.ts
+    testNamePattern: confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin
+    summary: >-
+      Real Chromium and Gateway proof for explicit target confirmation,
+      allowed-origin success, and deterministic rejected-origin recovery.

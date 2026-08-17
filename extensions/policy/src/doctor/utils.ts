@@ -1,5 +1,6 @@
 // Shared policy doctor value readers.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+export { readBooleanPath as readPolicyBoolean } from "../policy-state-helpers.js";
 
 export function readPolicyStringArray(
   policy: unknown,
@@ -33,7 +34,7 @@ export function readStringList(
   return readPolicyStringArray(policy, path, options) ?? [];
 }
 
-export function readString(policy: unknown, path: readonly string[]): string | undefined {
+export function readPolicyPathString(policy: unknown, path: readonly string[]): string | undefined {
   let current: unknown = policy;
   for (const part of path) {
     if (!isRecord(current)) {
@@ -49,15 +50,4 @@ export function ocPathSegment(value: string): string {
     return value;
   }
   return JSON.stringify(value);
-}
-
-export function readPolicyBoolean(policy: unknown, path: readonly string[]): boolean | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return typeof current === "boolean" ? current : undefined;
 }

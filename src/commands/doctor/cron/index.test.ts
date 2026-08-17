@@ -1,8 +1,9 @@
-// Doctor cron index tests cover cron doctor checks and repair entrypoints.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Doctor cron index tests cover cron doctor checks and repair entrypoints.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -183,12 +184,7 @@ function requirePersistedJob(jobs: Array<Record<string, unknown>>, index: number
   return job;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function expectNoteContaining(message: string, title: string): void {
   expect(
@@ -343,6 +339,118 @@ describe("collectLegacyCronStoreHealthFindings", () => {
 });
 
 describe("maybeRepairLegacyCronStore", () => {
+  it("keeps shared-workspace legacy MCP warnings scoped to each job agent", async () => {
+    const storePath = await makeTempStorePath();
+    const sharedWorkspace = path.join(path.dirname(storePath), "shared-workspace");
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "research-job",
+        name: "Research legacy cap",
+        agentId: "research",
+        payload: {
+          kind: "agentTurn",
+          message: "research",
+          toolsAllow: ["read"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+      createCurrentCronJob({
+        id: "support-job",
+        name: "Support legacy cap",
+        agentId: "support",
+        payload: {
+          kind: "agentTurn",
+          message: "support",
+          toolsAllow: ["read"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+    ]);
+    const cfg = {
+      cron: { store: storePath },
+      agents: {
+        list: [
+          { id: "research", workspace: sharedWorkspace },
+          { id: "support", workspace: sharedWorkspace },
+        ],
+      },
+      mcp: {
+        servers: {
+          notes: {
+            transport: "stdio",
+            command: "notes-mcp",
+            codex: { agents: ["research"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await maybeRepairLegacyCronStore({
+      cfg,
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const advisory = noteMock.mock.calls.find(
+      ([message, title]) =>
+        title === "Cron" &&
+        typeof message === "string" &&
+        message.includes("inherited default tool cap"),
+    )?.[0];
+    expect(advisory).toContain("Research legacy cap");
+    expect(advisory).not.toContain("Support legacy cap");
+  });
+
+  it("uses the system agent for agent-less legacy-cap diagnostics", async () => {
+    const storePath = await makeTempStorePath();
+    const mainWorkspace = path.join(path.dirname(storePath), "main-workspace");
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "ambient-job",
+        name: "Ambient legacy cap",
+        payload: {
+          kind: "agentTurn",
+          message: "ambient",
+          toolsAllow: ["read"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+    ]);
+    const cfg = {
+      cron: { store: storePath },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { workspace: mainWorkspace },
+          helper: {},
+          third: {},
+        },
+      },
+      mcp: {
+        servers: {
+          notes: {
+            transport: "stdio",
+            command: "notes-mcp",
+            codex: { agents: ["main"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      maybeRepairLegacyCronStore({ cfg, options: {}, prompter: makePrompter(true) }),
+    ).resolves.toBeUndefined();
+
+    const advisory = noteMock.mock.calls.find(
+      ([message, title]) =>
+        title === "Cron" &&
+        typeof message === "string" &&
+        message.includes("inherited default tool cap"),
+    )?.[0];
+    expect(advisory).toContain("Ambient legacy cap");
+  });
+
   it("reports quarantined cron rows even when the active store is already sanitized", async () => {
     const storePath = await makeTempStorePath();
     await writeCurrentCronStore(storePath, []);

@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
+import { LEGACY_TASK_SUGGESTION_TOOL_NAME } from "../shared/legacy-tool-name-migration.js";
 import {
   planCronCodexRefRewriteAgainstPersistedConfig,
   repairCronCodexRuntimePolicies,
@@ -112,6 +113,24 @@ describe("normalizeStoredCronJobs", () => {
     const delivery = jobs[0]?.delivery as Record<string, unknown> | undefined;
     expect(delivery?.mode).toBe("announce");
     expect(delivery?.channel).toBe("slack");
+  });
+
+  it("rewrites the legacy task-suggestion tool in persisted tool allowlists", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          toolsAllow: ["read", LEGACY_TASK_SUGGESTION_TOOL_NAME],
+        },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyTaskSuggestionToolName).toBe(1);
+    const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
+    expect(payload.toolsAllow).toEqual(["read", "suggest_task"]);
   });
 
   it("rewrites legacy OpenAI Codex model refs in cron payloads", () => {

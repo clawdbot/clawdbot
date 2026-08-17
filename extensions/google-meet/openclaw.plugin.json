@@ -1,7 +1,17 @@
 {
   "id": "google-meet",
+  "doctorContract": {
+    "configRepair": true
+  },
   "name": "Google Meet",
   "description": "OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.",
+  "cliCommands": [
+    {
+      "name": "googlemeet",
+      "description": "Join and manage Google Meet calls",
+      "hasSubcommands": true
+    }
+  ],
   "icon": "https://cdn.simpleicons.org/googlemeet",
   "enabledByDefault": true,
   "commandAliases": [{ "name": "googlemeet" }],
@@ -34,7 +44,7 @@
     },
     "chrome.audioBackend": {
       "label": "Chrome Audio Backend",
-      "help": "BlackHole 2ch is required for local duplex audio routing."
+      "help": "Auto selects BlackHole 2ch on macOS or PipeWire-Pulse on Linux."
     },
     "chrome.launch": {
       "label": "Launch Chrome"
@@ -97,7 +107,7 @@
     },
     "chrome.audioBufferBytes": {
       "label": "Audio Buffer Bytes",
-      "help": "SoX processing buffer for generated Chrome command-pair audio commands. Lower values reduce latency but may underrun on busy hosts.",
+      "help": "Processing buffer for generated Chrome command-pair audio. Lower values reduce latency but may underrun on busy hosts.",
       "advanced": true
     },
     "chrome.audioBridgeCommand": {
@@ -110,7 +120,7 @@
     },
     "chromeNode.node": {
       "label": "Chrome Node",
-      "help": "Node id/name/IP that owns Chrome, BlackHole, and SoX for chrome-node transport.",
+      "help": "Node id/name/IP that owns Chrome and the native virtual-audio backend for chrome-node transport.",
       "advanced": true
     },
     "twilio.defaultDialInNumber": {
@@ -257,8 +267,8 @@
         "properties": {
           "audioBackend": {
             "type": "string",
-            "enum": ["blackhole-2ch"],
-            "default": "blackhole-2ch"
+            "enum": ["auto", "blackhole-2ch", "pipewire-pulse"],
+            "default": "auto"
           },
           "launch": {
             "type": "boolean",
@@ -298,54 +308,12 @@
           },
           "audioInputCommand": {
             "type": "array",
-            "default": [
-              "sox",
-              "-q",
-              "--buffer",
-              "4096",
-              "-t",
-              "coreaudio",
-              "BlackHole 2ch",
-              "-t",
-              "raw",
-              "-r",
-              "24000",
-              "-c",
-              "1",
-              "-e",
-              "signed-integer",
-              "-b",
-              "16",
-              "-L",
-              "-"
-            ],
             "items": {
               "type": "string"
             }
           },
           "audioOutputCommand": {
             "type": "array",
-            "default": [
-              "sox",
-              "-q",
-              "--buffer",
-              "4096",
-              "-t",
-              "raw",
-              "-r",
-              "24000",
-              "-c",
-              "1",
-              "-e",
-              "signed-integer",
-              "-b",
-              "16",
-              "-L",
-              "-",
-              "-t",
-              "coreaudio",
-              "BlackHole 2ch"
-            ],
             "items": {
               "type": "string"
             }

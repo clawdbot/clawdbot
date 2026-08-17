@@ -23,6 +23,9 @@ export async function runActiveToolSchemaWarningsHealth(
   const warnings = await collectActiveToolSchemaProjectionWarnings({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
   });
   if (warnings.length === 0) {
     return;
@@ -50,7 +53,11 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
+  const catalog = await loadPreparedModelCatalog({
+    config: ctx.cfg,
+    readOnly: true,
+    providerDiscoveryProviderIds: [],
+  });
   const status = getModelRefStatus({
     cfg: ctx.cfg,
     catalog,
@@ -107,12 +114,23 @@ export async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Pr
     options: ctx.options,
   });
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
-  noteWorkspaceStatus(ctx.cfg, { pluginVersionDrift });
+  noteWorkspaceStatus(ctx.cfg, {
+    pluginVersionDrift,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
+  });
 }
 
 export async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairSkillReadiness } = await import("../commands/doctor-skills.js");
-  ctx.cfg = await maybeRepairSkillReadiness({ cfg: ctx.cfg, prompter: ctx.prompter });
+  ctx.cfg = await maybeRepairSkillReadiness({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
+  });
 }
 
 export async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -193,8 +211,6 @@ function memorySearchNoteToFinding(message: string): HealthFinding | null {
   let path = "memory.search.provider";
   if (firstLine.includes("No active memory plugin")) {
     path = "plugins.slots.memory";
-  } else if (firstLine.includes("QMD memory backend")) {
-    path = "memory.backend";
   } else if (firstLine.includes("OpenAI-compatible embeddings endpoint")) {
     path = "memory.search.remote.baseUrl";
   } else if (firstLine.includes("OpenAI-compatible embedding model")) {
@@ -216,7 +232,6 @@ export async function collectMemorySearchHealthFindings(
   const notes: string[] = [];
   await noteMemorySearchHealth(ctx.cfg, {
     includeWorkspaceMemoryHealth: false,
-    skipQmdBinaryProbe: true,
     skipAuthProfileResolution: true,
     gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
     noteFn: (message) => notes.push(String(message)),

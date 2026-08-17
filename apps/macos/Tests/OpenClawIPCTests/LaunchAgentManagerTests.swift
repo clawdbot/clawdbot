@@ -3,6 +3,26 @@ import Testing
 @testable import OpenClaw
 
 struct LaunchAgentManagerTests {
+    @Test func `active profile performs no login agent reads or writes`() async {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        var writes: [String] = []
+        LaunchAgentManager._testResetLaunchctlCalls()
+
+        #expect(await !(LaunchAgentManager.status(profile: profile)))
+        #expect(await !(LaunchAgentManager.set(
+            enabled: true,
+            bundlePath: "/Applications/OpenClaw.app",
+            profile: profile,
+            writePlist: { writes.append($0) })))
+        #expect(await !(LaunchAgentManager.set(
+            enabled: false,
+            bundlePath: "/Applications/OpenClaw.app",
+            profile: profile,
+            writePlist: { writes.append($0) })))
+        #expect(writes.isEmpty)
+        #expect(LaunchAgentManager._testLaunchctlCallSnapshot().isEmpty)
+    }
+
     @Test func `enabling an already loaded login job only refreshes its plist`() async {
         var persistedBundlePaths: [String] = []
         let reloaded = await LaunchAgentManager.set(

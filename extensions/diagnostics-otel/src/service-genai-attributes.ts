@@ -1,6 +1,7 @@
 import { SpanKind } from "@opentelemetry/api";
 import { GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT } from "@opentelemetry/semantic-conventions/incubating";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asFiniteNumber, asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { DiagnosticEventPayload } from "../api.js";
 import { redactSensitiveText } from "../api.js";
 import {
@@ -48,7 +49,11 @@ export function genAiOperationName(
 }
 
 export function positiveFiniteNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return asFiniteNumberInRange(value, { min: 0, minExclusive: true });
+}
+
+function nonNegativeFiniteNumber(value: number | undefined): number | undefined {
+  return asFiniteNumberInRange(value, { min: 0 });
 }
 
 export function assignPositiveNumberAttr(
@@ -84,8 +89,9 @@ function assignNumberAttr(
   key: string,
   value: number | undefined,
 ): void {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    attrs[key] = value;
+  const normalized = asFiniteNumber(value);
+  if (normalized !== undefined) {
+    attrs[key] = normalized;
   }
 }
 
@@ -95,14 +101,17 @@ function modelCallPromptTokens(usage: {
   cacheRead?: number;
   cacheWrite?: number;
 }): number | undefined {
-  if (typeof usage.promptTokens === "number" && Number.isFinite(usage.promptTokens)) {
-    return usage.promptTokens;
+  const promptTokens = nonNegativeFiniteNumber(usage.promptTokens);
+  if (promptTokens !== undefined) {
+    return promptTokens;
   }
-  const input = usage.input ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
-  const total = input + cacheRead + cacheWrite;
-  return total > 0 ? total : undefined;
+  const input = nonNegativeFiniteNumber(usage.input);
+  const cacheRead = nonNegativeFiniteNumber(usage.cacheRead);
+  const cacheWrite = nonNegativeFiniteNumber(usage.cacheWrite);
+  if (input === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return undefined;
+  }
+  return (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
 }
 
 export function assignModelCallPromptStatsAttrs(
@@ -147,7 +156,10 @@ export function assignModelCallUsageAttrs(
     ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
     ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
   ] as const) {
-    assignPositiveNumberAttr(attrs, key, value);
+    const normalized = nonNegativeFiniteNumber(value);
+    if (normalized !== undefined) {
+      attrs[key] = normalized;
+    }
   }
 }
 

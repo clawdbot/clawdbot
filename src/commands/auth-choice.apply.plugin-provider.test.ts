@@ -6,8 +6,7 @@ import {
   prepareAuthChoiceLoadedPluginProvider,
   runProviderPluginAuthMethod,
 } from "../plugins/provider-auth-choice.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
+import type { ProviderPlugin, ProviderAuthMethod } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
 type ResolveProviderInstallCatalogEntry =
@@ -47,6 +46,7 @@ const upsertAuthProfile = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: 
 vi.mock("../agents/auth-profiles.js", () => ({
   upsertAuthProfile,
   upsertAuthProfileWithLock: upsertAuthProfile,
+  upsertAuthProfileWithLockOrThrow: upsertAuthProfile,
 }));
 
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));

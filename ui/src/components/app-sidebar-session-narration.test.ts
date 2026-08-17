@@ -14,14 +14,14 @@ function runningRow(key: string): SidebarRecentSession {
   return {
     key,
     label: "Run",
-    meta: "now",
+    updatedAt: Date.now(),
     href: "#",
     active: false,
     visuallyActive: false,
     hasActiveRun: true,
     modelSelectionLocked: false,
     pinned: false,
-    cloudWorkerActive: false,
+    cloudWorkerStopAction: null,
     hasAutomation: false,
     unread: false,
     attention: { kind: "none" },
@@ -159,6 +159,22 @@ describe("SidebarSessionNarrationController", () => {
       }),
     );
     expect(lines.at(-1)?.has("agent:main:run")).toBe(false);
+    expect(digests.at(-1)?.get("agent:main:run")?.headline).toBe(
+      "Reviewing the current implementation",
+    );
+
+    const digestUpdateCount = digests.length;
+    controller.handleEvent(
+      gatewayEvent("session.observer", {
+        sessionKey: "agent:main:run",
+        runId: "run-2",
+        revision: 0,
+        updatedAt: 10_001,
+        headline: "Invalid replacement",
+        health: "on-track",
+      }),
+    );
+    expect(digests).toHaveLength(digestUpdateCount);
     expect(digests.at(-1)?.get("agent:main:run")?.headline).toBe(
       "Reviewing the current implementation",
     );

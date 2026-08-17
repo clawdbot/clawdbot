@@ -1,4 +1,4 @@
-import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
@@ -25,12 +25,12 @@ export const telegramChannelConfigUiHints = {
     },
     nativeCommands: true,
     streaming: {
-      "": 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
-      mode: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "partial").',
+      "": 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "progress"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
+      mode: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "progress").',
       chunkMode:
         'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
       "block.enabled":
-        'Enable chunked block-style Telegram preview delivery when channels.telegram.streaming.mode="block".',
+        "Enable normal Telegram block replies. This takes precedence over editable preview delivery.",
       "block.coalesce": "Merge streamed Telegram block replies before sending final delivery.",
       "preview.chunk.minChars":
         'Minimum chars before emitting a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
@@ -41,13 +41,13 @@ export const telegramChannelConfigUiHints = {
       "preview.toolProgress":
         "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
       "preview.commandText":
-        'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+        'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
     },
     progress: { includeCommentary: true, commentaryOrder: "after-command" },
   }),
   richMessages: {
     label: "Telegram Rich Messages",
-    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
+    help: "Opt into Bot API 10.2 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",

@@ -16,16 +16,49 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("system-1");
   });
 
+  it("sanitizes terminal controls before rendering an initial system message", () => {
+    const chatLog = new ChatLog(20);
+    const sgr = "\x1b[38;5;201mcolor";
+    const erase = "\x1b[3Jerase";
+    const osc52 = "\x1b]52;c;T08_CHAT_LOG_CLIPBOARD\x07";
+    const c1Csi = "\u009b3Jc1";
+    const c1Osc = "\u009d0;T08_CHAT_LOG_TITLE\u009c";
+
+    chatLog.addSystem(`before ${sgr}\x1b[0m ${erase} ${osc52}${c1Csi} ${c1Osc}after`);
+
+    const raw = chatLog.render(120).join("\n");
+    const rendered = normalizeTestText(raw);
+    expect(rendered).toContain("before color erase c1 after");
+    for (const attack of [sgr, erase, osc52, c1Csi, c1Osc]) {
+      expect(raw).not.toContain(attack);
+    }
+  });
+
   it("coalesces consecutive repeatable system messages", () => {
     const chatLog = new ChatLog(20);
+    const rawText = "\x1b[?7777h\x1b]52;c;T08_CHAT_LOG_ONLY_CONTROLS\x07";
 
-    chatLog.addSystem("no active run", { coalesceConsecutive: true });
-    chatLog.addSystem("no active run", { coalesceConsecutive: true });
-    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addSystem(rawText, { coalesceConsecutive: true });
+    chatLog.addSystem(rawText, { coalesceConsecutive: true });
+    chatLog.addSystem(rawText, { coalesceConsecutive: true });
+
+    const raw = chatLog.render(120).join("\n");
+    const rendered = normalizeTestText(raw);
+    expect(chatLog.children.length).toBe(1);
+    expect(rendered).toContain("(no output) x3");
+    expect(raw).not.toContain(rawText);
+  });
+
+  it("does not coalesce distinct raw system messages that sanitize identically", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("\x1b[?7776h", { coalesceConsecutive: true });
+    chatLog.addSystem("\u009b777;888H", { coalesceConsecutive: true });
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(chatLog.children.length).toBe(1);
-    expect(rendered).toContain("no active run x3");
+    expect(chatLog.children.length).toBe(2);
+    expect(rendered.match(/\(no output\)/g)).toHaveLength(2);
+    expect(rendered).not.toContain("x2");
   });
 
   it("does not coalesce ordinary system messages", () => {
@@ -848,13 +881,18 @@ describe("ChatLog", () => {
 
   it("replaces an existing pending system notice for the same runId", () => {
     const chatLog = new ChatLog(40);
+    const firstAttack = "\x1b]52;c;T08_PENDING_FIRST\x07";
+    const secondAttack = "\u009d0;T08_PENDING_SECOND\u009c";
 
-    chatLog.addPendingSystem("run-1", "first notice");
-    chatLog.addPendingSystem("run-1", "second notice");
+    chatLog.addPendingSystem("run-1", `first ${firstAttack}notice`);
+    chatLog.addPendingSystem("run-1", secondAttack);
 
-    const rendered = chatLog.render(120).join("\n");
+    const raw = chatLog.render(120).join("\n");
+    const rendered = normalizeTestText(raw);
     expect(rendered).not.toContain("first notice");
-    expect(rendered).toContain("second notice");
+    expect(rendered).toContain("(no output)");
+    expect(raw).not.toContain(firstAttack);
+    expect(raw).not.toContain(secondAttack);
     expect(chatLog.children.length).toBe(1);
   });
 });

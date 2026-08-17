@@ -1,4 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
 const liveTerminalRunIds = new WeakMap<object, string>();
@@ -28,10 +29,6 @@ export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
   );
 }
 
-export function clearAuthoritativeTerminal(host: object): void {
-  authoritativeTerminals.delete(host);
-}
-
 export function rememberAuthoritativeTerminal(options: {
   event: {
     clientRunId?: string | null;
@@ -44,10 +41,7 @@ export function rememberAuthoritativeTerminal(options: {
   payload: unknown;
   runIdBeforeApply: string | null;
 }): void {
-  const payload =
-    options.payload && typeof options.payload === "object" && !Array.isArray(options.payload)
-      ? (options.payload as Record<string, unknown>)
-      : null;
+  const payload = asNullableRecord(options.payload);
   const identity = readSessionMessageIdentity(payload?.message, {
     messageId: payload?.messageId,
   });

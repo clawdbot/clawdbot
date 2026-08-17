@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
+import { AUDIT_ACTIVITY_MESSAGE_KIND } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -485,7 +486,8 @@ function projectMessageIdentities(db: DatabaseSync, input: MessageAuditEventInpu
 }
 
 function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<AuditEventsTable> {
-  const message = input.kind === "message" ? projectMessageIdentities(db, input) : undefined;
+  const message =
+    input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? projectMessageIdentities(db, input) : undefined;
   return {
     event_id: randomUUID(),
     source_id: input.sourceId,
@@ -499,13 +501,13 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<Au
     actor_type: input.actorType,
     actor_id: message?.actorId ?? input.actorId,
     agent_id: input.agentId ?? null,
-    session_key: input.kind === "message" ? null : (input.sessionKey ?? null),
-    session_id: input.kind === "message" ? null : (input.sessionId ?? null),
+    session_key: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? null : (input.sessionKey ?? null),
+    session_id: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? null : (input.sessionId ?? null),
     run_id: input.runId ?? null,
     tool_call_id: input.kind === "tool_action" ? (input.toolCallId ?? null) : null,
     tool_name: input.kind === "tool_action" ? input.toolName : null,
-    direction: input.kind === "message" ? input.direction : null,
-    channel: input.kind === "message" ? input.channel : null,
+    direction: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.direction : null,
+    channel: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.channel : null,
     conversation_kind: input.kind === "message" ? input.conversationKind : null,
     message_outcome: input.kind === "message" ? input.outcome : null,
     reason_code: input.kind === "message" ? (input.reasonCode ?? null) : null,

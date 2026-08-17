@@ -1,6 +1,7 @@
 // Stores and resolves the last TUI session per workspace.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -35,10 +36,6 @@ export function buildTuiLastSessionScopeKey(params: {
     .update(`${params.sessionScope}\n${agentId}\n${connectionUrl}`)
     .digest("hex")
     .slice(0, 32);
-}
-
-function normalizeMarker(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function isHeartbeatSessionKey(sessionKey: string): boolean {
@@ -118,6 +115,35 @@ export async function writeTuiLastSessionKey(params: {
         ),
     );
   }, stateDatabaseOptions(params.stateDir));
+}
+
+/**
+ * Wraps writeTuiLastSessionKey for fire-and-forget callers: a failing state DB
+ * means the next launch silently loses session restore, so the first failure
+ * is reported once instead of spamming every session switch.
+ */
+export function createRememberSessionKeyWriter(params: {
+  buildScopeKey: (sessionKey: string) => string;
+  reportFailure: (message: string) => void;
+  write: typeof writeTuiLastSessionKey;
+}): (sessionKey: string) => void {
+  const write = params.write;
+  let failureReported = false;
+  return (sessionKey: string) => {
+    const trimmed = sessionKey.trim();
+    if (!trimmed || trimmed === "unknown") {
+      return;
+    }
+    void write({ scopeKey: params.buildScopeKey(trimmed), sessionKey: trimmed }).catch(
+      (err: unknown) => {
+        if (failureReported) {
+          return;
+        }
+        failureReported = true;
+        params.reportFailure(err instanceof Error ? err.message : String(err));
+      },
+    );
+  };
 }
 
 /** Removes restore pointers that target sessions retired by doctor repair. */

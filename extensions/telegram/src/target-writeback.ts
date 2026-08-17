@@ -9,7 +9,7 @@ import {
   resolveCronStorePath,
   saveCronStore,
 } from "openclaw/plugin-sdk/cron-store-runtime";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,

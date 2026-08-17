@@ -27,6 +27,7 @@ import {
   type MatrixOwnDeviceInfo,
   type MatrixOwnDeviceVerificationStatus,
 } from "./client-support.js";
+import { quiesceMatrixClientSync } from "./client-sync-quiesce.js";
 import type { MatrixCryptoFacade } from "./crypto-facade.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
@@ -145,6 +146,7 @@ export abstract class MatrixClientBase {
   protected transactionScopeId: string | null = null;
   protected transactionScopePromise: Promise<string> | null = null;
   private readonly messageWireDispatchGuards = new Map<string, MatrixMessageWireDispatchGuard>();
+  private sdkStopped = false;
 
   readonly dms = {
     update: async (): Promise<boolean> => {
@@ -480,6 +482,11 @@ export abstract class MatrixClientBase {
     if (this.started) {
       return;
     }
+    if (this.sdkStopped) {
+      throw new Error(
+        "Matrix client has been fully stopped and cannot be restarted; acquire a new shared client generation",
+      );
+    }
 
     throwIfMatrixStartupAborted(opts.abortSignal);
     await this.ensureCryptoSupportInitialized();
@@ -535,7 +542,10 @@ export abstract class MatrixClientBase {
     await this.startSyncSession({ bootstrapCrypto: false });
   }
 
-  stopSyncWithoutPersist(): void {
+  private stopSdkClient(): void {
+    if (this.sdkStopped) {
+      return;
+    }
     if (this.idbPersistTimer) {
       clearInterval(this.idbPersistTimer);
       this.idbPersistTimer = null;
@@ -543,7 +553,20 @@ export abstract class MatrixClientBase {
     this.currentSyncState = null;
     this.currentSyncError = undefined;
     this.client.stopClient();
+    this.sdkStopped = true;
     this.started = false;
+  }
+
+  async quiesceSync(): Promise<void> {
+    await quiesceMatrixClientSync({
+      client: this.client,
+      emitter: this.emitter,
+      markStopped: () => {
+        this.started = false;
+      },
+      started: this.started,
+      syncStore: this.syncStore,
+    });
   }
 
   async drainPendingDecryptions(reason = "matrix client shutdown"): Promise<void> {
@@ -551,42 +574,35 @@ export abstract class MatrixClientBase {
   }
 
   stop(): void {
-    this.stopSyncWithoutPersist();
-    this.decryptBridge?.stop();
-    // Final persist on shutdown
-    this.syncStore?.markCleanShutdown();
-    if (loadedMatrixCryptoRuntime) {
-      const { persistIdbToDisk } = loadedMatrixCryptoRuntime;
-      this.stopPersistPromise = Promise.all([
-        persistIdbToDisk({
-          snapshotPath: this.idbSnapshotPath,
-          databasePrefix: this.cryptoDatabasePrefix,
-        }).catch(noop),
-        this.syncStore?.flush().catch(noop),
-      ]).then(() => undefined);
-      return;
-    }
-    this.stopPersistPromise = loadMatrixCryptoRuntime()
-      .then(async ({ persistIdbToDisk }) => {
-        await Promise.all([
-          persistIdbToDisk({
-            snapshotPath: this.idbSnapshotPath,
-            databasePrefix: this.cryptoDatabasePrefix,
-          }).catch(noop),
-          this.syncStore?.flush().catch(noop),
-        ]);
-      })
-      .catch(noop)
-      .then(() => undefined);
+    void this.stopAndPersist()
+      .catch(() => this.stopWithoutPersist())
+      .catch(noop);
   }
 
   async stopAndPersist(): Promise<void> {
-    this.stop();
+    if (this.stopPersistPromise) {
+      await this.stopPersistPromise;
+      return;
+    }
+    this.stopPersistPromise = (async () => {
+      await this.quiesceSync();
+      this.stopSdkClient();
+      this.decryptBridge?.stop();
+      const runtime = loadedMatrixCryptoRuntime ?? (await loadMatrixCryptoRuntime());
+      await runtime.persistIdbToDisk({
+        snapshotPath: this.idbSnapshotPath,
+        databasePrefix: this.cryptoDatabasePrefix,
+        strict: true,
+      });
+      this.syncStore?.markCleanShutdown();
+      await this.syncStore?.flush();
+    })();
     await this.stopPersistPromise;
   }
 
   stopWithoutPersist(): void {
-    this.stopSyncWithoutPersist();
+    this.syncStore?.discardPendingSyncCursorPersistence();
+    this.stopSdkClient();
     this.decryptBridge?.stop();
     this.stopPersistPromise = Promise.resolve();
   }

@@ -1,7 +1,8 @@
 // OpenAI-compatible speech provider sends speech synthesis requests to OpenAI-style APIs.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { asFiniteNumber, asObject, trimToUndefined } from "../agents/provider-http-errors.js";
+import { asFiniteNumber, trimToUndefined } from "../agents/provider-http-errors.js";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
@@ -121,18 +122,21 @@ function resolveProviderConfigRecord(
   rawConfig: Record<string, unknown>,
   providerConfigKey: string,
 ): Record<string, unknown> | undefined {
-  const providers = asObject(rawConfig.providers);
-  return asObject(providers?.[providerConfigKey]) ?? asObject(rawConfig[providerConfigKey]);
+  const providers = asOptionalRecord(rawConfig.providers);
+  return (
+    asOptionalRecord(providers?.[providerConfigKey]) ??
+    asOptionalRecord(rawConfig[providerConfigKey])
+  );
 }
 
 function readModelProviderConfig(
   cfg: unknown,
   providerConfigKey: string,
 ): ModelProviderConfig | undefined {
-  const root = asObject(cfg);
-  const models = asObject(root?.models);
-  const providers = asObject(models?.providers);
-  return asObject(providers?.[providerConfigKey]);
+  const root = asOptionalRecord(cfg);
+  const models = asOptionalRecord(root?.models);
+  const providers = asOptionalRecord(models?.providers);
+  return asOptionalRecord(providers?.[providerConfigKey]);
 }
 
 function readSpeechOverrides(overrides: SpeechProviderOverrides | undefined): {

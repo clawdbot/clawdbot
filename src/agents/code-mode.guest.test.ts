@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareSource, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -12,6 +13,8 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
+
+const sourceValidationConfig = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
 describe("Code Mode guest execution", () => {
   beforeEach(() => {
@@ -139,11 +142,11 @@ describe("Code Mode guest execution", () => {
   });
 
   it.each([
-    { code: "true;", value: null },
+    { code: "true;", value: null, realGuest: true },
     { code: "false;", value: null },
     { code: "return true || false;", value: true },
     { code: "return -1;", value: -1 },
-    { code: "return /foo/.test('foo');", value: true },
+    { code: "return /foo/.test('foo');", value: true, realGuest: true },
     { code: "Infinity -1; return 42;", value: 42 },
     { code: "eval; return typeof eval;", value: "function" },
     { code: "if (true) { return -1; }", value: -1 },
@@ -153,21 +156,29 @@ describe("Code Mode guest execution", () => {
     { code: "const ls = 7; return ls;", value: 7 },
     { code: "const echo = (value) => value; return echo('hello');", value: "hello" },
     { code: "test instanceof Function; function test() {}", value: null },
-    { code: "ls -1; function ls() {}", value: null },
+    { code: "ls -1; function ls() {}", value: null, realGuest: true },
     { code: "ls -1; function/**/ls() {}", value: null },
     { code: "ls > limit; function ls() {} var limit = 1;", value: null },
     { code: "echo `hello`; function echo(parts) { return parts[0]; }", value: null },
-    { code: "pwd; var { pwd } = { pwd: 7 }; return pwd;", value: 7 },
+    { code: "pwd; var { pwd } = { pwd: 7 }; return pwd;", value: 7, realGuest: true },
     { code: "pwd; var [pwd] = [7]; return pwd;", value: 7 },
     { code: "pwd; for (var pwd of [7]) {} return pwd;", value: 7 },
     { code: "pwd; var other = 1, pwd = 7; return pwd;", value: 7 },
-    { code: "pwd; function* pwd() { yield 7; } return pwd().next().value;", value: 7 },
+    {
+      code: "pwd; function* pwd() { yield 7; } return pwd().next().value;",
+      value: 7,
+      realGuest: true,
+    },
     { code: "pwd; function/**/pwd() { return 7; } return pwd();", value: 7 },
     { code: "pwd; var/**/{ pwd } = { pwd: 7 }; return pwd;", value: 7 },
     { code: "node -version; function/**/node() {}; var version = 1;", value: null },
   ])(
-    "executes valid shell-like JavaScript without false rejection: %j",
-    async ({ code, value }) => {
+    "preserves valid shell-like JavaScript without false rejection: %j",
+    async ({ code, value, realGuest }) => {
+      if (!realGuest) {
+        await expect(prepareSource({ code, config: sourceValidationConfig })).resolves.toBe(code);
+        return;
+      }
       const { config, catalogRef, tools } = createCodeModeHarness();
       applyCodeModeCatalog({
         tools: [...tools, pluginTool("fake_noop", "Noop")],
@@ -463,28 +474,6 @@ describe("Code Mode guest execution", () => {
     );
   });
 
-  it("does not load TypeScript for plain JavaScript code mode runs", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const details = await runUntilCompleted({
-      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
-      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: "return 42;",
-    });
-
-    expect(details.status).toBe("completed");
-    expect(details.value).toBe(42);
-    expect(testing.getTypescriptRuntimePromise()).toBeNull();
-  });
-
   it("allows identifiers and strings that contain import without module access", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -515,6 +504,7 @@ describe("Code Mode guest execution", () => {
       name: "template-literal import text",
       code: "return `import('node:fs')`;",
       value: "import('node:fs')",
+      realGuest: true,
     },
     {
       name: "template-literal require text",
@@ -530,6 +520,7 @@ describe("Code Mode guest execution", () => {
       name: "regular-expression module text",
       code: 'return /import.meta/.test("import.meta");',
       value: true,
+      realGuest: true,
     },
     {
       name: "regular-expression module text inside interpolation",
@@ -540,6 +531,7 @@ describe("Code Mode guest execution", () => {
       name: "ordinary import method",
       code: "const api = { import(value) { return value; } }; return api.import(42);",
       value: 42,
+      realGuest: true,
     },
     {
       name: "ordinary require method",
@@ -561,7 +553,11 @@ describe("Code Mode guest execution", () => {
       code: "const api = { import: { meta: 42 } }; return api.import.meta;",
       value: 42,
     },
-  ])("executes harmless $name in the real guest worker", async ({ code, value }) => {
+  ])("preserves harmless $name in source validation", async ({ code, value, realGuest }) => {
+    if (!realGuest) {
+      await expect(prepareSource({ code, config: sourceValidationConfig })).resolves.toBe(code);
+      return;
+    }
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],

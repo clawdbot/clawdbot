@@ -1,6 +1,5 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -19,8 +18,7 @@ import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
   buildRemoveMcpServerPatch,
@@ -32,6 +30,7 @@ import {
   type McpServerSummary,
   type McpServersPatchBuildResult,
 } from "../../lib/config/mcp-servers.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
@@ -52,6 +51,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
+import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import { PLUGINS_HUB_PANEL_ID, pluginsHubTabs, type PluginsHubTab } from "./plugins-hub.ts";
 import type { ConnectorSuggestion } from "./presentation.ts";
 import { pluginArtPath } from "./presentation.ts";
@@ -112,7 +112,10 @@ function mutationSuccessMessage(
     ? `pluginsPage.${action}Restart`
     : `pluginsPage.${action}Success`;
   const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-  const lines = [t(key, { name: result.plugin.name }), ...warnings];
+  const lines = [
+    t(key, { name: result.plugin.name }),
+    ...warnings.map((warning) => formatUiExternalText(warning)),
+  ];
   return lines.filter(Boolean).join("\n");
 }
 
@@ -175,7 +178,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.replaceResult(result);
     },
     onError: (error) => {
-      this.error = formatErrorMessage(error, { redact: redactToolDetail });
+      this.error = formatUiError(error);
     },
   });
 
@@ -531,14 +534,14 @@ class PluginsPage extends OpenClawLightDomElement {
   private get searchError(): string | null {
     return this.searchTask.status === TaskStatus.ERROR &&
       this.debouncedSearchQuery === this.query.trim()
-      ? formatErrorMessage(this.searchTask.error, { redact: redactToolDetail })
+      ? formatUiError(this.searchTask.error)
       : null;
   }
 
   private get configRefreshError(): string | null {
     const failure =
       this.configTask.status === TaskStatus.ERROR
-        ? formatErrorMessage(this.configTask.error, { redact: redactToolDetail })
+        ? formatUiError(this.configTask.error)
         : this.configTask.status === TaskStatus.COMPLETE
           ? this.configTask.value
           : null;
@@ -734,9 +737,10 @@ class PluginsPage extends OpenClawLightDomElement {
     onError: (error: unknown) => void = (error) => {
       this.setMessage(rowKey, {
         kind: "error",
-        text: formatErrorMessage(error, { redact: redactToolDetail }),
+        text: formatUiError(error),
       });
     },
+    options: { preserveMessageWhilePending?: boolean } = {},
   ): Promise<void> {
     const scope = this.gateway.capture();
     if (!scope || !this.canMutate() || this.busy[rowKey]) {
@@ -747,7 +751,9 @@ class PluginsPage extends OpenClawLightDomElement {
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.mutationTokens.get(rowKey) === mutationToken;
     this.setBusy(rowKey, true);
-    this.setMessage(rowKey, null);
+    if (!options.preserveMessageWhilePending) {
+      this.setMessage(rowKey, null);
+    }
     try {
       const mutation = await runPluginConfigMutation(
         this.context.runtimeConfig,
@@ -770,23 +776,36 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async install(rowKey: string, request: PluginInstallRequest): Promise<void> {
+  private async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
     await this.runPluginMutation(
-      rowKey,
+      installIdentity,
       (client) => installPlugin(client, request),
       async (result, refreshError, client) => {
+        const installedPluginKey = pluginRowKey(result.plugin.id);
         this.applyMutationResult(result);
+        if (installedPluginKey !== installIdentity) {
+          this.setMessage(installIdentity, null);
+        }
         this.setMessage(
-          rowKey,
+          installedPluginKey,
           committedMutationMessage(mutationSuccessMessage("installed", result), refreshError),
         );
         await this.refreshCatalogAfterMutation(client);
       },
       (error) => {
+        const policyWarning = readPluginInstallPolicyWarning(error);
+        if (policyWarning) {
+          this.setMessage(installIdentity, {
+            kind: "warning",
+            text: policyWarning.reason,
+            installPolicyWarning: { details: policyWarning, request },
+          });
+          return;
+        }
         const trust = readPluginInstallTrustError(error);
         const packageName = request.source === "clawhub" ? request.packageName : null;
         if (packageName && pluginInstallNeedsRiskAcknowledgement(error)) {
-          this.setMessage(rowKey, {
+          this.setMessage(installIdentity, {
             kind: "error",
             text: trust?.warning ?? t("pluginsPage.defaultRiskWarning"),
             acknowledge: {
@@ -796,10 +815,13 @@ class PluginsPage extends OpenClawLightDomElement {
           });
           return;
         }
-        this.setMessage(rowKey, {
+        this.setMessage(installIdentity, {
           kind: "error",
-          text: formatErrorMessage(error, { redact: redactToolDetail }),
+          text: formatUiError(error),
         });
+      },
+      {
+        preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
       },
     );
   }
@@ -844,7 +866,7 @@ class PluginsPage extends OpenClawLightDomElement {
           kind: "success",
           text: [
             t("pluginsPage.removedRestart", { name: result.pluginId }),
-            ...(result.warnings ?? []),
+            ...(result.warnings ?? []).map((warning) => formatUiExternalText(warning)),
             refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
           ]
             .filter(Boolean)
@@ -893,7 +915,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.mcpMessage = { kind: "success", text: params.successText };
       return true;
     } catch (error) {
-      return fail(formatErrorMessage(error, { redact: redactToolDetail }));
+      return fail(formatUiError(error));
     } finally {
       this.mcpBusy = false;
       if (params.busyKey) {
@@ -1030,7 +1052,8 @@ class PluginsPage extends OpenClawLightDomElement {
           },
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
-          onInstall: (rowKey, request) => void this.install(rowKey, request),
+          onInstall: (request, installIdentity) => void this.install(request, installIdentity),
+          onDismissMessage: (rowKey) => this.setMessage(rowKey, null),
           onRequestUninstall: (rowKey) => this.setPendingRemoval(rowKey, true),
           onCancelUninstall: (rowKey) => this.setPendingRemoval(rowKey, false),
           onUninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),

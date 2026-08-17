@@ -28,6 +28,8 @@ export function registerPluginHttpRoute(params: {
   gatewayRuntimeScopeSurface?: PluginHttpRouteRegistration["gatewayRuntimeScopeSurface"];
   /** Replace an existing canonical route owned by the same plugin and compatible route source. */
   replaceExisting?: boolean;
+  /** Reuse an existing canonical route only when its nonempty plugin and source owners match. */
+  reuseExistingSameOwner?: boolean;
   /** Throw when the route cannot be registered instead of returning a no-op cleanup. */
   throwOnFailure?: boolean;
   pluginId?: string;
@@ -83,24 +85,40 @@ export function registerPluginHttpRoute(params: {
         `plugin: route conflict at ${normalizedPath} (${routeMatch})${suffix}`,
       );
     }
+    const requestedOwner = normalizeOptionalString(params.pluginId);
+    const requestedSource = normalizeOptionalString(params.source);
+    const mismatchedOwner = canonicalMatches.find(
+      (route) =>
+        normalizeOptionalString(route.pluginId) !== requestedOwner ||
+        normalizeOptionalString(route.source) !== requestedSource,
+    );
+    if (!params.replaceExisting && params.reuseExistingSameOwner) {
+      if (requestedOwner !== undefined && requestedSource !== undefined && !mismatchedOwner) {
+        params.log?.(
+          `plugin: reusing existing webhook path ${normalizedPath} (${routeMatch}) (${requestedOwner}/${requestedSource})`,
+        );
+        return noopUnregister;
+      }
+      const conflictingOwner = mismatchedOwner ?? existing;
+      return rejectRegistration(
+        `plugin: route reuse denied for ${normalizedPath} (${routeMatch})${suffix}; owned by ${conflictingOwner.pluginId ?? "unknown-plugin"} (${conflictingOwner.source ?? "unknown-source"})`,
+      );
+    }
     if (!params.replaceExisting) {
       return rejectRegistration(
         `plugin: route conflict at ${normalizedPath} (${routeMatch})${suffix}; owned by ${existing.pluginId ?? "unknown-plugin"} (${existing.source ?? "unknown-source"})`,
       );
     }
-    const replacementOwner = normalizeOptionalString(params.pluginId);
-    const replacementSource = normalizeOptionalString(params.source);
     // Source-less same-plugin replacement shipped before route-source ownership.
     // Preserve it only when both sides omit source; otherwise require an exact source match.
-    const mismatchedOwner = canonicalMatches.find(
+    const incompatibleReplacement = canonicalMatches.find(
       (route) =>
-        normalizeOptionalString(route.pluginId) !== replacementOwner ||
-        (replacementOwner !== undefined &&
-          normalizeOptionalString(route.source) !== replacementSource),
+        normalizeOptionalString(route.pluginId) !== requestedOwner ||
+        (requestedOwner !== undefined && normalizeOptionalString(route.source) !== requestedSource),
     );
-    if (mismatchedOwner) {
+    if (incompatibleReplacement) {
       return rejectRegistration(
-        `plugin: route replacement denied for ${normalizedPath} (${routeMatch})${suffix}; owned by ${mismatchedOwner.pluginId ?? "unknown-plugin"} (${mismatchedOwner.source ?? "unknown-source"})`,
+        `plugin: route replacement denied for ${normalizedPath} (${routeMatch})${suffix}; owned by ${incompatibleReplacement.pluginId ?? "unknown-plugin"} (${incompatibleReplacement.source ?? "unknown-source"})`,
       );
     }
     const pluginHint = params.pluginId ? ` (${params.pluginId})` : "";

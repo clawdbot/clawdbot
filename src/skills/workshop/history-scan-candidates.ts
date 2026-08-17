@@ -1,4 +1,4 @@
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   listSessionTranscriptInstances,
   type SessionTranscriptInstance,
@@ -57,7 +57,7 @@ export function selectSkillHistoryScanCandidates(params: {
 export function listHistoryScanCandidates(
   params: SkillHistoryScanScope,
 ): SkillHistoryScanCandidate[] {
-  const storePath = resolveStorePath(params.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
   });

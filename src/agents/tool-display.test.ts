@@ -36,6 +36,22 @@ describe("isShellToolDisplayName", () => {
 });
 
 describe("tool display details", () => {
+  it("puts the camera PTZ operation before its node and device", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "nodes",
+        args: {
+          action: "camera_ptz",
+          ptzOperation: "status",
+          node: "Mac",
+          deviceId: "camera-id",
+        },
+      }),
+    );
+
+    expect(detail).toBe("ptz operation status, node Mac, device id camera-id");
+  });
+
   it("keeps same-line heredoc operators from attaching the body to later stages", () => {
     const command = "cat <<EOF && printf ok\nbody | secret\nEOF\nprintf done";
     const stages = splitTopLevelStages(command);

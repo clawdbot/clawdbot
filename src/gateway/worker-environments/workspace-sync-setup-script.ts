@@ -1,6 +1,6 @@
 export const REMOTE_WORKSPACE_SETUP_SCRIPT = String.raw`set -eu
 relative=$1
-root=$HOME/.openclaw-worker
+canonical_home=$(cd "$HOME" && pwd -P)
 
 ensure_private_directory() {
   directory=$1
@@ -15,8 +15,7 @@ ensure_private_directory() {
   chmod 700 "$directory"
 }
 
-ensure_private_directory "$root"
-current=$root
+current=$canonical_home
 old_ifs=$IFS
 IFS=/
 set -- $relative
@@ -27,5 +26,6 @@ for segment in "$@"; do
 done
 cd "$current"
 find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-pwd -P
+canonical_workspace=$(pwd -P)
+node -e 'process.stdout.write(JSON.stringify({tag:"openclaw-workspace-setup-v1",canonicalHome:process.argv[1],canonicalWorkspace:process.argv[2]})+"\n")' "$canonical_home" "$canonical_workspace"
 `;

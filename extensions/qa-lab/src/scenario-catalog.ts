@@ -111,6 +111,7 @@ const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),
     args: z.array(z.string()).optional(),
+    parallelSafe: z.boolean().optional(),
     timeoutMs: z.number().int().positive().optional(),
   }),
 ]);
@@ -349,6 +350,7 @@ export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;
   execution: QaScenarioExecution & {
     flow?: QaScenarioFlow;
+    flowKind?: "module" | "steps";
   };
 };
 
@@ -361,6 +363,32 @@ export type QaBootstrapScenarioCatalog = {
   kickoffTask: string;
   scenarios: QaSeedScenarioWithSource[];
 };
+
+export function resolveQaScenarioRequiredProviderMode(
+  scenario: Pick<QaSeedScenarioWithSource, "id" | "execution">,
+) {
+  const configuredValue = scenario.execution.config?.requiredProviderMode;
+  const configuredResult =
+    configuredValue === undefined
+      ? undefined
+      : qaScenarioModuleFlow.providerModeSchema.safeParse(
+          typeof configuredValue === "string" ? configuredValue.trim() : configuredValue,
+        );
+  if (configuredResult && !configuredResult.success) {
+    throw new Error(
+      `QA scenario ${scenario.id} declares unknown provider mode: ${String(configuredValue)}`,
+    );
+  }
+  const configuredMode = configuredResult?.success ? configuredResult.data : undefined;
+  const executionMode =
+    scenario.execution.kind === "flow" ? scenario.execution.providerMode : undefined;
+  if (configuredMode && executionMode && configuredMode !== executionMode) {
+    throw new Error(
+      `QA scenario ${scenario.id} declares conflicting provider modes: execution.providerMode=${executionMode}, execution.config.requiredProviderMode=${configuredMode}`,
+    );
+  }
+  return configuredMode ?? executionMode;
+}
 
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.yaml";
 const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";
@@ -454,41 +482,24 @@ export function readQaScenarioPack(): QaScenarioPack {
         parsedScenario.execution ?? {},
         relativePath,
       );
-      const requiredChannelDriver = qaScenarioModuleFlow.resolveRequiredChannelDriver(
-        parsedScenarioFile.flow,
-      );
-      const configuredChannelDriver =
-        execution.kind === "flow" ? execution.config?.requiredChannelDriver : undefined;
-      if (
-        requiredChannelDriver &&
-        configuredChannelDriver !== undefined &&
-        configuredChannelDriver !== requiredChannelDriver
-      ) {
-        throw new Error(
-          `${relativePath}: live transport module requires channelDriver=${requiredChannelDriver}`,
-        );
-      }
+      // Module shorthand normalizes to ordinary steps below. Preserve its authored form so
+      // planning cannot schedule it on an adapter that does not support module flows.
+      const flowKind = qaScenarioModuleFlow.resolveKind(parsedScenarioFile.flow);
       const flow = qaScenarioModuleFlow.resolveFlow(
         parsedScenarioFile.flow,
         parsedScenarioFile.title,
       );
       qaScenarioModuleFlow.assertDefined({ executionKind: execution.kind, flow, relativePath });
-      return {
+      const scenario = {
         ...parsedScenario,
         sourcePath: relativePath,
         execution: {
           ...execution,
-          ...(requiredChannelDriver && execution.kind === "flow"
-            ? {
-                config: {
-                  ...execution.config,
-                  requiredChannelDriver,
-                },
-              }
-            : {}),
-          ...(flow ? { flow } : {}),
+          ...(flow ? { flow, flowKind } : {}),
         },
       } satisfies QaSeedScenarioWithSource;
+      resolveQaScenarioRequiredProviderMode(scenario);
+      return scenario;
     })(),
   );
   const seenScenarioIds = new Set<string>();

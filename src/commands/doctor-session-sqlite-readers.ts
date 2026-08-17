@@ -14,10 +14,12 @@ import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+
+type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
 type ReadOnlySqliteSessionSummary = {
   entry: SessionEntry;
@@ -117,7 +119,9 @@ function readTranscriptEventsForImport(
     id: sessionId,
     type: "session",
     version: plan.sourceVersion,
-  } as unknown as FileEntry;
+    timestamp: "",
+    cwd: "",
+  } satisfies FileEntry;
   // V1 compactions refer to original row indexes. Stable index-derived IDs let
   // the second pass resolve those links without retaining the transcript.
   const idPrefix = createHash("sha256")
@@ -144,14 +148,15 @@ function readTranscriptEventsForImport(
         let event = loadedEvent;
         let recognizedEvent: FileEntry | undefined;
         if (originalIndex === plan.headerIndex) {
-          const legacyHeader = event as unknown as Record<string, unknown>;
-          const canonicalHeader: Record<string, unknown> = {
-            ...legacyHeader,
+          const canonicalHeader = {
+            ...event,
             id: sessionId,
-            type: "session",
+            type: "session" as const,
+            timestamp: typeof event.timestamp === "string" ? event.timestamp : "",
+            cwd: "cwd" in event && typeof event.cwd === "string" ? event.cwd : "",
           };
-          delete canonicalHeader.sessionId;
-          event = canonicalHeader as unknown as FileEntry;
+          Reflect.deleteProperty(canonicalHeader, "sessionId");
+          event = canonicalHeader;
           recognizedEvent = event;
         } else {
           // Reuse the runtime partition contract one row at a time. The
@@ -469,6 +474,9 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
 }
 
 export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
+  if (target.sqlitePath) {
+    return resolveOpenClawAgentSqlitePath({ agentId: target.agentId, path: target.sqlitePath });
+  }
   const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
   });
@@ -482,7 +490,14 @@ function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
   try {
     const parsed = JSON.parse(entryJson) as unknown;
     return isRecord(parsed) && typeof parsed.sessionId === "string"
-      ? (parsed as unknown as SessionEntry)
+      ? {
+          ...parsed,
+          sessionId: parsed.sessionId,
+          updatedAt:
+            typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt)
+              ? parsed.updatedAt
+              : 0,
+        }
       : undefined;
   } catch {
     return undefined;

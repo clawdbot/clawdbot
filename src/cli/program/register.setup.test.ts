@@ -402,7 +402,7 @@ describe("registerSetupCommand", () => {
       await runCli(["setup", "--gateway-port", gatewayPort]);
 
       expect(runtime.error).toHaveBeenCalledWith(
-        "Error: --gateway-port must be an integer between 1 and 65535.",
+        "--gateway-port must be an integer between 1 and 65535.",
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(setupWizardCommandMock).not.toHaveBeenCalled();
@@ -522,6 +522,30 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["guided", ["--wizard"]],
+    ["classic", ["--classic"]],
+    ["non-interactive", ["--non-interactive", "--accept-risk"]],
+  ])("forwards --agent-name through %s setup", async (_mode, modeArgs) => {
+    await runCli([
+      "setup",
+      ...modeArgs,
+      "--agent-name",
+      "robby",
+      "--workspace",
+      "/tmp/robby",
+      "--skip-bootstrap",
+    ]);
+
+    expect(lastWizardOptions()).toMatchObject({
+      agentName: "robby",
+      workspace: "/tmp/robby",
+      skipBootstrap: true,
+    });
+    expect(setupCommandMock).not.toHaveBeenCalled();
+    expect(runSystemAgentMock).not.toHaveBeenCalled();
+  });
+
   it("runs setup wizard command for migration import flags", async () => {
     await runCli([
       "setup",
@@ -544,7 +568,7 @@ describe("registerSetupCommand", () => {
 
     await runCli(["setup"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: setup failed");
+    expect(runtime.error).toHaveBeenCalledWith("setup failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

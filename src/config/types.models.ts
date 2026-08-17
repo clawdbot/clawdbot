@@ -182,7 +182,7 @@ export type ModelDefinitionConfig = {
     }>;
   };
   /** Provider/native maximum context window in tokens. */
-  contextWindow: number;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while letting configs
@@ -216,10 +216,6 @@ export type ModelProviderConfig = {
   auth?: ModelProviderAuthMode;
   /** Default API adapter for models under this provider. */
   api?: ModelApi;
-  /** Provider-level default context window. */
-  contextWindow?: number;
-  /** Provider-level effective runtime context cap. */
-  contextTokens?: number;
   /** Provider-level default max output tokens. */
   maxTokens?: number;
   /** Provider request timeout in seconds. */

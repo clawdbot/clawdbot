@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Skill } from "../skills/loading/skill-contract.js";
-import { resolveSkillsPromptForRun } from "../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
@@ -48,7 +48,7 @@ describe("Code Mode skills and read tools", () => {
 
   it("keeps Code Mode skill parsing aligned with the production prompt renderer", () => {
     const entries = [createFixtureSkillEntry("alpha"), createFixtureSkillEntry("beta")];
-    const skillsPrompt = resolveSkillsPromptForRun({
+    const skillsPrompt = resolveSkillsPrompt({
       entries,
       workspaceDir: "/workspace",
     });

@@ -5,7 +5,6 @@ import {
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
 import {
-  createAutomaticSourceDeliveryContext,
   createNoQueuedDispatchResult,
   createNonTerminalToolWarningPayload,
   deliverDiscordReply,
@@ -15,6 +14,7 @@ import {
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
+  createAutomaticDraftContext,
   createMockDraftStreamForTest,
   expectFinalWithProgressReceipt,
   getDeliveredFinalTexts,
@@ -42,7 +42,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await params?.dispatcher.sendFinalReply({ text: "done" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "progress" } },
     });
 
@@ -84,7 +84,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       ).toBe(true);
       return createNoQueuedDispatchResult();
     });
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: "Investigating" } },
       },
@@ -129,7 +129,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       });
       return createNoQueuedDispatchResult();
     });
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: "Investigating" } },
       },
@@ -171,7 +171,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       });
       return createNoQueuedDispatchResult();
     });
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: "Investigating" } },
       },
@@ -228,7 +228,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -252,6 +252,38 @@ describe("processDiscordMessage draft streaming progress", () => {
     expectFinalWithProgressReceipt("done", "💬 2 notes", "🛠️ 1 tool call");
   });
 
+  it("retries an unacknowledged preamble and reports visibility after Discord accepts it", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    draftStream.messageId.mockReturnValue(undefined);
+    const results: Array<boolean | void> = [];
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      const preamble = {
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking source data.",
+      };
+      results.push(await params?.replyOptions?.onItemEvent?.(preamble));
+      draftStream.messageId.mockReturnValue("preview-1");
+      results.push(await params?.replyOptions?.onItemEvent?.(preamble));
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, commentary: true },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(results).toEqual([false, true]);
+    expect(draftStream.update.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it.each([
     ["active", true],
     ["inactive", false],
@@ -261,7 +293,10 @@ describe("processDiscordMessage draft streaming progress", () => {
       const draftStream = createMockDraftStreamForTest();
 
       dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        expect(params?.replyOptions?.commentaryPayloadsEnabled).toBe(true);
+        expect(params?.replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
         params?.replyOptions?.onVerboseProgressVisibility?.(() => durableLaneActive);
+        expect(params?.replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(durableLaneActive);
         await params?.replyOptions?.onItemEvent?.({
           itemId: "preamble-1",
           kind: "preamble",
@@ -270,7 +305,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         return createNoQueuedDispatchResult();
       });
 
-      const ctx = await createAutomaticSourceDeliveryContext({
+      const ctx = await createAutomaticDraftContext({
         discordConfig: {
           streaming: {
             mode: "progress",
@@ -296,6 +331,25 @@ describe("processDiscordMessage draft streaming progress", () => {
     },
   );
 
+  it("omits the durable commentary owner when Discord commentary progress is disabled", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.commentaryPayloadsEnabled).toBe(false);
+      expect(params?.replyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { commentary: false },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+  });
+
   it.each([
     ["active", true],
     ["inactive", false],
@@ -319,7 +373,7 @@ describe("processDiscordMessage draft streaming progress", () => {
         return createNoQueuedDispatchResult();
       });
 
-      const ctx = await createAutomaticSourceDeliveryContext({
+      const ctx = await createAutomaticDraftContext({
         discordConfig: {
           streaming: { mode: "progress", progress: { label: "Shelling" } },
         },
@@ -354,7 +408,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -390,7 +444,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -428,7 +482,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -452,7 +506,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -482,7 +536,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 1 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -513,7 +567,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -550,7 +604,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: "Shelling" } },
       },
@@ -585,7 +639,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: "Shelling" } },
       },
@@ -619,7 +673,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: "Shelling" } },
       },
@@ -651,7 +705,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: "Shelling" } },
       },
@@ -683,7 +737,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: "Shelling" } },
       },
@@ -712,12 +766,13 @@ describe("processDiscordMessage draft streaming progress", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
           progress: {
             label: "Shelling",
+            commandText: "raw",
           },
         },
       },
@@ -746,7 +801,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -763,6 +818,39 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done");
   });
 
+  it("preserves command output text when raw Discord progress is configured", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+      });
+      await params?.replyOptions?.onCommandOutput?.({
+        phase: "end",
+        title: "pnpm test -- --watch=false",
+        name: "exec",
+        exitCode: 0,
+      });
+      await elapseProgressDraftStartDelay();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", commandText: "raw" },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update.mock.calls.flat().join("\n")).toContain("pnpm test -- --watch=false");
+  });
+
   it("keeps Discord progress lines below the configured label", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
@@ -775,7 +863,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",

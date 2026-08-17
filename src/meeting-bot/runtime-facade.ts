@@ -273,7 +273,7 @@ export function createMeetingRuntimeFacade<
         tab: result.tab,
       });
       session.chrome = {
-        audioBackend: "blackhole-2ch",
+        audioBackend: result.audioBackend,
         launched: result.launched,
         nodeId,
         browserProfile: this.params.config.chrome.browserProfile,

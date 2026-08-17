@@ -158,6 +158,7 @@ const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedM
   openScope: "any member",
   groupPolicyPath: "channels.mattermost.groupPolicy",
   groupAllowFromPath: "channels.mattermost.groupAllowFrom",
+  findingTitle: "Mattermost security warning",
   policyPathSuffix: "dmPolicy",
   normalizeDmEntry: (raw) => normalizeAllowEntry(raw),
 });
@@ -972,6 +973,13 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       targetIdComparison: "case-sensitive",
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeMattermostMessagingTarget(to);
+        if (!target) {
+          return undefined;
+        }
+        return target.startsWith("user:") || target.startsWith("@") ? "direct" : "channel";
+      },
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
         const child = conversationId.trim();

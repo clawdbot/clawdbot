@@ -26,10 +26,11 @@ export type LegacyLosslessCompactionConfig = {
   modelValue?: string;
 };
 
-export type DisabledCodexPluginRouteHit = {
+export type CodexRuntimeRouteHit = {
   path: string;
   modelRef: string;
   canonicalModel: string;
+  agentId?: string;
 };
 
 export type DisabledCodexPluginRouteIssue = {

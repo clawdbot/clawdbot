@@ -38,7 +38,7 @@ import {
   type ManifestModelCatalogProviderAliasMetadata,
 } from "./model.static-catalog.js";
 
-export function resolveConfiguredFallbackModel(params: {
+export function buildConfiguredFallbackModel(params: {
   provider: string;
   modelId: string;
   cfg?: OpenClawConfig;
@@ -163,11 +163,7 @@ export function resolveConfiguredFallbackModel(params: {
     providerConfig?.models?.[0]?.maxTokens;
   const resolvedFallbackMaxTokens = configuredFallbackMaxTokens ?? staticCatalogModel?.maxTokens;
   const resolvedFallbackContextWindow =
-    configuredModel?.contextWindow ??
-    providerConfig?.contextWindow ??
-    providerConfig?.models?.[0]?.contextWindow ??
-    staticCatalogModel?.contextWindow ??
-    DEFAULT_CONTEXT_TOKENS;
+    configuredModel?.contextWindow ?? staticCatalogModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
   const normalizedResolvedFallbackMaxTokens = clampModelMaxTokensToContextWindow(
     resolvedFallbackMaxTokens,
     resolvedFallbackContextWindow,
@@ -198,11 +194,7 @@ export function resolveConfiguredFallbackModel(params: {
               : {}),
             cost: metadataModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: resolvedFallbackContextWindow,
-            contextTokens:
-              configuredModel?.contextTokens ??
-              providerConfig?.contextTokens ??
-              providerConfig?.models?.[0]?.contextTokens ??
-              staticCatalogModel?.contextTokens,
+            contextTokens: configuredModel?.contextTokens ?? staticCatalogModel?.contextTokens,
             // maxTokens is a wire-level output cap, not a context-budget fallback.
             // Omit an unknown cap so strict providers can apply their own limit.
             ...(normalizedResolvedFallbackMaxTokens !== undefined

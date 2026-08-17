@@ -201,6 +201,53 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
+  it("does not share cache rows across different runtime policy agents", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "worker" }));
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts only the revoked grant's cached tool closures", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+
+    expect(cache.evictGrant("grant-a")).toBe(true);
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
+  });
+
+  it("preserves the global 256-entry cache cap across grants", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    for (let index = 0; index < 256; index += 1) {
+      cache.resolve(
+        scopeParams({ cfg, grantToken: "grant-a", currentMessageId: `message-${index}` }),
+      );
+    }
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b", currentMessageId: "message-b" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(257);
+
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-a", currentMessageId: "message-0" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(258);
+
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b", currentMessageId: "message-b" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(258);
+  });
+
   it("never reuses ordinary private-mode tools for a source-reply-only grant", () => {
     const cache = new McpLoopbackToolCache();
     const cfg = {} as OpenClawConfig;

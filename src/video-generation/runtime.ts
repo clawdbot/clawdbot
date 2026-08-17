@@ -3,6 +3,11 @@ import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
+import {
+  getVideoGenerationProvider,
+  listVideoGenerationProviders,
+} from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
@@ -14,13 +19,11 @@ import {
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
-  buildReferenceInputCapabilityFailure,
+  buildVideoGenerationCapabilityFailure,
   resolveProviderWithModelCapabilities,
 } from "./capability-overlays.js";
 import { resolveVideoGenerationSupportedDurations } from "./duration-support.js";
-import { parseVideoGenerationModelRef } from "./model-ref.js";
 import { resolveVideoGenerationOverrides } from "./normalization.js";
-import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
 import type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
 import type { VideoGenerationProviderOptionType, VideoGenerationResult } from "./types.js";
 
@@ -176,13 +179,12 @@ export async function generateVideo(
       log: logger,
     });
 
-    // Guard: skip candidates that cannot satisfy reference-input counts so
-    // we never silently drop audio/image/video refs by falling over to a
-    // provider that ignores them and "succeeds" without the caller's assets.
+    // Guard: catalog modes and reference counts are authoritative before I/O,
+    // so fallback cannot select a model that will reject or drop the request.
     const inputImageCount = params.inputImages?.length ?? 0;
     const inputVideoCount = params.inputVideos?.length ?? 0;
     const inputAudioCount = params.inputAudios?.length ?? 0;
-    const referenceInputMismatch = buildReferenceInputCapabilityFailure({
+    const capabilityMismatch = buildVideoGenerationCapabilityFailure({
       providerId: candidate.provider,
       model: candidate.model,
       provider: activeProvider,
@@ -190,16 +192,16 @@ export async function generateVideo(
       inputVideoCount,
       inputAudioCount,
     });
-    if (referenceInputMismatch) {
+    if (capabilityMismatch) {
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
-        error: referenceInputMismatch,
+        error: capabilityMismatch,
       });
-      lastError = new Error(referenceInputMismatch);
-      warnOnFirstSkip(referenceInputMismatch);
+      lastError = new Error(capabilityMismatch);
+      warnOnFirstSkip(capabilityMismatch);
       logger.debug(
-        `video-generation candidate skipped (reference input capability): ${candidate.provider}/${candidate.model}`,
+        `video-generation candidate skipped (mode or reference capability): ${candidate.provider}/${candidate.model}`,
       );
       continue;
     }

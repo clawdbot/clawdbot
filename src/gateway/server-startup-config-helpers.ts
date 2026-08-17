@@ -8,7 +8,12 @@ import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
 } from "../config/io.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
+import {
+  retainLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "../config/legacy.default-agent-owner.js";
+import { materializeLegacyDefaultAgentRoles } from "../config/legacy.default-agent-roles.js";
 import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
@@ -51,7 +56,7 @@ export function assertValidGatewayStartupConfigSnapshot(
   }
   const issues =
     snapshot.issues.length > 0
-      ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+      ? renderConfigValidationIssueLines(snapshot, "").join("\n")
       : "Unknown validation issue.";
   const recoveryHint =
     options.includeDoctorHint && isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
@@ -125,8 +130,13 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   params.log.info(
     `gateway: auto-enabled plugins for this runtime without writing config:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
   );
+  const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(configSnapshot.sourceConfig);
+  const runtimeConfig = legacyDefaultAgentId
+    ? materializeLegacyDefaultAgentRoles(autoEnable.config, legacyDefaultAgentId).config
+    : autoEnable.config;
+  retainLegacyDefaultAgentId(runtimeConfig, legacyDefaultAgentId);
   return {
-    snapshot: withRuntimeConfig(configSnapshot, autoEnable.config),
+    snapshot: withRuntimeConfig(configSnapshot, runtimeConfig),
     wroteConfig,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };

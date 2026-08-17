@@ -1,8 +1,9 @@
 // Transcript event helpers serialize and trim session transcript events.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveGlobalSet } from "../shared/global-singleton.js";
+import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 /** Storage-neutral identity for the session transcript that changed. */
 type SessionTranscriptUpdateTarget = {
@@ -48,6 +49,16 @@ const INTERNAL_SESSION_TRANSCRIPT_LISTENERS = resolveGlobalSet<InternalSessionTr
   "close-and-restart",
 );
 
+const SESSION_TRANSCRIPT_UPDATE_STATE = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionTranscriptUpdateState"),
+  () => ({ version: 0 }),
+);
+
+/** Monotonic fence for projections that embed transcript-derived fields (previews, titles). */
+export function readSessionTranscriptUpdateVersion(): number {
+  return SESSION_TRANSCRIPT_UPDATE_STATE.version;
+}
+
 /** Registers a listener for normalized session transcript updates. */
 export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {
   SESSION_TRANSCRIPT_LISTENERS.add(listener);
@@ -68,10 +79,13 @@ export function onInternalSessionTranscriptUpdate(
 
 /** Emits a normalized transcript update to all registered listeners. */
 export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpdate): void {
-  const nextUpdate = normalizeSessionTranscriptUpdate(update, { allowIdentityOnly: true });
+  const nextUpdate = normalizeSessionTranscriptUpdate(update);
   if (!nextUpdate) {
     return;
   }
+  // Commit-then-broadcast: a subscriber's refetch races the sessions.list
+  // cache, so the fence must advance before any listener can observe the write.
+  SESSION_TRANSCRIPT_UPDATE_STATE.version += 1;
   const publicUpdate = projectPublicSessionTranscriptUpdate(nextUpdate);
   if (publicUpdate) {
     emitPublicSessionTranscriptUpdate(publicUpdate);
@@ -81,29 +95,18 @@ export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpd
 
 function normalizeSessionTranscriptUpdate(
   update: InternalSessionTranscriptUpdate,
-  options: { allowIdentityOnly: boolean },
 ): InternalSessionTranscriptUpdate | undefined {
-  const normalized = {
-    sessionFile: update.sessionFile,
-    target: update.target,
-    sessionKey: update.sessionKey,
-    agentId: update.agentId,
-    sessionId: update.sessionId,
-    lifecycleRevision: update.lifecycleRevision,
-    message: update.message,
-    messageId: update.messageId,
-    messageSeq: update.messageSeq,
-  };
-  const trimmed = normalizeOptionalString(normalized.sessionFile);
-  const target = normalizeUpdateTarget(normalized);
-  if (!trimmed && (!options.allowIdentityOnly || !target)) {
+  const trimmed = normalizeOptionalString(update.sessionFile);
+  const target = normalizeUpdateTarget(update);
+  if (!trimmed && !target) {
     return undefined;
   }
-  const messageSeq = asPositiveSafeInteger(normalized.messageSeq);
-  const sessionKey = normalizeOptionalString(normalized.sessionKey) ?? target?.sessionKey;
-  const agentId = normalizeOptionalString(normalized.agentId) ?? target?.agentId;
-  const sessionId = normalizeOptionalString(normalized.sessionId) ?? target?.sessionId;
-  const lifecycleRevision = normalizeOptionalString(normalized.lifecycleRevision);
+  const messageSeq = asPositiveSafeInteger(update.messageSeq);
+  const sessionKey = normalizeOptionalString(update.sessionKey) ?? target?.sessionKey;
+  const agentId = normalizeOptionalString(update.agentId) ?? target?.agentId;
+  const sessionId = normalizeOptionalString(update.sessionId) ?? target?.sessionId;
+  const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
+  const messageId = normalizeOptionalString(update.messageId);
   return {
     ...(trimmed ? { sessionFile: trimmed } : {}),
     ...(target ? { target } : {}),
@@ -111,10 +114,8 @@ function normalizeSessionTranscriptUpdate(
     ...(agentId ? { agentId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(lifecycleRevision ? { lifecycleRevision } : {}),
-    ...(normalized.message !== undefined ? { message: normalized.message } : {}),
-    ...(normalizeOptionalString(normalized.messageId)
-      ? { messageId: normalizeOptionalString(normalized.messageId) }
-      : {}),
+    ...(update.message !== undefined ? { message: update.message } : {}),
+    ...(messageId ? { messageId } : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
   };
 }
@@ -155,10 +156,21 @@ function projectPublicSessionTranscriptUpdate(
     ...(update.sessionKey ? { sessionKey: update.sessionKey } : {}),
     ...(update.agentId ? { agentId: update.agentId } : {}),
     ...(update.sessionId ? { sessionId: update.sessionId } : {}),
-    ...(update.message !== undefined ? { message: update.message } : {}),
+    ...(update.message !== undefined
+      ? { message: projectPublicSessionTranscriptMessage(update.message) }
+      : {}),
     ...(update.messageId ? { messageId: update.messageId } : {}),
     ...(update.messageSeq !== undefined ? { messageSeq: update.messageSeq } : {}),
   };
+}
+
+function projectPublicSessionTranscriptMessage(message: unknown): unknown {
+  if (!isRecord(message) || !Object.hasOwn(message, "providerReplay")) {
+    return message;
+  }
+  const publicMessage = { ...message };
+  delete publicMessage.providerReplay;
+  return publicMessage;
 }
 
 function normalizeUpdateTarget(update: {

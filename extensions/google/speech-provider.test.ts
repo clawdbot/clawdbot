@@ -374,6 +374,56 @@ describe("Google speech provider", () => {
     expect(requestSequence).toHaveBeenCalledTimes(2);
   });
 
+  it("accepts Gemini audio with URL-safe base64", async () => {
+    const pcm = Buffer.from([0xfb, 0xff, 8, 0, 9, 0, 10, 0]);
+    const pcmBase64url = pcm.toString("base64url");
+    expect(pcmBase64url).toMatch(/[-_]/);
+    expect(pcmBase64url).not.toMatch(/[+/]/);
+    const response = {
+      response: googleTtsResponse(pcmBase64url),
+      release: vi.fn(async () => {}),
+    };
+    const requestSequence = vi.fn().mockResolvedValue(response);
+    postJsonRequestMock.mockImplementation(requestSequence);
+    const provider = buildGoogleSpeechProvider();
+
+    const result = await provider.synthesize({
+      text: "Accept URL-safe audio.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+      },
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+
+    expect(result.audioBuffer.subarray(44)).toEqual(pcm);
+    expect(requestSequence).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Gemini audio with a mixed base64 alphabet", async () => {
+    const malformedResponse = {
+      response: googleTtsResponse("aGVsbG8+_"),
+      release: vi.fn(async () => {}),
+    };
+    const requestSequence = vi.fn().mockResolvedValue(malformedResponse);
+    postJsonRequestMock.mockImplementation(requestSequence);
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Reject mixed audio.",
+        cfg: {},
+        providerConfig: {
+          apiKey: "google-test-key",
+        },
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Google TTS response returned malformed base64 audio data");
+    expect(requestSequence).toHaveBeenCalledTimes(2);
+  });
+
   it("retries once when Gemini TTS fetch aborts", async () => {
     const pcm = Buffer.from([7, 0, 8, 0]);
     const abortError = new Error("This operation was aborted");

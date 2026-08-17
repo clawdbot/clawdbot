@@ -46,6 +46,129 @@ describe("qa-bus state", () => {
     expect(snapshot.messages.map((message) => message.id)).toEqual([inbound.id, outbound.id]);
   });
 
+  it("records provider-native inbound IDs before indexing and publishing messages", () => {
+    const state = createQaBusState();
+    const providerMessageId = "$provider-event:matrix.test";
+
+    const inbound = state.addInboundMessage(
+      {
+        conversation: { id: "qa-room", kind: "group" },
+        senderId: "alice",
+        text: "provider-native identity",
+      },
+      providerMessageId,
+    );
+    const snapshot = state.getSnapshot();
+
+    expect(inbound.id).toBe(providerMessageId);
+    expect(snapshot.messages[0]?.id).toBe(providerMessageId);
+    expect(snapshot.events[0]).toMatchObject({
+      kind: "inbound-message",
+      message: { id: providerMessageId },
+    });
+    expect(state.poll().events[0]).toMatchObject({
+      kind: "inbound-message",
+      message: { id: providerMessageId },
+    });
+    expect(state.readMessage({ messageId: providerMessageId })).toMatchObject({
+      id: providerMessageId,
+      text: "provider-native identity",
+    });
+  });
+
+  it("keeps identical provider-native message IDs isolated by account", () => {
+    const state = createQaBusState();
+    const messageId = "42";
+
+    for (const accountId of ["account-a", "account-b"]) {
+      state.addInboundMessage(
+        {
+          accountId,
+          conversation: { id: `${accountId}-room`, kind: "group" },
+          senderId: accountId,
+          text: `${accountId} original`,
+        },
+        messageId,
+      );
+    }
+
+    const snapshot = state.getSnapshot();
+    expect(snapshot.messages.map((message) => [message.accountId, message.id])).toEqual([
+      ["account-a", messageId],
+      ["account-b", messageId],
+    ]);
+    expect(snapshot.events.map((event) => event.accountId)).toEqual(["account-a", "account-b"]);
+
+    for (const accountId of ["account-a", "account-b"]) {
+      expect(state.readMessage({ accountId, messageId })).toMatchObject({
+        accountId,
+        id: messageId,
+        text: `${accountId} original`,
+      });
+      expect(state.searchMessages({ accountId })).toEqual([
+        expect.objectContaining({ accountId, id: messageId }),
+      ]);
+      expect(state.poll({ accountId }).events).toEqual([
+        expect.objectContaining({ accountId, message: expect.objectContaining({ id: messageId }) }),
+      ]);
+    }
+
+    state.editMessage({ accountId: "account-a", messageId, text: "account-a edited" });
+    state.reactToMessage({ accountId: "account-b", messageId, emoji: "eyes" });
+    expect(state.readMessage({ accountId: "account-a", messageId })).toMatchObject({
+      text: "account-a edited",
+      reactions: [],
+    });
+    expect(state.readMessage({ accountId: "account-b", messageId })).toMatchObject({
+      text: "account-b original",
+      reactions: [expect.objectContaining({ emoji: "eyes" })],
+    });
+  });
+
+  it("rejects ambiguous provider-native IDs instead of selecting the wrong conversation", () => {
+    const state = createQaBusState();
+    const accountId = "account-a";
+    const messageId = "42";
+
+    for (const conversationId of ["first-room", "second-room"]) {
+      state.addInboundMessage(
+        {
+          accountId,
+          conversation: { id: conversationId, kind: "group" },
+          senderId: "alice",
+          text: `${conversationId} original`,
+        },
+        messageId,
+      );
+    }
+
+    const originalSnapshot = state.getSnapshot();
+    expect(originalSnapshot.messages.map((message) => message.conversation.id)).toEqual([
+      "first-room",
+      "second-room",
+    ]);
+    expect(originalSnapshot.events.map((event) => event.accountId)).toEqual([accountId, accountId]);
+    for (const conversationId of ["first-room", "second-room"]) {
+      expect(state.searchMessages({ accountId, conversationId })).toEqual([
+        expect.objectContaining({
+          id: messageId,
+          conversation: expect.objectContaining({ id: conversationId }),
+        }),
+      ]);
+    }
+
+    const ambiguousMessage = "qa-bus message id is ambiguous for selected account: 42";
+    expect(() => state.readMessage({ accountId, messageId })).toThrow(ambiguousMessage);
+    expect(() => state.editMessage({ accountId, messageId, text: "wrong conversation" })).toThrow(
+      ambiguousMessage,
+    );
+    expect(() => state.reactToMessage({ accountId, messageId, emoji: "eyes" })).toThrow(
+      ambiguousMessage,
+    );
+    expect(() => state.deleteMessage({ accountId, messageId })).toThrow(ambiguousMessage);
+    expect(state.getSnapshot()).toEqual(originalSnapshot);
+  });
+
   it("normalizes the dm ingress alias before channel routing", () => {
     const state = createQaBusState();
 
@@ -357,6 +480,37 @@ describe("qa-bus state", () => {
         timeoutMs: 20,
       }),
     ).rejects.toThrow("qa-bus wait timeout");
+  });
+
+  it("ignores deleted message matches until a visible replacement arrives", async () => {
+    const state = createQaBusState();
+    const deleted = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "QA-VISIBLE-REPLACEMENT",
+    });
+    state.deleteMessage({ messageId: deleted.id });
+
+    await expect(
+      state.waitFor({
+        direction: "outbound",
+        kind: "message-text",
+        textIncludes: "QA-VISIBLE-REPLACEMENT",
+        timeoutMs: 10,
+      }),
+    ).rejects.toThrow("qa-bus wait timeout after 10ms");
+
+    const pending = state.waitFor({
+      direction: "outbound",
+      kind: "message-text",
+      textIncludes: "QA-VISIBLE-REPLACEMENT",
+      timeoutMs: 100,
+    });
+    const replacement = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "QA-VISIBLE-REPLACEMENT",
+    });
+
+    await expect(pending).resolves.toMatchObject({ id: replacement.id, direction: "outbound" });
   });
 
   it("caps oversized wait timers", async () => {

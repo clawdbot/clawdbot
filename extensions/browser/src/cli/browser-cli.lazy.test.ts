@@ -88,6 +88,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     ["cookies", ["browser", "cookies"]],
     ["local storage", ["browser", "storage", "local", "get"]],
     ["session storage", ["browser", "storage", "session", "get", "key"]],
+    ["native host", ["browser", "extension", "native-host"]],
   ])("declares default JSON output for %s", (_name, args) => {
     expect(isBrowserMachineOutput({ argv: ["node", "openclaw", ...args] })).toBe(true);
   });

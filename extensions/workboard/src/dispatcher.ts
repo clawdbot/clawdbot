@@ -6,7 +6,10 @@ import type {
   WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveNonNegativeIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -70,12 +73,6 @@ type WorkboardDispatchStartParams = {
 };
 
 const pendingWorkboardDispatches = new WeakMap<WorkboardStore, Promise<void>>();
-
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : fallback;
-}
 
 function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
   const sanitized = (value ?? fallback)
@@ -216,7 +213,7 @@ function buildWorkerPrompt(params: {
     "",
     "Heartbeat with workboard_heartbeat using the card id and token while working.",
     "When done, call workboard_complete with the card id, token, summary, and proof.",
-    "If you called workboard_proof separately, pass its returned proofId to workboard_complete.",
+    "If you recorded proof separately, pass its returned proofId to workboard_complete.",
     "If blocked, call workboard_block with the card id, token, and reason.",
     "",
     params.context,
@@ -327,7 +324,7 @@ async function runWorkboardDispatch(
   const now = params.options?.now ?? Date.now();
   const boardId = params.options?.boardId;
   const dispatch = await params.store.dispatch({ now, boardId });
-  const maxStarts = normalizePositiveInteger(
+  const maxStarts = resolveNonNegativeIntegerOption(
     params.options?.maxStarts,
     DEFAULT_DISPATCH_MAX_STARTS,
   );

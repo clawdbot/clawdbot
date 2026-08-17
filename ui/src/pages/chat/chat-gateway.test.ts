@@ -1,7 +1,9 @@
+import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // @vitest-environment node
 // Control UI tests cover chat behavior.
-import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatState } from "./chat-history.ts";
@@ -38,25 +40,119 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
   };
 }
 
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
+type HistoryResult = {
+  messages: Array<unknown>;
+  thinkingLevel?: string;
+  verboseLevel?: string;
+};
+
+function createTestClient(request: unknown): NonNullable<ChatState["client"]> {
+  return { request } as unknown as NonNullable<ChatState["client"]>;
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
+function createHistoryState(request: unknown, overrides: Partial<ChatState> = {}): ChatState {
+  return createState({
+    client: createTestClient(request),
+    ...overrides,
+  });
 }
+
+function createResolvedHistoryState(result: unknown, overrides: Partial<ChatState> = {}) {
+  const request = vi.fn().mockResolvedValue(result);
+  return { request, state: createHistoryState(request, overrides) };
+}
+
+function createHistorySnapshot(messages: Array<unknown>, overrides: Partial<ChatState> = {}) {
+  return createResolvedHistoryState({ messages, thinkingLevel: "low" }, overrides);
+}
+
+function createHistoryStateForClient(
+  client: NonNullable<ChatState["client"]>,
+  overrides: Partial<ChatState> = {},
+) {
+  return createState({ client, ...overrides });
+}
+
+function createDeferredHistoryState(overrides: Partial<ChatState> = {}) {
+  const history = createDeferred<HistoryResult>();
+  const request = vi.fn(() => history.promise);
+  return { history, request, state: createHistoryState(request, overrides) };
+}
+
+function createAssistantHistory(text: string, overrides: Omit<HistoryResult, "messages"> = {}) {
+  return {
+    messages: [{ role: "assistant", content: [{ type: "text", text }] }],
+    ...overrides,
+  };
+}
+
+type SessionTestState = ChatState & {
+  [key: string]: unknown;
+  chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;
+  lastLocalTerminalReconcile?: { sessionStatus: string } | null;
+  sessionsResult: {
+    [key: string]: unknown;
+    sessions: Array<Record<string, unknown>>;
+  };
+};
+
+function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTestState {
+  const state = createState(overrides) as SessionTestState;
+  state.sessionsResult = {
+    ts: 0,
+    path: "",
+    count: 1,
+    defaults: {},
+    sessions: [
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: true,
+        activeRunIds: ["run-1"],
+        status: "running",
+        startedAt: 100,
+      },
+    ],
+  };
+  return state;
+}
+
+type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
+type LiveToolState = ChatState & {
+  chatStreamSegments: HistoryToolSegment[];
+  chatToolMessages: Record<string, unknown>[];
+  toolStreamById: Map<string, unknown>;
+  toolStreamOrder: string[];
+  toolStreamSyncTimer: number | null;
+};
+
+function attachLiveToolState(
+  state: ChatState,
+  tools: Record<string, unknown>[],
+  segments: HistoryToolSegment[],
+): LiveToolState {
+  const liveState = state as LiveToolState;
+  liveState.chatStreamSegments = segments;
+  liveState.chatToolMessages = tools;
+  liveState.toolStreamById = new Map(
+    tools.map((tool) => [String(tool.toolCallId), { message: tool }]),
+  );
+  liveState.toolStreamOrder = tools.map((tool) => String(tool.toolCallId));
+  liveState.toolStreamSyncTimer = null;
+  return liveState;
+}
+
+function createLiveToolHistoryState(
+  messages: Array<unknown>,
+  overrides: Partial<ChatState>,
+  tools: Record<string, unknown>[],
+  segments: HistoryToolSegment[],
+): LiveToolState {
+  return attachLiveToolState(createHistorySnapshot(messages, overrides).state, tools, segments);
+}
+
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function expectTextChatMessage(message: unknown, role: string, text: string): void {
   const record = requireRecord(message);
@@ -276,6 +372,27 @@ describe("handleChatGatewayEvent", () => {
         sessionKey: "other",
       }),
     ).toEqual([payload.message]);
+  });
+
+  it("caches one background final when three retained panes receive the same event", () => {
+    const cache = new Map();
+    const states = ["one", "two", "three"].map((sessionKey) =>
+      createState({ chatMessagesBySession: cache, sessionKey }),
+    );
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "background",
+      state: "final",
+      message: createTextChatMessage("assistant", "background final"),
+    };
+
+    for (const state of states) {
+      expect(handleChatGatewayEvent(state, payload)).toBeNull();
+    }
+
+    expect(readChatMessagesFromCache(cache, states[0]!, { sessionKey: "background" })).toEqual([
+      payload.message,
+    ]);
   });
 
   it.each([
@@ -620,11 +737,9 @@ describe("handleChatGatewayEvent", () => {
   ])("keeps a delivered $name visible exactly once across stale history", async ({ final }) => {
     const user = createTextChatMessage("user", "Ask", { id: "persisted-user", seq: 1 });
     const request = vi.fn().mockResolvedValue({ messages: [user] });
-    const state = createState({
+    const state = createHistoryState(request, {
       chatMessages: [user],
       chatRunId: "delivered-run",
-      client: { request } as unknown as ChatState["client"],
-      sessionKey: "main",
     });
 
     expect(
@@ -772,6 +887,127 @@ describe("handleChatGatewayEvent", () => {
     expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
   });
 
+  it("retires a reply steer chip after an exact-target terminal rejection", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "reply-steer-request",
+      chatQueue: [
+        {
+          id: "reply-steer-chip",
+          text: "Reply with deployment context",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "reply-steer-request",
+          sendRunId: "reply-steer-request",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "reply-steer-request",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "active run changed; review and retry",
+      }),
+    ).toBe("error");
+
+    expect(state.chatQueue).toEqual([]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunError).toEqual({
+      summary: "Error: active run changed; review and retry",
+    });
+  });
+
+  it("retires a landed steer chip when its request run finishes inside the active run", () => {
+    const activePrompt = {
+      id: "active-prompt",
+      text: "Keep this run active",
+      createdAt: 1,
+      sendRunId: "active-run",
+      sendState: "waiting-model" as const,
+      sessionKey: "main",
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "active-run",
+      chatQueue: [
+        activePrompt,
+        {
+          id: "landed-steer-chip",
+          text: "Use the deployment plan",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "steer-request-run",
+          sendRunId: "steer-request-run",
+          steerTargetRunId: "active-run",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "steer-request-run",
+        sessionKey: "main",
+        state: "final",
+      }),
+    ).toBe("final");
+
+    expect(state.chatQueue).toEqual([activePrompt]);
+    expect(state.chatRunId).toBe("active-run");
+    expect(state.chatMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        __openclaw: { idempotencyKey: "active-run:user" },
+      }),
+      expect.objectContaining({
+        role: "user",
+        __openclaw: { idempotencyKey: "steer-request-run:user" },
+      }),
+    ]);
+  });
+
+  it("keeps a pending steer chip when an unrelated request run finishes", () => {
+    const chip = {
+      id: "pending-steer-chip",
+      text: "Keep waiting for this steer",
+      createdAt: 3,
+      kind: "steered" as const,
+      pendingRunId: "active-run",
+      sendRunId: "steer-request-run",
+      sessionKey: "main",
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "active-run",
+      chatQueue: [
+        chip,
+        {
+          id: "unrelated-pending-row",
+          text: "Keep unrelated pending work",
+          createdAt: 4,
+          pendingRunId: "unrelated-run",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    handleChatGatewayEvent(state, {
+      runId: "unrelated-run",
+      sessionKey: "main",
+      state: "final",
+    });
+
+    expect(state.chatQueue).toEqual([
+      chip,
+      expect.objectContaining({ id: "unrelated-pending-row" }),
+    ]);
+    expect(state.chatRunId).toBe("active-run");
+    expect(state.chatMessages).toEqual([]);
+  });
+
   it("uses an already-persisted steer to recover the active stream boundary", () => {
     const state = createState({
       sessionKey: "main",
@@ -887,39 +1123,11 @@ describe("handleChatGatewayEvent", () => {
     ({ event, projectionStatus, sessionStatus, errorSummary }) => {
       vi.useFakeTimers();
       try {
-        const state = createState({
-          sessionKey: "main",
+        const state = createStateWithRunningSession({
           chatRunId: "run-1",
           chatStream: "Partial assistant reply",
           chatStreamStartedAt: 100,
-        }) as ChatState & {
-          chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;
-          lastLocalTerminalReconcile?: { sessionStatus: string } | null;
-          sessionsResult?: {
-            ts: number;
-            path: string;
-            count: number;
-            defaults: Record<string, unknown>;
-            sessions: Array<Record<string, unknown>>;
-          };
-        };
-        state.sessionsResult = {
-          ts: 0,
-          path: "",
-          count: 1,
-          defaults: {},
-          sessions: [
-            {
-              key: "main",
-              kind: "direct",
-              updatedAt: 1,
-              hasActiveRun: true,
-              activeRunIds: ["run-1"],
-              status: "running",
-              startedAt: 100,
-            },
-          ],
-        };
+        });
 
         expect(
           handleChatGatewayEvent(state, {
@@ -957,25 +1165,11 @@ describe("handleChatGatewayEvent", () => {
   it("reconciles cached run and indicator state on terminal events", () => {
     vi.useFakeTimers();
     try {
-      const state = createState({
-        sessionKey: "main",
+      const state = createStateWithRunningSession({
         chatRunId: "run-1",
         chatStream: "Live reply",
         chatStreamStartedAt: 100,
-      }) as ChatState & {
-        chatRunStatus?: unknown;
-        compactionStatus?: unknown;
-        compactionClearTimer?: ReturnType<typeof setTimeout> | null;
-        fallbackStatus?: unknown;
-        fallbackClearTimer?: ReturnType<typeof setTimeout> | null;
-        sessionsResult?: {
-          ts: number;
-          path: string;
-          count: number;
-          defaults: Record<string, unknown>;
-          sessions: Array<Record<string, unknown>>;
-        };
-      };
+      });
       state.compactionStatus = {
         phase: "active",
         runId: "run-1",
@@ -990,23 +1184,6 @@ describe("handleChatGatewayEvent", () => {
         occurredAt: 100,
       };
       state.fallbackClearTimer = setTimeout(() => undefined, 1_000);
-      state.sessionsResult = {
-        ts: 0,
-        path: "",
-        count: 1,
-        defaults: {},
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: 1,
-            hasActiveRun: true,
-            activeRunIds: ["run-1"],
-            status: "running",
-            startedAt: 100,
-          },
-        ],
-      };
       const payload: ChatEventPayload = {
         runId: "run-1",
         sessionKey: "main",
@@ -1040,38 +1217,11 @@ describe("handleChatGatewayEvent", () => {
   it("does not publish Done while a yielded turn has registered continuation work", () => {
     vi.useFakeTimers();
     try {
-      const state = createState({
-        sessionKey: "main",
+      const state = createStateWithRunningSession({
         chatRunId: "run-1",
         chatStream: "Restarting now",
         chatStreamStartedAt: 100,
-      }) as ChatState & {
-        chatRunStatus?: unknown;
-        sessionsResult?: {
-          ts: number;
-          path: string;
-          count: number;
-          defaults: Record<string, unknown>;
-          sessions: Array<Record<string, unknown>>;
-        };
-      };
-      state.sessionsResult = {
-        ts: 0,
-        path: "",
-        count: 1,
-        defaults: {},
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: 1,
-            hasActiveRun: true,
-            activeRunIds: ["run-1"],
-            status: "running",
-            startedAt: 100,
-          },
-        ],
-      };
+      });
 
       expect(
         handleChatGatewayEvent(state, {
@@ -2384,12 +2534,10 @@ describe("loadChatHistory filtering", () => {
       { role: "assistant", content: [{ type: "text", text: "Real answer" }] },
       { role: "assistant", text: "  NO_REPLY  " },
     ];
-    const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low", verboseLevel: "full" }),
-    };
-    const state = createState({
-      client: mockClient as unknown as ChatState["client"],
-      connected: true,
+    const { state } = createResolvedHistoryState({
+      messages,
+      thinkingLevel: "low",
+      verboseLevel: "full",
     });
 
     await loadChatHistory(state);
@@ -2407,13 +2555,7 @@ describe("loadChatHistory filtering", () => {
 
   it("keeps assistant message when text field has real content but content is NO_REPLY", async () => {
     const messages = [{ role: "assistant", text: "real reply", content: "NO_REPLY" }];
-    const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages }),
-    };
-    const state = createState({
-      client: mockClient as unknown as ChatState["client"],
-      connected: true,
-    });
+    const { state } = createResolvedHistoryState({ messages });
 
     await loadChatHistory(state);
 
@@ -2443,13 +2585,7 @@ describe("loadChatHistory filtering", () => {
         content: [{ type: "text", text: "real tool output" }],
       },
     ];
-    const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages }),
-    };
-    const state = createState({
-      client: mockClient as unknown as ChatState["client"],
-      connected: true,
-    });
+    const { state } = createResolvedHistoryState({ messages });
 
     await loadChatHistory(state);
 
@@ -2472,13 +2608,7 @@ describe("loadChatHistory filtering", () => {
       },
       { role: "user", content: "" },
     ];
-    const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages }),
-    };
-    const state = createState({
-      client: mockClient as unknown as ChatState["client"],
-      connected: true,
-    });
+    const { state } = createResolvedHistoryState({ messages });
 
     await loadChatHistory(state);
 
@@ -2492,13 +2622,7 @@ describe("loadChatHistory filtering", () => {
         "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
       ),
     ];
-    const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages }),
-    };
-    const state = createState({
-      client: mockClient as unknown as ChatState["client"],
-      connected: true,
-    });
+    const { state } = createResolvedHistoryState({ messages });
 
     await loadChatHistory(state);
 
@@ -2506,7 +2630,7 @@ describe("loadChatHistory filtering", () => {
   });
 
   it("applies current session metadata from chat history", async () => {
-    const request = vi.fn().mockResolvedValue({
+    const { state } = createResolvedHistoryState({
       messages: [],
       sessionId: "legacy-session",
       thinkingLevel: "low",
@@ -2523,10 +2647,6 @@ describe("loadChatHistory filtering", () => {
         updatedAt: 123,
       },
     });
-    const state = createState({
-      client: { request } as unknown as ChatState["client"],
-      connected: true,
-    });
 
     const result = await loadChatHistory(state);
 
@@ -2540,19 +2660,17 @@ describe("loadChatHistory filtering", () => {
   });
 
   it("preserves the displayed leaf when history metadata is not authoritative for it", async () => {
-    const request = vi.fn().mockResolvedValue({
-      messages: [],
-      sessionInfo: {
-        key: "main",
-        sessionId: "session-main",
-        updatedAt: 123,
+    const { state } = createResolvedHistoryState(
+      {
+        messages: [],
+        sessionInfo: {
+          key: "main",
+          sessionId: "session-main",
+          updatedAt: 123,
+        },
       },
-    });
-    const state = createState({
-      chatDisplayedLeafEntryId: "leaf-from-tail",
-      client: { request } as unknown as ChatState["client"],
-      connected: true,
-    });
+      { chatDisplayedLeafEntryId: "leaf-from-tail" },
+    );
 
     await loadChatHistory(state);
 
@@ -2560,12 +2678,12 @@ describe("loadChatHistory filtering", () => {
   });
 
   it("omits literal global agentId until selected/default agent is known", async () => {
-    const request = vi.fn().mockResolvedValue({ messages: [] });
-    const state = createState({
-      sessionKey: "global",
-      client: { request } as unknown as ChatState["client"],
-      connected: true,
-    });
+    const { request, state } = createResolvedHistoryState(
+      { messages: [] },
+      {
+        sessionKey: "global",
+      },
+    );
 
     await loadChatHistory(state);
 
@@ -2576,18 +2694,18 @@ describe("loadChatHistory filtering", () => {
   });
 
   it("uses hello default agent for literal global history before agents list loads", async () => {
-    const request = vi.fn().mockResolvedValue({ messages: [] });
-    const state = createState({
-      sessionKey: "global",
-      hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-        snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+    const { request, state } = createResolvedHistoryState(
+      { messages: [] },
+      {
+        sessionKey: "global",
+        hello: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+          snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+        },
       },
-      client: { request } as unknown as ChatState["client"],
-      connected: true,
-    });
+    );
 
     await loadChatHistory(state);
 
@@ -2599,15 +2717,15 @@ describe("loadChatHistory filtering", () => {
 
   it("caches global history under the selected agent only", async () => {
     const messages = [{ role: "assistant", content: [{ type: "text", text: "work history" }] }];
-    const request = vi.fn().mockResolvedValue({ messages });
-    const state = createState({
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-      chatMessagesBySession: new Map(),
-      client: { request } as unknown as ChatState["client"],
-      connected: true,
-    });
+    const { state } = createResolvedHistoryState(
+      { messages },
+      {
+        sessionKey: "global",
+        assistantAgentId: "work",
+        agentsList: { defaultId: "main" },
+        chatMessagesBySession: new Map(),
+      },
+    );
 
     await loadChatHistory(state);
 
@@ -2620,22 +2738,58 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessagesBySession?.has("agent:main:main")).toBe(false);
   });
 
-  it("loads startup history with agents in one request", async () => {
-    const request = vi.fn().mockResolvedValue({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
-      agentsList: {
-        agents: [{ id: "ops", name: "Ops" }],
-        defaultId: "ops",
-        mainKey: "main",
-        scope: "agent",
+  it("rejects a stale startup roster before mutating chat-local selection", async () => {
+    const currentRoster = {
+      agents: [{ id: "research", name: "Research" }],
+      defaultId: "research",
+      mainKey: "main",
+      scope: "per-sender" as const,
+    };
+    const onAgentsList = vi.fn(() => false);
+    const { state } = createResolvedHistoryState(
+      {
+        agentsList: {
+          agents: [{ id: "main", name: "Stale Main" }],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+        },
+        messages: [],
       },
-    });
-    const state = createState({
-      agentsError: "previous agents.list failure",
-      client: { request } as unknown as ChatState["client"],
-      connected: true,
-      sessionKey: "global",
-    });
+      {
+        agentsError: "keep newer roster status",
+        agentsList: currentRoster,
+        agentsSelectedId: "research",
+        onAgentsList,
+      },
+    );
+
+    await loadChatHistory(state, { startup: true });
+
+    expect(onAgentsList).toHaveBeenCalledOnce();
+    expect(state.agentsError).toBe("keep newer roster status");
+    expect(state.agentsList).toBe(currentRoster);
+    expect(state.agentsSelectedId).toBe("research");
+  });
+
+  it("loads startup history with agents in one request", async () => {
+    const onAgentsList = vi.fn(() => true);
+    const { request, state } = createResolvedHistoryState(
+      {
+        messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
+        agentsList: {
+          agents: [{ id: "ops", name: "Ops" }],
+          defaultId: "ops",
+          mainKey: "main",
+          scope: "agent",
+        },
+      },
+      {
+        agentsError: "previous agents.list failure",
+        onAgentsList,
+        sessionKey: "global",
+      },
+    );
 
     await loadChatHistory(state, { startup: true });
 
@@ -2649,70 +2803,37 @@ describe("loadChatHistory filtering", () => {
     expect(state.agentsError).toBeNull();
     expect(state.agentsList?.defaultId).toBe("ops");
     expect(state.agentsSelectedId).toBe("ops");
+    expect(onAgentsList).toHaveBeenCalledOnce();
   });
 
-  it("coalesces matching startup requests across chat pane states", async () => {
-    const startup = createDeferred<{
-      messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>;
-    }>();
+  it.each([
+    { name: "coalesces matching startup requests across chat pane states", refresh: false },
+    {
+      name: "coalesces overlapping pane startup loads when rendered message arrays change",
+      refresh: true,
+    },
+  ])("$name", async ({ refresh }) => {
+    const startup = createDeferred<HistoryResult>();
     const request = vi.fn(() => startup.promise);
-    const client = { request } as unknown as ChatState["client"];
-    const firstState = createState({
-      client,
-      connected: true,
-      sessionKey: "agent:main:main",
-    });
-    const secondState = createState({
-      client,
-      connected: true,
-      sessionKey: "agent:main:main",
-    });
+    const client = createTestClient(request);
+    const firstState = createHistoryStateForClient(client, { sessionKey: "agent:main:main" });
+    const secondState = createHistoryStateForClient(client, { sessionKey: "agent:main:main" });
 
-    const firstLoad = loadChatHistory(firstState, { startup: true });
-    const secondLoad = loadChatHistory(secondState, { startup: true });
-
-    expect(request).toHaveBeenCalledTimes(1);
-    startup.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "shared" }] }],
-    });
-    await Promise.all([firstLoad, secondLoad]);
-
-    expect(firstState.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "shared" }] },
-    ]);
-    expect(secondState.chatMessages).toEqual(firstState.chatMessages);
-  });
-
-  it("coalesces overlapping pane startup loads when rendered message arrays change", async () => {
-    type StartupResult = {
-      messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>;
-    };
-    const sharedStartup = createDeferred<StartupResult>();
-    const request = vi.fn(() => sharedStartup.promise);
-    const client = { request } as unknown as ChatState["client"];
-    const firstState = createState({
-      client,
-      connected: true,
-      sessionKey: "agent:main:main",
-    });
-    const secondState = createState({
-      client,
-      connected: true,
-      sessionKey: "agent:main:main",
-    });
-
-    const firstSharedLoad = loadChatHistory(firstState, { startup: true });
-    const secondSharedLoad = loadChatHistory(secondState, { startup: true });
-    firstState.chatMessages = [...firstState.chatMessages];
-    const firstFreshLoad = loadChatHistory(firstState, { startup: true });
-    secondState.chatMessages = [...secondState.chatMessages];
-    const secondFreshLoad = loadChatHistory(secondState, { startup: true });
-
-    expect(request).toHaveBeenCalledOnce();
-    sharedStartup.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "shared" }] }],
-    });
-    await Promise.all([firstSharedLoad, secondSharedLoad, firstFreshLoad, secondFreshLoad]);
+    const loads = [
+      loadChatHistory(firstState, { startup: true }),
+      loadChatHistory(secondState, { startup: true }),
+    ];
+    if (refresh) {
+      firstState.chatMessages = [...firstState.chatMessages];
+      loads.push(loadChatHistory(firstState, { startup: true }));
+      secondState.chatMessages = [...secondState.chatMessages];
+      loads.push(loadChatHistory(secondState, { startup: true }));
+      expect(request).toHaveBeenCalledOnce();
+    } else {
+      expect(request).toHaveBeenCalledTimes(1);
+    }
+    startup.resolve(createAssistantHistory("shared"));
+    await Promise.all(loads);
 
     expect(firstState.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "shared" }] },
@@ -2722,17 +2843,9 @@ describe("loadChatHistory filtering", () => {
 
   it("keeps startup requests separate for different pane sessions", async () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
-    const client = { request } as unknown as ChatState["client"];
-    const firstState = createState({
-      client,
-      connected: true,
-      sessionKey: "agent:main:first",
-    });
-    const secondState = createState({
-      client,
-      connected: true,
-      sessionKey: "agent:main:second",
-    });
+    const client = createTestClient(request);
+    const firstState = createHistoryStateForClient(client, { sessionKey: "agent:main:first" });
+    const secondState = createHistoryStateForClient(client, { sessionKey: "agent:main:second" });
 
     await Promise.all([
       loadChatHistory(firstState, { startup: true }),
@@ -2751,25 +2864,17 @@ describe("loadChatHistory filtering", () => {
   });
 
   it("keeps startup requests separate across pane connection epochs", async () => {
-    const staleStartup = createDeferred<{
-      messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>;
-    }>();
+    const staleStartup = createDeferred<HistoryResult>();
     const request = vi
       .fn()
       .mockImplementationOnce(() => staleStartup.promise)
-      .mockResolvedValueOnce({
-        messages: [{ role: "assistant", content: [{ type: "text", text: "fresh" }] }],
-      });
-    const client = { request } as unknown as ChatState["client"];
-    const staleState = createState({
-      client,
-      connected: true,
+      .mockResolvedValueOnce(createAssistantHistory("fresh"));
+    const client = createTestClient(request);
+    const staleState = createHistoryStateForClient(client, {
       connectionEpoch: 1,
       sessionKey: "agent:main:main",
     });
-    const freshState = createState({
-      client,
-      connected: true,
+    const freshState = createHistoryStateForClient(client, {
       connectionEpoch: 2,
       sessionKey: "agent:main:main",
     });
@@ -2779,9 +2884,7 @@ describe("loadChatHistory filtering", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
     await freshLoad;
-    staleStartup.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "stale" }] }],
-    });
+    staleStartup.resolve(createAssistantHistory("stale"));
     await staleLoad;
 
     expect(freshState.chatMessages).toEqual([
@@ -2790,17 +2893,17 @@ describe("loadChatHistory filtering", () => {
   });
 
   it("falls back to chat.history when startup history is not advertised", async () => {
-    const request = vi.fn().mockResolvedValue({ messages: [] });
-    const state = createState({
-      client: { request } as unknown as ChatState["client"],
-      connected: true,
-      hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-        features: { methods: ["chat.history"], events: [] },
+    const { request, state } = createResolvedHistoryState(
+      { messages: [] },
+      {
+        hello: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+          features: { methods: ["chat.history"], events: [] },
+        },
       },
-    });
+    );
 
     await loadChatHistory(state, { startup: true });
 
@@ -2813,15 +2916,10 @@ describe("loadChatHistory filtering", () => {
 
 describe("chat send Gateway requests", () => {
   it("clears reconnect resume when history returns a different backing session", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "session-after-reconnect",
-      messages: [],
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      reconnectResumeSessionId: "session-before-reconnect",
-    });
+    const { state } = createResolvedHistoryState(
+      { sessionId: "session-after-reconnect", messages: [] },
+      { reconnectResumeSessionId: "session-before-reconnect" },
+    );
 
     await loadChatHistory(state);
 
@@ -2840,13 +2938,8 @@ describe("loadChatHistory retry handling", () => {
           message: "unknown method: chat.startup",
         }),
       )
-      .mockResolvedValueOnce({
-        messages: [{ role: "assistant", content: [{ type: "text", text: "fallback" }] }],
-      });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
+      .mockResolvedValueOnce(createAssistantHistory("fallback"));
+    const state = createHistoryState(request);
 
     await loadChatHistory(state, { startup: true });
 
@@ -2877,14 +2970,8 @@ describe("loadChatHistory retry handling", () => {
             retryAfterMs: 250,
           }),
         )
-        .mockResolvedValueOnce({
-          messages: [{ role: "assistant", content: [{ type: "text", text: "awake" }] }],
-          thinkingLevel: "low",
-        });
-      const state = createState({
-        connected: true,
-        client: { request } as unknown as ChatState["client"],
-      });
+        .mockResolvedValueOnce(createAssistantHistory("awake", { thinkingLevel: "low" }));
+      const state = createHistoryState(request);
 
       const load = loadChatHistory(state);
       await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
@@ -2929,12 +3016,10 @@ describe("loadChatHistory retry handling", () => {
           }),
         )
         .mockImplementationOnce(() => secondAttempt.promise)
-        .mockResolvedValueOnce({
-          messages: [{ role: "assistant", content: [{ type: "text", text: "awake" }] }],
-        });
-      const client = { request } as unknown as ChatState["client"];
-      const firstState = createState({ client, connected: true });
-      const secondState = createState({ client, connected: true });
+        .mockResolvedValueOnce(createAssistantHistory("awake"));
+      const client = createTestClient(request);
+      const firstState = createHistoryStateForClient(client);
+      const secondState = createHistoryStateForClient(client);
 
       const firstLoad = loadChatHistory(firstState);
       await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
@@ -2959,18 +3044,11 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
-    const request = vi.fn().mockResolvedValue({
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
-        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
-        { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
-      ],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
+    const { request, state } = createHistorySnapshot([
+      { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+      { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
+    ]);
 
     await loadChatHistory(state);
 
@@ -2988,25 +3066,18 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("filters heartbeat acknowledgements and internal-only user messages", async () => {
-    const request = vi.fn().mockResolvedValue({
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
-        createTextChatMessage(
-          "user",
-          [
-            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-            "subagent completion payload",
-            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-          ].join("\n"),
-        ),
-        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
-      ],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
+    const { state } = createHistorySnapshot([
+      { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+      createTextChatMessage(
+        "user",
+        [
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "subagent completion payload",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+      ),
+      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+    ]);
 
     await loadChatHistory(state);
 
@@ -3133,13 +3204,13 @@ describe("loadChatHistory retry handling", () => {
     },
   ])("$name", async (fixture) => {
     const { history, visible, expected, state: overrides, verify } = fixture.create();
-    const request = vi.fn().mockResolvedValue({ messages: history });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: visible,
-      ...overrides,
-    });
+    const { request, state } = createResolvedHistoryState(
+      { messages: history },
+      {
+        chatMessages: visible,
+        ...overrides,
+      },
+    );
 
     await loadChatHistory(state);
 
@@ -3147,7 +3218,6 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual(expected);
     verify?.(state);
   });
-  type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
   type RecoveredToolFixture = {
     tools: Record<string, unknown>[];
     persistedCount: number;
@@ -3277,31 +3347,17 @@ describe("loadChatHistory retry handling", () => {
       remainingSegments = [],
     } = fixture.create();
     const persistedUser = createTextChatMessage("user", "latest ask", { seq: 1 });
-    const request = vi.fn().mockResolvedValue({
-      messages: [persistedUser, ...tools.slice(0, persistedCount)],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: [persistedUser],
-      chatRunId: "run-1",
-      chatStream: stream,
-      chatStreamStartedAt: 100,
-    }) as ChatState & {
-      chatStreamSegments: HistoryToolSegment[];
-      chatToolMessages: Record<string, unknown>[];
-      toolStreamById: Map<string, unknown>;
-      toolStreamOrder: string[];
-      toolStreamSyncTimer: number | null;
-    };
-    state.chatStreamSegments = segments;
-    state.chatToolMessages = tools;
-    state.toolStreamById = new Map(
-      tools.map((tool) => [String(tool.toolCallId), { message: tool }]),
+    const state = createLiveToolHistoryState(
+      [persistedUser, ...tools.slice(0, persistedCount)],
+      {
+        chatMessages: [persistedUser],
+        chatRunId: "run-1",
+        chatStream: stream,
+        chatStreamStartedAt: 100,
+      },
+      tools,
+      segments,
     );
-    state.toolStreamOrder = tools.map((tool) => String(tool.toolCallId));
-    state.toolStreamSyncTimer = null;
 
     await loadChatHistory(state);
 
@@ -3344,29 +3400,17 @@ describe("loadChatHistory retry handling", () => {
       runId: "run-1",
       content: [{ type: "toolcall", name: "shell", arguments: {} }],
     };
-    const request = vi.fn().mockResolvedValue({
-      messages: [olderUser, olderToolResult, latestUser],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: [olderUser, olderToolResult, latestUser],
-      chatRunId: "run-1",
-      chatStream: "Still answering.",
-      chatStreamStartedAt: 100,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number }>;
-      chatToolMessages: Record<string, unknown>[];
-      toolStreamById: Map<string, unknown>;
-      toolStreamOrder: string[];
-      toolStreamSyncTimer: number | null;
-    };
-    state.chatStreamSegments = [{ text: "before current tool", ts: 1 }];
-    state.chatToolMessages = [liveToolMessage];
-    state.toolStreamById = new Map([["call_current", { message: liveToolMessage }]]);
-    state.toolStreamOrder = ["call_current"];
-    state.toolStreamSyncTimer = null;
+    const state = createLiveToolHistoryState(
+      [olderUser, olderToolResult, latestUser],
+      {
+        chatMessages: [olderUser, olderToolResult, latestUser],
+        chatRunId: "run-1",
+        chatStream: "Still answering.",
+        chatStreamStartedAt: 100,
+      },
+      [liveToolMessage],
+      [{ text: "before current tool", ts: 1 }],
+    );
 
     await loadChatHistory(state);
 
@@ -3395,36 +3439,24 @@ describe("loadChatHistory retry handling", () => {
       timestamp: 2,
       __openclaw: { seq: 2 },
     };
-    const request = vi.fn().mockResolvedValue({
-      messages: [persistedUser, persistedToolCall],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: [persistedUser],
-      chatRunId: "run-1",
-      chatStream: "Still answering.",
-      chatStreamStartedAt: 100,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number }>;
-      chatToolMessages: Record<string, unknown>[];
-      toolStreamById: Map<string, unknown>;
-      toolStreamOrder: string[];
-      toolStreamSyncTimer: number | null;
-    };
-    state.chatStreamSegments = [{ text: "before tool", ts: 1 }];
-    state.chatToolMessages = [
+    const state = createLiveToolHistoryState(
+      [persistedUser, persistedToolCall],
       {
-        role: "assistant",
-        toolCallId: "call_1",
-        runId: "run-1",
-        content: [{ type: "toolcall", name: "shell", arguments: {} }],
+        chatMessages: [persistedUser],
+        chatRunId: "run-1",
+        chatStream: "Still answering.",
+        chatStreamStartedAt: 100,
       },
-    ];
-    state.toolStreamById = new Map([["call_1", { message: state.chatToolMessages[0] }]]);
-    state.toolStreamOrder = ["call_1"];
-    state.toolStreamSyncTimer = null;
+      [
+        {
+          role: "assistant",
+          toolCallId: "call_1",
+          runId: "run-1",
+          content: [{ type: "toolcall", name: "shell", arguments: {} }],
+        },
+      ],
+      [{ text: "before tool", ts: 1 }],
+    );
 
     await loadChatHistory(state);
 
@@ -3452,29 +3484,17 @@ describe("loadChatHistory retry handling", () => {
       timestamp: 2,
       __openclaw: { seq: 2 },
     };
-    const request = vi.fn().mockResolvedValue({
-      messages: [persistedUser, persistedToolResult],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: [persistedUser],
-      chatRunId: "run-1",
-      chatStream: null,
-      chatStreamStartedAt: 100,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number }>;
-      chatToolMessages: Record<string, unknown>[];
-      toolStreamById: Map<string, unknown>;
-      toolStreamOrder: string[];
-      toolStreamSyncTimer: number | null;
-    };
-    state.chatStreamSegments = [{ text: "before tool", ts: 1 }];
-    state.chatToolMessages = [persistedToolResult];
-    state.toolStreamById = new Map([["call_1", { message: persistedToolResult }]]);
-    state.toolStreamOrder = ["call_1"];
-    state.toolStreamSyncTimer = null;
+    const state = createLiveToolHistoryState(
+      [persistedUser, persistedToolResult],
+      {
+        chatMessages: [persistedUser],
+        chatRunId: "run-1",
+        chatStream: null,
+        chatStreamStartedAt: 100,
+      },
+      [persistedToolResult],
+      [{ text: "before tool", ts: 1 }],
+    );
 
     await loadChatHistory(state);
 
@@ -3492,15 +3512,16 @@ describe("loadChatHistory retry handling", () => {
     expect(state.toolStreamOrder).toEqual([]);
   });
 
-  it("materializes orphaned streamed assistant text when history reload is stale", async () => {
-    const persistedUser = createTextChatMessage("user", "first", { seq: 1 });
-    const request = vi.fn().mockResolvedValue({
-      messages: [persistedUser],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
+  it.each([
+    { name: "materializes orphaned streamed assistant text when history reload is stale" },
+    {
+      name: "timestamps materialized streamed text after the persisted user prompt",
+      userTimestamp: 200,
+      verifyTimestamp: true,
+    },
+  ])("$name", async ({ userTimestamp, verifyTimestamp }) => {
+    const persistedUser = createTextChatMessage("user", "first", { seq: 1 }, userTimestamp);
+    const { state } = createHistorySnapshot([persistedUser], {
       chatMessages: [persistedUser],
       chatRunId: null,
       chatStream: "Partial answer before history catch-up.",
@@ -3516,35 +3537,9 @@ describe("loadChatHistory retry handling", () => {
       "assistant",
       "Partial answer before history catch-up.",
     );
-    expect(state.chatStream).toBeNull();
-    expect(state.chatStreamStartedAt).toBeNull();
-  });
-
-  it("timestamps materialized streamed text after the persisted user prompt", async () => {
-    const persistedUser = createTextChatMessage("user", "first", { seq: 1 }, 200);
-    const request = vi.fn().mockResolvedValue({
-      messages: [persistedUser],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: [persistedUser],
-      chatRunId: null,
-      chatStream: "Partial answer before history catch-up.",
-      chatStreamStartedAt: 100,
-    });
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toHaveLength(2);
-    expect(state.chatMessages[0]).toEqual(persistedUser);
-    expectTextChatMessage(
-      state.chatMessages[1],
-      "assistant",
-      "Partial answer before history catch-up.",
-    );
-    expect(requireRecord(state.chatMessages[1]).timestamp).toBe(201);
+    if (verifyTimestamp) {
+      expect(requireRecord(state.chatMessages[1]).timestamp).toBe(201);
+    }
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
   });
@@ -3558,29 +3553,17 @@ describe("loadChatHistory retry handling", () => {
       content: [{ type: "text", text: "tool output" }],
       __openclaw: { seq: 2 },
     };
-    const request = vi.fn().mockResolvedValue({
-      messages: [persistedUser, persistedToolResult],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: [persistedUser],
-      chatRunId: null,
-      chatStream: null,
-      chatStreamStartedAt: null,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number }>;
-      chatToolMessages: Record<string, unknown>[];
-      toolStreamById: Map<string, unknown>;
-      toolStreamOrder: string[];
-      toolStreamSyncTimer: number | null;
-    };
-    state.chatStreamSegments = [{ text: "before tool", ts: 1 }];
-    state.chatToolMessages = [persistedToolResult];
-    state.toolStreamById = new Map([["call_1", { message: persistedToolResult }]]);
-    state.toolStreamOrder = ["call_1"];
-    state.toolStreamSyncTimer = null;
+    const state = createLiveToolHistoryState(
+      [persistedUser, persistedToolResult],
+      {
+        chatMessages: [persistedUser],
+        chatRunId: null,
+        chatStream: null,
+        chatStreamStartedAt: null,
+      },
+      [persistedToolResult],
+      [{ text: "before tool", ts: 1 }],
+    );
 
     await loadChatHistory(state);
 
@@ -3603,13 +3586,7 @@ describe("loadChatHistory retry handling", () => {
       "First visible stream text. More final text.",
       { seq: 2 },
     );
-    const request = vi.fn().mockResolvedValue({
-      messages: [persistedUser, historyAssistant],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
+    const { state } = createHistorySnapshot([persistedUser, historyAssistant], {
       chatMessages: [persistedUser],
       chatRunId: "run-1",
       chatStream: "First visible stream text.",
@@ -3636,29 +3613,17 @@ describe("loadChatHistory retry handling", () => {
       runId: "run-1",
       content: [{ type: "toolcall", name: "shell", arguments: {} }],
     };
-    const request = vi.fn().mockResolvedValue({
-      messages: [persistedUser, historyAssistant],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: [persistedUser],
-      chatRunId: "run-1",
-      chatStream: "First visible stream text.",
-      chatStreamStartedAt: 100,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number }>;
-      chatToolMessages: Record<string, unknown>[];
-      toolStreamById: Map<string, unknown>;
-      toolStreamOrder: string[];
-      toolStreamSyncTimer: number | null;
-    };
-    state.chatStreamSegments = [{ text: "First visible stream text.", ts: 90 }];
-    state.chatToolMessages = [liveToolMessage];
-    state.toolStreamById = new Map([["call_current", { message: liveToolMessage }]]);
-    state.toolStreamOrder = ["call_current"];
-    state.toolStreamSyncTimer = null;
+    const state = createLiveToolHistoryState(
+      [persistedUser, historyAssistant],
+      {
+        chatMessages: [persistedUser],
+        chatRunId: "run-1",
+        chatStream: "First visible stream text.",
+        chatStreamStartedAt: 100,
+      },
+      [liveToolMessage],
+      [{ text: "First visible stream text.", ts: 90 }],
+    );
 
     await loadChatHistory(state);
 
@@ -3678,15 +3643,7 @@ describe("loadChatHistory retry handling", () => {
       { idempotencyKey: "pending-run:user" },
       10,
     );
-    const request = vi.fn().mockResolvedValue({
-      messages: [],
-      thinkingLevel: "low",
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: [optimisticUser],
-    });
+    const { state } = createHistorySnapshot([], { chatMessages: [optimisticUser] });
 
     await loadChatHistory(state);
 
@@ -3707,14 +3664,10 @@ describe("loadChatHistory retry handling", () => {
       seq: 1,
     });
     const historyAssistant = createTextChatMessage("assistant", "latest answer", { seq: 2 });
-    const request = vi.fn().mockResolvedValue({
-      messages: [historyUser, historyAssistant],
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      chatMessages: [optimisticUser],
-    });
+    const { state } = createResolvedHistoryState(
+      { messages: [historyUser, historyAssistant] },
+      { chatMessages: [optimisticUser] },
+    );
 
     await loadChatHistory(state);
 
@@ -3729,9 +3682,7 @@ describe("loadChatHistory retry handling", () => {
         details: { code: "AUTH_UNAUTHORIZED" },
       }),
     );
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
+    const state = createHistoryState(request, {
       chatMessages: [{ role: "assistant", content: [{ type: "text", text: "old" }] }],
       chatThinkingLevel: "high",
       chatVerboseLevel: "full",
@@ -3749,21 +3700,13 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("coalesces duplicate in-flight history loads for the selected session", async () => {
-    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const request = vi.fn(() => history.promise);
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
+    const { history, request, state } = createDeferredHistoryState();
 
     const firstLoad = loadChatHistory(state);
     const secondLoad = loadChatHistory(state);
 
     expect(request).toHaveBeenCalledTimes(1);
-    history.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
-      thinkingLevel: "low",
-    });
+    history.resolve(createAssistantHistory("ready", { thinkingLevel: "low" }));
     await firstLoad;
     await secondLoad;
 
@@ -3775,12 +3718,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("preserves a first send appended while the startup history request is in flight", async () => {
-    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const request = vi.fn(() => history.promise);
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
+    const { history, request, state } = createDeferredHistoryState();
 
     const load = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
@@ -3812,12 +3750,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("preserves late assistant messages when startup history only catches up to the user turn", async () => {
-    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const request = vi.fn(() => history.promise);
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
+    const { history, request, state } = createDeferredHistoryState();
 
     const load = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
@@ -3859,12 +3792,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("keeps repeated late prompts when startup history only has an older matching prompt", async () => {
-    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const request = vi.fn(() => history.promise);
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
+    const { history, request, state } = createDeferredHistoryState();
 
     const load = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
@@ -3899,12 +3827,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("coalesces same-session history while a proven pending send changes local messages", async () => {
-    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const request = vi.fn(() => history.promise);
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
+    const { history, request, state } = createDeferredHistoryState();
 
     const firstLoad = loadChatHistory(state);
     const pending = createTextChatMessage("user", "new local ask", {
@@ -3933,18 +3856,16 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("rejects stale success and cleanup after a same-client reconnect", async () => {
-    const staleRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const freshRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const staleRequest = createDeferred<HistoryResult>();
+    const freshRequest = createDeferred<HistoryResult>();
     const request = vi
       .fn()
       .mockImplementationOnce(() => staleRequest.promise)
       .mockImplementationOnce(() => freshRequest.promise);
-    const client = { request } as unknown as NonNullable<ChatState["client"]>;
+    const client = createTestClient(request);
     const visibleMessage = createTextChatMessage("assistant", "visible before reconnect");
-    const state = createState({
+    const state = createHistoryStateForClient(client, {
       chatMessages: [visibleMessage],
-      client,
-      connected: true,
       connectionEpoch: 1,
     });
 
@@ -3956,20 +3877,14 @@ describe("loadChatHistory retry handling", () => {
     const freshLoad = loadChatHistory(state);
 
     expect(request).toHaveBeenCalledTimes(2);
-    staleRequest.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "stale history" }] }],
-      thinkingLevel: "high",
-    });
+    staleRequest.resolve(createAssistantHistory("stale history", { thinkingLevel: "high" }));
     await staleLoad;
 
     expect(state.chatMessages).toEqual([visibleMessage]);
     expect(state.chatThinkingLevel).toBeNull();
     expect(state.chatLoading).toBe(true);
 
-    freshRequest.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh history" }] }],
-      thinkingLevel: "low",
-    });
+    freshRequest.resolve(createAssistantHistory("fresh history", { thinkingLevel: "low" }));
     await freshLoad;
 
     expect(state.chatMessages).toEqual([
@@ -3980,12 +3895,10 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("rejects stale errors and cleanup after a same-client reconnect", async () => {
-    const staleRequest = createDeferred<{ messages: Array<unknown> }>();
+    const staleRequest = createDeferred<HistoryResult>();
     const request = vi.fn(() => staleRequest.promise);
-    const client = { request } as unknown as NonNullable<ChatState["client"]>;
-    const state = createState({
-      client,
-      connected: true,
+    const client = createTestClient(request);
+    const state = createHistoryStateForClient(client, {
       connectionEpoch: 1,
     });
 
@@ -4006,16 +3919,8 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("ignores stale history responses after switching sessions", async () => {
-    const mainRequest = createDeferred<{
-      messages: Array<unknown>;
-      thinkingLevel?: string;
-      verboseLevel?: string;
-    }>();
-    const otherRequest = createDeferred<{
-      messages: Array<unknown>;
-      thinkingLevel?: string;
-      verboseLevel?: string;
-    }>();
+    const mainRequest = createDeferred<HistoryResult>();
+    const otherRequest = createDeferred<HistoryResult>();
     const request = vi.fn((_method: string, params?: { sessionKey?: string }) => {
       if (params?.sessionKey === "main") {
         return mainRequest.promise;
@@ -4025,9 +3930,7 @@ describe("loadChatHistory retry handling", () => {
       }
       throw new Error(`Unexpected sessionKey: ${String(params?.sessionKey)}`);
     });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
+    const state = createHistoryState(request, {
       chatMessages: [{ role: "assistant", content: [{ type: "text", text: "visible old" }] }],
     });
 
@@ -4035,11 +3938,9 @@ describe("loadChatHistory retry handling", () => {
     state.sessionKey = "other";
     const secondLoad = loadChatHistory(state);
 
-    mainRequest.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "main history" }] }],
-      thinkingLevel: "high",
-      verboseLevel: "full",
-    });
+    mainRequest.resolve(
+      createAssistantHistory("main history", { thinkingLevel: "high", verboseLevel: "full" }),
+    );
     await firstLoad;
 
     expect(state.chatLoading).toBe(true);
@@ -4049,11 +3950,9 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatThinkingLevel).toBeNull();
     expect(state.chatVerboseLevel).toBeNull();
 
-    otherRequest.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "other history" }] }],
-      thinkingLevel: "low",
-      verboseLevel: "full",
-    });
+    otherRequest.resolve(
+      createAssistantHistory("other history", { thinkingLevel: "low", verboseLevel: "full" }),
+    );
     await secondLoad;
 
     expect(state.chatLoading).toBe(false);
@@ -4065,16 +3964,14 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("ignores stale global history responses after switching selected agents", async () => {
-    const workRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const workRequest = createDeferred<HistoryResult>();
     const request = vi.fn((_method: string, params?: { agentId?: string; sessionKey?: string }) => {
       if (params?.sessionKey === "global" && params.agentId === "work") {
         return workRequest.promise;
       }
       throw new Error(`Unexpected request: ${JSON.stringify(params)}`);
     });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
+    const state = createHistoryState(request, {
       sessionKey: "global",
       assistantAgentId: "work",
       agentsList: { defaultId: "main" },
@@ -4083,10 +3980,7 @@ describe("loadChatHistory retry handling", () => {
 
     const load = loadChatHistory(state);
     state.assistantAgentId = "main";
-    workRequest.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "work history" }] }],
-      thinkingLevel: "high",
-    });
+    workRequest.resolve(createAssistantHistory("work history", { thinkingLevel: "high" }));
     await load;
 
     expect(state.chatLoading).toBe(false);

@@ -255,7 +255,7 @@ describe("Workboard card dashboard", () => {
     expect(element.querySelector("openclaw-board-view")).not.toBeNull();
   });
 
-  it("disables widget ticket refresh while the dashboard is collapsed", async () => {
+  it("pauses the board while the dashboard is collapsed", async () => {
     const { client } = createClient([
       {
         name: "status",
@@ -274,17 +274,17 @@ describe("Workboard card dashboard", () => {
     const element = await mountDashboard("agent:main:workboard-collapse", client);
     await vi.waitFor(() => expect(element.querySelector("openclaw-board-view")).not.toBeNull());
     const board = element.querySelector("openclaw-board-view")!;
-    expect(board.ticketRefreshEnabled).toBe(true);
+    expect(board.active).toBe(true);
 
     element.querySelector<HTMLButtonElement>(".workboard-card-dashboard__toggle")?.click();
     await element.updateComplete;
     await board.updateComplete;
-    expect(board.ticketRefreshEnabled).toBe(false);
+    expect(board.active).toBe(false);
 
     element.querySelector<HTMLButtonElement>(".workboard-card-dashboard__toggle")?.click();
     await element.updateComplete;
     await board.updateComplete;
-    expect(board.ticketRefreshEnabled).toBe(true);
+    expect(board.active).toBe(true);
   });
 
   it("keeps an empty dashboard compact until the operator expands its hint", async () => {

@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { resetLogger, setLoggerOverride, testApi } from "./logger.js";
+import { resetLogger, setLoggerOverride } from "./logger.js";
+import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 

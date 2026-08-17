@@ -5,10 +5,10 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
-import { VERSION } from "../version.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
   installLaunchAgent,
+  isLaunchAgentEnabled,
   isLaunchAgentLoaded,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
@@ -46,6 +46,7 @@ import type {
   GatewayServiceState,
 } from "./service-types.js";
 import {
+  findInstalledSystemdGatewayScope,
   installSystemdService,
   isSystemdServiceEnabled,
   readSystemdServiceExecStart,
@@ -83,6 +84,8 @@ export type GatewayService = {
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (
     env: GatewayServiceEnv,
@@ -126,15 +129,6 @@ function collectGatewayServiceStartRepairIssues(
     return [];
   }
   const issues: GatewayServiceStartRepairIssue[] = [];
-  const serviceVersion = command.environment?.OPENCLAW_SERVICE_VERSION?.trim();
-  if (serviceVersion && serviceVersion !== VERSION) {
-    // Version drift often means the service points at old package paths; require
-    // reinstall/repair before pretending restart succeeded.
-    issues.push({
-      code: "version-mismatch",
-      message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
-    });
-  }
   const servicePort =
     parseTcpPortFromArgs(command.programArguments) ??
     parseTcpPort(command.environment?.OPENCLAW_GATEWAY_PORT ?? "");
@@ -347,6 +341,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopLaunchAgent,
     restart: restartLaunchAgent,
     isLoaded: isLaunchAgentLoaded,
+    isEnabled: isLaunchAgentEnabled,
     readCommand: readLaunchAgentProgramArguments,
     readRuntime: readLaunchAgentRuntime,
   },
@@ -361,6 +356,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopSystemdService,
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
+    hasInstalledDefinition: async ({ env }) =>
+      (await findInstalledSystemdGatewayScope(env ?? process.env)) !== null,
     readCommand: readSystemdServiceExecStart,
     readRuntime: readSystemdServiceRuntime,
   },
@@ -380,54 +377,31 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
   },
 };
 
-function assertGatewayServiceMutationOwnedByOpenClaw(
+function guardGatewayServiceMutation<TArgs extends { env?: GatewayServiceEnv }, TResult>(
   action: string,
-  env?: GatewayServiceEnv,
-): void {
-  assertGatewayServiceMutationAllowed(action, process.env);
-  if (env && env !== process.env) {
-    assertGatewayServiceMutationAllowed(action, env);
-  }
+  mutate: (args: TArgs) => Promise<TResult>,
+): (args: TArgs) => Promise<TResult> {
+  return async (args) => {
+    // Mutations must satisfy both lifecycle ownership and durable-config
+    // version guards before invoking any platform service manager.
+    assertGatewayServiceMutationAllowed(action, process.env);
+    if (args.env && args.env !== process.env) {
+      assertGatewayServiceMutationAllowed(action, args.env);
+    }
+    await assertFutureConfigActionAllowed(action);
+    return await mutate(args);
+  };
 }
 
 function withGatewayServiceMutationGuards(service: GatewayService): GatewayService {
   return {
     ...service,
-    stage: async (args) => {
-      // Service mutations rewrite durable launchd/systemd/schtasks files, so
-      // block them when config was produced by a newer OpenClaw.
-      assertGatewayServiceMutationOwnedByOpenClaw("rewrite the gateway service", args.env);
-      await assertFutureConfigActionAllowed("rewrite the gateway service");
-      return await service.stage(args);
-    },
-    install: async (args) => {
-      assertGatewayServiceMutationOwnedByOpenClaw(
-        "install or rewrite the gateway service",
-        args.env,
-      );
-      await assertFutureConfigActionAllowed("install or rewrite the gateway service");
-      return await service.install(args);
-    },
-    uninstall: async (args) => {
-      assertGatewayServiceMutationOwnedByOpenClaw("uninstall the gateway service", args.env);
-      await assertFutureConfigActionAllowed("uninstall the gateway service");
-      return await service.uninstall(args);
-    },
-    start: async (args) => {
-      assertGatewayServiceMutationOwnedByOpenClaw("start the gateway service", args.env);
-      await assertFutureConfigActionAllowed("start the gateway service");
-      return await service.start(args);
-    },
-    stop: async (args) => {
-      assertGatewayServiceMutationOwnedByOpenClaw("stop the gateway service", args.env);
-      await assertFutureConfigActionAllowed("stop the gateway service");
-      return await service.stop(args);
-    },
-    restart: async (args) => {
-      assertGatewayServiceMutationOwnedByOpenClaw("restart the gateway service", args.env);
-      await assertFutureConfigActionAllowed("restart the gateway service");
-      return await service.restart(args);
-    },
+    stage: guardGatewayServiceMutation("rewrite the gateway service", service.stage),
+    install: guardGatewayServiceMutation("install or rewrite the gateway service", service.install),
+    uninstall: guardGatewayServiceMutation("uninstall the gateway service", service.uninstall),
+    start: guardGatewayServiceMutation("start the gateway service", service.start),
+    stop: guardGatewayServiceMutation("stop the gateway service", service.stop),
+    restart: guardGatewayServiceMutation("restart the gateway service", service.restart),
   };
 }
 

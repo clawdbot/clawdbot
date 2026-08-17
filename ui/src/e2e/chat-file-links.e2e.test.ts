@@ -5,11 +5,13 @@ import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -38,7 +40,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     try {
       const gateway = await installMockGateway(page, {
         historyMessages: [
@@ -192,7 +194,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     });
     try {
       const page = await context.newPage();
-      page.setDefaultTimeout(15_000);
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.files.get": {
@@ -222,13 +224,13 @@ describeControlUiE2e("Control UI chat file links", () => {
         await fileRow.locator(".chat-workspace-rail__file-open").click();
       };
       const closePreview = async () => {
-        await page.getByRole("button", { name: "Close Details" }).click();
+        await page.getByRole("button", { name: "Close Review" }).click();
         await page.locator("openclaw-chat-detail-panel").waitFor({ state: "detached" });
       };
 
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".chat-workspace-toggle").click();
-      await page.getByRole("complementary", { name: "Thread workspace" }).waitFor();
+      await openChatSidePanelType(page, "Files");
+      await page.getByRole("complementary", { name: "Session workspace" }).waitFor();
 
       await openPreview("notes.txt");
       await page.locator(".sidebar-file-view").waitFor({ state: "visible" });

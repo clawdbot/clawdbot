@@ -1,7 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
-type EndpointCall = { url: string; timeoutSeconds: number; init: RequestInit };
+type EndpointCall = {
+  url: string;
+  timeoutSeconds: number;
+  init: RequestInit;
+  signal?: AbortSignal;
+};
 type JsonRecord = Record<string, unknown>;
 type ToolParameters = {
   properties: Record<
@@ -11,6 +16,7 @@ type ToolParameters = {
 };
 const endpointMockState = vi.hoisted(() => ({
   calls: [] as EndpointCall[],
+  effects: [] as Array<(() => void) | undefined>,
   responses: [] as Response[],
 }));
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
@@ -24,6 +30,7 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
         if (!response) {
           throw new Error("Missing mocked Parallel response.");
         }
+        endpointMockState.effects.shift()?.();
         return await run(response);
       },
     ),
@@ -115,6 +122,7 @@ const cacheKey = (overrides: Partial<CacheKeyParams> = {}) =>
   testing.buildParallelCacheKey({ ...CACHE_KEY_BASE, ...overrides });
 beforeEach(() => {
   endpointMockState.calls = [];
+  endpointMockState.effects = [];
   endpointMockState.responses = [];
 });
 describe("parallel web search provider", () => {
@@ -306,6 +314,30 @@ describe("parallel web search provider", () => {
     expect(body).toMatchObject({ search_queries: ["openclaw"] });
     expect(result).not.toHaveProperty("objective");
     expect(result).toMatchObject({ provider: "parallel" });
+  });
+  it("forwards paid-search cancellation to the guarded endpoint", async () => {
+    enqueueJson();
+    const controller = new AbortController();
+
+    await paidTool().execute(
+      { search_queries: ["parallel active cancellation"] },
+      { signal: controller.signal },
+    );
+
+    expect(endpointCall(0).signal).toBe(controller.signal);
+  });
+  it("does not bill an already canceled paid search", async () => {
+    enqueueJson();
+    const controller = new AbortController();
+    controller.abort(new Error("Parallel caller canceled"));
+
+    await expect(
+      paidTool().execute(
+        { search_queries: ["parallel pre-canceled"] },
+        { signal: controller.signal },
+      ),
+    ).rejects.toThrow("Parallel caller canceled");
+    expect(endpointMockState.calls).toHaveLength(0);
   });
   it("returns an error payload when search_queries is missing or empty", async () => {
     const tool = paidTool();
@@ -669,6 +701,37 @@ describe("runParallelMcpSearch", () => {
   });
 });
 describe("parallel-free web search provider", () => {
+  it("keeps caller cancellation attached to every free MCP handshake step", async () => {
+    pushMcpHandshake({ search_id: "free-cancellation", results: [] });
+    const controller = new AbortController();
+
+    await freeTool().execute(
+      { search_queries: ["parallel free cancellation control"] },
+      { signal: controller.signal },
+    );
+
+    expect(endpointMockState.calls).toHaveLength(3);
+    expect(endpointMockState.calls.every((call) => call.signal === controller.signal)).toBe(true);
+  });
+
+  it("does not cache a free MCP result completed after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Parallel free search cancelled after response");
+    pushMcpHandshake({ search_id: "cancelled-free", results: [] });
+    pushMcpHandshake({ search_id: "recovered-free", results: [] });
+    endpointMockState.effects.push(undefined, undefined, () => controller.abort(reason));
+    const args = {
+      objective: "verify Parallel cancellation cache ownership",
+      search_queries: ["parallel cancellation cache"],
+    };
+
+    await expect(freeTool().execute(args, { signal: controller.signal })).rejects.toBe(reason);
+    const recovered = await freeTool().execute(args);
+
+    expect(endpointMockState.calls).toHaveLength(6);
+    expect(recovered.searchId).toBe("recovered-free");
+  });
+
   it("exposes keyless metadata without claiming auto-detect fallback", () => {
     const provider = createParallelFreeWebSearchProvider();
     expect(provider.id).toBe("parallel-free");

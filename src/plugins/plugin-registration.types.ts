@@ -8,10 +8,15 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import type { DiagnosticTracePropagationBridge as DiagnosticTracePropagationBridgeContract } from "../infra/diagnostic-trace-propagation.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
+type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
+  DiagnosticEventPayload,
+  DiagnosticEventMetadata
+>;
 
 type PluginInteractiveHandlerResult = {
   handled?: boolean;
@@ -189,6 +194,11 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     connId?: string;
     scopes?: string[];
   } | null;
+  risk?: {
+    level: "ordinary" | "high";
+    /** Stable, content-free family name; never include user or action arguments. */
+    family: string;
+  };
   approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
   invokeNode: (input?: {
     params?: unknown;
@@ -228,6 +238,13 @@ export type OpenClawPluginNodeInvokePolicy = {
    * when an iOS node reports BACKGROUND_UNAVAILABLE.
    */
   foregroundRestrictedOnIos?: boolean;
+  /**
+   * Classify exact command arguments before the policy handler or node transport runs.
+   * Throwing rejects the invocation before dispatch.
+   */
+  classifyRisk?: (
+    ctx: Pick<OpenClawPluginNodeInvokePolicyContext, "command" | "params">,
+  ) => NonNullable<OpenClawPluginNodeInvokePolicyContext["risk"]>;
   handle: (
     ctx: OpenClawPluginNodeInvokePolicyContext,
   ) => Promise<OpenClawPluginNodeInvokePolicyResult> | OpenClawPluginNodeInvokePolicyResult;
@@ -285,6 +302,7 @@ export type OpenClawPluginServiceContext = {
         privateData: DiagnosticEventPrivateData,
       ) => void,
     ) => () => void;
+    registerTracePropagationBridge?: (bridge: DiagnosticTracePropagationBridge) => () => void;
   };
 };
 

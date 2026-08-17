@@ -17,7 +17,7 @@ export {
   readSecretFileSync,
   type SecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
-export { writeSecretFileAtomic as writePrivateSecretFileAtomic } from "@openclaw/fs-safe/secret";
+export { writeSecretFileAtomic as writePrivateSecretFileAtomic } from "@openclaw/fs-safe/secret"; // Sanctioned domain alias.
 
 export type SecretFileReadResult =
   | {

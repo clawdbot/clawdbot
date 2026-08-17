@@ -11,7 +11,7 @@ import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => []),
-  getChannelPlugin: vi.fn(() => ({})),
+  getChannelPlugin: vi.fn(() => ({ outbound: { deliveryMode: "gateway" } })),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15551234567" })),
 }));
 

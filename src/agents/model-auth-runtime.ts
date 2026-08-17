@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import type { AuthProfileStore } from "./auth-profiles.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "./model-auth-markers.js";
@@ -140,12 +141,27 @@ export function hasRuntimeAvailableProviderAuth(params: {
   allowPluginSyntheticAuth?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   modelApi?: string;
+  store?: AuthProfileStore;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   const authOverride = authConfig.resolveProviderAuthOverride(params.cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
   }
+
+  // Callers that supply the auth store get inline provider keys hidden while
+  // their billing/auth cooldown is active, so browse and tool selection stop
+  // advertising a credential the resolver would refuse to hand back.
+  const inlineProviderApiKeyUsable = params.store
+    ? (() => {
+        const unusableUntil = authConfig.resolveInlineProviderApiKeyCooldownUntil(
+          params.store,
+          provider,
+        );
+        return unusableUntil === null || unusableUntil <= Date.now();
+      })()
+    : true;
+
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -160,7 +176,14 @@ export function hasRuntimeAvailableProviderAuth(params: {
       provider,
       modelApi: params.modelApi,
       mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
-    })
+    }) &&
+    (!authConfig.isConfigBackedInlineProviderApiKey({
+      cfg: params.cfg,
+      provider,
+      source: envAuth.source,
+      store: params.store,
+    }) ||
+      inlineProviderApiKeyUsable)
   ) {
     return true;
   }
@@ -169,11 +192,25 @@ export function hasRuntimeAvailableProviderAuth(params: {
       cfg: params.cfg,
       provider,
       env: params.env,
-    })
+    }) &&
+    inlineProviderApiKeyUsable
   ) {
     return true;
   }
-  if (resolveManagedSecretRefRuntimeProviderAuth({ cfg: params.cfg, provider })) {
+  const managedRuntimeAuth = resolveManagedSecretRefRuntimeProviderAuth({
+    cfg: params.cfg,
+    provider,
+  });
+  if (
+    managedRuntimeAuth &&
+    (!authConfig.isConfigBackedInlineProviderApiKey({
+      cfg: params.cfg,
+      provider,
+      source: managedRuntimeAuth.source,
+      store: params.store,
+    }) ||
+      inlineProviderApiKeyUsable)
+  ) {
     return true;
   }
   if (authConfig.hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {

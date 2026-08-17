@@ -61,3 +61,80 @@ export function getRootOptionAwareCommandPath(argv: readonly string[], depth: nu
   }
   return path;
 }
+
+type CommandPositionalsParseOptions = {
+  commandPath: ReadonlyArray<string>;
+  booleanFlags?: ReadonlyArray<string>;
+  valueFlags?: ReadonlyArray<string>;
+  maxPositionals?: number;
+};
+
+function consumeKnownOptionToken(
+  args: ReadonlyArray<string>,
+  index: number,
+  booleanFlags: ReadonlySet<string>,
+  valueFlags: ReadonlySet<string>,
+): number {
+  const arg = args[index];
+  if (!arg || arg === FLAG_TERMINATOR || !arg.startsWith("-")) {
+    return 0;
+  }
+
+  const equalsIndex = arg.indexOf("=");
+  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+  if (booleanFlags.has(flag)) {
+    return equalsIndex === -1 ? 1 : 0;
+  }
+  if (!valueFlags.has(flag)) {
+    return 0;
+  }
+  if (equalsIndex !== -1) {
+    return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
+  }
+  return isValueToken(args[index + 1]) ? 2 : 0;
+}
+
+/** Parse command positionals while consuming known root and command options. */
+export function getCommandPositionalsWithRootOptions(
+  argv: readonly string[],
+  options: CommandPositionalsParseOptions,
+): string[] | null {
+  const args = argv.slice(2);
+  const booleanFlags = new Set(options.booleanFlags ?? []);
+  const valueFlags = new Set(options.valueFlags ?? []);
+  const positionals: string[] = [];
+  let commandIndex = 0;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const rootConsumed = consumeRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      const optionConsumed = consumeKnownOptionToken(args, index, booleanFlags, valueFlags);
+      if (optionConsumed === 0) {
+        return null;
+      }
+      index += optionConsumed - 1;
+      continue;
+    }
+    if (commandIndex < options.commandPath.length) {
+      if (arg !== options.commandPath[commandIndex]) {
+        return null;
+      }
+      commandIndex += 1;
+      continue;
+    }
+    positionals.push(arg);
+    if (positionals.length === options.maxPositionals) {
+      return positionals;
+    }
+  }
+
+  return commandIndex < options.commandPath.length ? null : positionals;
+}

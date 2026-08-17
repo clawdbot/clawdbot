@@ -9,6 +9,7 @@ export function resolveSlackQaScenarioIds(params: {
 }) {
   return resolveLiveTransportQaScenarioIds({
     channelId: "slack",
+    supportsModuleFlows: true,
     ...params,
     providerMode: params.providerMode ?? "live-frontier",
   });

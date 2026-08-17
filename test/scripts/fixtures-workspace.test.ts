@@ -3,9 +3,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const FIXTURE_SCRIPT = "scripts/e2e/lib/fixture.mjs";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runAgentsDeleteAssert(root: string, outputPath: string, env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [FIXTURE_SCRIPT, "agents-delete-assert", outputPath], {
@@ -19,6 +21,17 @@ function runAgentsDeleteAssert(root: string, outputPath: string, env: Record<str
   });
 }
 
+function runAgentsDeleteConfig(root: string) {
+  const stateDir = path.join(root, "state");
+  const workspace = path.join(root, "workspace");
+  mkdirSync(stateDir, { recursive: true });
+  const result = spawnSync(process.execPath, [FIXTURE_SCRIPT, "agents-delete-config"], {
+    encoding: "utf8",
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, SHARED_WORKSPACE: workspace },
+  });
+  return { result, stateDir, workspace };
+}
+
 function runOpenWebUiWorkspace(workspaceDir: string) {
   return spawnSync(process.execPath, [FIXTURE_SCRIPT, "openwebui-workspace"], {
     encoding: "utf8",
@@ -30,6 +43,18 @@ function runOpenWebUiWorkspace(workspaceDir: string) {
 }
 
 describe("workspace fixture assertions", () => {
+  it("writes explicit owners for the shared-workspace agents", () => {
+    const root = tempDirs.make("openclaw-fixture-workspace-");
+    const { result, stateDir, workspace } = runAgentsDeleteConfig(root);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf8")).agents).toEqual({
+      ownership: "explicit",
+      defaults: { heartbeat: { agentId: "main" } },
+      entries: { main: { workspace }, ops: { workspace } },
+    });
+  });
+
   it("prepares Open WebUI without retired workspace setup state", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-fixture-workspace-"));
     const workspaceDir = path.join(root, "workspace");
@@ -99,4 +124,40 @@ describe("workspace fixture assertions", () => {
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  it.each([undefined, "local"])(
+    "rejects agents delete output without gateway transport (%s)",
+    (transport) => {
+      const root = tempDirs.make("openclaw-fixture-workspace-");
+      const stateDir = path.join(root, "state");
+      const workspace = path.join(root, "workspace");
+      const outputPath = path.join(root, "agents-delete.json");
+      try {
+        mkdirSync(stateDir, { recursive: true });
+        mkdirSync(workspace, { recursive: true });
+        writeFileSync(
+          path.join(stateDir, "openclaw.json"),
+          `${JSON.stringify({ agents: { entries: { main: { workspace } } } })}\n`,
+        );
+        writeFileSync(
+          outputPath,
+          `${JSON.stringify({
+            agentId: "ops",
+            workspace,
+            workspaceRetained: true,
+            workspaceRetainedReason: "shared",
+            workspaceSharedWith: ["main"],
+            ...(transport ? { transport } : {}),
+          })}\n`,
+        );
+
+        const result = runAgentsDeleteAssert(root, outputPath);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("transport mismatch");
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });

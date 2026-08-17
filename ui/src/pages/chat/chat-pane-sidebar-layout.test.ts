@@ -1,210 +1,145 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import {
-  renderSidebarRegion,
-  resolveSidebarLayoutForBoard,
-  restoreHiddenSidebarChat,
-} from "./chat-pane-sidebar-layout.ts";
-import {
-  closeSlot,
-  detachPanelToColumn,
-  mergePanelIntoColumn,
-  openSlot,
-} from "./sidebar-layout.ts";
+import { renderSidebarRegion, resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
+import "./components/chat-sidebar-region.runtime.ts";
+import { openSlot, setSidebarOpen, type SidebarLayout } from "./sidebar-layout.ts";
 
 function board(dock: ResolvedBoardView["dock"], face: ResolvedBoardView["face"] = "dashboard") {
-  return {
-    hasBoard: true,
-    face,
-    dock,
-  } as ResolvedBoardView;
+  return { hasBoard: true, face, dock } as ResolvedBoardView;
 }
 
+const containers: HTMLElement[] = [];
+
+function callbacks() {
+  return {
+    activatePanel: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    reorderPanel: vi.fn(),
+    resizePanel: vi.fn(),
+    setDock: vi.fn(),
+    setExpanded: vi.fn(),
+    setOpen: vi.fn(),
+  };
+}
+
+async function renderLayout(container: HTMLElement, layout: SidebarLayout, narrow = false) {
+  render(
+    renderSidebarRegion({
+      availableWidth: narrow ? 620 : 1_400,
+      availableSlots: ["detail", "terminal", "workspace"],
+      callbacks: callbacks(),
+      layout,
+      narrow,
+      panelActions: {},
+      panelTemplates: { detail: html`<aside data-detail>Details</aside>` },
+      primary: html`<main data-primary>Primary</main>`,
+    }),
+    container,
+  );
+  await customElements.whenDefined("openclaw-chat-sidebar-region");
+  await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+}
+
+afterEach(() => {
+  for (const container of containers.splice(0)) {
+    container.remove();
+  }
+});
+
 describe("chat pane sidebar layout", () => {
-  it("preserves the primary DOM across open, close, and reopen", async () => {
+  it("preserves the primary DOM across open, minimize, reopen, and mobile", async () => {
     const container = document.createElement("div");
     document.body.append(container);
-    const callbacks = {
-      activatePanel: vi.fn(),
-      closeSlot: vi.fn(),
-      detachPanel: vi.fn(),
-      mergePanel: vi.fn(),
-      resizeColumn: vi.fn(),
-    };
-    const renderLayout = async (
-      layout: ReturnType<typeof openSlot> | { columns: [] },
-      narrow = false,
-    ) => {
-      render(
-        renderSidebarRegion({
-          availableWidth: narrow ? 620 : 1_400,
-          callbacks,
-          discussionOpenUrl: null,
-          focusPanelId: "",
-          focusVersion: 0,
-          layout,
-          narrow,
-          panelMutationEnabled: {},
-          panelTemplates: { detail: html`<aside>Details</aside>` },
-          primary: html`<main data-primary>Primary</main>`,
-          sessionKey: "agent:main:current",
-        }),
-        container,
-      );
-    };
+    containers.push(container);
+    const open = openSlot({ columns: [] }, "detail");
 
-    await renderLayout({ columns: [] });
+    await renderLayout(container, { columns: [], open: false });
     const primary = container.querySelector("[data-primary]");
-    await renderLayout(openSlot({ columns: [] }, "detail"));
+    await renderLayout(container, open);
     expect(container.querySelector("[data-primary]")).toBe(primary);
-    await customElements.whenDefined("openclaw-chat-sidebar-region");
-    await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+    expect(container.querySelector(".sidebar-region__right-runtime .side-panel")).not.toBeNull();
+    await renderLayout(container, setSidebarOpen(open, false));
     expect(container.querySelector("[data-primary]")).toBe(primary);
-    const rightTab = container.querySelector(".sidebar-region__right-runtime .sidebar-column__tab");
-    expect(rightTab).not.toBeNull();
-    expect(primary!.compareDocumentPosition(rightTab!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    await renderLayout({ columns: [] });
+    expect(container.querySelector(".side-panel")).toBeNull();
+    await renderLayout(container, open, true);
     expect(container.querySelector("[data-primary]")).toBe(primary);
-    await renderLayout(openSlot({ columns: [] }, "detail"));
-    expect(container.querySelector("[data-primary]")).toBe(primary);
-    await renderLayout(openSlot({ columns: [] }, "detail"), true);
-    await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
-    expect(container.querySelector("[data-primary]")).toBe(primary);
-    await renderLayout(openSlot({ columns: [] }, "detail"));
-    await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
-    expect(container.querySelector("[data-primary]")).toBe(primary);
-
-    container.remove();
+    expect(container.querySelector(".sidebar-region--narrow")).not.toBeNull();
   });
 
-  it("promotes side-docked dashboard chat into the requested side", () => {
-    const layout = resolveSidebarLayoutForBoard({
-      board: board("left"),
-      hasDetail: false,
-      layout: { columns: [] },
-      paneWidth: 1_400,
-    });
-    expect(layout.columns[0]?.side).toBe("left");
-    expect(layout.columns[0]?.panels[0]?.slot).toBe("chat");
-  });
-
-  it("keeps an unmeasured wide shell aligned with the sidebar runtime", () => {
+  it("keeps an unmeasured shell in the wide layout", async () => {
     const container = document.createElement("div");
+    containers.push(container);
     render(
       renderSidebarRegion({
         availableWidth: 0,
-        callbacks: {
-          activatePanel: vi.fn(),
-          closeSlot: vi.fn(),
-          detachPanel: vi.fn(),
-          mergePanel: vi.fn(),
-          resizeColumn: vi.fn(),
-        },
-        discussionOpenUrl: null,
-        focusPanelId: "",
-        focusVersion: 0,
+        availableSlots: ["detail"],
+        callbacks: callbacks(),
         layout: openSlot({ columns: [] }, "detail"),
         narrow: false,
-        panelMutationEnabled: {},
+        panelActions: {},
         panelTemplates: { detail: html`<aside>Details</aside>` },
         primary: html`<main>Primary</main>`,
-        sessionKey: "agent:main:current",
       }),
       container,
     );
-
     expect(container.querySelector(".sidebar-region--narrow")).toBeNull();
   });
 
-  it("keeps bottom chat outside the sidebar model", () => {
+  it("places the unified panel below the conversation when bottom-docked", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const layout = { ...openSlot({ columns: [] }, "detail"), dock: "bottom" as const };
+
+    await renderLayout(container, layout);
+
+    expect(container.querySelector(".sidebar-region--bottom")).not.toBeNull();
+    expect(container.querySelector(".side-panel--bottom")).not.toBeNull();
+    expect(container.querySelector("resizable-divider")?.orientation).toBe("horizontal");
+  });
+
+  it("puts side-docked board chat in the canonical panel regardless of legacy dock edge", () => {
     const layout = resolveSidebarLayoutForBoard({
-      board: board("bottom"),
-      hasDetail: true,
-      layout: openSlot(openSlot({ columns: [] }, "chat"), "detail"),
+      board: board("left"),
+      layout: { columns: [] },
       paneWidth: 1_400,
     });
-    expect(layout.columns.flatMap((column) => column.panels.map((panel) => panel.slot))).toEqual([
-      "detail",
-    ]);
+    expect(layout.columns).toHaveLength(1);
+    expect(layout.columns[0]?.side).toBe("right");
+    expect(layout.columns[0]?.panels[0]?.slot).toBe("chat");
   });
 
-  it("drops stale detail placement when no transient detail is available", () => {
+  it("keeps bottom and hidden board chat outside the side panel", () => {
+    for (const dock of ["bottom", "hidden"] as const) {
+      const layout = resolveSidebarLayoutForBoard({
+        board: board(dock),
+        layout: openSlot(openSlot({ columns: [] }, "chat"), "detail"),
+        paneWidth: 1_400,
+      });
+      expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["detail"]);
+    }
+  });
+
+  it("keeps the detail tab when its transient content is no longer available", () => {
     const layout = resolveSidebarLayoutForBoard({
       board: board("hidden", "chat"),
-      hasDetail: false,
-      layout: openSlot({ columns: [] }, "detail"),
+      layout: openSlot(openSlot({ columns: [] }, "workspace"), "detail"),
       paneWidth: 1_400,
     });
-    expect(layout).toEqual({ columns: [] });
+    expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["workspace", "detail"]);
   });
 
-  it("preserves stored chat placement when moving panels in a hidden-chat projection", () => {
-    const stored = openSlot(
-      openSlot(openSlot({ columns: [] }, "chat", "left"), "detail"),
-      "discussion",
-    );
-    const rendered = closeSlot(stored, "chat");
-    const detail = rendered.columns
-      .flatMap((column) => column.panels)
-      .find((panel) => panel.slot === "detail")!;
-    const discussionColumn = rendered.columns.find((column) =>
-      column.panels.some((panel) => panel.slot === "discussion"),
-    )!;
-    const movedProjection = mergePanelIntoColumn(rendered, detail.id, discussionColumn.id, 0);
-    const moved = restoreHiddenSidebarChat({
-      activatedPanelId: detail.id,
-      movedLayout: movedProjection,
-      renderedLayout: rendered,
-      storedLayout: stored,
-    });
-
-    expect(moved.columns.flatMap((column) => column.panels.map((panel) => panel.slot))).toEqual([
-      "chat",
-      "detail",
-      "discussion",
-    ]);
-  });
-
-  it("preserves the stored active chat tab across an unrelated projected move", () => {
-    let stored = openSlot(openSlot(openSlot({ columns: [] }, "chat"), "detail"), "discussion");
-    const chatColumn = stored.columns.find((column) =>
-      column.panels.some((panel) => panel.slot === "chat"),
-    )!;
-    const chatPanel = chatColumn.panels.find((panel) => panel.slot === "chat")!;
-    const detailPanel = stored.columns
-      .flatMap((column) => column.panels)
-      .find((panel) => panel.slot === "detail")!;
-    const discussionPanel = stored.columns
-      .flatMap((column) => column.panels)
-      .find((panel) => panel.slot === "discussion")!;
-    stored = mergePanelIntoColumn(stored, detailPanel.id, chatColumn.id, 1);
-    stored = mergePanelIntoColumn(stored, discussionPanel.id, chatColumn.id, 2);
-    stored.columns.find((column) => column.id === chatColumn.id)!.activePanelId = chatPanel.id;
-    const rendered = closeSlot(stored, "chat");
-    const movedProjection = detachPanelToColumn(rendered, detailPanel.id, "right", 0);
-
-    const moved = restoreHiddenSidebarChat({
-      activatedPanelId: detailPanel.id,
-      movedLayout: movedProjection,
-      renderedLayout: rendered,
-      storedLayout: stored,
-    });
-
-    expect(moved.columns.find((column) => column.id === chatColumn.id)?.activePanelId).toBe(
-      chatPanel.id,
-    );
-  });
-
-  it("refits ordinary chat columns to preserve the primary minimum", () => {
+  it("fits only the one canonical panel width", () => {
     const layout = resolveSidebarLayoutForBoard({
       board: board("hidden", "chat"),
-      hasDetail: true,
       layout: openSlot(openSlot({ columns: [] }, "detail"), "discussion"),
       paneWidth: 1_000,
     });
-    expect(layout.columns.reduce((sum, column) => sum + column.width, 0)).toBe(680);
+    expect(layout.columns).toHaveLength(1);
+    expect(layout.columns[0]?.width).toBe(360);
   });
 });

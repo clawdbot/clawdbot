@@ -161,8 +161,7 @@ export function assertCodexAppServerAllowedForOpenClawExecMode(
 
 function createDefaultOpenClawExecPolicy(): OpenClawExecPolicy {
   return {
-    security: "full",
-    ask: "off",
+    ...resolveOpenClawExecPolicyForMode("full"),
     touched: false,
   };
 }

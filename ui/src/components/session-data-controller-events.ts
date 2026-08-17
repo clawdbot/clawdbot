@@ -89,6 +89,7 @@ export function refreshSidebarSessionList(
     archivedFilter,
     limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
     includeDerivedTitles: true,
+    includeLastMessage: true,
     ...(append && typeof offset === "number" ? { offset, append: true } : {}),
     force: true,
   });

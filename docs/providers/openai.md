@@ -48,7 +48,7 @@ changing config.
 | Goal                                              | Use                                                                | Notes                                                               |
 | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-5.6-sol`                                               | Fresh subscription setup; sign in with Codex auth.                  |
-| Direct API-key billing for agent turns            | `openai/gpt-5.6` plus an ordered API-key auth profile              | Fresh API-key setup; the bare direct-API id resolves to Sol.        |
+| Direct API-key billing for agent turns            | `openai/gpt-5.6-sol` plus an ordered API-key auth profile          | Fresh API-key setup uses the explicit Sol id.                       |
 | Choose an exact GPT-5.6 tier                      | `openai/gpt-5.6-sol`, `-terra`, or `-luna`                         | Check `models list` for the tiers available to this account.        |
 | Account without GPT-5.6 access                    | `openai/gpt-5.5`                                                   | Explicit recovery choice; OpenClaw does not silently downgrade.     |
 | Direct API-key billing, explicit OpenClaw runtime | `openai/gpt-5.6` plus provider/model `agentRuntime.id: "openclaw"` | Select a normal `openai` API-key profile.                           |
@@ -72,13 +72,19 @@ When provider/model `agentRuntime` policy is unset or `auto`, OpenAI's
 provider-owned route policy chooses the implicit runtime from the effective
 endpoint and adapter:
 
-| Effective route facts                                                                                                                                                  | Implicit runtime      |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| Exact official Platform HTTPS endpoint with `openai-responses`, or exact official ChatGPT HTTPS endpoint with `openai-chatgpt-responses`; no authored request override | Codex may be selected |
-| Authored `openai-completions` adapter                                                                                                                                  | OpenClaw              |
-| Custom endpoint                                                                                                                                                        | OpenClaw              |
-| Explicit exact official endpoint using HTTP                                                                                                                            | Rejected              |
-| Route with an authored provider/model request override                                                                                                                 | OpenClaw              |
+| Effective route facts                                                                                                                                                           | Implicit runtime      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| Exact official Platform HTTPS endpoint with `openai-responses`, or exact official ChatGPT HTTPS endpoint with `openai-chatgpt-responses`; no authored provider request override | Codex may be selected |
+| Authored `openai-completions` adapter                                                                                                                                           | OpenClaw              |
+| Custom endpoint                                                                                                                                                                 | OpenClaw              |
+| Explicit exact official endpoint using HTTP                                                                                                                                     | Rejected              |
+| Route with an authored provider/model request override                                                                                                                          | OpenClaw              |
+
+Valid model-scoped `params.fastMode` / `params.fast_mode` values and valid
+cutoff keys are typed agent-runtime controls, not authored provider request
+params. They do not disqualify implicit Codex selection or select a runtime by
+themselves. Pin `agentRuntime.id: "openclaw"` or `agentRuntime.id: "codex"`
+when a recipe depends on one runtime.
 
 An explicit non-default provider/model `agentRuntime.id` remains authoritative.
 For example, `agentRuntime.id: "openclaw"` keeps an otherwise Codex-eligible
@@ -110,11 +116,13 @@ lower-cost tier. See the
 [GPT-5.6 launch announcement](https://openai.com/index/previewing-gpt-5-6-sol/)
 and [access guide](https://help.openai.com/en/articles/20001325-a-preview-of-gpt-5-6-sol-terra-and-luna).
 
-With direct OpenAI API-key auth, the bare `openai/gpt-5.6` id is an alias for
-Sol and is the fresh setup default. The native Codex catalog does not apply
-that direct-API alias client-side; depending on workspace access, it can show
-the exact Sol, Terra, and Luna ids. Fresh ChatGPT/Codex OAuth setup therefore
-uses `openai/gpt-5.6-sol`. Check the current account with:
+OpenAI's [GPT-5.6 Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+documents the bare `openai/gpt-5.6` id as a supported alias for Sol. Fresh
+API-key and ChatGPT/Codex OAuth setup use the canonical `openai/gpt-5.6-sol`
+ref so model pickers do not show both names for the same tier. Run
+`openclaw doctor --fix` to rewrite persisted bare OpenAI refs to that canonical
+identity. The native Codex catalog can show the exact Sol, Terra, and Luna ids depending on
+workspace access. Check the current account with:
 
 ```bash
 openclaw models list --provider openai
@@ -259,27 +267,28 @@ for the full example.
 
     ```json5
     {
-      env: { OPENAI_API_KEY: "example-openai-key-not-real" },
-      agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
+      env: { vars: { OPENAI_API_KEY: "example-openai-key-not-real" } },
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
     }
     ```
 
-    The bare direct-API `gpt-5.6` id resolves to the Sol tier. If this API
-    organization does not expose GPT-5.6, set the primary to
-    `openai/gpt-5.5` explicitly.
+    The bare direct-API `gpt-5.6` alias is also accepted and resolves to the
+    Sol tier. If this API organization does not expose GPT-5.6, set the primary
+    to `openai/gpt-5.5` explicitly.
 
     To try ChatGPT's current Instant model from the OpenAI API, set the model
     to `openai/chat-latest`:
 
     ```json5
     {
-      env: { OPENAI_API_KEY: "example-openai-key-not-real" },
+      env: { vars: { OPENAI_API_KEY: "example-openai-key-not-real" } },
       agents: { defaults: { model: { primary: "openai/chat-latest" } } },
     }
     ```
 
     `chat-latest` is a moving alias. Fresh OpenAI API-key setup instead uses
-    `openai/gpt-5.6`, whose bare direct-API id resolves to Sol. Existing
+    `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+    supported and resolves to Sol. Existing
     explicit primaries, including `openai/gpt-5.5`, remain unchanged. The
     `chat-latest` alias only accepts `medium` text verbosity; OpenClaw forces
     any other requested verbosity to `medium` for this model.
@@ -442,7 +451,7 @@ for the full example.
     ```
 
     Use `--profile-id` for multiple Codex OAuth logins in the same agent, then
-    control them via auth ordering or `/model ...@<profileId>`:
+    control them via auth ordering or `/model ...@<profileId> -s`:
 
     ```bash
     openclaw models auth login --provider openai --profile-id openai:ritsuko
@@ -470,7 +479,7 @@ for the full example.
     OpenClaw treats native model capacity and the active runtime budget as
     separate values:
 
-    - `contextWindow` declares the provider's total model window.
+    - `contextWindow` declares the model's native window.
     - `contextTokens` caps how much of that window OpenClaw uses for active input.
 
     ChatGPT/Codex OAuth follows the live Codex account catalog. The current
@@ -478,18 +487,31 @@ for the full example.
     Direct API-key GPT-5.5 and GPT-5.6 models also default to `272000`
     `contextTokens`, even though the Platform API exposes a larger native
     window. This keeps the normal latency, quality, and cost profile consistent
-    across auth modes. A configured `agents.defaults.contextTokens` value can
-    lower that budget further, but it cannot raise a model above its configured
-    `contextTokens` cap.
+    across auth modes. Override a direct model's active-input budget with
+    `models.providers.openai.models[].contextTokens` on that exact model entry.
 
     For direct API-key GPT-5.5 and GPT-5.6, OpenAI documents a `1050000`
     token provider window and `128000` maximum output tokens. Reserving the
-    full output allowance leaves `922000` tokens for input. This is a derived
-    operating budget, not a separate provider-published input limit. See the
-    official [model comparison](https://developers.openai.com/api/docs/models/compare)
+    full output allowance gives the shared safe input budget used by both
+    runtime recipes below:
+
+    ```text
+    1050000 total - 128000 maximum output = 922000 safe active input
+    automatic compaction threshold = 700000 active tokens
+    ```
+
+    `922000` is a derived operating budget, not a separate provider-published
+    input limit. The two runtimes translate that budget differently: embedded
+    OpenClaw sends Responses compaction controls, while native Codex owns its
+    catalog window and automatic compaction. See the official
+    [model comparison](https://developers.openai.com/api/docs/models/compare)
     and [GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5).
-    The following example opts one Terra model into that allowance and asks
-    OpenAI to compact at `700000` active tokens:
+
+    #### Embedded OpenClaw translation
+
+    This example pins the exact Sol model to the embedded OpenClaw runtime,
+    enables OpenAI API Fast mode through the shared runtime control, and asks OpenAI Responses
+    to compact at `700000` active tokens:
 
     ```json5
     {
@@ -498,8 +520,8 @@ for the full example.
           openai: {
             models: [
               {
-                id: "gpt-5.6-terra",
-                name: "GPT-5.6 Terra",
+                id: "gpt-5.6-sol",
+                name: "GPT-5.6 Sol",
                 contextWindow: 1050000,
                 contextTokens: 922000,
                 maxTokens: 128000,
@@ -510,11 +532,12 @@ for the full example.
       },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-terra" },
+          model: { primary: "openai/gpt-5.6-sol" },
           models: {
-            "openai/gpt-5.6-terra": {
+            "openai/gpt-5.6-sol": {
               agentRuntime: { id: "openclaw" },
               params: {
+                fastMode: true,
                 responsesServerCompaction: true,
                 responsesCompactThreshold: 700000,
               },
@@ -525,20 +548,75 @@ for the full example.
     }
     ```
 
-    `agentRuntime.id: "openclaw"` is intentional in this example. It proves the
-    embedded OpenClaw Responses path is using the model metadata and server-side
-    compaction settings above. A native Codex harness thread owns its context
-    budget in Codex config instead; see
+    OpenAI Responses automatic compaction emits an encrypted `compaction`
+    output item. A stateless client carries the newest item into the next
+    request and may drop every earlier input item. OpenClaw persists that item
+    opaquely, fences reuse by route, session, and auth, replays it, prunes the
+    replaced prefix, carries it through worker transcript commits, and removes
+    it from display and diagnostics. Never print, log, or expose the encrypted
+    content.
+
+    A process-owned isolated-Gateway run verified this exact
+    `openai/gpt-5.6-sol` configuration. Dense turns reached `295098`, `586562`,
+    and `863664` prompt tokens. Turn three emitted and persisted a first-class
+    server compaction item; the next request replayed that exact opaque item,
+    pruned its prefix, and used `9602` prompt tokens. A deterministic long
+    response produced `5480` output tokens, durable markers survived compaction
+    and Gateway restart, restart latency was `12081` ms, every call reported
+    `serviceTier: priority`, and the full suite took `220.03` seconds. These
+    timings are observations, not service-level guarantees.
+
+    #### Native Codex translation
+
+    Keep the same OpenClaw model selection, but make Codex the explicit runtime
+    and do not add Responses compaction params to this model entry:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": {
+              agentRuntime: { id: "codex" },
+              params: { fastMode: true },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Codex must receive `922000` for both `context_window` and
+    `max_context_window`, `700000` for `auto_compact_token_limit`, and matching
+    app-server overrides with `model_auto_compact_token_limit_scope=total`.
+    Codex then applies its 95% effective-window reserve, yielding `875900`
+    active tokens. Configure an ordered OpenAI API-key profile and keep the
+    default isolated agent-scoped Codex home. The complete catalog, app-server,
+    auth, and restart recipe is in
     [Codex harness long context](/plugins/codex-harness#direct-api-long-context).
+
+    These examples are two explicit runtime choices, not one auto-selecting
+    configuration. The model-scoped `agentRuntime` and runtime-owned compaction
+    settings must change together. OpenClaw can retain both choices only when
+    their model refs or agent configurations are distinguishable; otherwise,
+    switch the model runtime and its matching config as one atomic change. Then
+    restart the Gateway and native Codex app-server, run `/model default -s`,
+    and start a fresh chat. Existing native Codex threads retain the provider
+    and model recorded when they were created.
 
     <Warning>
     OpenAI applies higher long-context pricing once a GPT-5.5 or GPT-5.6
     request exceeds `272000` input tokens: the whole qualifying request is
-    billed at 2× input and 1.5× output rates. Large prompts are resent or
-    compacted across turns, so an opt-in session can cost substantially more
-    than the default even when the visible reply is short. See
-    [OpenAI API pricing](https://developers.openai.com/api/docs/pricing). The API
-    remains authoritative for account access, actual limits, and billing.
+    billed at 2× input and cache rates and 1.5× output rates. Fast-mode pricing
+    is model-specific; GPT-5.6 Sol API Fast mode is currently another 2× over
+    Standard. For that model, combined long-context Fast traffic is therefore
+    4× short-context Standard input-side pricing and 3× short-context Standard
+    output pricing. Large prompts are resent or compacted across turns, so an
+    opt-in session can cost substantially more than the default even when the
+    visible reply is short. See [Fast mode](https://openai.com/api-priority-processing/)
+    and [OpenAI API pricing](https://developers.openai.com/api/docs/pricing).
+    The API remains authoritative for account access, actual limits, and billing.
     </Warning>
 
     ### Catalog recovery
@@ -614,7 +692,7 @@ generation through the same `openai/gpt-image-2` model ref.
 {
   agents: {
     defaults: {
-      imageGenerationModel: { primary: "openai/gpt-image-2" },
+      mediaModels: { image: { primary: "openai/gpt-image-2" } },
     },
   },
 }
@@ -710,7 +788,7 @@ uploaded video in the `video` field.
 {
   agents: {
     defaults: {
-      videoGenerationModel: { primary: "openai/sora-2" },
+      mediaModels: { video: { primary: "openai/sora-2" } },
     },
   },
 }
@@ -730,12 +808,9 @@ request reaches the provider, so aspect-ratio requests generally still work.
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family models on
-the `openai` provider (including legacy pre-repair Codex refs that normalize
-to `openai/*`). Other providers that also serve GPT-5-family model ids, such
-as OpenRouter or opencode routes, do not receive this overlay; it is gated on
-provider id `openai`, not on model id alone. Older GPT-4.x models never
-receive it.
+OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5-family
+OpenClaw-assembled prompts. The OpenAI plugin setting below controls the
+friendly style on OpenAI-family routes. Older GPT-4.x model ids do not match.
 
 The native Codex app-server harness does not receive the persona/tool-
 discipline behavior contract or the friendly interaction-style overlay through
@@ -766,10 +841,10 @@ separate and configurable.
   <Tab title="Config">
     ```json5
     {
-      agents: {
-        defaults: {
-          promptOverlays: {
-            gpt5: { personality: "friendly" },
+      plugins: {
+        entries: {
+          openai: {
+            config: { personality: "friendly" },
           },
         },
       },
@@ -778,7 +853,7 @@ separate and configurable.
   </Tab>
   <Tab title="CLI">
     ```bash
-    openclaw config set agents.defaults.promptOverlays.gpt5.personality off
+    openclaw config set plugins.entries.openai.config.personality off
     ```
   </Tab>
 </Tabs>
@@ -789,9 +864,9 @@ friendly style layer.
 </Tip>
 
 <Note>
-Legacy `plugins.entries.openai.config.personality` is still read as a
-compatibility fallback when the shared
-`agents.defaults.promptOverlays.gpt5.personality` setting is unset.
+The retired `agents.defaults.promptOverlays` key is no longer read; config
+validation rejects it, and `openclaw doctor --fix` migrates its personality
+value into `plugins.entries.openai.config.personality` when that key is unset.
 </Note>
 
 ## Voice and speech
@@ -859,14 +934,16 @@ compatibility fallback when the shared
     {
       tools: {
         media: {
+          models: [
+            {
+              type: "provider",
+              provider: "openai",
+              model: "gpt-4o-transcribe",
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
-            models: [
-              {
-                type: "provider",
-                provider: "openai",
-                model: "gpt-4o-transcribe",
-              },
-            ],
+            enabled: true,
           },
         },
       },
@@ -1055,8 +1132,8 @@ compatibility fallback when the shared
     never prints token material:
 
     ```bash
-    OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node scripts/test-live.mjs -- extensions/openai/realtime-quicksilver.live.test.ts
-    OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node scripts/test-live.mjs -- extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts
+    OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node --import tsx scripts/test-live.mts -- extensions/openai/realtime-quicksilver.live.test.ts
+    OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node --import tsx scripts/test-live.mts -- extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts
     ```
 
     <Note>
@@ -1225,31 +1302,40 @@ accordion below.
 
 ## Advanced configuration
 
-The per-model `params` examples below shape OpenClaw's embedded provider
-request. Configuring them is authored request behavior, so an otherwise eligible
-`auto` route stays on OpenClaw instead of selecting Codex implicitly. The native
-Codex app-server harness owns its own transport and request settings; explicit
-`agentRuntime.id: "codex"` fails closed when the effective route is not declared
-Codex-compatible.
+The `transport` and `serviceTier` examples below are authored embedded-provider
+request settings, so an otherwise eligible `auto` route stays on OpenClaw
+instead of selecting Codex implicitly. Valid `fastMode` / `fast_mode` values
+and valid cutoff keys are typed agent-runtime controls and do not select a
+runtime. Runtime-specific examples therefore pin `agentRuntime.id` explicitly.
+The native Codex app-server harness owns its own transport and request settings;
+explicit `agentRuntime.id: "codex"` fails closed when the effective route is
+not declared Codex-compatible.
 
 <AccordionGroup>
   <Accordion title="Transport (WebSocket vs SSE)">
-    OpenClaw uses WebSocket-first with SSE fallback (`"auto"`) for `openai/*`.
+    Direct API-key requests use SSE by default. Set `params.transport` when you
+    want Responses WebSocket mode on an eligible official OpenAI endpoint.
 
-    In `"auto"` mode, OpenClaw:
-    - Retries one early WebSocket failure before falling back to SSE
-    - After a failure, marks WebSocket as degraded for 60 seconds and uses SSE
-      during cool-down
-    - Attaches stable session and turn identity headers for retries and
-      reconnects
-    - Normalizes usage counters (`input_tokens` / `prompt_tokens`) across
-      transport variants
+    | Value                 | Behavior |
+    | --------------------- | -------- |
+    | `"sse"` (default)     | Stream each request over SSE |
+    | `"auto"`              | Prefer a session-cached WebSocket, with pre-dispatch SSE fallback |
+    | `"websocket-cached"`  | Explicitly use the session-cached WebSocket path, with the same pre-dispatch SSE fallback |
+    | `"websocket"`         | Use a transient WebSocket for the request, with pre-dispatch SSE fallback |
 
-    | Value                | Behavior                          |
-    | ---------------------- | ------------------------------------ |
-    | `"auto"` (default)   | WebSocket first, SSE fallback     |
-    | `"sse"`              | Force SSE only                    |
-    | `"websocket"`        | Force WebSocket only              |
+    Cached modes keep one eligible connection per session. When the prior
+    request and response still match the current history, OpenClaw sends only
+    the new input and references the prior response with
+    `previous_response_id`. Otherwise it sends full history without that
+    reference.
+
+    A setup or handshake failure before request dispatch falls back to SSE; it
+    is not retried or reconnected first. After dispatch, failures with an
+    unknown outcome remain replay-unsafe and fail closed. The explicit server
+    rejections `previous_response_not_found` and
+    `websocket_connection_limit_reached` are safe exceptions: OpenClaw closes
+    the failed socket and retries that turn once over SSE with full history and
+    no rejected `previous_response_id`.
 
     ```json5
     {
@@ -1257,6 +1343,7 @@ Codex-compatible.
         defaults: {
           models: {
             "openai/gpt-5.5": {
+              agentRuntime: { id: "openclaw" },
               params: { transport: "auto" },
             },
           },
@@ -1266,7 +1353,7 @@ Codex-compatible.
     ```
 
     Related OpenAI docs:
-    - [Realtime API with WebSocket](https://platform.openai.com/docs/guides/realtime-websocket)
+    - [Responses API WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)
     - [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)
 
   </Accordion>
@@ -1277,20 +1364,28 @@ Codex-compatible.
     - **Chat/UI:** `/fast status|auto|on|off`
     - **Config:** `agents.defaults.models["<provider>/<model>"].params.fastMode`
 
-    When enabled, OpenClaw maps fast mode to OpenAI priority processing
-    (`service_tier = "priority"`). Existing `service_tier` values are
-    preserved, and fast mode does not rewrite `reasoning` or
+    Valid `params.fastMode` / `params.fast_mode` values and valid cutoff keys
+    are typed runtime controls. They do not count as authored provider request
+    params and do not select OpenClaw or Codex. The example below pins embedded
+    OpenClaw because it describes a direct provider request.
+
+    When enabled on the embedded runtime, OpenClaw maps fast mode to OpenAI API
+    Fast mode (formerly Priority processing) and currently sends
+    `service_tier = "priority"`. Fast mode does not rewrite `reasoning` or
     `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the
-    auto cutoff, then starts later retry, fallback, tool-result, or
-    continuation calls without fast mode. The cutoff defaults to 60 seconds;
-    set `params.fastAutoOnSeconds` on the active model to change it.
+    auto cutoff, then starts later retry, fallback, tool-result, or continuation
+    calls without fast mode. The cutoff defaults to 60 seconds; set
+    `params.fastAutoOnSeconds` on the active model to change it.
 
     ```json5
     {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "openclaw" },
+              params: { fastMode: "auto", fastAutoOnSeconds: 30 },
+            },
           },
         },
       },
@@ -1298,22 +1393,40 @@ Codex-compatible.
     ```
 
     <Note>
-    Session overrides win over config. Clearing the session override in the
-    Sessions UI returns the session to the configured default.
+    The full precedence is inline message, stored session, per-agent default,
+    global default, per-model `params.fastMode`, then off. `/fast default`
+    clears only the session layer. `/status` reports the resolved OpenClaw
+    policy and runtime, not the upstream service tier actually honored or
+    returned. See [Thinking levels](/tools/thinking#fast-mode-%2Ffast) and
+    [Codex harness](/plugins/codex-harness#shared-fast-mode-and-codex-fast-mode).
     </Note>
+
+    Fast mode is premium-priced and model-specific. GPT-5.6 Sol API Fast mode
+    currently costs 2× Standard token pricing, with long-context multipliers
+    stacking as described above. ChatGPT/Codex-credit Fast mode is a separate
+    billing system: GPT-5.6 and GPT-5.5 currently consume 2.5× Standard credits,
+    while API-key Codex runs use API token pricing. See
+    [Fast mode](https://openai.com/api-priority-processing/),
+    [API pricing](https://developers.openai.com/api/docs/pricing), and
+    [Codex speed](https://learn.chatgpt.com/docs/agent-configuration/speed).
 
   </Accordion>
 
-  <Accordion title="Priority processing (service_tier)">
-    OpenAI's API exposes priority processing via `service_tier`. Set it per
-    model in OpenClaw:
+  <Accordion title="OpenAI API Fast mode with service_tier">
+    OpenAI now calls this API product Fast mode; it was formerly Priority
+    processing. OpenClaw currently sends the wire value
+    `service_tier = "priority"`. Set an explicit tier per
+    model on the embedded OpenClaw runtime:
 
     ```json5
     {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": { params: { serviceTier: "priority" } },
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "openclaw" },
+              params: { serviceTier: "priority" },
+            },
           },
         },
       },
@@ -1323,31 +1436,48 @@ Codex-compatible.
     Supported values: `auto`, `default`, `flex`, `priority`.
 
     <Warning>
-    `serviceTier` is forwarded only to native OpenAI endpoints
-    (`api.openai.com`) and native Codex endpoints (`chatgpt.com/backend-api`).
-    If you route either provider through a proxy, OpenClaw leaves
-    `service_tier` untouched.
+    `params.serviceTier` is an authored embedded-provider setting, not native
+    Codex app-server configuration. It is forwarded only by the embedded
+    runtime to native OpenAI endpoints (`api.openai.com`) and native ChatGPT
+    endpoints (`chatgpt.com/backend-api`). If you route either provider through
+    a proxy, OpenClaw leaves `service_tier` untouched. Configure the native
+    harness separately with `plugins.entries.codex.config.appServer.serviceTier`;
+    the shared Fast-mode run control can supersede that value.
     </Warning>
 
   </Accordion>
 
   <Accordion title="Server-side compaction (Responses API)">
-    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), the
-    OpenAI plugin's OpenClaw stream wrapper auto-enables server-side
-    compaction:
+    For store-capable direct OpenAI Responses models (`openai/*` resolved to
+    `api.openai.com`), the OpenAI plugin's OpenClaw stream wrapper auto-enables
+    server-side compaction:
 
     - Forces `store: true` (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
     - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when
       unavailable)
 
-    This applies to the built-in OpenClaw runtime path and to OpenAI provider
-    hooks used by embedded runs. The native Codex app-server harness manages
-    its own context through Codex and is not affected by this setting.
+    The same resolved route and effective threshold gate the client preflight,
+    so OpenClaw does not delay local compaction unless the transport will inject
+    `context_management`. ChatGPT OAuth, custom proxies, and routes with
+    `compat.supportsStore: false` are not store-capable and therefore ignore
+    these server-compaction controls. This applies to the built-in OpenClaw
+    runtime path and to OpenAI provider hooks used by embedded runs. The native
+    Codex app-server harness manages its own context through Codex and is not
+    affected by this setting.
+
+    OpenAI emits the compacted state as an encrypted `compaction` output item.
+    Keep that item opaque. For stateless continuation, carry the newest item
+    forward and drop the earlier input prefix it replaces. OpenClaw does this
+    automatically: it persists and replays the item only for the matching
+    route, session, and auth identity, preserves it across worker transcript
+    commits, and filters it from user-visible history and diagnostics. Never
+    display or log the encrypted content.
 
     <Tabs>
       <Tab title="Enable explicitly">
-        Useful for compatible endpoints like Azure OpenAI Responses:
+        Useful for store-capable endpoints like Azure OpenAI Responses. Setting
+        this to `true` does not override endpoint or `supportsStore` capability:
 
         ```json5
         {

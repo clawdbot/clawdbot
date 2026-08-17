@@ -28,16 +28,21 @@ const pluginRegistryState = resolveGlobalSingleton(GATEWAY_TEST_PLUGIN_REGISTRY_
 
 setActivePluginRegistry(pluginRegistryState.registry);
 
+function replaceTestPluginRegistry(registry: PluginRegistry): void {
+  // Gateway requests retain the startup registry object. Update that owned
+  // snapshot in place so per-test fixtures exercise the same request scope.
+  Object.assign(pluginRegistryState.registry, registry);
+  setActivePluginRegistry(pluginRegistryState.registry);
+}
+
 /** Installs a plugin registry fixture as the active runtime registry. */
 export function setTestPluginRegistry(registry: PluginRegistry): void {
-  pluginRegistryState.registry = registry;
-  setActivePluginRegistry(registry);
+  replaceTestPluginRegistry(registry);
 }
 
 /** Restores the default empty gateway test plugin registry. */
 export function resetTestPluginRegistry(): void {
-  pluginRegistryState.registry = createStubPluginRegistry();
-  setActivePluginRegistry(pluginRegistryState.registry);
+  replaceTestPluginRegistry(createStubPluginRegistry());
 }
 
 /** Returns the currently active gateway test plugin registry. */

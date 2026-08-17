@@ -1,25 +1,26 @@
 // Covers reconnect-triggered queue drain selection, active claims, backoff
 // bypass, and concurrent drain suppression.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
+  type DeliverFn,
+  drainPendingDeliveriesCore,
+  type RecoveryLogger,
+  recoverPendingDeliveries,
+  withActiveDeliveryClaim,
+} from "./delivery-queue-recovery.js";
+import {
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
-} from "./delivery-queue-storage.js";
-import {
-  type DeliverFn,
-  drainPendingDeliveries,
   enqueueDelivery,
   failDelivery,
-  type RecoveryLogger,
-  recoverPendingDeliveries,
-  withActiveDeliveryClaim,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -53,12 +54,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -93,7 +89,7 @@ async function drainDirectChatReconnectPending(opts: {
   stateDir: string;
 }) {
   const normalizedAccountId = normalizeReconnectAccountIdForTest(opts.accountId);
-  await drainPendingDeliveries({
+  await drainPendingDeliveriesCore({
     drainKey: `directchat:${normalizedAccountId}`,
     logLabel: "DirectChat reconnect drain",
     cfg: stubCfg,
@@ -147,7 +143,7 @@ async function enqueueFailedDirectChatDelivery(params: {
   return id;
 }
 
-describe("drainPendingDeliveries for reconnect", () => {
+describe("drainPendingDeliveriesCore for reconnect", () => {
   let tmpDir: string;
   const fixtures = installDeliveryQueueTmpDirHooks();
 
@@ -204,7 +200,7 @@ describe("drainPendingDeliveries for reconnect", () => {
       { channel: entry.channel, messageId: `${entry.channel}-delivered` },
     ]);
     const drain = () =>
-      drainPendingDeliveries({
+      drainPendingDeliveriesCore({
         drainKey: "gateway:outbound",
         logLabel: "Outbound delivery retry",
         cfg: stubCfg,
@@ -270,7 +266,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     });
     const deliver = vi.fn<DeliverFn>(async () => []);
 
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: "gateway:outbound",
       logLabel: "Outbound delivery retry",
       cfg,
@@ -282,7 +278,7 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     expect(admitDeferredDelivery).toHaveBeenCalledWith(expect.objectContaining({ cfg }));
     expect(deliver).not.toHaveBeenCalled();
-    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
   });
 
   it("retries immediately without resetting retry history", async () => {
@@ -314,7 +310,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("moves unknown-after-send entries to failed without replaying during reconnect drain", async () => {
+  it("removes random unknown-after-send entries without replaying during reconnect drain", async () => {
     const log = createRecoveryLog();
     const deliver = vi.fn<DeliverFn>(async () => {});
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
@@ -324,7 +320,7 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     expect(deliver).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
     expectLogMessageWith(log.warn, "refusing blind replay without adapter reconciliation");
   });
 
@@ -384,10 +380,10 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
-    // Should have moved to failed, not delivered
+    // Random delivery IDs do not need a reusable producer fence.
     expect(deliver).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
   });
 
   it("second concurrent call is skipped (concurrency guard)", async () => {
@@ -648,7 +644,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
     let mutated = false;
 
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: "directchat:acct1",
       logLabel: "DirectChat reconnect drain",
       cfg: stubCfg,

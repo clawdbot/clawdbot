@@ -168,6 +168,20 @@ class SidebarShellLogicTest {
     assertEquals(8, rows.size)
   }
 
+  @Test
+  fun sessionSubtitleShowsWorkingForActiveRunsAndKeepsTheIdleSourceFallback() {
+    val session = ChatSessionEntry(key = "telegram:123", updatedAtMs = 1_000, hasActiveRun = true)
+
+    assertEquals(
+      "Working",
+      sidebarSessionSubtitle(session, activeRunLabel = "Working", nowMs = 1_000),
+    )
+    assertEquals(
+      "Telegram",
+      sidebarSessionSubtitle(session.copy(hasActiveRun = false), activeRunLabel = null, nowMs = 1_000),
+    )
+  }
+
   private fun agent(
     id: String,
     kind: String? = null,

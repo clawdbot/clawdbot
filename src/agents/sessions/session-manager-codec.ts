@@ -1,3 +1,5 @@
+import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
@@ -186,7 +188,7 @@ function parseJsonlEntries(content: string): FileEntry[] {
 }
 
 export function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
-  if (!isJsonRecord(entry) || entry.type !== "message" || !isJsonRecord(entry.message)) {
+  if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) {
     return entry;
   }
   const message: Record<string, unknown> = entry.message;
@@ -195,14 +197,11 @@ export function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
     typeof message.content === "string"
   ) {
     message.content = [{ type: "text", text: message.content }];
-  } else if (message.role === "toolResult" && isJsonRecord(message.content)) {
+    stripCompactionReplayCheckpointInPlace(message);
+  } else if (message.role === "toolResult" && isRecord(message.content)) {
     message.content = [message.content];
   }
   return entry;
-}
-
-export function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isSessionEntryType(type: unknown): boolean {
@@ -225,7 +224,7 @@ function isSessionEntryType(type: unknown): boolean {
 
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
   if (
-    !isJsonRecord(entry) ||
+    !isRecord(entry) ||
     !isSessionEntryType(entry.type) ||
     typeof entry.id !== "string" ||
     entry.id.length === 0 ||
@@ -287,13 +286,12 @@ export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
 function isReadableContent(value: unknown): boolean {
   return (
     typeof value === "string" ||
-    (Array.isArray(value) &&
-      value.every((part) => isJsonRecord(part) && typeof part.type === "string"))
+    (Array.isArray(value) && value.every((part) => isRecord(part) && typeof part.type === "string"))
   );
 }
 
 function isReadableMessage(value: unknown): boolean {
-  if (!isJsonRecord(value) || typeof value.role !== "string") {
+  if (!isRecord(value) || typeof value.role !== "string") {
     return false;
   }
   switch (value.role) {
@@ -317,20 +315,20 @@ function isReadableMessage(value: unknown): boolean {
 }
 
 function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
-  const message = isJsonRecord(value) && value.type === "message" ? value.message : undefined;
+  const message = isRecord(value) && value.type === "message" ? value.message : undefined;
   const readableLegacyMessage =
-    isJsonRecord(message) && message.role === "hookMessage"
+    isRecord(message) && message.role === "hookMessage"
       ? isReadableContent(message.content)
       : isReadableMessage(message);
   return (
-    isJsonRecord(value) &&
+    isRecord(value) &&
     isSessionEntryType(value.type) &&
     (value.type !== "message" || readableLegacyMessage)
   );
 }
 
 function normalizePersistedLegacyHookMessage(value: unknown): unknown {
-  if (!isJsonRecord(value) || value.type !== "message" || !isJsonRecord(value.message)) {
+  if (!isRecord(value) || value.type !== "message" || !isRecord(value.message)) {
     return value;
   }
   const message = value.message;
@@ -348,7 +346,7 @@ export function parseParentLinkedOpaqueEntry(
   record: unknown,
 ): { id: string; parentId: string | null } | undefined {
   if (
-    !isJsonRecord(record) ||
+    !isRecord(record) ||
     record.type === "session" ||
     record.type === "leaf" ||
     typeof record.id !== "string" ||
@@ -370,7 +368,7 @@ export function parseOpaqueLeafEntry(record: unknown):
     }
   | undefined {
   if (
-    !isJsonRecord(record) ||
+    !isRecord(record) ||
     record.type !== "leaf" ||
     typeof record.id !== "string" ||
     record.id.length === 0 ||
@@ -401,19 +399,14 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   const opaqueEntries: Array<{ index: number; record: unknown }> = [];
   const fileEntriesByOriginalIndex: Array<FileEntry | undefined> = [];
   const header = entries.find(
-    (entry) => isJsonRecord(entry) && entry.type === "session" && typeof entry.id === "string",
+    (entry) => isRecord(entry) && entry.type === "session" && typeof entry.id === "string",
   ) as SessionHeader | undefined;
   const acceptsLegacyEntries = (header?.version ?? 1) < CURRENT_SESSION_VERSION;
   let hasHeader = false;
   for (const [originalIndex, rawEntry] of entries.entries()) {
     const entry = normalizePersistedLegacyHookMessage(rawEntry) as FileEntry;
-    if (
-      !hasHeader &&
-      isJsonRecord(entry) &&
-      entry.type === "session" &&
-      typeof entry.id === "string"
-    ) {
-      fileEntries.push(entry as unknown as SessionHeader);
+    if (!hasHeader && isRecord(entry) && entry.type === "session" && typeof entry.id === "string") {
+      fileEntries.push(entry);
       fileEntriesByOriginalIndex[originalIndex] = entry;
       hasHeader = true;
       continue;

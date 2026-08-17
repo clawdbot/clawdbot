@@ -5,12 +5,19 @@ import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
+import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeDeep } from "../infra/deep-merge.js";
+import type {
+  EmbeddedStateLockHandle,
+  EmbeddedStateSignalProcess,
+} from "../infra/embedded-state-lock.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 
 const AGENT_EXEC_MESSAGE_MAX_BYTES = 4 * 1024 * 1024;
@@ -78,6 +85,8 @@ type AgentExecCommandResult = {
 
 type AgentExecCommandDeps = {
   stdin?: AsyncIterable<unknown>;
+  process?: EmbeddedStateSignalProcess;
+  gatewayLockOptions?: GatewayLockOptions;
   runAgent?: (
     opts: Record<string, unknown>,
     runtime: RuntimeEnv,
@@ -283,23 +292,25 @@ function normalizeCodeMode(
  * outrank whatever the resolved config says.
  */
 /**
- * Drops inherited per-agent location overrides, which outrank the facts this
- * invocation owns. `agentDir` beats the state dir for session and transcript
- * storage, so an ephemeral run would write state into the operator's persistent
- * agent directory where deleting the temp state dir cannot reach it; a native
- * harness `runtime.acp.cwd` beats `--cwd`, so the turn could edit the wrong
- * repository. `agents.bindings[].acp.cwd` needs no equivalent because exec runs
- * no channel, so no binding matches.
+ * Drops inherited state and workspace location overrides, which outrank the
+ * facts this invocation owns. `session.store` and `agentDir` can redirect state
+ * outside the invocation root, where its lock or temporary cleanup cannot own
+ * it; a native harness `runtime.acp.cwd` can make the turn edit the wrong repo.
+ * `agents.bindings[].acp.cwd` needs no equivalent because exec runs no channel,
+ * so no binding matches.
  */
 function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
-  const entries = base.agents?.entries;
+  const { session, ...root } = base;
+  const { store: _store, ...sessionWithoutStore } = session ?? {};
+  const withoutSessionStore = session ? { ...root, session: sessionWithoutStore } : base;
+  const entries = withoutSessionStore.agents?.entries;
   if (!entries) {
-    return base;
+    return withoutSessionStore;
   }
   return {
-    ...base,
+    ...withoutSessionStore,
     agents: {
-      ...base.agents,
+      ...withoutSessionStore.agents,
       entries: Object.fromEntries(
         Object.entries(entries).map(([id, entry]) => {
           const { agentDir: _agentDir, runtime, ...rest } = entry;
@@ -335,6 +346,9 @@ function buildExecRunOverlay(params: {
         ? { entries: Object.fromEntries(entries.map((id) => [id, { workspace: params.cwd }])) }
         : {}),
     },
+    // This process exits after one turn, so live skill invalidation cannot be
+    // observed and would leave Chokidar retaining the otherwise-finished CLI.
+    skills: { load: { watch: false } },
     ...(codeMode !== undefined ? { tools: { codeMode } } : {}),
   } as OpenClawConfig;
 }
@@ -382,7 +396,13 @@ export async function resolveExecBaseConfig(
     throw new Error(`--config cannot be combined with ${conflicting}.`);
   }
   if (opts.isolated || opts.authEnvOnly === true) {
-    return {};
+    // A missing config is normally passed through the persisted-config
+    // migrations, which materialize the legacy main agent. Configless exec
+    // modes must preserve that runtime contract even though they skip all
+    // authored config and its credential surfaces.
+    const { migratePersistedImplicitMainRoster } = await import("../config/legacy.roster.js");
+    const { coerceConfig } = await import("../config/io.read-helpers.js");
+    return coerceConfig(migratePersistedImplicitMainRoster({}).config);
   }
   const { createConfigIO, getRuntimeConfig } = await import("../config/io.js");
   if (!opts.config) {
@@ -476,6 +496,10 @@ function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () 
   };
 }
 
+function formatActiveGatewayExecRefusal(identity: GatewayLockIdentity): string {
+  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Omit --state-dir to use isolated temporary state, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
+}
+
 function isStructuredTimeoutError(error: unknown): boolean {
   if (findAgentRunTerminalOutcome(error)?.status === "timeout") {
     return true;
@@ -550,6 +574,13 @@ export async function agentExecCommand(
   let restoreRuntimeConfigSnapshot: (() => void) | undefined;
   let runtimePaths: typeof import("../config/paths.js") | undefined;
   let configIo: typeof import("../config/io.js") | undefined;
+  let stopLocalAuditWriter: (() => Promise<void>) | undefined;
+  let stateLock: EmbeddedStateLockHandle | null | undefined;
+  let signalBridge:
+    | ReturnType<
+        (typeof import("../infra/embedded-state-lock.js"))["createEmbeddedStateSignalBridge"]
+      >
+    | undefined;
   try {
     const prompt = await resolveAgentExecPrompt(
       positionalMessage,
@@ -616,6 +647,16 @@ export async function agentExecCommand(
     restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths = await import("../config/paths.js");
     runtimePaths.pinRuntimePaths();
+    if (opts.stateDir) {
+      const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
+        await import("../infra/embedded-state-lock.js");
+      signalBridge = createEmbeddedStateSignalBridge(deps.process ?? process);
+      stateLock = await acquireEmbeddedStateLock({
+        options: deps.gatewayLockOptions,
+        signal: signalBridge.signal,
+        formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
+      });
+    }
     // The runtime snapshot is the only in-process config cache (`clearConfigCache`
     // is a no-op shim), so publishing the composed config here is what makes the
     // run use it. Serializing it to a temporary file and repointing
@@ -623,6 +664,15 @@ export async function agentExecCommand(
     // env-substituted provider keys to disk where the run's own exec tool
     // could read them.
     snapshotIo.setRuntimeConfigSnapshot(runConfig);
+    if (isExecutionIdentityCollectionEnabled(runConfig)) {
+      try {
+        stopLocalAuditWriter = (await import("./agent-local-audit.js")).startAgentLocalAuditWriter({
+          stateDir,
+        });
+      } catch {
+        // Admission emits a bounded warning if the direct-process writer is unavailable.
+      }
+    }
     const [
       { withAuthProfileStoreAgentDir, withEnvOnlyAuthProfileStore },
       { withHostExecInheritedEnvOmitted },
@@ -657,6 +707,7 @@ export async function agentExecCommand(
           cleanupBundleMcpOnRunEnd: true,
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
+          abortSignal: signalBridge?.signal,
           onModelFallbackExhausted: () => {
             fallbackExhausted = true;
           },
@@ -695,6 +746,10 @@ export async function agentExecCommand(
   }
 
   let cleanupError: unknown;
+  await stopLocalAuditWriter?.().catch(() => undefined);
+  await stateLock?.release().catch((error: unknown) => {
+    cleanupError ??= error;
+  });
   const runCleanupStep = (step: () => void) => {
     try {
       step();
@@ -724,6 +779,13 @@ export async function agentExecCommand(
     );
     const envelope = errorEnvelope(cleanupFailure, sessionId);
     commandResult = { envelope, exitCode: exitCodeForEnvelope(envelope) };
+  }
+
+  const receivedSignal = signalBridge?.getReceivedSignal();
+  signalBridge?.dispose();
+  if (receivedSignal) {
+    runtime.exit(receivedSignal === "SIGINT" ? 130 : 143, { resetStream: process.stderr });
+    return commandResult;
   }
 
   writeAgentExecOutput(runtime, commandResult.envelope, opts.json === true);

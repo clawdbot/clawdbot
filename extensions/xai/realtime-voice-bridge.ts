@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
@@ -12,6 +13,7 @@ import type {
 import { RealtimeVoiceSessionLifecycle } from "openclaw/plugin-sdk/realtime-voice";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import WebSocket from "ws";
+import { resolveXaiRealtimeApiKey } from "./realtime-voice-auth.runtime.js";
 import {
   XAI_REALTIME_BASE_RECONNECT_DELAY_MS,
   XAI_REALTIME_CONNECT_TIMEOUT_MS,
@@ -21,11 +23,12 @@ import {
   XAI_REALTIME_MAX_RECONNECT_ATTEMPTS,
   XAI_REALTIME_WS_MAX_PAYLOAD_BYTES,
   readXaiRealtimeErrorDetail,
-  resolveXaiRealtimeApiKey,
+  serializeXaiRealtimeToolResult,
   toXaiRealtimeWsUrl,
   type XaiRealtimeEvent,
 } from "./realtime-voice-config.js";
 import { XaiRealtimeMalformedAudioError, XaiRealtimeVoiceEvents } from "./realtime-voice-events.js";
+import { XaiRealtimePlaybackMarkOverflowError } from "./realtime-voice-protocol.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
 export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements RealtimeVoiceBridge {
@@ -97,17 +100,29 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void {
-    if (this.lifecycle.phase() === "terminal") {
+    if (this.lifecycle.phase() === "terminal" || options?.willContinue === true) {
       return;
     }
     if (!this.canSubmitInput()) {
-      if (this.pendingToolResults.length < XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
-        this.pendingToolResults.push({ callId, result, ...(options ? { options } : {}) });
-      } else {
-        this.config.onError?.(
-          new Error("xAI realtime voice pending tool result queue overflow during reconnect"),
-        );
+      let serialized: string;
+      try {
+        serialized = serializeXaiRealtimeToolResult(result);
+      } catch (error) {
+        this.config.onError?.(error as Error);
+        throw error;
       }
+      if (this.pendingToolResults.length >= XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
+        const error = new Error(
+          "xAI realtime voice pending tool result queue overflow during reconnect",
+        );
+        this.config.onError?.(error);
+        throw error;
+      }
+      this.pendingToolResults.push({
+        callId,
+        result: JSON.parse(serialized) as unknown,
+        ...(options ? { options } : {}),
+      });
       return;
     }
     this.submitToolResultNow(callId, result, options);
@@ -159,6 +174,9 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
         attempt.resolve();
         return;
       }
+      // Credential refresh has its own bounded lifecycle. Arm the socket timeout
+      // only once valid connection parameters are ready.
+      attempt.startTimeout();
       const { url, headers } = resolvedConnection;
       this.connectionUrl = url;
       const proxyAgent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
@@ -230,7 +248,10 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
             attempt.resolve(true);
           }
         } catch (error) {
-          if (error instanceof XaiRealtimeMalformedAudioError) {
+          if (
+            error instanceof XaiRealtimeMalformedAudioError ||
+            error instanceof XaiRealtimePlaybackMarkOverflowError
+          ) {
             attempt.reject(error);
             this.failConnection(error, ws, connection);
             return;
@@ -252,10 +273,10 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           meta: { provider: "xai", capability: "realtime-voice" },
         });
         if (!attempt.ready) {
-          rejectStartup(error instanceof Error ? error : new Error(String(error)));
+          rejectStartup(toStringifiedError(error));
           return;
         }
-        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+        this.config.onError?.(toStringifiedError(error));
       });
 
       ws.on("close", (code, reasonBuffer) => {
@@ -310,7 +331,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           attempt.resolve();
           return;
         }
-        attempt.reject(error instanceof Error ? error : new Error(String(error)));
+        attempt.reject(toStringifiedError(error));
       });
     await attempt.promise;
   }
@@ -398,7 +419,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       ) {
         return;
       }
-      this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+      this.config.onError?.(toStringifiedError(error));
       await this.attemptReconnect(reason, nextConnection);
     }
   }
@@ -468,21 +489,25 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }
 
   private failConnection(
-    error: XaiRealtimeMalformedAudioError,
+    error: XaiRealtimeMalformedAudioError | XaiRealtimePlaybackMarkOverflowError,
     ws: WebSocket,
     connection: RealtimeVoiceSessionConnection,
   ): void {
-    if (this.terminalError) {
+    if (!this.lifecycle.failure(connection)) {
       return;
     }
     this.terminalError = error;
-    this.lifecycle.failure(connection);
     this.resetTerminalState();
     try {
       this.config.onError?.(error);
     } finally {
       if (ws.readyState !== WebSocket.CLOSED) {
-        ws.close(1002, "Malformed audio payload");
+        ws.close(
+          1002,
+          error instanceof XaiRealtimePlaybackMarkOverflowError
+            ? "Playback mark overflow"
+            : "Malformed audio payload",
+        );
       } else {
         this.notifyClose(connection, "error");
       }

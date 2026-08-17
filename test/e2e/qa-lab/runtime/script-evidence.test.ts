@@ -19,6 +19,7 @@ async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: numb
     repoRoot,
     writer: createQaScriptEvidenceWriter({
       artifactBase: path.join(repoRoot, ".artifacts", "qa-e2e", "script"),
+      coverageBinding: "none",
       logFileName: "producer.log",
       maxDetailsBytes: params.maxDetailsBytes,
       maxLogBytes: params.maxLogBytes ?? 64,
@@ -58,6 +59,7 @@ describe("QA script evidence writer", () => {
       });
 
       expect(evidence.entries[0]).toMatchObject({
+        coverage: [],
         execution: {
           artifacts: [
             { kind: "log", path: "producer.log", source: "script" },
@@ -79,6 +81,23 @@ describe("QA script evidence writer", () => {
     });
   }
 
+  it("rejects uncataloged targets unless coverage binding is disabled", () => {
+    expect(() =>
+      createQaScriptEvidenceWriter({
+        artifactBase: path.join(os.tmpdir(), "openclaw-script-evidence-unknown"),
+        logFileName: "producer.log",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        providerMode: "mock-openai",
+        repoRoot: process.cwd(),
+        target: {
+          id: "script-evidence-test",
+          sourcePath: "test/e2e/qa-lab/runtime/script-evidence.test.ts",
+          title: "Script evidence test",
+        },
+      }),
+    ).toThrow("unknown qa scenario: script-evidence-test");
+  });
+
   it("keeps only the bounded log tail", async () => {
     const { artifactBase, writer } = await makeWriter({ maxLogBytes: 24 });
     writer.appendLog(`discard-me-${"x".repeat(64)}`);
@@ -90,6 +109,16 @@ describe("QA script evidence writer", () => {
     expect(log).toContain("recent-tail");
     expect(log).not.toContain("discard-me");
     expect(Buffer.byteLength(log, "utf8")).toBeLessThanOrEqual(24);
+  });
+
+  it("writes the bounded log independently for multi-target summaries", async () => {
+    const { artifactBase, writer } = await makeWriter();
+    writer.appendLog("producer output\n");
+
+    await expect(writer.writeLog()).resolves.toEqual({ kind: "log", path: "producer.log" });
+    await expect(fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).resolves.toBe(
+      "producer output\n",
+    );
   });
 
   it("keeps only the bounded failure detail tail", async () => {

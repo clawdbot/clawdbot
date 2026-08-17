@@ -74,11 +74,113 @@ describe("scanOpenRouterModels", () => {
     if (byPricing === undefined) {
       throw new Error("Expected pricing-based model result.");
     }
+    expect(byPricing.contextLength).toBe(16_384);
+    expect(byPricing.maxCompletionTokens).toBe(1024);
     expect(byPricing.supportsToolsMeta).toBe(true);
     expect(byPricing.supportedParametersCount).toBe(3);
     expect(byPricing.isFree).toBe(true);
     expect(byPricing.tool.skipped).toBe(true);
     expect(byPricing.image.skipped).toBe(true);
+  });
+
+  it("uses OpenRouter top-provider limits for scan metadata", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/provider-limited:free",
+          name: "Provider Limited",
+          context_length: 32_768,
+          top_provider: {
+            context_length: 16_384,
+            max_completion_tokens: 4096,
+          },
+          supported_parameters: [],
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+    });
+
+    expect(result?.contextLength).toBe(16_384);
+    expect(result?.maxCompletionTokens).toBe(4096);
+  });
+
+  it("falls back when top-provider limits are malformed", async () => {
+    for (const topProvider of [
+      { context_length: 0, max_completion_tokens: 0 },
+      { context_length: -1, max_completion_tokens: -1 },
+      { context_length: 8192.5, max_completion_tokens: 8192.5 },
+      {
+        context_length: Number.MAX_SAFE_INTEGER + 1,
+        max_completion_tokens: Number.MAX_SAFE_INTEGER + 1,
+      },
+      { context_length: "8192", max_completion_tokens: "1024" },
+      { context_length: null, max_completion_tokens: null },
+    ]) {
+      const fetchImpl = createFetchFixture({
+        data: [
+          {
+            id: "acme/provider-limited:free",
+            name: "Provider Limited",
+            context_length: 32_768,
+            max_completion_tokens: 4096,
+            top_provider: topProvider,
+            supported_parameters: [],
+            pricing: { prompt: "0", completion: "0" },
+          },
+        ],
+      });
+
+      const [result] = await scanOpenRouterModels({ fetchImpl, probe: false });
+
+      expect(result?.contextLength).toBe(32_768);
+      expect(result?.maxCompletionTokens).toBe(4096);
+    }
+  });
+
+  it("mixes provider context length with a top-level completion cap", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/provider-limited:free",
+          name: "Provider Limited",
+          context_length: 32_768,
+          max_completion_tokens: 4096,
+          top_provider: { context_length: 16_384, max_completion_tokens: 0 },
+          supported_parameters: [],
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({ fetchImpl, probe: false });
+
+    expect(result?.contextLength).toBe(16_384);
+    expect(result?.maxCompletionTokens).toBe(4096);
+  });
+
+  it("falls back to top-level max_output_tokens", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/output-limited:free",
+          name: "Output Limited",
+          context_length: 32_768,
+          max_output_tokens: 2048,
+          top_provider: { max_completion_tokens: 0 },
+          supported_parameters: [],
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({ fetchImpl, probe: false });
+
+    expect(result?.maxCompletionTokens).toBe(2048);
   });
 
   it("drops out-of-range OpenRouter created_at timestamps", async () => {

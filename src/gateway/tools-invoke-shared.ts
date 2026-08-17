@@ -17,8 +17,6 @@ import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
 } from "../channels/plugins/conversation-read-origin.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
-import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -30,7 +28,9 @@ import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
-import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -68,16 +68,25 @@ type ToolsInvokeOutcome =
       };
     };
 
-function resolveSessionKey(params: { cfg: OpenClawConfig; input: ToolsInvokeInput }): string {
-  const rawSessionKey = normalizeOptionalString(params.input.sessionKey);
-  if (rawSessionKey && rawSessionKey !== "main") {
-    return rawSessionKey;
+function resolveSessionTarget(params: { cfg: OpenClawConfig; input: ToolsInvokeInput }) {
+  const rawSessionKey = normalizeOptionalString(params.input.sessionKey) ?? "main";
+  const resolved = resolveRequestedSessionAgentId(
+    params.cfg,
+    rawSessionKey,
+    normalizeOptionalString(params.input.agentId),
+  );
+  if (!resolved.ok) {
+    return resolved;
   }
-  const agentId = normalizeOptionalString(params.input.agentId);
-  if (agentId) {
-    return canonicalizeSessionKeyForAgent(agentId, "main");
-  }
-  return resolveMainSessionKey(params.cfg);
+  return {
+    ok: true as const,
+    agentId: resolved.agentId,
+    sessionKey: resolveStoredSessionKeyForAgentStore({
+      cfg: params.cfg,
+      agentId: resolved.agentId,
+      sessionKey: rawSessionKey,
+    }),
+  };
 }
 
 function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
@@ -212,9 +221,18 @@ export async function invokeGatewayTool(params: {
     argsRaw && typeof argsRaw === "object" && !Array.isArray(argsRaw)
       ? (argsRaw as Record<string, unknown>)
       : {};
-  const sessionKey = resolveSessionKey({ cfg: params.cfg, input: params.input });
+  const sessionTarget = resolveSessionTarget({ cfg: params.cfg, input: params.input });
+  if (!sessionTarget.ok) {
+    return {
+      ok: false,
+      status: 400,
+      toolName,
+      error: { type: "invalid_request", message: sessionTarget.error.message },
+    };
+  }
+  const { agentId: selectedAgentId, sessionKey } = sessionTarget;
   const harnessEntry = isAgentHarnessSessionKey(sessionKey)
-    ? resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey }).entry
+    ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId: selectedAgentId }).entry
     : undefined;
   if (
     isAgentHarnessSessionKey(sessionKey) &&
@@ -234,6 +252,7 @@ export async function invokeGatewayTool(params: {
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
+      agentId: selectedAgentId,
       messageProvider: params.messageChannel,
       accountId: params.accountId,
       agentTo: params.agentTo,

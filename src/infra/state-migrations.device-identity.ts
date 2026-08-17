@@ -535,6 +535,7 @@ export async function migrateLegacyDeviceIdentity(params: {
       try {
         identityCoordinator = acquireDeviceIdentityCoordinator({
           databasePath: resolveDeviceIdentityStore({ env, identityKey: IDENTITY_KEY }).databasePath,
+          stateDir: params.stateDir,
         });
       } catch (error) {
         return {

@@ -12,11 +12,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  approveDevicePairing,
-  ensureDeviceToken,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { ensureDeviceToken } from "../infra/device-pairing-tokens.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -24,6 +22,11 @@ import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  type AuthRateLimiter,
+} from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -47,6 +50,12 @@ type PlaybackModeForSourceResolver = (
     (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
   >
 ) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
+type FileHandleRead = (
+  target: Uint8Array,
+  offset: number,
+  length: number,
+  position: number | null,
+) => Promise<{ bytesRead: number; buffer: Uint8Array }>;
 
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
@@ -86,7 +95,29 @@ const REAL_PNG = Buffer.from(
 );
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function createAuthRateLimiterSpy() {
+  const check = vi.fn<AuthRateLimiter["check"]>(() => ({
+    allowed: true,
+    remaining: 10,
+    retryAfterMs: 0,
+  }));
+  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>(() => {});
+  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(async () => {});
+  const reset = vi.fn<AuthRateLimiter["reset"]>(() => {});
+  return {
+    check,
+    recordFailure,
+    recordFailureAndDelay,
+    reset,
+    size: () => 0,
+    prune: () => {},
+    dispose: () => {},
+  } satisfies AuthRateLimiter;
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   probeMediaFileDescriptorMock.mockReset();
   probeMediaFileDescriptorMock.mockResolvedValue({});
@@ -140,6 +171,7 @@ describe("handleControlUiHttpRequest", () => {
       localMediaPreviewRoots?: string[];
       seamColor?: string;
       terminalEnabled: boolean;
+      cliAgentsEnabled: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
@@ -192,6 +224,8 @@ describe("handleControlUiHttpRequest", () => {
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
     config?: OpenClawConfig;
+    rateLimiter?: AuthRateLimiter;
+    trustedProxies?: string[];
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
     const url = params.basePath
@@ -209,6 +243,8 @@ describe("handleControlUiHttpRequest", () => {
         ...(params.basePath ? { basePath: params.basePath } : {}),
         ...(params.auth ? { auth: params.auth } : {}),
         ...(params.config ? { config: params.config } : {}),
+        ...(params.rateLimiter ? { rateLimiter: params.rateLimiter } : {}),
+        ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
         root: { kind: "resolved", path: params.rootPath },
       },
     );
@@ -381,6 +417,23 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
+  async function forceFirstFileHandleShortRead(filePath: string, maxBytes: number) {
+    const probe = await fs.open(filePath, "r");
+    const fileHandlePrototype = Object.getPrototypeOf(probe) as { read: FileHandleRead };
+    const originalRead = fileHandlePrototype.read;
+    await probe.close();
+    let constrained = false;
+    return vi
+      .spyOn(fileHandlePrototype, "read")
+      .mockImplementation(async function (this: unknown, target, offset, length, position) {
+        if (!constrained && position === 0 && length > maxBytes) {
+          constrained = true;
+          return await originalRead.call(this, target, offset, maxBytes, position);
+        }
+        return await originalRead.call(this, target, offset, length, position);
+      });
+  }
+
   async function withBasePathRootFixture<T>(params: {
     siblingDir: string;
     fn: (paths: { root: string; sibling: string }) => Promise<T>;
@@ -474,7 +527,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
@@ -508,7 +561,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
@@ -529,11 +582,15 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
-        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
-          root: { kind: "resolved", path: tmp },
-          config: { gateway: { terminal: { enabled: true } } },
-          terminalEnabled: false,
-        });
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { gateway: { terminal: { enabled: true } } },
+            terminalEnabled: false,
+          },
+        );
         const csp = setHeader.mock.calls.findLast(
           (call) => call[0] === "Content-Security-Policy",
         )?.[1];
@@ -1042,6 +1099,50 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("fully reads the assistant media metadata MIME prefix after a short read", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-meta-short-read-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.bin");
+        await fs.writeFile(filePath, REAL_PNG);
+        const readSpy = await forceFirstFileHandleShortRead(filePath, 1);
+
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(responseJson(end)).toMatchObject({ available: true, mimeType: "image/png" });
+        expect(readSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      },
+    });
+  });
+
+  it("fully reads the served assistant media MIME prefix after a short read", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-serve-short-read-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.bin");
+        await fs.writeFile(filePath, REAL_PNG);
+        const readSpy = await forceFirstFileHandleShortRead(filePath, 1);
+
+        const { res, handled, setHeader } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
+        expect(readSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      },
+    });
+  });
+
   it("reports assistant audio size, type, and probed duration metadata", async () => {
     probeMediaFileDescriptorMock.mockResolvedValueOnce({ durationMs: 2345 });
     await withAllowedAssistantMediaRoot({
@@ -1385,9 +1486,11 @@ describe("handleControlUiHttpRequest", () => {
       indexHtml: html,
       fn: async (tmp) => {
         const { res, setHeader } = makeMockHttpResponse();
-        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
-          root: { kind: "resolved", path: tmp },
-        });
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
         const cspCalls = setHeader.mock.calls.filter(
           (call) => call[0] === "Content-Security-Policy",
         );
@@ -1405,7 +1508,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
@@ -1431,7 +1534,11 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/openclaw/chat", method: "GET" } as IncomingMessage,
+          {
+            url: "/openclaw/chat",
+            method: "GET",
+            headers: { host: "gateway.example.test" },
+          } as IncomingMessage,
           res,
           {
             basePath: "/openclaw",
@@ -1479,7 +1586,11 @@ describe("handleControlUiHttpRequest", () => {
         fn: async (tmp) => {
           const { res, end } = makeMockHttpResponse();
           const handled = await handleControlUiHttpRequest(
-            { url: requestPath, method: "GET" } as IncomingMessage,
+            {
+              url: requestPath,
+              method: "GET",
+              headers: { host: "gateway.example.test" },
+            } as IncomingMessage,
             res,
             {
               ...(basePath ? { basePath } : {}),
@@ -1516,6 +1627,7 @@ describe("handleControlUiHttpRequest", () => {
                 seamColor: "#1A2b3C",
                 assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
               },
+              gateway: { cliAgents: { enabled: true } },
             },
           },
         );
@@ -1529,6 +1641,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAgentId).toBe("roboclaw");
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.terminalEnabled).toBe(true);
+        expect(parsed.cliAgentsEnabled).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
@@ -1824,6 +1937,7 @@ describe("handleControlUiHttpRequest", () => {
   it("serves bootstrap config JSON when auth is enabled and the token is valid", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
+        const rateLimiter = createAuthRateLimiterSpy();
         await fs.writeFile(path.join(tmp, "avatar.png"), "avatar-bytes\n");
         const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
           rootPath: tmp,
@@ -1835,6 +1949,7 @@ describe("handleControlUiHttpRequest", () => {
             agents: { defaults: { workspace: tmp } },
             ui: { assistant: { avatar: "avatar.png" } },
           },
+          rateLimiter,
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
@@ -1845,6 +1960,189 @@ describe("handleControlUiHttpRequest", () => {
           assistantAvatar: `data:image/png;base64,${Buffer.from("avatar-bytes\n").toString("base64")}`,
           assistantAvatarStatus: "local",
         });
+        expect(rateLimiter.reset).toHaveBeenCalledWith(
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+        expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("penalizes both credential scopes when a Control UI read token is invalid", async () => {
+    const tempHome = testTempDirs.make("openclaw-ui-invalid-token-");
+    await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const rateLimiter = createAuthRateLimiterSpy();
+          const { res, handled, end } = await runBootstrapConfigRequest({
+            rootPath: tmp,
+            auth: { mode: "token", token: "shared-token", allowTailscale: false },
+            headers: { authorization: "Bearer invalid-token" },
+            rateLimiter,
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(401);
+          expect(responseJson(end)).toEqual({
+            error: { message: "Unauthorized", type: "unauthorized" },
+          });
+          expect(rateLimiter.recordFailureAndDelay).toHaveBeenNthCalledWith(
+            1,
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+          );
+          expect(rateLimiter.recordFailureAndDelay).toHaveBeenNthCalledWith(
+            2,
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+          );
+          expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledTimes(2);
+        },
+      });
+    });
+  });
+
+  it("penalizes a trusted-proxy local password mismatch only as a shared secret", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const rateLimiter = createAuthRateLimiterSpy();
+        const { res, handled, end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            password: "local-password",
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+          trustedProxies: ["127.0.0.1"],
+          headers: {
+            host: "localhost",
+            authorization: "Bearer wrong-password",
+          },
+          rateLimiter,
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(responseJson(end)).toEqual({
+          error: { message: "Unauthorized", type: "unauthorized" },
+        });
+        expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledTimes(1);
+        expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledWith(
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+        expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalledWith(
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+        );
+      },
+    });
+  });
+
+  it("rejects a rate-limited Control UI read when no valid device token is presented", async () => {
+    const tempHome = testTempDirs.make("openclaw-ui-rate-limited-token-");
+    await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const rateLimiter = createAuthRateLimiterSpy();
+          rateLimiter.check.mockImplementation((_ip, scope) =>
+            scope === AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET
+              ? { allowed: false, remaining: 0, retryAfterMs: 2_500 }
+              : { allowed: true, remaining: 10, retryAfterMs: 0 },
+          );
+          const auth: ResolvedGatewayAuth = {
+            mode: "token",
+            token: "shared-token",
+            allowTailscale: false,
+          };
+          const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
+            rootPath: tmp,
+            auth,
+            headers: { authorization: "Bearer invalid-token" },
+            rateLimiter,
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(429);
+          expect(responseJson(end)).toEqual({
+            error: {
+              message: "Too many failed authentication attempts. Please try again later.",
+              type: "rate_limited",
+            },
+          });
+          expect(setHeader).toHaveBeenCalledWith("Retry-After", "3");
+          expect(rateLimiter.check).toHaveBeenNthCalledWith(
+            1,
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+          );
+          expect(rateLimiter.check).toHaveBeenNthCalledWith(
+            2,
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+          );
+          expect(rateLimiter.reset).not.toHaveBeenCalled();
+          expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledTimes(1);
+          expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledWith(
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+          );
+          expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalledWith(
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+          );
+        },
+      });
+    });
+  });
+
+  it("records a shared mismatch when the device-token scope is locked", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const rateLimiter = createAuthRateLimiterSpy();
+        rateLimiter.check.mockImplementation((_ip, scope) =>
+          scope === AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN
+            ? { allowed: false, remaining: 0, retryAfterMs: 2_500 }
+            : { allowed: true, remaining: 10, retryAfterMs: 0 },
+        );
+        const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "shared-token", allowTailscale: false },
+          headers: { authorization: "Bearer invalid-token" },
+          rateLimiter,
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(429);
+        expect(responseJson(end)).toEqual({
+          error: {
+            message: "Too many failed authentication attempts. Please try again later.",
+            type: "rate_limited",
+          },
+        });
+        expect(setHeader).toHaveBeenCalledWith("Retry-After", "3");
+        expect(rateLimiter.check).toHaveBeenNthCalledWith(
+          1,
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+        expect(rateLimiter.check).toHaveBeenNthCalledWith(
+          2,
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+        );
+        expect(rateLimiter.reset).not.toHaveBeenCalled();
+        expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledTimes(1);
+        expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledWith(
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+        expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalledWith(
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+        );
       },
     });
   });
@@ -2035,17 +2333,74 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (operatorToken) => {
         await withControlUiRoot({
           fn: async (tmp) => {
+            const rateLimiter = createAuthRateLimiterSpy();
             const { res, handled, end } = await runBootstrapConfigRequest({
               rootPath: tmp,
               auth: { mode: "token", token: "shared-token", allowTailscale: false },
               headers: {
                 authorization: `Bearer ${operatorToken}`,
               },
+              rateLimiter,
             });
             expect(handled).toBe(true);
             expect(res.statusCode).toBe(200);
             const parsed = parseBootstrapPayload(end);
             expect(parsed.assistantAgentId).toBeUndefined();
+            expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalled();
+            expect(rateLimiter.reset).toHaveBeenCalledWith(
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+            );
+            expect(rateLimiter.reset).toHaveBeenCalledWith(
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+            );
+          },
+        });
+      },
+    });
+  });
+
+  it("serves paired device-token bootstrap while the shared-secret scope is locked", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            const rateLimiter = createAuthRateLimiterSpy();
+            rateLimiter.check.mockImplementation((_ip, scope) =>
+              scope === AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET
+                ? { allowed: false, remaining: 0, retryAfterMs: 2_500 }
+                : { allowed: true, remaining: 10, retryAfterMs: 0 },
+            );
+            const { res, handled, end } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: { authorization: `Bearer ${operatorToken}` },
+              rateLimiter,
+            });
+
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            expect(parseBootstrapPayload(end).assistantAgentId).toBeUndefined();
+            expect(rateLimiter.check).toHaveBeenNthCalledWith(
+              1,
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+            );
+            expect(rateLimiter.check).toHaveBeenNthCalledWith(
+              2,
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+            );
+            expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalled();
+            expect(rateLimiter.reset).toHaveBeenCalledWith(
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+            );
+            expect(rateLimiter.reset).toHaveBeenCalledWith(
+              "127.0.0.1",
+              AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+            );
           },
         });
       },

@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
-import { stableStringify } from "@openclaw/normalization-core";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
+import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
-import { resolveStorePath } from "../../../config/sessions.js";
+import {
+  combineChannelAdmissionEvidence,
+  compareChannelAdmissionParticipants,
+} from "../../../channels/message-access/admission-evidence.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
@@ -39,6 +44,17 @@ import {
   retireFollowupRunCancellation,
   type FollowupRun,
 } from "./types.js";
+
+type InternalFollowupRun = FollowupRun & {
+  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
+  currentTurnImagesPrepared?: true;
+  /** Admission-owned layout; fact indexes are relative to this run's media array. */
+  mediaImageLayout?: MediaImageLayout;
+};
+
+function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
+  return (run as InternalFollowupRun).currentTurnImagesPrepared === true;
+}
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -162,22 +178,52 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
-function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
+function hasVerifiedAdmissionParticipant(run: FollowupRun): boolean {
+  return compareChannelAdmissionParticipants([run.channelAdmissionEvidence]) === "same";
+}
+
+function resolveFollowupAuthorizationKey(run: FollowupRun): string {
+  const execution = run.run;
   return JSON.stringify([
-    run.senderId ?? "",
-    JSON.stringify(run.channelContext ?? null),
-    run.senderE164 ?? "",
-    run.senderIsOwner === true,
-    run.execOverrides?.host ?? "",
-    run.execOverrides?.security ?? "",
-    run.execOverrides?.ask ?? "",
-    run.execOverrides?.node ?? "",
-    run.execOverrides?.nodeCwd ?? "",
-    run.bashElevated?.enabled === true,
-    run.bashElevated?.allowed === true,
-    run.bashElevated?.defaultLevel ?? "",
-    run.approvalReviewerDeviceId ?? "",
+    execution.senderId ?? "",
+    JSON.stringify(execution.channelContext ?? null),
+    stableStringify(execution.conversationToolPolicy ?? null),
+    execution.senderE164 ?? "",
+    execution.senderIsOwner === true,
+    execution.execOverrides?.host ?? "",
+    execution.execOverrides?.security ?? "",
+    execution.execOverrides?.ask ?? "",
+    execution.execOverrides?.node ?? "",
+    execution.execOverrides?.nodeCwd ?? "",
+    execution.bashElevated?.enabled === true,
+    execution.bashElevated?.allowed === true,
+    execution.bashElevated?.defaultLevel ?? "",
+    execution.approvalReviewerDeviceId ?? "",
   ]);
+}
+
+function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun["run"]) {
+  const participantComparison = compareChannelAdmissionParticipants(
+    items.map((item) => item.channelAdmissionEvidence),
+  );
+  if (
+    participantComparison === "same" ||
+    !items.every((item) => hasVerifiedAdmissionParticipant(item))
+  ) {
+    return source;
+  }
+  // Mixed or unverifiable people share no downstream sender authority. The
+  // opaque admission aggregate records unknown identity at the run boundary.
+  return {
+    ...source,
+    senderId: undefined,
+    senderName: undefined,
+    senderUsername: undefined,
+    senderE164: undefined,
+    senderIsOwner: false,
+    traceAuthorized: false,
+    ownerNumbers: [],
+  };
 }
 
 export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
@@ -190,13 +236,16 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
       accountId: run.originatingAccountId,
       threadId: run.originatingThreadId,
     }),
+    hasPreparedCurrentTurnImages(run),
     run.originatingChatId ?? "",
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
     normalizeChatType(run.originatingChatType) ?? "",
-    resolveFollowupAuthorizationKey(execution),
+    resolveFollowupAuthorizationKey(run),
     run.turnAdoptionLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
+    execution.provider,
+    execution.model,
     execution.messageProvider ?? "",
     JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
     stableStringify(execution.toolBindings ?? null),
@@ -205,6 +254,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.groupId ?? "",
     execution.groupChannel ?? "",
     execution.groupSpace ?? "",
+    JSON.stringify([...new Set(execution.memberRoleIds ?? [])].toSorted()),
     execution.spawnedBy ?? "",
     execution.traceAuthorized === true,
     execution.elevatedLevel ?? "",
@@ -213,6 +263,14 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     provenance?.sourceSessionKey ?? "",
     provenance?.sourceChannel ?? "",
     provenance?.sourceTool ?? "",
+    stableStringify(execution.trustedInternalHandoff ?? null),
+    stableStringify(execution.scheduledToolPolicy ?? null),
+    stableStringify(execution.runtimePluginToolGrant ?? null),
+    stableStringify(run.toolsAllow ?? null),
+    stableStringify(
+      run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
+    ),
+    run.disableTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
@@ -290,24 +348,52 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
 
 function collectQueuedPromptMedia(
   items: FollowupRun[],
-): Pick<FollowupRun, "images" | "imageOrder" | "media"> {
+): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
+  Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout"> {
   const images: NonNullable<FollowupRun["images"]> = [];
   const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
   const media: NonNullable<FollowupRun["media"]> = [];
+  const mediaImageSlots: MediaImageLayout["slots"] = [];
+  const suppressedFactIndexes: number[] = [];
+  const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
+    const mediaOffset = media.length;
+    const internalItem = item as InternalFollowupRun;
     if (item.images) {
       images.push(...item.images);
     }
     if (item.imageOrder) {
       imageOrder.push(...item.imageOrder);
     }
+    if (currentTurnImagesPrepared) {
+      const itemSlots: MediaImageLayout["slots"] =
+        internalItem.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
+      mediaImageSlots.push(
+        ...itemSlots.map((slot) =>
+          slot.factIndex === undefined
+            ? { kind: slot.kind }
+            : { kind: slot.kind, factIndex: slot.factIndex + mediaOffset },
+        ),
+      );
+      suppressedFactIndexes.push(
+        ...(internalItem.mediaImageLayout?.suppressedFactIndexes ?? []).map(
+          (factIndex) => factIndex + mediaOffset,
+        ),
+      );
+    }
     if (item.media) {
       media.push(...item.media);
     }
   }
+  const mediaImageLayout =
+    mediaImageSlots.length > 0 || suppressedFactIndexes.length > 0
+      ? { slots: mediaImageSlots, suppressedFactIndexes }
+      : undefined;
   return {
-    ...(images.length > 0 ? { images } : {}),
-    ...(imageOrder.length > 0 ? { imageOrder } : {}),
+    ...(currentTurnImagesPrepared ? { currentTurnImagesPrepared: true as const } : {}),
+    ...(currentTurnImagesPrepared || images.length > 0 ? { images } : {}),
+    ...(currentTurnImagesPrepared || imageOrder.length > 0 ? { imageOrder } : {}),
+    ...(mediaImageLayout ? { mediaImageLayout } : {}),
     ...(media.length > 0 ? { media } : {}),
   };
 }
@@ -317,11 +403,14 @@ type FollowupRuntimeMetadata = Pick<
   | "currentInboundEventKind"
   | "currentInboundAudio"
   | "currentInboundContext"
+  | "explicitSkillSelections"
+  | "channelAdmissionEvidence"
+  | "toolsAllow"
+  | "disableTools"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "turnAdoptionLifecycle"
-  | "onReplyAdmissionWaitChange"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -347,7 +436,7 @@ function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
 
 function resolveFollowupTranscriptTarget(source: FollowupRun) {
   const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
-  const storePath = resolveStorePath(source.run.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(source.run.config.session?.store, {
     agentId: source.run.agentId,
   });
   const sessionEntry = loadSessionEntryReadOnly({
@@ -547,34 +636,48 @@ function collectRuntimeMetadata(
   abortSignal?: AbortSignal,
 ): FollowupRuntimeMetadata {
   const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
+  // Delivery-key equality proves every source has the same turn authority.
+  // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
+  const authoritySource = items.at(-1);
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
-  const admissionWaitCallbacks = new Set(
-    items.flatMap((item) =>
-      item.onReplyAdmissionWaitChange ? [item.onReplyAdmissionWaitChange] : [],
-    ),
-  );
+  const explicitSkillSelections = [
+    ...new Map(
+      items
+        .flatMap((item) => item.explicitSkillSelections ?? [])
+        .map((selection) => [selection.path, selection] as const),
+    ).values(),
+  ];
   return {
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: collectCurrentInboundContext(items),
+    explicitSkillSelections:
+      explicitSkillSelections.length > 0 ? explicitSkillSelections : undefined,
+    channelAdmissionEvidence: combineChannelAdmissionEvidence(
+      items.map((item) => item.channelAdmissionEvidence),
+    ),
+    toolsAllow: authoritySource?.toolsAllow,
+    disableTools: authoritySource?.disableTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
-    onReplyAdmissionWaitChange:
-      admissionWaitCallbacks.size > 0
-        ? (waiting) => {
-            for (const callback of admissionWaitCallbacks) {
-              callback(waiting);
-            }
-          }
-        : undefined,
   };
+}
+
+function resolveQueuedCronCreatorAuthorityUnavailable(
+  items: readonly FollowupRun[],
+): "queued-local-operator" | undefined {
+  return items.some(
+    (item) =>
+      item.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable === "queued-local-operator",
+  )
+    ? "queued-local-operator"
+    : undefined;
 }
 
 type FollowupQueueSummaryState = {
   cap: number;
-  dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
   summarySources: FollowupRun[];
@@ -583,6 +686,7 @@ type FollowupQueueSummaryState = {
     contextKey: string;
     count: number;
     sources: FollowupRun[];
+    summaryLines: string[];
     sourceRefs: WeakMap<FollowupRun, FollowupRun>;
   }>;
   evictedSummaryCount: number;
@@ -593,6 +697,16 @@ type QueueSummaryDelivery = {
   droppedCount: number;
   sources: FollowupRun[];
 };
+
+function resolveQueueSummaryLines(
+  queue: Pick<FollowupQueueSummaryState, "summaryLines" | "summarySources">,
+  sources: FollowupRun[],
+): string[] {
+  return sources.map((source) => {
+    const sourceIndex = queue.summarySources.indexOf(source);
+    return expectDefined(queue.summaryLines[sourceIndex], "summary line for retained source");
+  });
+}
 
 function createQueueSummaryDelivery(params: {
   queue: FollowupQueueSummaryState;
@@ -607,11 +721,10 @@ function createQueueSummaryDelivery(params: {
   }
   const droppedCount = params.sources ? sources.length : params.queue.droppedCount;
   const summaryLines = params.sources
-    ? params.queue.summaryLines.slice(0, sources.length)
+    ? resolveQueueSummaryLines(params.queue, sources)
     : [...params.queue.summaryLines];
   const prompt = previewQueueSummaryPrompt({
     state: {
-      dropPolicy: params.queue.dropPolicy,
       droppedCount,
       summaryLines,
     },
@@ -649,7 +762,10 @@ function consumeQueueSummaryDelivery(
           "summary elisions entry at elision index",
         );
         const elidedSourceIndex = entry.sources.indexOf(entry.sourceRefs.get(source) ?? source);
-        entry.sources.splice(elidedSourceIndex, 1);
+        if (elidedSourceIndex >= 0) {
+          entry.sources.splice(elidedSourceIndex, 1);
+          entry.summaryLines.splice(elidedSourceIndex, 1);
+        }
         entry.count = entry.sources.length;
         consumedCount += 1;
         if (entry.sources.length === 0) {
@@ -890,7 +1006,13 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
+    explicitSkillSelections: source.explicitSkillSelections,
+    toolsAllow: source.toolsAllow,
+    disableTools: source.disableTools,
+    images: source.images,
+    imageOrder: source.imageOrder,
     media: source.media,
+    channelAdmissionEvidence: source.channelAdmissionEvidence,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
@@ -904,7 +1026,6 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
-    onReplyAdmissionWaitChange: source.onReplyAdmissionWaitChange,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
@@ -947,6 +1068,7 @@ async function runSyntheticOverflowSummary(params: {
     input: {
       text: params.prompt,
       idempotencyKey: `followup-overflow:${params.source.run.sessionId}:${routeHash}:${params.source.messageId ?? params.source.enqueuedAt}:${promptHash}`,
+      senderIsOwner: params.source.run.senderIsOwner,
       provenance: params.source.run.inputProvenance,
     },
     target: () => resolveFollowupTranscriptTarget(params.source),
@@ -954,6 +1076,7 @@ async function runSyntheticOverflowSummary(params: {
     errorContext: "followup overflow summary transcript",
   });
   const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
+  const runtimeMetadata = collectRuntimeMetadata(params.sources);
   let admitted = false;
   await params.runFollowup({
     prompt: params.prompt,
@@ -961,15 +1084,21 @@ async function runSyntheticOverflowSummary(params: {
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
     userTurnTranscriptRecorder,
-    run: params.source.run,
+    run: resolveCollectedRun(params.sources, params.source.run),
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
-    onReplyAdmissionWaitChange: collectRuntimeMetadata(params.sources).onReplyAdmissionWaitChange,
+    explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
+    channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
+    toolsAllow: runtimeMetadata.toolsAllow,
+    disableTools: runtimeMetadata.disableTools,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {
             // Synthetic aggregate owner — not a durable exclusive ingress identity.
             admission: "cancel-only" as const,
+            ...(resolveQueuedCronCreatorAuthorityUnavailable(params.sources)
+              ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+              : {}),
             onAdopted: async () => {
               await params.onAdmitted?.();
               admitted = true;
@@ -1009,6 +1138,7 @@ async function drainElidedOverflowSummary(params: {
       continue;
     }
     entry.sources.splice(index, 1);
+    entry.summaryLines.splice(index, 1);
     entry.count = Math.max(0, entry.count - 1);
     params.queue.droppedCount = Math.max(0, params.queue.droppedCount - 1);
     completeFollowupRunLifecycle(source);
@@ -1024,10 +1154,10 @@ async function drainElidedOverflowSummary(params: {
   const elidedCount = entry.sources.length;
   const elidedSources = [...entry.sources];
   const droppedCount = elidedCount + retainedSources.length;
-  const summaryLines = params.queue.summaryLines.slice(0, retainedSources.length);
+  const retainedSummaryLines = resolveQueueSummaryLines(params.queue, retainedSources);
+  const summaryLines = [...entry.summaryLines, ...retainedSummaryLines].slice(-params.queue.cap);
   const prompt = previewQueueSummaryPrompt({
     state: {
-      dropPolicy: params.queue.dropPolicy,
       droppedCount,
       summaryLines,
     },
@@ -1064,6 +1194,7 @@ async function drainElidedOverflowSummary(params: {
   }
   const consumedCount = Math.min(elidedCount, entry.sources.length);
   const consumedSources = entry.sources.splice(0, consumedCount);
+  entry.summaryLines.splice(0, consumedCount);
   entry.count = entry.sources.length;
   for (const consumedSource of consumedSources) {
     completeFollowupRunLifecycle(consumedSource);
@@ -1148,6 +1279,7 @@ export function scheduleFollowupDrain(
   // Give the detached chain its own root so inherited request admission cannot go stale.
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     let retryDeferred = false;
+    let waitingForSteer = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -1155,12 +1287,26 @@ export function scheduleFollowupDrain(
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
+        if (queue.items.some((item) => item.steerPending)) {
+          waitingForSteer = true;
+          break;
+        }
         await waitForQueueDebounce(queue, queue.abortController.signal);
         await dropAbortedFollowups(queue.items, effectiveRunFollowup);
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
+        if (queue.items.some((item) => item.steerPending)) {
+          waitingForSteer = true;
+          break;
+        }
         if (await drainProtectedPriorityFollowup(queue.items, effectiveRunFollowup)) {
+          continue;
+        }
+        if (queue.droppedCount > 0 && queue.items.some((item) => item.steerAnchor)) {
+          if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, reserveOptions))) {
+            break;
+          }
           continue;
         }
         if (
@@ -1225,7 +1371,9 @@ export function scheduleFollowupDrain(
             }
             assertSingleAdmissionOwner(activeGroupItems);
             const groupSource = activeGroupItems.at(-1);
-            const run = groupSource?.run ?? queue.lastRun;
+            const run = groupSource
+              ? resolveCollectedRun(activeGroupItems, groupSource.run)
+              : queue.lastRun;
             if (!run) {
               break;
             }
@@ -1290,6 +1438,9 @@ export function scheduleFollowupDrain(
                       turnAdoptionLifecycle: {
                         // Synthetic aggregate owner — sources keep their own admission.
                         admission: "cancel-only" as const,
+                        ...(resolveQueuedCronCreatorAuthorityUnavailable(activeGroupItems)
+                          ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+                          : {}),
                         onAdopted: admitGroupSources,
                         onSettled: () => {
                           if (admitted) {
@@ -1371,7 +1522,11 @@ export function scheduleFollowupDrain(
     } finally {
       queue.draining = false;
       const hasPendingQueueWork = queue.items.length > 0 || queue.droppedCount > 0;
-      if (retryDeferred && hasPendingQueueWork) {
+      if (waitingForSteer && hasPendingQueueWork) {
+        if (!queue.items.some((item) => item.steerPending)) {
+          scheduleFollowupDrain(key, effectiveRunFollowup);
+        }
+      } else if (retryDeferred && hasPendingQueueWork) {
         scheduleFollowupDrain(key, effectiveRunFollowup);
       } else if (!hasPendingQueueWork) {
         // Only remove the map entry if it still points to this queue instance.

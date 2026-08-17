@@ -1,6 +1,7 @@
 // Control UI view renders dreaming screen content.
 import "../../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { renderHubTabs } from "../../../components/hub-tabs.ts";
@@ -9,9 +10,10 @@ import {
   lobsterPetSeed,
   renderLobsterSvg,
 } from "../../../components/lobster-pet.ts";
-import "../../../components/modal-dialog.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import "../../../components/modal-dialog.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import "../../../styles/dreams.css";
 import type { DreamingEntry, WikiImportInsights, WikiOverview } from "./dreaming.ts";
 
@@ -72,8 +74,7 @@ function parseDiaryEntries(raw: string): DiaryEntry[] {
 }
 
 function parseDiaryTimestamp(date: string): number | null {
-  const parsed = Date.parse(date);
-  return Number.isFinite(parsed) ? parsed : null;
+  return parseDateStringTimestampMs(date) ?? null;
 }
 
 function formatDiaryChipLabel(date: string): string {
@@ -92,6 +93,14 @@ type DreamingPhaseInfo = {
 };
 
 type DreamingProps = {
+  access: {
+    canOpenConfig: boolean;
+    canBackfillDiary: boolean;
+    canDedupeDreamDiary: boolean;
+    canResetDiary: boolean;
+    canResetGroundedShortTerm: boolean;
+    canRepairDreamingArtifacts: boolean;
+  };
   viewState: DreamingViewState;
   active: boolean;
   selectedAgentId: string;
@@ -435,8 +444,8 @@ function formatRange(path: string, startLine: number, endLine: number): string {
 }
 
 function formatCompactDateTime(value: string): string {
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseDateStringTimestampMs(value);
+  if (parsed === undefined) {
     return value;
   }
   return new Date(parsed).toLocaleString([], {
@@ -580,7 +589,7 @@ async function openWikiPreview(lookup: string, props: DreamingProps): Promise<vo
     state.wikiPreviewTruncated = preview.truncated === true;
   } catch (error) {
     if (state.wikiPreviewRequestId === requestId && state.wikiPreviewOpen) {
-      state.wikiPreviewError = String(error);
+      state.wikiPreviewError = formatUiError(error);
     }
   } finally {
     if (state.wikiPreviewRequestId === requestId && state.wikiPreviewOpen) {
@@ -676,11 +685,7 @@ function renderDiarySubtabExplainer(activeDiarySubTab: DreamingViewState["active
 }
 
 function parseSortableTimestamp(value?: string): number {
-  if (!value) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
 }
 
 function compareWaitingEntryByRecency(a: DreamingEntry, b: DreamingEntry): number {
@@ -805,8 +810,16 @@ function renderAdvancedSection(props: DreamingProps) {
         </div>
         <div class="dreams-advanced__actions">
           ${[
-            { label: t("dreaming.scene.dedupeDiary"), onClick: props.onDedupeDreamDiary },
-            { label: t("dreaming.scene.repairCache"), onClick: props.onRepairDreamingArtifacts },
+            {
+              label: t("dreaming.scene.dedupeDiary"),
+              onClick: props.onDedupeDreamDiary,
+              allowed: props.access.canDedupeDreamDiary,
+            },
+            {
+              label: t("dreaming.scene.repairCache"),
+              onClick: props.onRepairDreamingArtifacts,
+              allowed: props.access.canRepairDreamingArtifacts,
+            },
             {
               label: t(
                 props.dreamDiaryActionLoading
@@ -814,14 +827,23 @@ function renderAdvancedSection(props: DreamingProps) {
                   : "dreaming.scene.backfill",
               ),
               onClick: props.onBackfillDiary,
+              allowed: props.access.canBackfillDiary,
             },
-            { label: t("dreaming.scene.reset"), onClick: props.onResetDiary },
-            { label: t("dreaming.scene.clearGrounded"), onClick: props.onResetGroundedShortTerm },
+            {
+              label: t("dreaming.scene.reset"),
+              onClick: props.onResetDiary,
+              allowed: props.access.canResetDiary,
+            },
+            {
+              label: t("dreaming.scene.clearGrounded"),
+              onClick: props.onResetGroundedShortTerm,
+              allowed: props.access.canResetGroundedShortTerm,
+            },
           ].map(
-            ({ label, onClick }) => html`
+            ({ label, onClick, allowed }) => html`
               <button
                 class="btn btn--subtle btn--sm"
-                ?disabled=${props.modeSaving || props.dreamDiaryActionLoading}
+                ?disabled=${!allowed || props.modeSaving || props.dreamDiaryActionLoading}
                 @click=${() => onClick()}
               >
                 ${label}
@@ -865,7 +887,9 @@ function renderAdvancedSection(props: DreamingProps) {
           controls: html`
             <button
               class="btn btn--subtle btn--sm"
-              ?disabled=${props.modeSaving || props.dreamDiaryActionLoading}
+              ?disabled=${!props.access.canResetGroundedShortTerm ||
+              props.modeSaving ||
+              props.dreamDiaryActionLoading}
               @click=${() => props.onResetGroundedShortTerm()}
             >
               ${t("dreaming.scene.clearGrounded")}
@@ -1378,7 +1402,7 @@ function renderDiarySection(props: DreamingProps) {
           <button
             class="btn btn--subtle btn--sm"
             ?disabled=${memoryWikiUnavailable
-              ? false
+              ? !props.access.canOpenConfig
               : props.modeSaving ||
                 (activeDiarySubTab === "dreams"
                   ? props.dreamDiaryLoading
@@ -1437,7 +1461,11 @@ function renderDiarySection(props: DreamingProps) {
                   )}
                 </div>
                 <div class="dreams-diary__empty-actions">
-                  <button class="btn btn--subtle btn--sm" @click=${() => props.onOpenConfig()}>
+                  <button
+                    class="btn btn--subtle btn--sm"
+                    ?disabled=${!props.access.canOpenConfig}
+                    @click=${() => props.onOpenConfig()}
+                  >
                     ${t("dreaming.wiki.openConfig")}
                   </button>
                 </div>

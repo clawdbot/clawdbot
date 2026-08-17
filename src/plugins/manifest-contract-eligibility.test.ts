@@ -1,5 +1,5 @@
 // Covers manifest contract eligibility decisions.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -16,12 +16,22 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
-import {
-  isManifestPluginAvailableForControlPlane,
-  listAvailableManifestContractValues,
-  loadManifestContractSnapshot,
-} from "./manifest-contract-eligibility.js";
-import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+let isManifestPluginAvailableForControlPlane: typeof import("./manifest-contract-eligibility.js").isManifestPluginAvailableForControlPlane;
+let listAvailableManifestContractValues: typeof import("./manifest-contract-eligibility.js").listAvailableManifestContractValues;
+let loadManifestContractSnapshot: typeof import("./manifest-contract-eligibility.js").loadManifestContractSnapshot;
+let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
+
+beforeAll(async () => {
+  // The plugins project shares module state across files. Rebind this module graph
+  // after the hoisted mocks so an earlier production import cannot bypass them.
+  vi.resetModules();
+  ({
+    isManifestPluginAvailableForControlPlane,
+    listAvailableManifestContractValues,
+    loadManifestContractSnapshot,
+  } = await import("./manifest-contract-eligibility.js"));
+  ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
+});
 
 describe("bundled manifest contract availability", () => {
   const plugin = {

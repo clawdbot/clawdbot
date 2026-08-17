@@ -19,9 +19,10 @@ OTLP/HTTP works without code changes. For local file logs, see
 - **`diagnostics-otel`** subscribes to those events and exports them as
   OpenTelemetry **metrics**, **traces**, and **logs** over OTLP/HTTP, and can
   mirror log records to stdout JSONL.
-- **Provider calls** receive a W3C `traceparent` header from OpenClaw's
-  trusted model-call span context when the provider transport accepts custom
-  headers. Plugin-emitted trace context is not propagated.
+- **Provider calls** receive a W3C `traceparent` header from the actual current
+  OpenTelemetry model-call span when the provider transport accepts custom
+  headers. Diagnostic IDs remain local correlation keys, and plugin-emitted
+  trace context is not propagated.
 - Exporters attach only when both the diagnostics surface and the plugin are
   enabled, so in-process cost stays near zero by default.
 
@@ -59,7 +60,22 @@ openclaw plugins install clawhub:@openclaw/diagnostics-otel
 Or enable the plugin from the CLI: `openclaw plugins enable diagnostics-otel`.
 
 <Note>
-`protocol` supports `http/protobuf` only. Since `traces` and `metrics` default to enabled, any other value (including `grpc`) aborts the entire diagnostics-otel subscription with an `unsupported protocol` warning - this also stops stdout log export. Explicitly set `traces: false` and `metrics: false` if you only want `logsExporter: "stdout"` with a non-OTLP protocol value.
+`diagnostics.otel.protocol` accepts only `http/protobuf`. If a persisted config,
+including a value supplied through `${VAR}` interpolation, still resolves this
+field to the retired `grpc` value, run
+[`openclaw doctor --fix`](/cli/doctor). Doctor repairs directly authored values
+and a sole internal single-file include that owns the top-level `diagnostics`
+section. For root or array includes, nested include chains, sibling overrides,
+external include targets, or another ambiguous source, Doctor leaves the files
+unchanged and lists the candidate source file or files to edit manually.
+
+When `diagnostics.otel.protocol` is unset, each plugin-owned OTLP signal first
+checks its nonblank `OTEL_EXPORTER_OTLP_*_PROTOCOL` value, then
+`OTEL_EXPORTER_OTLP_PROTOCOL`, then defaults to `http/protobuf`. Doctor does not
+rewrite process environment variables. An unsupported value disables only that
+plugin-owned OTLP signal; supported sibling signals continue, as does the stdout
+branch of `logsExporter: "both"`. Preloaded trace and metric SDKs own their own
+transport selection and are not rejected by this plugin.
 </Note>
 
 ## Signals exported
@@ -75,6 +91,19 @@ default to on when `diagnostics.otel.enabled` is true; logs default to off
 and export only when `diagnostics.otel.logs` is explicitly `true`. Log export
 defaults to OTLP; set `diagnostics.otel.logsExporter` to `stdout` for JSONL on
 stdout, or `both` for both.
+
+<Note>
+The shared `endpoint` and `OTEL_EXPORTER_OTLP_ENDPOINT` are bases for all
+enabled signals. OpenClaw appends `/v1/traces`, `/v1/metrics`, or `/v1/logs`
+to root and custom collector paths. For compatibility with hosted frontends,
+a shared endpoint already ending in one of those signal paths keeps that path
+for its matching signal and replaces the terminal segment for the others.
+
+Signal-specific `tracesEndpoint`, `metricsEndpoint`, and `logsEndpoint`
+settings, plus their matching `OTEL_EXPORTER_OTLP_*_ENDPOINT` fallbacks, are
+passed to the exporter as exact URLs. OpenClaw does not append or rewrite their
+paths.
+</Note>
 
 ## Which processes export
 
@@ -97,6 +126,31 @@ stdout, or `both` for both.
   through the Gateway, or use `openclaw agent --local`, when you need traces
   from a headless run.
 
+## Exporter health
+
+`openclaw doctor` and `openclaw status --all` show a bounded, redacted snapshot
+of the running Gateway's latest trusted exporter state for each signal and
+transport. For `diagnostics-otel`, the snapshot distinguishes:
+
+- OTLP/HTTP protobuf with an endpoint supplied by config or an `OTEL_*`
+  environment fallback.
+- OTLP/HTTP protobuf using the exporter dependency's default endpoint because
+  no endpoint was supplied.
+- Stdout log export.
+- Trace or metric export owned by an externally preloaded OpenTelemetry SDK.
+
+OTLP export failure and recovery transitions are recorded from the exporter's
+final result callback, after dependency-owned retries finish. A retryable
+response that later succeeds is therefore not reported as a failure. Startup,
+log preparation or emit, export, and shutdown failures use fixed reason
+categories rather than raw errors.
+
+The snapshot never includes endpoint values, headers, certificates, payloads,
+or raw error messages. Transport is retained only in this local health
+projection. It is not added to the existing
+`openclaw.telemetry.exporter.events` metric attributes, and existing Prometheus
+label sets are unchanged.
+
 ## Configuration reference
 
 ```json5
@@ -109,7 +163,7 @@ stdout, or `both` for both.
       tracesEndpoint: "http://otel-collector:4318/v1/traces",
       metricsEndpoint: "http://otel-collector:4318/v1/metrics",
       logsEndpoint: "http://otel-collector:4318/v1/logs",
-      protocol: "http/protobuf", // grpc disables OTLP export
+      protocol: "http/protobuf",
       serviceName: "openclaw-gateway", // unset falls back to OTEL_SERVICE_NAME, then "openclaw"
       metricNamePrefix: "acme.", // optional; include the separator
       headers: { "x-collector-token": "..." },
@@ -139,14 +193,30 @@ dashboards, alerts, and recording rules that query the old names.
 
 ### Environment variables
 
-| Variable                                                                                                          | Purpose                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                     | Fallback for `diagnostics.otel.endpoint` when the config key is unset.                                                                                                                                                                                                                                         |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Signal-specific endpoint fallbacks used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                                                                                         |
-| `OTEL_SERVICE_NAME`                                                                                               | Fallback for `diagnostics.otel.serviceName` when the config key is unset. Default service name is `openclaw`.                                                                                                                                                                                                  |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Fallback for the wire protocol when `diagnostics.otel.protocol` is unset. Only `http/protobuf` enables export.                                                                                                                                                                                                 |
-| `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless. |
-| `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                                                                                    |
+| Variable                                                                                                                                                                                                                               | Purpose                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                                                                                                                                          | Fallback for `diagnostics.otel.endpoint` when the config key is unset.                                                                                                                                                                                                                                                                                                           |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`                                                                                                                      | Signal-specific endpoint fallbacks used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                                                                                                                                                           |
+| `OTEL_SERVICE_NAME`                                                                                                                                                                                                                    | Fallback for `diagnostics.otel.serviceName` when the config key is unset. Default service name is `openclaw`.                                                                                                                                                                                                                                                                    |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                                                                                                                                          | Shared process-environment fallback used when `diagnostics.otel.protocol` and the signal-specific protocol variable are unset. Only `http/protobuf` enables a plugin-owned OTLP exporter.                                                                                                                                                                                        |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` / `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` / `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`                                                                                                                      | Signal-specific protocol fallbacks used when `diagnostics.otel.protocol` is unset. A nonblank signal-specific value wins over the shared protocol value. Unsupported values disable only that plugin-owned OTLP signal.                                                                                                                                                          |
+| `OTEL_PROPAGATORS`                                                                                                                                                                                                                     | Propagators registered for each plugin-owned generation, including when `OTEL_SDK_DISABLED=true`. Defaults to `tracecontext,baggage`; `none` disables automatic propagation. Values are case-insensitive. Unavailable values and deprecated `jaeger` usage emit a plugin warning.                                                                                                |
+| `OTEL_SDK_DISABLED`                                                                                                                                                                                                                    | A case-insensitive `true` disables all plugin-owned trace, metric, log, and stdout routes before endpoint, protocol, or TLS setup. Any other value leaves the SDK enabled; unrecognized values emit a plugin warning and fall back to `false`. Async context and `OTEL_PROPAGATORS` remain active.                                                                               |
+| `OTEL_NODE_RESOURCE_DETECTORS`                                                                                                                                                                                                         | Selects resource detectors for plugin-owned trace and metric providers. Supported tokens are `env`, `host`, `os`, `process`, and `serviceinstance`; `all` runs them in host, OS, service-instance, process, environment order, while `none` disables detection. The default is environment, process, then host. Explicit OpenClaw service config wins detector attributes.       |
+| `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG`                                                                                                                                                                                      | Standard OpenTelemetry sampler selection used when `diagnostics.otel.sampleRate` is unset. An explicit `sampleRate` remains the higher-precedence OpenClaw sampler.                                                                                                                                                                                                              |
+| `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` / `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` / `OTEL_SPAN_EVENT_COUNT_LIMIT` / `OTEL_SPAN_LINK_COUNT_LIMIT` / `OTEL_SPAN_ATTRIBUTE_PER_EVENT_COUNT_LIMIT` / `OTEL_SPAN_ATTRIBUTE_PER_LINK_COUNT_LIMIT` | Standard OpenTelemetry span limits applied by each plugin-owned tracer provider.                                                                                                                                                                                                                                                                                                 |
+| `OTEL_BSP_MAX_QUEUE_SIZE` / `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` / `OTEL_BSP_SCHEDULE_DELAY` / `OTEL_BSP_EXPORT_TIMEOUT`                                                                                                                   | Batch span processor settings for plugin-owned trace export. Values must be positive; invalid values use OpenTelemetry defaults. Export batch size is capped at queue size.                                                                                                                                                                                                      |
+| `OTEL_METRIC_EXPORT_INTERVAL` / `OTEL_METRIC_EXPORT_TIMEOUT`                                                                                                                                                                           | Periodic metric export interval and timeout for plugin-owned metrics. Values must be positive; invalid values use OpenTelemetry defaults, and timeout is capped at the active interval. `diagnostics.otel.flushIntervalMs` overrides the interval.                                                                                                                               |
+| `OTEL_NODE_EXPERIMENTAL_SDK_METRICS`                                                                                                                                                                                                   | Enables OpenTelemetry SDK self-observation metrics for the private meter, tracer, and batch span processor when set to `true`.                                                                                                                                                                                                                                                   |
+| `OTEL_LOG_LEVEL`                                                                                                                                                                                                                       | Owned mode does not replace the process-global OpenTelemetry diagnostic logger because the public SDK APIs expose no generation-private equivalent. A preload or host may configure this variable before OpenClaw starts; the plugin preserves that external diagnostic owner.                                                                                                   |
+| `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                                                                                                                                        | Set to `gen_ai_latest_experimental` to emit the latest GenAI inference span shape: `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality attributes regardless.                                                                   |
+| `OPENCLAW_OTEL_PRELOADED`                                                                                                                                                                                                              | Set to `1` when another preload or host process already registered global OpenTelemetry providers. The plugin consumes external trace, metric, context, propagation, and logger ownership without registering, replacing, disabling, unregistering, or shutting it down. With `OTEL_SDK_DISABLED=true`, external ownership remains active while plugin-owned logs stay disabled. |
+
+Without `OPENCLAW_OTEL_PRELOADED=1`, trace, metric, and log providers are
+generation-private. The plugin publishes only its async context manager and
+propagator through the public OpenTelemetry APIs, and removes them only while
+those public behaviors still match the generation being stopped. A replacement
+host or later generation therefore keeps ownership through cleanup.
 
 ## Continue an upstream WebSocket trace
 
@@ -197,10 +267,13 @@ bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
 
-Outbound model requests may include a W3C `traceparent` header generated only
-from OpenClaw-owned diagnostic trace context for the active model call.
-Existing caller-supplied `traceparent` headers are replaced, so plugins or
-custom provider options cannot spoof cross-service trace ancestry.
+When `diagnostics-otel` tracing is active, outbound model requests may include
+a W3C `traceparent` header from the actual exporter-owned model-call span.
+Diagnostic trace IDs and span IDs only correlate events to that span; they are
+not used as outbound OTel identities. If the exporter cannot resolve a real
+span context, OpenClaw omits the header instead of naming an unexported parent.
+Existing caller-supplied `traceparent` headers are removed or replaced, so
+plugins or custom provider options cannot spoof cross-service trace ancestry.
 
 Set `diagnostics.otel.captureContent` to `true` only when your collector and
 retention policy are approved for prompt, response, tool, and tool-definition
@@ -461,9 +534,14 @@ Liveness warnings also emit:
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
+  - Optional host-derived `openclaw.plugin` only for trusted plugin runtime completions
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
   - `gen_ai.request.model`, `gen_ai.operation.name`, `gen_ai.usage.*`
+
+Plugin attribution is span-only. It does not add a plugin dimension to shared
+OpenTelemetry metrics or change Prometheus metric labels.
+
 - `openclaw.run`
   - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`
 - `openclaw.model.call`
@@ -671,6 +749,13 @@ redacted by the always-on log redaction policy. Full guide:
 
 Or leave `diagnostics-otel` out of `plugins.allow`, or run
 `openclaw plugins disable diagnostics-otel`.
+
+When the plugin would otherwise own NodeSDK, keep propagation available while
+disabling every plugin-owned exporter, listener, health route, and stdout sink:
+
+```bash
+OTEL_SDK_DISABLED=true openclaw gateway
+```
 
 ## Related
 

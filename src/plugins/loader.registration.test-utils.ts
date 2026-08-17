@@ -9,6 +9,7 @@ import {
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -32,7 +33,7 @@ import {
 } from "./interactive-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   useNoBundledPlugins,
   writePlugin,
@@ -48,10 +49,6 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
   getMemoryCapabilityRegistration,
@@ -114,6 +111,89 @@ describe("loadOpenClawPlugins", () => {
         message: "hook already registered: shared-name (duplicate-legacy-hook)",
       }),
     );
+  });
+
+  it("warns when registerHook is used with a typed hook event name", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "typed-name-legacy-register",
+      filename: "typed-name-legacy-register.cjs",
+      body: `module.exports = {
+          id: "typed-name-legacy-register",
+          register(api) {
+            api.registerHook(["before_tool_call", "message_received"], () => {}, {
+              name: "typed-name-legacy-register",
+            });
+          },
+        };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["typed-name-legacy-register"],
+        },
+      },
+      onlyPluginIds: ["typed-name-legacy-register"],
+    });
+
+    expect(registry.legacyInternalHooks.map((entry) => entry.event)).toEqual([
+      "before_tool_call",
+      "message_received",
+    ]);
+    expect(
+      registry.diagnostics
+        .filter(
+          (diagnostic) =>
+            diagnostic.pluginId === "typed-name-legacy-register" &&
+            diagnostic.level === "warn" &&
+            diagnostic.message.includes("dispatched by the typed hook runner only"),
+        )
+        .map((diagnostic) => diagnostic.message),
+    ).toEqual([
+      expect.stringContaining('Use api.on("before_tool_call", ...)'),
+      expect.stringContaining('Use api.on("message_received", ...)'),
+    ]);
+  });
+
+  it("keeps legacy type:action events diagnostic-free in registerHook", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "legacy-type-action-register",
+      filename: "legacy-type-action-register.cjs",
+      body: `module.exports = {
+          id: "legacy-type-action-register",
+          register(api) {
+            api.registerHook("gateway:startup", () => {}, { name: "legacy-startup" });
+            api.registerHook("command:new", () => {}, { name: "legacy-command" });
+          },
+        };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["legacy-type-action-register"],
+        },
+      },
+      onlyPluginIds: ["legacy-type-action-register"],
+    });
+
+    expect(registry.legacyInternalHooks.map((entry) => entry.event)).toEqual([
+      "gateway:startup",
+      "command:new",
+    ]);
+    expect(
+      registry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("dispatched by the typed hook runner only"),
+      ),
+    ).toBe(false);
   });
 
   it("runs consecutive plugin hook handlers with shared mutable context but isolated plugin config", async () => {
@@ -468,7 +548,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("can scope bundled provider loads without hanging", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const scopedDir = path.join(bundledDir, "scoped-provider");
     mkdirSafe(scopedDir);
     fs.writeFileSync(
@@ -542,7 +622,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("allows bundled plugins to supply system.notify without opening the command to external plugins", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const bundledPluginDir = path.join(bundledDir, "notify-host");
     mkdirSafe(bundledPluginDir);
     fs.writeFileSync(
@@ -613,12 +693,49 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("reserves private worker supervisor commands from plugin registration", () => {
+    useNoBundledPlugins();
+    const commands = [...NODE_WORKER_PRIVATE_COMMANDS];
+    const plugin = writePlugin({
+      id: "private-worker-controls",
+      filename: "private-worker-controls.cjs",
+      body: `module.exports = {
+          id: "private-worker-controls",
+          register(api) {
+            for (const command of ${JSON.stringify(commands)}) {
+              api.registerNodeHostCommand({ command, handle: async () => "{}" });
+            }
+            api.registerNodeInvokePolicy({
+              commands: ${JSON.stringify(commands)},
+              handle: async () => ({ ok: true, payloadJSON: "{}" }),
+            });
+          },
+        };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          allow: ["private-worker-controls"],
+          load: { paths: [plugin.file] },
+        },
+      },
+      onlyPluginIds: ["private-worker-controls"],
+    });
+
+    expect(registry.nodeHostCommands).toEqual([]);
+    expect(registry.nodeInvokePolicies).toEqual([]);
+    for (const command of commands) {
+      expect(registry.diagnostics.some((diagnostic) => diagnostic.message.includes(command))).toBe(
+        true,
+      );
+    }
+  });
+
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
-    registerMemoryEmbeddingProvider({
-      id: "active",
-      create: async () => ({ provider: null }),
-    });
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [],
       get: async () => null,
@@ -652,10 +769,6 @@ describe("loadOpenClawPlugins", () => {
           id: "snapshot-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryEmbeddingProvider({
-              id: "snapshot",
-              create: async () => ({ provider: null }),
-            });
             api.registerMemoryCapability({
               promptBuilder: () => ["snapshot memory section"],
               flushPlanResolver: () => ({
@@ -671,7 +784,7 @@ describe("loadOpenClawPlugins", () => {
                   return { manager: null, error: "snapshot" };
                 },
                 resolveMemoryBackendConfig() {
-                  return { backend: "qmd", qmd: {} };
+                  return { backend: "builtin" };
                 },
               },
             });
@@ -701,7 +814,6 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
-    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
     expect(listMemoryPromptPreparations()).toHaveLength(1);
   });
 
@@ -848,10 +960,6 @@ describe("loadOpenClawPlugins", () => {
           id: "failing-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryEmbeddingProvider({
-              id: "failed",
-              create: async () => ({ provider: null }),
-            });
             api.registerMemoryCapability({
               promptBuilder: () => ["stale failure section"],
               flushPlanResolver: () => ({
@@ -901,7 +1009,6 @@ describe("loadOpenClawPlugins", () => {
     expect(listMemoryPromptPreparations()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
-    expect(listMemoryEmbeddingProviders()).toStrictEqual([]);
   });
 
   it("does not replace the active detached task runtime during non-activating loads", () => {
@@ -1204,7 +1311,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("restores cached memory capability public artifacts on cache hits", async () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
     fs.writeFileSync(absolutePath, "# Memory\n");
     const plugin = writePlugin({
@@ -1271,7 +1378,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("preserves previously registered memory capability across activate:false snapshot loads", async () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
     fs.writeFileSync(absolutePath, "# Memory\n");
     const memoryPlugin = writePlugin({
@@ -1672,8 +1779,8 @@ describe("loadOpenClawPlugins", () => {
       name: "does not reuse cached bundled plugin registries across env changes",
       pluginId: "cache-root",
       setup: () => {
-        const bundledA = makeTempDir();
-        const bundledB = makeTempDir();
+        const bundledA = makePluginLoaderTempDir();
+        const bundledB = makePluginLoaderTempDir();
         const pluginA = writePlugin({
           id: "cache-root",
           dir: path.join(bundledA, "cache-root"),
@@ -1724,10 +1831,10 @@ describe("loadOpenClawPlugins", () => {
       name: "does not reuse cached load-path plugin registries across env home changes",
       pluginId: "demo",
       setup: () => {
-        const homeA = makeTempDir();
-        const homeB = makeTempDir();
-        const stateDir = makeTempDir();
-        const bundledDir = makeTempDir();
+        const homeA = makePluginLoaderTempDir();
+        const homeB = makePluginLoaderTempDir();
+        const stateDir = makePluginLoaderTempDir();
+        const bundledDir = makePluginLoaderTempDir();
         const pluginA = writePlugin({
           id: "demo",
           dir: path.join(homeA, "plugins", "demo"),

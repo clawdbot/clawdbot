@@ -2,7 +2,6 @@
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createDiscordActivityButton } from "../activities/interaction.js";
@@ -10,8 +9,12 @@ import {
   getDiscordExecApprovalApprovers,
   isDiscordExecApprovalClientEnabled,
 } from "../exec-approvals.js";
-import type { BaseCommand, BaseMessageInteractiveComponent, Modal } from "../internal/discord.js";
-import { createDiscordVoiceCommand } from "../voice/command.js";
+import type {
+  BaseMessageInteractiveComponent,
+  DiscordCommand,
+  Modal,
+} from "../internal/discord.js";
+import { createDiscordVoiceCommand, DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 import {
   createAgentComponentControls,
   createDiscordComponentControls,
@@ -27,10 +30,11 @@ import {
   createDiscordModelPickerFallbackSelect,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import type { DiscordProviderCommandSpec } from "./provider.commands.js";
 import { createDiscordQuestionButton } from "./questions.js";
 import type { ThreadBindingManager } from "./thread-bindings.types.js";
 
-type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 export function createDiscordProviderInteractionSurface(params: {
   cfg: OpenClawConfig;
@@ -38,7 +42,7 @@ export function createDiscordProviderInteractionSurface(params: {
   accountId: string;
   applicationId?: string;
   token: string;
-  commandSpecs: NativeCommandSpec[];
+  commandSpecs: DiscordProviderCommandSpec[];
   nativeEnabled: boolean;
   voiceEnabled: boolean;
   groupPolicy: "open" | "disabled" | "allowlist";
@@ -55,25 +59,18 @@ export function createDiscordProviderInteractionSurface(params: {
   abortSignal?: AbortSignal;
   createNativeCommand?: typeof createDiscordNativeCommand;
 }): {
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
 } {
   const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
-  const commands: BaseCommand[] = params.commandSpecs.map((spec) =>
-    createNativeCommand({
-      command: spec,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
-      ephemeralDefault: params.ephemeralDefault,
-      threadBindings: params.threadBindings,
-    }),
-  );
-  if (params.nativeEnabled && params.voiceEnabled) {
-    commands.push(
-      createDiscordVoiceCommand({
+  const commands: DiscordCommand[] = params.commandSpecs.map((spec) => {
+    if (
+      params.nativeEnabled &&
+      params.voiceEnabled &&
+      spec.name === DISCORD_VOICE_COMMAND_SPEC.name
+    ) {
+      return createDiscordVoiceCommand({
         cfg: params.cfg,
         discordConfig: params.discordConfig,
         accountId: params.accountId,
@@ -81,9 +78,18 @@ export function createDiscordProviderInteractionSurface(params: {
         useAccessGroups: params.useAccessGroups,
         getManager: () => params.voiceManagerRef.current,
         ephemeralDefault: params.ephemeralDefault,
-      }),
-    );
-  }
+      });
+    }
+    return createNativeCommand({
+      command: spec,
+      cfg: params.cfg,
+      discordConfig: params.discordConfig,
+      accountId: params.accountId,
+      sessionPrefix: params.sessionPrefix,
+      ephemeralDefault: params.ephemeralDefault,
+      threadBindings: params.threadBindings,
+    });
+  });
 
   const execApprovalsConfig = params.discordConfig.execApprovals ?? {};
   const execApprovalsEnabled = isDiscordExecApprovalClientEnabled({

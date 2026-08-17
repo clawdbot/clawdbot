@@ -23,7 +23,7 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
   modelId?: string;
   workspaceDir?: string;
   store?: AuthProfileStore;
-  userLockedAuthProfileId?: string;
+  userPinnedAuthProfileId?: string;
 }): {
   providerIds?: readonly string[];
   ignoreAutoPreferredProfile: boolean;
@@ -33,7 +33,7 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     store: params.store,
-    userLockedAuthProfileId: params.userLockedAuthProfileId,
+    userPinnedAuthProfileId: params.userPinnedAuthProfileId,
   });
   const selectedRuntimeProvider =
     resolveCliRuntimeExecutionProvider({
@@ -41,7 +41,7 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       modelId: params.modelId,
-      authProfileId: params.userLockedAuthProfileId,
+      authProfileId: params.userPinnedAuthProfileId,
     }) || (params.provider === CLAUDE_CLI_PROVIDER_ID ? CLAUDE_CLI_PROVIDER_ID : undefined);
   const selectedProvider =
     authScope.selectedProviderId ??
@@ -56,8 +56,8 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
     ...(providerIds.length > 0 ? { providerIds } : {}),
     ignoreAutoPreferredProfile:
       // Claude CLI should not auto-prefer a profile when runtime selection has
-      // already chosen Claude CLI and the user did not lock a profile.
-      !params.userLockedAuthProfileId && selectedProvider === CLAUDE_CLI_PROVIDER_ID,
+      // already chosen Claude CLI and the user did not pin a profile.
+      !params.userPinnedAuthProfileId && selectedProvider === CLAUDE_CLI_PROVIDER_ID,
   };
 }
 
@@ -66,57 +66,29 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   store?: AuthProfileStore;
-  userLockedAuthProfileId?: string;
+  userPinnedAuthProfileId?: string;
 }): {
   providerIds: string[];
   selectedProviderId?: string;
 } {
-  if (params.userLockedAuthProfileId) {
-    // Locked profile id means discovery should be scoped to that exact profile's
-    // compatible external CLI provider, if any.
-    const providerId = resolveExternalCliProviderIdForCompatibleAuthProfile({
-      ...params,
-      profileId: params.userLockedAuthProfileId,
-    })?.externalCliProviderId;
-    return {
-      providerIds: providerId ? [providerId] : [],
-      ...(providerId ? { selectedProviderId: providerId } : {}),
-    };
-  }
-
   const providerIds: string[] = [];
-  let sawCompatibleOrderedProfile = false;
-  let selectedProviderId: string | undefined;
-  for (const profileId of resolveConfiguredAuthProfileOrder(params)) {
-    const resolved = resolveExternalCliProviderIdForCompatibleAuthProfile({
-      ...params,
-      profileId,
-    });
-    if (!resolved.compatible) {
-      continue;
-    }
-    if (!sawCompatibleOrderedProfile) {
-      selectedProviderId = resolved.externalCliProviderId;
-      sawCompatibleOrderedProfile = true;
-    }
-    if (resolved.externalCliProviderId) {
-      providerIds.push(resolved.externalCliProviderId);
-    }
-  }
-  if (sawCompatibleOrderedProfile) {
-    return {
-      providerIds: [...new Set(providerIds)],
-      ...(selectedProviderId ? { selectedProviderId } : {}),
-    };
-  }
-
-  let compatibleProfileCount = 0;
-  const profileIds = [
+  const orderedProfileIds = resolveConfiguredAuthProfileOrder(params);
+  const allProfileIds = [
     ...new Set([
       ...Object.keys(params.cfg?.auth?.profiles ?? {}),
       ...Object.keys(params.store?.profiles ?? {}),
     ]),
   ];
+  const discoveredProfileIds = orderedProfileIds.length > 0 ? orderedProfileIds : allProfileIds;
+  const profileIds = params.userPinnedAuthProfileId
+    ? [
+        params.userPinnedAuthProfileId,
+        ...discoveredProfileIds.filter((profileId) => profileId !== params.userPinnedAuthProfileId),
+      ]
+    : discoveredProfileIds;
+  let sawCompatibleOrderedProfile = false;
+  let selectedProviderId: string | undefined;
+  let compatibleProfileCount = 0;
   for (const profileId of profileIds) {
     const resolved = resolveExternalCliProviderIdForCompatibleAuthProfile({
       ...params,
@@ -126,10 +98,21 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
       continue;
     }
     compatibleProfileCount += 1;
+    if (!sawCompatibleOrderedProfile) {
+      selectedProviderId = resolved.externalCliProviderId;
+      sawCompatibleOrderedProfile = true;
+    }
     if (resolved.externalCliProviderId) {
       providerIds.push(resolved.externalCliProviderId);
     }
   }
+  if (params.userPinnedAuthProfileId || orderedProfileIds.length > 0) {
+    return {
+      providerIds: [...new Set(providerIds)],
+      ...(selectedProviderId ? { selectedProviderId } : {}),
+    };
+  }
+
   const uniqueProviderIds = [...new Set(providerIds)];
   return {
     providerIds: uniqueProviderIds,

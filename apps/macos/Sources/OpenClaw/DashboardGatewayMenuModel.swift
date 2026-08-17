@@ -30,6 +30,7 @@ enum DashboardGatewayMenuModel {
 
     static func connectionLabel(
         mode: AppState.ConnectionMode,
+        controlState: ControlChannel.ConnectionState,
         entries: [DashboardGatewayEntry]) -> String
     {
         guard entries.count >= 2,
@@ -39,7 +40,7 @@ enum DashboardGatewayMenuModel {
             case .unconfigured:
                 String(localized: "OpenClaw Not Configured")
             case .remote:
-                String(localized: "Remote OpenClaw Active")
+                self.remoteConnectionLabel(state: controlState)
             case .local:
                 String(localized: "OpenClaw Active")
             }
@@ -48,9 +49,29 @@ enum DashboardGatewayMenuModel {
         case .unconfigured:
             String(localized: "OpenClaw Not Configured — \(primaryName)")
         case .remote:
-            String(localized: "Remote OpenClaw Active — \(primaryName)")
+            self.remoteConnectionLabel(state: controlState, primaryName: primaryName)
         case .local:
             String(localized: "OpenClaw Active — \(primaryName)")
+        }
+    }
+
+    private static func remoteConnectionLabel(
+        state: ControlChannel.ConnectionState,
+        primaryName: String? = nil) -> String
+    {
+        switch (state, primaryName) {
+        case (.connected, nil):
+            String(localized: "Remote OpenClaw Active")
+        case let (.connected, .some(name)):
+            String(localized: "Remote OpenClaw Active — \(name)")
+        case (.connecting, nil):
+            String(localized: "Remote OpenClaw Connecting")
+        case let (.connecting, .some(name)):
+            String(localized: "Remote OpenClaw Connecting — \(name)")
+        case (.disconnected, nil), (.degraded, nil):
+            String(localized: "Remote OpenClaw Needs Attention")
+        case let (.disconnected, .some(name)), let (.degraded, .some(name)):
+            String(localized: "Remote OpenClaw Needs Attention — \(name)")
         }
     }
 }

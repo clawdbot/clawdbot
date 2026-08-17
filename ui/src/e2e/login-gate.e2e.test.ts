@@ -1,25 +1,22 @@
 // Control UI tests cover the responsive disconnected login gate.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import type { BrowserContext, Page } from "playwright";
+import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+const suite = createControlUiE2eSuite({
+  name: "Control UI responsive login gate E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
+const RECOVERY_ARTIFACT_DIR = path.resolve(".artifacts/control-ui-e2e/zombie-reload");
 
 async function renderLoginGate(page: Page): Promise<void> {
-  const response = await page.goto(server.baseUrl);
+  const response = await page.goto(suite.server.baseUrl);
   expect(response?.status()).toBe(200);
 
   await mountLoginGate(page);
@@ -64,42 +61,136 @@ async function closeContext(context: BrowserContext): Promise<void> {
   await context.close().catch(() => {});
 }
 
-describeControlUiE2e("Control UI responsive login gate E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
+suite.define(() => {
+  it("cache-busts stale-build recovery on a first dashboard navigation", async () => {
+    const context = await suite.browser.newContext({
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const documentRequests: Array<{ fresh: boolean; pathname: string }> = [];
+    const appOrigin = new URL(suite.server.baseUrl).origin;
+    await page.route(`${appOrigin}/**`, async (route) => {
+      const request = route.request();
+      if (request.resourceType() === "document") {
+        const url = new URL(request.url());
+        documentRequests.push({
+          fresh: url.searchParams.has("openclaw_mount_recovery"),
+          pathname: url.pathname,
+        });
+      }
+      await route.continue();
+    });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["connect"],
+      sessionKey: "agent:example-agent:example-session",
+    });
+    const mismatch = {
+      code: "UNAVAILABLE",
+      message: "Control UI updated; reload this page to continue",
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        gatewayBuildId: "replacement-build",
+        reloadRequired: true,
+      },
+      retryable: false,
+    };
+    const target = new URL("dashboard/example-agent/example-session", suite.server.baseUrl);
+
+    try {
+      await page.goto(target.href);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", mismatch);
+
+      await expect.poll(() => documentRequests.length).toBe(2);
+      await gateway.waitForRequest("connect");
+      expect(documentRequests).toEqual([
+        { fresh: false, pathname: target.pathname },
+        { fresh: true, pathname: target.pathname },
+      ]);
+      await gateway.resolveDeferred("connect");
+
+      await page.locator("openclaw-app-shell").waitFor();
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+      await expect.poll(() => page.url()).toBe(target.href);
+    } finally {
+      await closeContext(context);
     }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
 
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
+  it("reloads once for a build rejection, then keeps visible recovery guidance", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const key = "openclaw.control-ui-e2e.build-rejection-loads";
+      const count = Number.parseInt(sessionStorage.getItem(key) ?? "0", 10);
+      sessionStorage.setItem(key, String(count + 1));
+    });
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    const mismatch = {
+      code: "UNAVAILABLE",
+      message: "Control UI updated; reload this page to continue",
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        gatewayBuildId: "replacement-build",
+        reloadRequired: true,
+      },
+      retryable: false,
+    };
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", mismatch);
+      await page.waitForFunction(
+        () =>
+          sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ===
+            "replacement-build" &&
+          sessionStorage.getItem("openclaw.control-ui-e2e.build-rejection-loads") === "2",
+      );
+
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", mismatch);
+      await page.getByRole("button", { name: /Server updated/u }).waitFor({ timeout: 10_000 });
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+      expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).not.toBeNull();
+      await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });
+      await page.screenshot({
+        path: path.join(RECOVERY_ARTIFACT_DIR, "01-reload-required.png"),
+        fullPage: true,
+      });
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
+      expect(
+        await page.evaluate(() =>
+          sessionStorage.getItem("openclaw.control-ui-e2e.build-rejection-loads"),
+        ),
+      ).toBe("2");
+    } finally {
+      await closeContext(context);
+    }
   });
 
-  it("shows a protocol mismatch without reconnecting", async () => {
-    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+  it("shows a bare protocol mismatch as compatibility guidance without reconnecting", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
     await page.clock.install();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     try {
-      await page.goto(server.baseUrl);
+      await page.goto(suite.server.baseUrl);
       await gateway.waitForRequest("connect");
       await gateway.rejectDeferred("connect", {
         code: "INVALID_REQUEST",
-        message: "protocol mismatch",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
         details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
       });
 
-      const failure = page.locator(".login-gate__failure-summary");
+      const failure = page.locator('.login-gate__failure[data-kind="protocol-mismatch"]');
       await failure.waitFor({ timeout: 10_000 });
       expect((await failure.textContent())?.toLowerCase()).toContain(
         "supported connection protocol",
       );
+      expect(await failure.locator(".login-gate__failure-refresh").isVisible()).toBe(true);
       await page.clock.runFor(1_600);
       expect(await gateway.getRequests("connect")).toHaveLength(1);
     } finally {
@@ -107,8 +198,171 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
     }
   });
 
+  it("lets reload-required recovery outrank a manually pinned login gate", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      sessionStorage.setItem("openclaw.controlUi.staleChunkReloadBuildId", "replacement-build");
+    });
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+      await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
+
+      await gateway.deferNext("connect");
+      await page.getByRole("button", { name: "Connect" }).click();
+      await expect.poll(async () => (await gateway.getRequests("connect")).length).toBe(2);
+      await gateway.rejectDeferred("connect", {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+        retryable: false,
+      });
+
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.phase;
+          }),
+        )
+        .toBe("reload-required");
+      await page.getByRole("button", { name: /Server updated/u }).waitFor();
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("blocks non-chat page actions visibly while reconnecting", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(new URL("settings/connection", suite.server.baseUrl).href);
+      await page.locator("openclaw-app-shell").waitFor();
+      await gateway.deferNext("connect");
+      await gateway.closeLatest(1012, "test reconnect");
+
+      await page.getByText("Actions are unavailable while the Gateway reconnects.").waitFor();
+      const outlet = page.locator("openclaw-router-outlet");
+      expect(await outlet.getAttribute("inert")).not.toBeNull();
+      expect(await outlet.getAttribute("aria-disabled")).toBe("true");
+      await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });
+      await page.screenshot({
+        path: path.join(RECOVERY_ARTIFACT_DIR, "02-reconnecting-actions-blocked.png"),
+        fullPage: true,
+      });
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it.each([
+    {
+      name: "missing token",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      },
+      expectedKind: "auth-required",
+      expectedTitle: "Auth required",
+    },
+    {
+      name: "pairing approval",
+      error: {
+        code: "NOT_PAIRED",
+        message: "device is not approved",
+        details: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
+      },
+      expectedKind: "pairing-required",
+      expectedTitle: "Device pairing required",
+    },
+    {
+      name: "generic transport",
+      error: {
+        code: "UNAVAILABLE",
+        message: "WebSocket connection failed",
+      },
+      expectedKind: "network",
+      expectedTitle: "Could not connect",
+    },
+  ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", fixture.error);
+
+      const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
+      await failure.waitFor({ timeout: 10_000 });
+      expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
+        fixture.expectedTitle,
+      );
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("retires the static startup fallback after rendering auth-required guidance", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      window.addEventListener("openclaw-control-ui-rendered", () => {
+        const key = "openclaw.control-ui-e2e.render-count";
+        const count = Number.parseInt(sessionStorage.getItem(key) ?? "0", 10);
+        sessionStorage.setItem(key, String(count + 1));
+      });
+    });
+    await page.clock.install();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+
+      const authRequired = page.locator('.login-gate__failure[data-kind="auth-required"]');
+      await authRequired.waitFor({ timeout: 10_000 });
+      await page.clock.runFor(12_001);
+
+      expect(await authRequired.isVisible()).toBe(true);
+      expect(await page.locator("#openclaw-mount-fallback").isHidden()).toBe(true);
+      expect((await page.locator("body").getAttribute("class")) ?? "").not.toContain(
+        "openclaw-mount-fallback-active",
+      );
+      expect(
+        await page.evaluate(() => sessionStorage.getItem("openclaw.control-ui-e2e.render-count")),
+      ).toBe("1");
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("keeps mobile controls compact, touchable, and keyboard-friendly", async () => {
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       hasTouch: true,
       isMobile: true,
       viewport: { height: 500, width: 375 },
@@ -183,7 +437,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
   });
 
   it("keeps failure recovery visible while generic help stays collapsed", async () => {
-    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
 
     try {
@@ -204,7 +458,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
   });
 
   it("applies standalone safe-area insets exactly once", async () => {
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       hasTouch: true,
       isMobile: true,
       viewport: { height: 500, width: 375 },

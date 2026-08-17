@@ -6,6 +6,8 @@ import {
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
+import { consumeCodexAppServerLiveThread } from "./app-server/client-runtime.js";
+import type { CodexAppServerClient } from "./app-server/client.js";
 import { isCodexFastServiceTier } from "./app-server/config.js";
 import { assertCodexThreadResumeResponse } from "./app-server/protocol-validators.js";
 import {
@@ -15,6 +17,15 @@ import {
   reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
 } from "./app-server/session-binding.js";
+import {
+  isSameCodexAppServerThreadOwner,
+  releaseCodexAppServerBindingSubscription,
+  retainCodexAppServerBindingSubscription,
+  retireCodexConversationThreadBinding,
+  rollbackCodexAppServerBindingSubscription,
+  withCodexConversationThreadActivity,
+  withExclusiveCodexAppServerThread,
+} from "./app-server/thread-ownership.js";
 import { formatCodexDisplayText, formatThreads } from "./command-formatters.js";
 import {
   parseBindArgs,
@@ -34,6 +45,7 @@ import {
   readCodexConversationBindingData,
 } from "./conversation-binding-data.js";
 import { formatPermissionsMode } from "./conversation-control.js";
+import { isIncognitoSessionKey } from "./incognito-session.js";
 import { formatCodexCliSessions } from "./node-cli-sessions.js";
 
 export function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext): boolean {
@@ -151,17 +163,53 @@ export async function detachConversation(
   }
   const current = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(current);
+  const identity =
+    data?.kind === "codex-app-server-session"
+      ? conversationBindingIdentity(data.bindingId)
+      : undefined;
+  const sourceSessionKey =
+    data?.kind === "codex-app-server-session" ? data.source?.sessionKey : undefined;
+  let expectedThreadId: string | undefined;
+  let expectedStartId: string | undefined;
   if (data?.kind === "codex-app-server-session") {
-    const binding = await deps.bindingStore.read(conversationBindingIdentity(data.bindingId));
+    const binding = await deps.bindingStore.read(identity!);
     assertCodexBindingMayBeReplaced(binding, "detaching its conversation binding");
+    if (deps.readCodexConversationActiveTurn(identity!)) {
+      return "This Codex conversation has an active run; use /codex stop before detaching it.";
+    }
+    expectedThreadId = binding?.threadId;
+    expectedStartId = binding?.conversationStartId;
   }
-  const detached = await ctx.detachConversationBinding();
-  if (data?.kind === "codex-app-server-session") {
-    await deps.bindingStore.mutate(conversationBindingIdentity(data.bindingId), { kind: "clear" });
+  const detachPublicConversation = async () => {
+    const detached = await ctx.detachConversationBinding();
+    return detached.removed
+      ? "Detached this conversation from Codex."
+      : "No Codex conversation binding was attached.";
+  };
+  if (identity && expectedThreadId) {
+    return await withCodexConversationThreadActivity(identity.bindingId, async () => {
+      let detachedPublicConversation: string | undefined;
+      const retired = await retireCodexConversationThreadBinding({
+        bindingStore: deps.bindingStore,
+        identity,
+        expectedThreadId,
+        ...(expectedStartId ? { expectedStartId } : {}),
+        // The source session owns ephemeral tracking; destination channel
+        // session keys do not describe how this subscription was created.
+        ...(isIncognitoSessionKey(sourceSessionKey) ? { allowUntracked: true } : {}),
+        afterClear: async () => {
+          // The owner restores the exact native row if public detach fails;
+          // an attached conversation then resumes its original thread.
+          detachedPublicConversation = await detachPublicConversation();
+        },
+      });
+      if (!retired) {
+        return "This Codex conversation binding changed while detaching; try again.";
+      }
+      return detachedPublicConversation!;
+    });
   }
-  return detached.removed
-    ? "Detached this conversation from Codex."
-    : "No Codex conversation binding was attached.";
+  return await detachPublicConversation();
 }
 
 export async function describeConversationBinding(
@@ -266,74 +314,125 @@ export async function resumeThread(
     agentId: scope.agentId,
     config: ctx.config,
   });
-  return await deps.bindingStore.withLease(identity, async () => {
-    const reclaimed = await reclaimCurrentCodexSessionGeneration({
-      bindingStore: deps.bindingStore,
-      identity,
-      config: ctx.config,
-    });
-    if (!reclaimed) {
-      throw createCodexSessionGenerationSupersededError(identity.sessionId);
-    }
-    const currentBinding = await deps.bindingStore.read(identity);
-    assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");
-    const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
-      authProfileId: currentBinding?.authProfileId,
-      agentDir: scope.agentDir,
-      config: ctx.config,
-    });
-    const response = assertCodexThreadResumeResponse(
-      await deps.codexControlRequest(
-        pluginConfig,
-        CODEX_CONTROL_METHODS.resumeThread,
-        {
-          threadId: normalizedThreadId,
-          excludeTurns: true,
-        },
-        {
+  return await withExclusiveCodexAppServerThread({
+    bindingStore: deps.bindingStore,
+    identity,
+    threadId: normalizedThreadId,
+    run: async () =>
+      await deps.bindingStore.withLease(identity, async () => {
+        const reclaimed = await reclaimCurrentCodexSessionGeneration({
+          bindingStore: deps.bindingStore,
+          identity,
           config: ctx.config,
+        });
+        if (!reclaimed) {
+          throw createCodexSessionGenerationSupersededError(identity.sessionId);
+        }
+        const currentBinding = await deps.bindingStore.read(identity);
+        assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");
+        const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
+          authProfileId: currentBinding?.authProfileId,
           agentDir: scope.agentDir,
-          authProfileId,
-          sessionKey: ctx.sessionKey,
-          sessionId: ctx.sessionId,
-        },
-      ),
-    );
-    const effectiveThreadId = response.thread.id;
-    if (effectiveThreadId !== normalizedThreadId) {
-      throw new Error(
-        `Codex thread/resume returned ${effectiveThreadId} for ${normalizedThreadId}`,
-      );
-    }
-    const resumedCwd = response.thread.cwd;
-    if (typeof resumedCwd !== "string") {
-      throw new Error(`Codex thread/resume returned no cwd for ${normalizedThreadId}`);
-    }
-    const modelProvider = normalizeCodexAppServerBindingModelProvider({
-      authProfileId,
-      modelProvider: response.modelProvider ?? undefined,
-      agentDir: scope.agentDir,
-      config: ctx.config,
-    });
-    const bindingBeforeCommit = await deps.bindingStore.read(identity);
-    assertCodexBindingMayBeReplaced(bindingBeforeCommit, "committing a different resumed thread");
-    const committed = await deps.bindingStore.mutate(identity, {
-      kind: "set",
-      binding: {
-        threadId: effectiveThreadId,
-        cwd: resumedCwd,
-        authProfileId,
-        model: response.model,
-        modelProvider,
-        historyCoveredThrough: new Date().toISOString(),
-      },
-    });
-    if (!committed) {
-      throw new Error("Codex thread binding changed while attaching the resumed thread.");
-    }
-    return `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(
-      effectiveThreadId,
-    )}.`;
+          config: ctx.config,
+        });
+        let committedResponse = false;
+        const commitResumedThread = async (value: unknown, client?: CodexAppServerClient) => {
+          const response = assertCodexThreadResumeResponse(value);
+          const effectiveThreadId = response.thread.id;
+          if (effectiveThreadId !== normalizedThreadId) {
+            throw new Error(
+              `Codex thread/resume returned ${effectiveThreadId} for ${normalizedThreadId}`,
+            );
+          }
+          const resumedCwd = response.thread.cwd;
+          if (typeof resumedCwd !== "string") {
+            throw new Error(`Codex thread/resume returned no cwd for ${normalizedThreadId}`);
+          }
+          const modelProvider = normalizeCodexAppServerBindingModelProvider({
+            authProfileId,
+            modelProvider: response.modelProvider ?? undefined,
+            agentDir: scope.agentDir,
+            config: ctx.config,
+          });
+          const bindingBeforeCommit = await deps.bindingStore.read(identity);
+          assertCodexBindingMayBeReplaced(
+            bindingBeforeCommit,
+            "committing a different resumed thread",
+          );
+          const clientId = client?.getInstanceId();
+          const sameOwner = client
+            ? isSameCodexAppServerThreadOwner(bindingBeforeCommit, {
+                threadId: effectiveThreadId,
+                clientId,
+              })
+            : bindingBeforeCommit?.threadId === effectiveThreadId;
+          let retained = false;
+          try {
+            if (client) {
+              const knownOwnership = sameOwner
+                ? await consumeCodexAppServerLiveThread(client, effectiveThreadId)
+                : undefined;
+              retained = await retainCodexAppServerBindingSubscription(
+                client,
+                effectiveThreadId,
+                knownOwnership,
+              );
+              if (!retained) {
+                throw new Error("Codex resumed thread lost its native subscription owner.");
+              }
+            }
+            if (bindingBeforeCommit && !sameOwner) {
+              // The old row must remain authoritative until its subscription
+              // is gone; otherwise another session can claim and lose it.
+              await releaseCodexAppServerBindingSubscription(bindingBeforeCommit);
+            }
+            const committed = await deps.bindingStore.mutate(identity, {
+              kind: "set",
+              binding: {
+                ...(bindingBeforeCommit?.threadId === effectiveThreadId ? bindingBeforeCommit : {}),
+                threadId: effectiveThreadId,
+                ...(clientId ? { clientId } : {}),
+                cwd: resumedCwd,
+                authProfileId,
+                model: response.model,
+                modelProvider,
+                historyCoveredThrough: new Date().toISOString(),
+              },
+            });
+            if (!committed) {
+              throw new Error("Codex thread binding changed while attaching the resumed thread.");
+            }
+          } catch (error) {
+            if (client && !sameOwner) {
+              await rollbackCodexAppServerBindingSubscription(client, effectiveThreadId, retained);
+            }
+            throw error;
+          }
+          committedResponse = true;
+        };
+        const response = await deps.codexControlRequest(
+          pluginConfig,
+          CODEX_CONTROL_METHODS.resumeThread,
+          {
+            threadId: normalizedThreadId,
+            excludeTurns: true,
+          },
+          {
+            config: ctx.config,
+            agentDir: scope.agentDir,
+            authProfileId,
+            sessionKey: ctx.sessionKey,
+            sessionId: ctx.sessionId,
+            onResponse: commitResumedThread,
+          },
+        );
+        if (!committedResponse) {
+          await commitResumedThread(response);
+        }
+        return `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(
+          normalizedThreadId,
+        )}.`;
+      }),
   });
 }
 

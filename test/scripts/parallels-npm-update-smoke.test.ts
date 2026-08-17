@@ -1,6 +1,5 @@
 // Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +23,7 @@ import {
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
 import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
 const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
@@ -35,13 +35,7 @@ const TEST_AUTH = {
   apiKeyValue: "test-key",
   modelId: "gpt-5.4",
 };
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-parallels-npm-update-"));
-  tempDirs.push(root);
-  return root;
-}
+const tempDirs = createTempDirTracker();
 
 function pidIsAlive(pid: number): boolean {
   try {
@@ -103,9 +97,7 @@ function extractWindowsBackgroundControlMarkers(decoded: string): {
 
 afterEach(() => {
   vi.useRealTimers();
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("parallels npm update smoke", () => {
@@ -160,7 +152,7 @@ describe("parallels npm update smoke", () => {
     class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
       protected override async makeRunTempDir(prefix: string): Promise<string> {
         void prefix;
-        return makeTempDir();
+        return tempDirs.make("openclaw-parallels-npm-update-");
       }
 
       protected override async runSteps(): Promise<void> {
@@ -188,7 +180,7 @@ describe("parallels npm update smoke", () => {
   });
 
   it("removes uploaded guest update scripts when chmod fails", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "prlctl.log");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
@@ -255,7 +247,7 @@ exit 1
   });
 
   it("uses one macOS guest identity to write and execute update scripts", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "prlctl.log");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
@@ -379,7 +371,7 @@ exit 1
     expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
   });
 
-  it("relaunches POSIX gateways after a transient post-update startup failure", () => {
+  it("restarts POSIX gateways only after an exact current-launch migration refusal", () => {
     const input = {
       auth: TEST_AUTH,
       expectedNeedle: "2026.7.2-beta.5",
@@ -387,8 +379,59 @@ exit 1
     };
 
     for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
-      expect(script).toContain("attempt=$((attempt + 1))");
-      expect(script).toContain('if [ "$attempt" -eq 4 ]; then\n      start_openclaw_gateway');
+      expect(script).toContain(
+        "OpenClaw plugin migration inputs changed during startup convergence;",
+      );
+      expect(script).toContain("gateway_launch_log_offset=");
+      expect(script).toContain("gateway_pid=$!");
+      expect(script).toContain('if ! kill -0 "$gateway_pid" 2>/dev/null; then');
+      expect(script).toContain('tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log"');
+      expect(script).toContain(
+        'if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then',
+      );
+      expect(script).toContain("gateway_restart_count=1");
+      expect(script).not.toContain('if [ "$attempt" -eq 4 ]');
+    }
+  });
+
+  it("restarts the Windows gateway only after its current launch exits with the exact refusal", () => {
+    const script = windowsUpdateScript({
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    });
+
+    expect(script).toContain(
+      "OpenClaw plugin migration inputs changed during startup convergence;",
+    );
+    expect(script).toContain("$script:gatewayProcess.HasExited");
+    expect(script).toContain("$script:gatewayProcess.WaitForExit()");
+    expect(script).toContain("$script:gatewayRestartCount -eq 0");
+    expect(script).toContain("Test-CurrentGatewayStartupMigrationRefusal");
+    expect(script).toContain("Select-String -Path $script:gatewayLogPath -SimpleMatch");
+    expect(script).toContain("$script:gatewayRestartCount = 1");
+    expect(script).not.toContain("$attempt -eq 4");
+    expect(script).not.toContain("Invoke-OpenClaw gateway restart");
+  });
+
+  it("keeps POSIX provider secrets out of executable command lines", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    };
+    const exportLine = `  export ${TEST_AUTH.apiKeyEnv}='${TEST_AUTH.apiKeyValue}'`;
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script.split("\n").filter((line) => line.includes(TEST_AUTH.apiKeyValue))).toEqual([
+        exportLine,
+      ]);
+      expect(script).toMatch(/with_provider_api_key [^\n]*gateway run/u);
+      expect(script).toMatch(/with_provider_api_key [^\n]*agent --local/u);
+      expect(script).toContain(`unset ${TEST_AUTH.apiKeyEnv}`);
+      expect(script.split("\n").find((line) => line.includes(" update --tag "))).not.toContain(
+        "with_provider_api_key",
+      );
     }
   });
 
@@ -502,8 +545,7 @@ exit 1
     expect(scripts).toContain("print_log_tail()");
     expect(scripts).toContain("OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES");
     expect(scripts).toContain('print_log_tail "$output_file"');
-    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-macos-gateway.log >&2");
-    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-linux-gateway.log >&2");
+    expect(scripts).toContain('print_log_tail "$gateway_log" >&2');
     expect(scripts).not.toContain('cat "$output_file"');
     expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
   });
@@ -538,7 +580,7 @@ exit 1
   });
 
   it("streams fresh lane logs instead of retaining them in memory", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
     const output: string[] = [];
 
@@ -579,7 +621,7 @@ exit 1
   });
 
   it("clamps oversized fresh lane command timeouts before scheduling", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
 
     const code = await spawnLoggedCommand(
@@ -595,7 +637,7 @@ exit 1
   });
 
   it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
     const scriptPath = path.join(root, "hung-fresh-lane.mjs");
     const descendantPidPath = path.join(root, "descendant.pid");
@@ -635,7 +677,7 @@ exit 1
   it.runIf(process.platform !== "win32")(
     "lets fresh lane descendants exit during timeout kill grace",
     async () => {
-      const root = makeTempDir();
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
       const logPath = path.join(root, "fresh.log");
       const scriptPath = path.join(root, "graceful-fresh-lane.mjs");
       const readyPath = path.join(root, "ready");
@@ -714,7 +756,7 @@ exit 1
   it.runIf(process.platform !== "win32")(
     "lets update stream descendants exit during timeout kill grace",
     async () => {
-      const root = makeTempDir();
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
       const scriptPath = path.join(root, "stream-update-grace.mjs");
       const readyPath = path.join(root, "stream-ready");
       const donePath = path.join(root, "stream-done");
@@ -1033,7 +1075,7 @@ exit 1
   });
 
   it("selects macOS desktop users with homes on spaced mounted volumes", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
       prlctlPath,
@@ -1081,7 +1123,7 @@ exit 7
   });
 
   it("keeps spaces in macOS sudo fallback desktop homes", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
       prlctlPath,
@@ -1164,23 +1206,40 @@ exit 7
     );
     expect(windowsScript).toContain("Remove-FuturePluginEntries\nStop-OpenClawGatewayProcesses");
     expect(script).toContain("scrub_future_plugin_entries\nstop_openclaw_gateway_processes");
-    expect(script).toContain("Invoke-WithScopedEnv @{ OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'");
     expect(macosScript).toContain('OPENCLAW_BIN="$(resolve_required_command openclaw)"');
     expect(macosScript).toContain("/usr/local/bin:/usr/local/sbin");
-    expect(macosScript).toContain(
-      'OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" update --tag',
-    );
     expect(macosScript).not.toContain("/opt/homebrew/bin/openclaw");
-    expect(script).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag");
+  });
+
+  it("preserves bundled plugin inventory during updates while isolating POSIX gateway stops", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.5.3-beta.2",
+      updateTarget: "2026.5.3-beta.2",
+    };
+    const windowsScript = windowsUpdateScript(input);
+    const macosScript = macosUpdateScript(input);
+    const linuxScript = linuxUpdateScript(input);
+    const updateLines = [windowsScript, macosScript, linuxScript].map((generatedScript) =>
+      generatedScript.split("\n").find((line) => line.includes(" update --tag ")),
+    );
+
+    expect(updateLines).not.toContain(undefined);
+    for (const updateLine of updateLines) {
+      expect(updateLine).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    }
+    expect(windowsScript).toContain(
+      "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'",
+    );
     expect(macosScript).toContain(
       'OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" gateway stop',
     );
-    expect(script).toContain(
+    expect(linuxScript).toContain(
       "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop",
     );
   });
 
-  it("reenables bundled plugins before Windows post-update verification", () => {
+  it("limits the Windows update environment to the update invocation", () => {
     const script = windowsUpdateScript({
       auth: TEST_AUTH,
       expectedNeedle: "2026.5.3-beta.2",
@@ -1188,18 +1247,20 @@ exit 7
     });
 
     const updateIndex = script.indexOf("Invoke-OpenClaw update --tag");
-    const scopedIndex = script.indexOf("Invoke-WithScopedEnv @{ OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    const scopedIndex = script.indexOf(
+      "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
+    );
     const versionIndex = script.indexOf("Invoke-OpenClaw --version", scopedIndex);
-    const restartIndex = script.indexOf("Invoke-OpenClaw gateway restart");
+    const startIndex = script.indexOf("\nStart-OpenClawGateway\n", updateIndex);
     const agentIndex = script.indexOf("Invoke-OpenClaw agent --local");
 
     expect(updateIndex).toBeGreaterThanOrEqual(0);
     expect(scopedIndex).toBeGreaterThanOrEqual(0);
     expect(updateIndex).toBeGreaterThan(scopedIndex);
     expect(versionIndex).toBeGreaterThan(updateIndex);
-    expect(restartIndex).toBeGreaterThan(updateIndex);
+    expect(startIndex).toBeGreaterThan(updateIndex);
     expect(agentIndex).toBeGreaterThan(updateIndex);
-    expect(script).not.toContain("$env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'");
+    expect(script).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
   });
 
   it("generates a .NET-safe Windows stale import regex in the update-failure guard", () => {

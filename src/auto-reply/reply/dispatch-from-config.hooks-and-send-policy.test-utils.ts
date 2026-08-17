@@ -1,12 +1,16 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { NO_VISIBLE_REPLY_FALLBACK_TEXT } from "./dispatch-from-config.payloads.js";
+import {
+  NO_VISIBLE_REPLY_FALLBACK_TEXT,
+  QUEUE_CAP_REJECTION_TEXT,
+} from "./dispatch-from-config.payloads.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -32,7 +36,6 @@ import {
   describe2BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -467,7 +470,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         },
       } as OpenClawConfig,
     },
-  ])("treats explicit NO_REPLY as intentional silence in $name", async ({ ctx, cfg }) => {
+  ])("records explicit NO_REPLY without a generic fallback in $name", async ({ ctx, cfg }) => {
     setNoAbort();
     const deliver = vi.fn(async () => {});
     const dispatcher = createReplyDispatcher({ deliver });
@@ -480,8 +483,13 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
+    expect(replyResolver).toHaveBeenCalledOnce();
     expect(deliver).not.toHaveBeenCalled();
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      deliberateSilentTerminalReply: true,
+    });
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
@@ -512,6 +520,72 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(deliveredTexts).not.toContain("visible reply");
     expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("reports queue-cap rejection instead of a temporary model failure", async () => {
+    setNoAbort();
+    diagnosticMocks.logMessageDispatchCompleted.mockClear();
+    const deliveredTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn(async (payload) => {
+        deliveredTexts.push(payload.text ?? "");
+      }),
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const runState = resolveReplyOperationRunState(opts);
+      if (!runState) {
+        throw new Error("expected reply operation state");
+      }
+      runState.admission = { status: "skipped", reason: "queue-cap" };
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct", SessionKey: "test:queue-cap" }),
+      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliveredTexts).toEqual([QUEUE_CAP_REJECTION_TEXT]);
+    expect(deliveredTexts).not.toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "skipped",
+        reason: "queue-cap",
+        sessionKey: "test:queue-cap",
+      }),
+    );
+  });
+
+  it("does not report a pending continuation as an empty terminal reply", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: InternalGetReplyOptions) => {
+      opts?.onPendingContinuation?.();
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Surface: "telegram",
+        Provider: "telegram",
+        SessionKey: "agent:main:telegram:direct:test",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
   });
 
   it("delivers core no-visible-reply fallback for disallowed empty mentioned group turns", async () => {
@@ -586,7 +660,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
-  it("does not treat an active-run accepted turn as an empty completion", async () => {
+  it("reports an active-run accepted turn as deferred instead of empty", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -614,6 +688,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      deferredToActiveRun: "followup",
     });
   });
 
@@ -2534,7 +2609,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("forwards suppressed tool progress callbacks in message-tool-only mode", async () => {
+  it("lets the channel own forced tool progress at verbosity off", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -2542,9 +2617,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       sendPolicy: "allow",
     };
     const dispatcher = createDispatcher();
-    const onToolResult = vi.fn();
+    const onToolResult = vi.fn(() => false);
+    const payload = { text: "🧠 Memory Search: release notes" } satisfies ReplyPayload;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "🛠️ Exec: ruby sleep proof" });
+      await opts?.onToolResult?.(payload);
       return { text: "NO_REPLY" } satisfies ReplyPayload;
     });
     const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
@@ -2556,6 +2632,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
         suppressDefaultToolProgressMessages: true,
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onToolResult,
@@ -2564,10 +2641,89 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(onToolResult).toHaveBeenCalledWith({ text: "🛠️ Exec: ruby sleep proof" });
+    expect(onToolResult).toHaveBeenCalledOnce();
+    expect(onToolResult).toHaveBeenCalledWith(payload);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      label: "media",
+      payload: { mediaUrl: "https://example.com/tool-result.png" },
+    },
+    {
+      label: "captioned media",
+      payload: {
+        text: "Generated image",
+        mediaUrl: "https://example.com/tool-result.png",
+      },
+    },
+    {
+      label: "exec approvals",
+      payload: {
+        text: "Approval required.",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      },
+    },
+    {
+      label: "unavailable exec approvals",
+      payload: {
+        text: "Exec approval is unavailable.",
+        channelData: {
+          execApprovalUnavailable: { reason: "no-approval-route" },
+        },
+      },
+    },
+    {
+      label: "ask-user prompts",
+      payload: {
+        text: "Question for you: Where should this deploy?",
+        channelData: { askUser: { questionId: "question-owned-by-agent-runtime" } },
+      },
+    },
+  ] satisfies Array<{ label: string; payload: ReplyPayload }>)(
+    "keeps forced $label durable when channel progress is available",
+    async ({ payload }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "s1",
+        updatedAt: 0,
+        sendPolicy: "allow",
+      };
+      const dispatcher = createDispatcher();
+      const onToolResult = vi.fn(() => false);
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.(payload);
+        return { text: "NO_REPLY" } satisfies ReplyPayload;
+      });
+
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          forceToolResultProgress: true,
+          suppressDefaultToolProgressMessages: true,
+          suppressToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+          onToolResult,
+        },
+      });
+
+      expect(onToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
 
   it("delivers forced tool progress in message-tool-only mode without verbose progress", async () => {
     setNoAbort();
@@ -2611,6 +2767,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       verboseLevel: "on",
     };
     const dispatcher = createDispatcher();
+    const onToolResult = vi.fn(() => false);
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({ text: "🛠️ Exec: echo post-restart" });
       return { text: "NO_REPLY" } satisfies ReplyPayload;
@@ -2624,6 +2781,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        onToolResult,
       },
     });
 
@@ -2632,6 +2792,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
       expect.objectContaining({ text: "🛠️ Exec: echo post-restart" }),
     );
+    expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 

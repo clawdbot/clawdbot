@@ -14,6 +14,10 @@ export const EnvironmentStatusSchema = Type.String({
   enum: ["available", "unavailable", "starting", "stopping", "error"],
 });
 
+const EnvironmentTrustSchema = Type.String({
+  enum: ["persistent", "disposable"],
+});
+
 /** Durable lifecycle states for plugin-provisioned worker environments. */
 export const WorkerEnvironmentStateSchema = Type.Union([
   Type.Literal("requested"),
@@ -37,6 +41,25 @@ export const WorkerTunnelStatusSchema = Type.Union([
   Type.Literal("reconnecting"),
 ]);
 
+/** Closed app ids a worker desktop may advertise and launch. */
+export const WorkerDesktopAppIdSchema = Type.Union([
+  Type.Literal("browser"),
+  Type.Literal("terminal"),
+]);
+
+/** Actionable issue attached only to runtime targets that need operator intervention. */
+export const RuntimeTargetIssueSchema = closedObject({
+  code: Type.Literal("update-required"),
+  action: Type.Literal("update-and-reconnect"),
+  updateCommand: Type.Literal("openclaw update"),
+  headlessReconnectCommand: Type.Literal("openclaw node restart"),
+});
+
+const NodeWorkerBundleStatusSchema = Type.Union([
+  closedObject({ status: Type.Literal("installed"), version: NonEmptyString }),
+  closedObject({ status: Type.Literal("missing") }),
+]);
+
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
   providerId: NonEmptyString,
@@ -46,6 +69,11 @@ export const WorkerEnvironmentMetadataSchema = closedObject({
   idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
   attachedSessionIds: Type.Array(NonEmptyString),
   tunnelStatus: WorkerTunnelStatusSchema,
+  error: Type.Optional(NonEmptyString),
+  desktop: Type.Optional(Type.Boolean()),
+  desktopApps: Type.Optional(
+    Type.Array(WorkerDesktopAppIdSchema, { maxItems: 8, uniqueItems: true }),
+  ),
 });
 
 function createEnvironmentSummarySchema() {
@@ -54,7 +82,17 @@ function createEnvironmentSummarySchema() {
     type: NonEmptyString,
     label: Type.Optional(NonEmptyString),
     status: EnvironmentStatusSchema,
+    platform: Type.Optional(NonEmptyString),
+    sessionHost: Type.Optional(Type.Boolean()),
+    workerBundle: Type.Optional(NodeWorkerBundleStatusSchema),
+    lastConnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastDisconnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastSeenAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastSeenReason: Type.Optional(NonEmptyString),
+    trust: Type.Optional(EnvironmentTrustSchema),
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
+    desktop: Type.Optional(Type.Boolean()),
+    issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
   });
 }
@@ -69,6 +107,7 @@ export const EnvironmentsListParamsSchema = closedObject({});
 const WorkerEnvironmentProfileSummarySchema = closedObject({
   id: NonEmptyString,
   providerId: NonEmptyString,
+  trust: Type.Optional(EnvironmentTrustSchema),
 });
 
 /** List response containing all gateway-visible environment summaries. */
@@ -101,9 +140,36 @@ export const EnvironmentsDestroyParamsSchema = closedObject({
 /** Destroy result exposes the terminal worker lifecycle state. */
 export const EnvironmentsDestroyResultSchema = createEnvironmentSummarySchema();
 
+export const WorkerDesktopObserveParamsSchema = closedObject({
+  environmentId: NonEmptyString,
+  control: Type.Optional(Type.Boolean()),
+});
+
+// Transport is an open enum-string; future transports may add split streamPath/controlPath
+// fields additively without replacing the phase-1 RFB contract.
+export const WorkerDesktopObserveResultSchema = closedObject({
+  transport: Type.String({ enum: ["rfb"] }),
+  wsPath: NonEmptyString,
+  expiresAtMs: Type.Integer({ minimum: 0 }),
+  control: Type.Boolean(),
+  vncPassword: Type.Optional(NonEmptyString),
+});
+
+export const WorkerDesktopLaunchParamsSchema = closedObject({
+  environmentId: NonEmptyString,
+  app: WorkerDesktopAppIdSchema,
+});
+
+export const WorkerDesktopLaunchResultSchema = closedObject({
+  app: WorkerDesktopAppIdSchema,
+  status: Type.Literal("ready"),
+});
+
 export type EnvironmentStatus = Static<typeof EnvironmentStatusSchema>;
 export type WorkerEnvironmentState = Static<typeof WorkerEnvironmentStateSchema>;
 export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
+export type WorkerDesktopAppId = Static<typeof WorkerDesktopAppIdSchema>;
+export type RuntimeTargetIssue = Static<typeof RuntimeTargetIssueSchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
@@ -114,3 +180,7 @@ export type EnvironmentsListParams = Static<typeof EnvironmentsListParamsSchema>
 export type EnvironmentsListResult = Static<typeof EnvironmentsListResultSchema>;
 export type EnvironmentsStatusParams = Static<typeof EnvironmentsStatusParamsSchema>;
 export type EnvironmentsStatusResult = Static<typeof EnvironmentsStatusResultSchema>;
+export type WorkerDesktopObserveParams = Static<typeof WorkerDesktopObserveParamsSchema>;
+export type WorkerDesktopObserveResult = Static<typeof WorkerDesktopObserveResultSchema>;
+export type WorkerDesktopLaunchParams = Static<typeof WorkerDesktopLaunchParamsSchema>;
+export type WorkerDesktopLaunchResult = Static<typeof WorkerDesktopLaunchResultSchema>;

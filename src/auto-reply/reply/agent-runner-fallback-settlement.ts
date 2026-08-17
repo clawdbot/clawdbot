@@ -1,4 +1,9 @@
 import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
+import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import {
+  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+  renderControlUiAgentFailureCopy,
+} from "../../agents/failover/user-copy.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
@@ -9,7 +14,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
-import { buildControlUiAgentFailureText } from "./agent-runner-failure-copy.js";
+import { resolveSourceReplyPolicy } from "./agent-runner-core.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCandidatesResult } from "./agent-runner-fallback-candidate.js";
 import type {
@@ -17,10 +22,7 @@ import type {
   AgentFallbackCycleResult,
 } from "./agent-runner-fallback-cycle.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
-import {
-  classifyProviderRequestError,
-  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-} from "./provider-request-error-classifier.js";
+import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import {
   isReplyOperationRestartAbort,
   isReplyOperationUserAbort,
@@ -60,7 +62,7 @@ export async function settleAgentFallbackCycle(params: {
         provider: attempt.provider,
         model: attempt.model,
         error: attempt.error,
-        reason: attempt.reason || undefined,
+        reason: attempt.reason ?? "unknown",
         status: typeof attempt.status === "number" ? attempt.status : undefined,
         code: attempt.code || undefined,
       }))
@@ -114,19 +116,44 @@ export async function settleAgentFallbackCycle(params: {
   }
   if (embeddedError?.kind === "role_ordering") {
     emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
-    const providerRequestError = classifyProviderRequestError(embeddedError);
     turn.replyOperation?.fail("run_failed", embeddedError);
     const embeddedErrorText = formatErrorMessage(embeddedError);
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: cycle.shouldSurfaceToControlUi
-          ? buildControlUiAgentFailureText(embeddedErrorText)
-          : (providerRequestError?.userMessage ?? PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE),
+          ? renderControlUiAgentFailureCopy(embeddedErrorText)
+          : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
       }),
     };
   }
   const terminalMetadata = fallbackResult.terminal.metadata;
+  const sourceReplyPolicy = turn.sessionKey
+    ? resolveSourceReplyPolicy({
+        cfg: cycle.runtimeConfig,
+        sessionCtx: turn.sessionCtx,
+        sessionEntry: turn.getActiveSessionEntry(),
+        sessionKey: turn.sessionKey,
+        runtimePolicySessionKey: turn.runtimePolicySessionKey,
+        opts: turn.opts,
+      })
+    : undefined;
+  const finalText = runResult.meta?.finalAssistantVisibleText?.trim() ?? "";
+  const successfulSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
+  const hasPendingContinuation =
+    runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
+  const privateFinalTerminalReply =
+    !hasPendingContinuation &&
+    classifyPrivateMessageToolFinal({
+      sourceReplyDeliveryMode: sourceReplyPolicy?.sourceReplyDeliveryMode,
+      sendPolicyDenied: sourceReplyPolicy?.sendPolicyDenied === true,
+      successfulSourceReplyDelivery,
+      isHeartbeat: turn.isHeartbeat,
+      isRoomEvent: turn.sessionCtx.InboundEventKind === "room_event",
+      finalText,
+    }) === "short"
+      ? ({ disposition: "empty", code: "message-tool-not-called" } as const)
+      : undefined;
   let terminalRunFailed = false;
   if (fallbackExhausted) {
     const exhaustionError = new Error(
@@ -150,7 +177,11 @@ export async function settleAgentFallbackCycle(params: {
     turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
-    settledLifecycleTerminal?.emit("end", runResult);
+    settledLifecycleTerminal?.emit(
+      "end",
+      runResult,
+      privateFinalTerminalReply ? { terminalReply: privateFinalTerminalReply } : undefined,
+    );
   }
   return {
     kind: "completed",

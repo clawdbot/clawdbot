@@ -3,8 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -38,13 +40,7 @@ vi.mock("./upload-store.sqlite.js", async (importOriginal) => {
 
 const ACTIVE_UPLOAD_LIMIT = 32;
 
-let tempDirs: string[] = [];
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-store-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTempDirTracker();
 
 async function makeStore(options?: {
   installLeaseHeartbeatMs?: number;
@@ -52,7 +48,7 @@ async function makeStore(options?: {
   now?: () => number;
   ttlMs?: number;
 }) {
-  const root = await makeTempDir();
+  const root = tempDirs.make("openclaw-skill-upload-store-");
   const databasePath = path.join(root, "openclaw.sqlite");
   return {
     root,
@@ -168,19 +164,13 @@ describe("skill upload store", () => {
     }
   });
 
-  beforeEach(() => {
-    tempDirs = [];
-  });
-
-  afterEach(async () => {
+  afterEach(() => {
     uploadSqliteMocks.readSkillUploadArchiveChunks.mockReset();
     uploadSqliteMocks.readSkillUploadArchiveChunks.mockImplementation(
       uploadSqliteMocks.defaultReadSkillUploadArchiveChunks!,
     );
     closeOpenClawStateDatabaseForTest();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    tempDirs.cleanup();
   });
 
   it("stores chunks, commits one archive blob, and materializes only for the action", async () => {
@@ -932,17 +922,3 @@ describe("skill upload store", () => {
     expect(uploadCount(databasePath)).toBe(1);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

@@ -15,11 +15,14 @@ import {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
-  asFiniteNumber,
+  asFiniteNumberInRange,
+  asSafeIntegerInRange,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   createOpenAIRealtimeTranscriptionClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
-  trimToUndefined,
 } from "./realtime-provider-shared.js";
 
 type OpenAIRealtimeTranscriptionProviderConfig = {
@@ -125,28 +128,20 @@ function normalizeProviderConfig(
         value: raw?.openaiApiKey,
         path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
       }),
-    language: trimToUndefined(raw?.language),
-    model: trimToUndefined(raw?.model) ?? trimToUndefined(raw?.sttModel),
-    prompt: trimToUndefined(raw?.prompt),
+    language: normalizeOptionalString(raw?.language),
+    model: normalizeOptionalString(raw?.model) ?? normalizeOptionalString(raw?.sttModel),
+    prompt: normalizeOptionalString(raw?.prompt),
     silenceDurationMs: normalizeNonNegativeInteger(raw?.silenceDurationMs),
     vadThreshold: normalizeVadThreshold(raw?.vadThreshold),
   };
 }
 
 function normalizeNonNegativeInteger(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  if (number === undefined || !Number.isSafeInteger(number) || number < 0) {
-    return undefined;
-  }
-  return number;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function normalizeVadThreshold(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  if (number === undefined || number < 0 || number > 1) {
-    return undefined;
-  }
-  return number;
+  return asFiniteNumberInRange(value, { min: 0, max: 1 });
 }
 
 function buildOpenAIRealtimeTranscriptionSessionPayload(
@@ -384,6 +379,14 @@ function createOpenAIRealtimeTranscriptionSession(
     const partialBytes = pendingTranscripts.get(key)?.bytes ?? 0;
     pendingTranscripts.delete(key);
     retainedTranscriptBytes -= partialBytes;
+    const transcriptBytes = transcript ? Buffer.byteLength(transcript, "utf8") : 0;
+    if (
+      transcriptBytes >
+      OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES - retainedTranscriptBytes
+    ) {
+      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE), transport);
+      return false;
+    }
     if (!itemId || !committedItems.has(itemId)) {
       if (itemId) {
         if (!settleItem(itemId, transport)) {
@@ -396,14 +399,6 @@ function createOpenAIRealtimeTranscriptionSession(
         config.onTranscript?.(transcript);
       }
       return true;
-    }
-    const transcriptBytes = transcript ? Buffer.byteLength(transcript, "utf8") : 0;
-    if (
-      transcriptBytes >
-      OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES - retainedTranscriptBytes
-    ) {
-      failTerminal(new Error(OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE), transport);
-      return false;
     }
     completedTranscripts.set(itemId, transcript);
     retainedTranscriptBytes += transcriptBytes;

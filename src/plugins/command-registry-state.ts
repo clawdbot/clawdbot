@@ -1,7 +1,8 @@
 // Stores plugin command registry state for the current process lifecycle.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
-import { getActivePluginGatewayCommandRegistry, requireActivePluginRegistry } from "./runtime.js";
+import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
+import { requireActivePluginRegistry } from "./runtime.js";
 import type {
   AgentPromptGuidance,
   AgentPromptSurfaceKind,
@@ -15,28 +16,21 @@ export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   trustedOwnerStatusExposure?: true;
 };
 
-const getCommandRegistry = () =>
-  getActivePluginGatewayCommandRegistry() ?? requireActivePluginRegistry();
-
 const getPluginCommandMap = () =>
   new Map(
-    getCommandRegistry().commands.map((entry) => [
-      `/${normalizeOptionalLowercaseString(entry.command.name) ?? ""}`,
-      {
-        ...entry.command,
-        pluginId: entry.pluginId,
-        pluginName: entry.pluginName,
-        pluginRoot: entry.rootDir,
-        trustedOwnerStatusExposure: entry.trustedOwnerStatusExposure,
-      },
+    listRegisteredPluginCommands(resolveCompatibilityPluginCommandRegistry()).map((command) => [
+      `/${normalizeOptionalLowercaseString(command.name) ?? ""}`,
+      command,
     ]),
   );
+
+export const resolveCompatibilityPluginCommandRegistry = requireActivePluginRegistry;
 
 export const pluginCommands = new Proxy(new Map<string, RegisteredPluginCommand>(), {
   get(_target, property) {
     if (property === "clear") {
       return () => {
-        getCommandRegistry().commands.length = 0;
+        resolveCompatibilityPluginCommandRegistry().commands.length = 0;
       };
     }
     const map = getPluginCommandMap();
@@ -44,10 +38,6 @@ export const pluginCommands = new Proxy(new Map<string, RegisteredPluginCommand>
     return typeof value === "function" ? value.bind(map) : value;
   },
 });
-
-export function setPluginCommandRegistryLocked(locked: boolean): void {
-  getCommandRegistry().commandRegistryLocked = locked;
-}
 
 export function clearPluginCommands(): void {
   pluginCommands.clear();

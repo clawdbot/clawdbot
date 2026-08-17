@@ -124,6 +124,7 @@ export function redactSecretDegradationReason(reason: string): SecretDegradation
 }
 
 const SECRET_SURFACE_UNAVAILABLE_ERROR_CODE = "SECRET_SURFACE_UNAVAILABLE";
+const trustedSecretSurfaceUnavailableErrors = new WeakSet<object>();
 
 /** Runtime error returned when a request targets an isolated SecretRef owner. */
 export class SecretSurfaceUnavailableError extends Error {
@@ -140,7 +141,17 @@ export class SecretSurfaceUnavailableError extends Error {
     this.ownerKind = owner.ownerKind;
     this.ownerId = owner.ownerId;
     this.paths = [...owner.paths];
+    trustedSecretSurfaceUnavailableErrors.add(this);
   }
+}
+
+/** Authenticates owner-created failures without trusting forgeable error names or prototypes. */
+export function isTrustedSecretSurfaceUnavailableError(
+  error: unknown,
+): error is SecretSurfaceUnavailableError {
+  return (
+    typeof error === "object" && error !== null && trustedSecretSurfaceUnavailableErrors.has(error)
+  );
 }
 
 let activeDegradedOwners: DegradedSecretOwner[] = [];

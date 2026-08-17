@@ -88,6 +88,42 @@ class ChatControllerSessionSearchTest {
     }
 
   @Test
+  fun fetchSessionListPreservesGatewayClassificationFacts() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respond("sessions.list") {
+        buildJsonObject {
+          put(
+            "sessions",
+            JsonArray(
+              listOf(
+                buildJsonObject {
+                  put("key", JsonPrimitive("agent:main:telegram:main:direct:491234567890"))
+                  put("updatedAt", JsonPrimitive(100))
+                  put("agentId", JsonPrimitive("main"))
+                  put("classification", JsonPrimitive("direct"))
+                  put("accountId", JsonPrimitive("main"))
+                  put("peerKind", JsonPrimitive("direct"))
+                  put("isMain", JsonPrimitive(false))
+                  put("isBackground", JsonPrimitive(false))
+                },
+              ),
+            ),
+          )
+        }.toString()
+      }
+      val controller = newController(gateway)
+
+      val row = controller.fetchSessionList(search = null, archived = false).single()
+      assertEquals("main", row.ownerAgentId)
+      assertEquals("direct", row.classification)
+      assertEquals("main", row.accountId)
+      assertEquals("direct", row.peerKind)
+      assertEquals(false, row.isMain)
+      assertEquals(false, row.isBackground)
+    }
+
+  @Test
   fun fetchSessionListFallsBackToLocalFilterWhenOffline() =
     runTest {
       val gateway = ScriptedGateway(json)

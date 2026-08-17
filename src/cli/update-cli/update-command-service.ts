@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -30,7 +31,6 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
@@ -55,6 +55,7 @@ import {
 import { runRestartScript } from "./restart-helper.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
+import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
@@ -69,15 +70,6 @@ const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
 const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
-const SERVICE_REFRESH_PATH_ENV_KEYS = [
-  "OPENCLAW_HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-] as const;
-const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
-  ...SERVICE_REFRESH_PATH_ENV_KEYS,
-  "OPENCLAW_PROFILE",
-] as const;
 const JSON_MODE_SERVICE_STDOUT = new Writable({
   write(_chunk, _encoding, callback) {
     callback();
@@ -117,6 +109,7 @@ export type PreManagedServiceStop = {
   serviceMatchesMutationRoot?: boolean;
   blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
+  serviceDefinitionEnv?: NodeJS.ProcessEnv;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
@@ -471,7 +464,36 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     };
   }
 
-  if (!serviceState.running) {
+  if (serviceMatchesMutationRoot === false) {
+    if (!params.jsonMode) {
+      defaultRuntime.log(
+        theme.muted(
+          `Managed gateway service points at a different OpenClaw root; leaving it running during this ${params.updateInstallKind} update.`,
+        ),
+      );
+    }
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      // Keep checking additional git mutation roots for this active supervisor.
+      running: true,
+      ...serviceOwnership,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  // A loaded LaunchAgent can be between KeepAlive respawns. Other supervisors
+  // need the handoff marker to distinguish that transition from operator-stopped state.
+  const launchAgentMayRespawn =
+    process.platform === "darwin" &&
+    serviceState.loaded &&
+    (await service.isEnabled?.({ env: serviceState.env })) === true;
+  const handoffSupervisorMayRespawn =
+    process.platform !== "darwin" && process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1";
+  const supervisorMayRespawn =
+    serviceState.loaded && (launchAgentMayRespawn || handoffSupervisorMayRespawn);
+  if (!serviceState.running && !supervisorMayRespawn) {
     const windowsTaskAutoStartRecovery = await maybeSuspendWindowsTaskAutoStartForPackageUpdate({
       updateInstallKind: params.updateInstallKind,
       serviceEnv: serviceState.env,
@@ -496,24 +518,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       running: true,
       ...serviceOwnership,
       blockMessage,
-      serviceEnv: serviceState.env,
-    };
-  }
-
-  if (serviceMatchesMutationRoot === false) {
-    if (!params.jsonMode) {
-      defaultRuntime.log(
-        theme.muted(
-          `Managed gateway service points at a different OpenClaw root; leaving it running during this ${params.updateInstallKind} update.`,
-        ),
-      );
-    }
-    return {
-      stopped: false,
-      inspected: true,
-      runtimeInspected: true,
-      running: true,
-      ...serviceOwnership,
       serviceEnv: serviceState.env,
     };
   }
@@ -561,9 +565,10 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     stopped: true,
     inspected: true,
     runtimeInspected: true,
-    running: true,
+    running: serviceState.running,
     ...serviceOwnership,
     serviceEnv: serviceState.env,
+    serviceDefinitionEnv: serviceState.command?.environment,
     ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
   };
 }
@@ -745,70 +750,13 @@ async function resolvePackageRuntimeForPreflight(params: {
   return { version, nodeRunner };
 }
 
-function resolveServiceRefreshEnv(
-  env: NodeJS.ProcessEnv,
-  invocationCwd?: string,
-): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = { ...env };
-  for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
-    const rawValue = resolvedEnv[key]?.trim();
-    if (!rawValue) {
-      continue;
-    }
-    if (rawValue.startsWith("~") || path.isAbsolute(rawValue) || path.win32.isAbsolute(rawValue)) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    if (!invocationCwd) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
-  }
-  return resolvedEnv;
-}
-
-export function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    NODE_DISABLE_COMPILE_CACHE: "1",
-  };
-}
+export { disableUpdatedPackageCompileCacheEnv } from "./update-command-service-env.js";
 
 export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const resolvedEnv = { ...env };
   delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
   delete resolvedEnv.OPENCLAW_SERVICE_KIND;
   delete resolvedEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV];
-  return resolvedEnv;
-}
-
-function resolveUpdatedInstallCommandEnv(
-  env: NodeJS.ProcessEnv,
-  invocationCwd?: string,
-): NodeJS.ProcessEnv {
-  return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
-}
-
-export function resolvePostInstallDoctorEnv(params?: {
-  baseEnv?: NodeJS.ProcessEnv;
-  serviceEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-}): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = {
-    ...disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env),
-  };
-  if (!params?.serviceEnv) {
-    return resolvedEnv;
-  }
-
-  const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
-  for (const key of POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS) {
-    const value = serviceEnv[key]?.trim();
-    if (value) {
-      resolvedEnv[key] = serviceEnv[key];
-    }
-  }
   return resolvedEnv;
 }
 
@@ -855,7 +803,11 @@ async function refreshGatewayServiceEnv(params: {
       [params.nodeRunner ?? resolveNodeRunner(), entrypoint, ...args],
       {
         cwd: params.result.root,
-        env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
+        env: resolveUpdatedInstallCommandEnv({
+          processEnv: process.env,
+          serviceEnv: params.env,
+          invocationCwd: params.invocationCwd,
+        }),
         timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
       },
     );
@@ -899,7 +851,11 @@ async function runUpdatedInstallGatewayRestart(params: {
     [params.nodeRunner ?? resolveNodeRunner(), entrypoint, ...args],
     {
       cwd: params.result.root,
-      env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
+      env: resolveUpdatedInstallCommandEnv({
+        processEnv: process.env,
+        serviceEnv: params.env,
+        invocationCwd: params.invocationCwd,
+      }),
       // Restart health owns migration-aware readiness. Keep only the caller's bounded update
       // budget outside it so the former fixed 60-second watchdog cannot preempt that wait.
       timeoutMs: params.timeoutMs,

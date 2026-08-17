@@ -1,28 +1,23 @@
 // Control UI tests cover proxy-style same-client reconnects through the real browser lifecycle.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-  type MockGatewayControls,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { BrowserContext, Page } from "playwright";
+import { expect, it } from "vitest";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+const suite = createControlUiE2eSuite({
+  name: "Control UI usage proxy reconnect lifecycle",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}`,
+});
 
 // Mirrors the module-private default usage TTL asserted by this flow.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-
-let browser: Browser;
-let server: ControlUiE2eServer;
 
 const totals = {
   input: 100,
@@ -113,7 +108,7 @@ async function createContext(): Promise<BrowserContext> {
   if (proofDir) {
     await mkdir(proofDir, { recursive: true });
   }
-  return browser.newContext({
+  return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1440 },
@@ -139,7 +134,8 @@ async function proxyReconnect(
 ): Promise<void> {
   await gateway.closeLatest(1001, "proxy idle timeout");
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
-  expect(await page.locator(".sidebar-identity-card__subtitle").count()).toBe(0);
+  await waitForControlUiGatewayReady(page);
+  expect(await page.locator(".sidebar-identity-card__status").textContent()).toBe("");
 }
 
 async function captureProof(page: Page, name: string): Promise<void> {
@@ -155,20 +151,7 @@ async function usageBadges(page: Page): Promise<string[]> {
   );
 }
 
-describeControlUiE2e("Control UI usage proxy reconnect lifecycle", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is not available at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("avoids a reload storm but retries Usage work interrupted by a proxy drop", async () => {
     const context = await createContext();
     const page = await context.newPage();
@@ -181,7 +164,7 @@ describeControlUiE2e("Control UI usage proxy reconnect lifecycle", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}chat`);
+      const response = await page.goto(`${suite.server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();

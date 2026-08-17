@@ -15,7 +15,7 @@ import {
   resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
-import { expectRecordFields, requireRecord } from "./test-helpers.assertions.js";
+import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
 type AugmentCliHistoryParams = Parameters<typeof augmentChatHistoryWithCliSessionImports>[0];
@@ -35,7 +35,7 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
-  return requireRecord(value, "record");
+  return requireGatewayRecord(value, "record");
 }
 
 function expectCliSessionMarker(message: unknown, sessionId: string): void {
@@ -242,6 +242,34 @@ describe("cli session history", () => {
           content: "/tmp/demo",
           tool_use_id: "toolu_123",
         },
+      ]);
+    });
+  });
+
+  it("preserves Date.parse semantics for numeric-looking Claude timestamps", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        [
+          { timestamp: "0", uuid: "numeric-zero", content: "zero" },
+          { timestamp: "2026", uuid: "numeric-year", content: "year" },
+        ]
+          .map((entry) =>
+            JSON.stringify({
+              type: "user",
+              uuid: entry.uuid,
+              timestamp: entry.timestamp,
+              message: { role: "user", content: entry.content },
+            }),
+          )
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      expect(messages.map((message) => message.timestamp)).toEqual([
+        Date.parse("0"),
+        Date.parse("2026"),
       ]);
     });
   });

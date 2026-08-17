@@ -24,12 +24,11 @@
  *   Path 2 (src/agents/cli-runner/execute.ts) — implicit: same gate as Path 3,
  *     and gated by `resolveSystemPromptUsage` which is tested below.
  *   Path 3 (src/agents/cli-runner/helpers.ts — buildCliArgs) — covered here.
- *   Path 4 (src/agents/cli-runner/claude-live-session.ts — stripLiveProcessArgs
- *     via buildClaudeLiveArgs) — covered here.
+ *   Path 4 (src/agents/cli-runner/claude-live-session.ts) — covered by
+ *     claude-live-session.test.ts.
  */
 import { describe, expect, it } from "vitest";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
-import { buildClaudeLiveArgs } from "./claude-live-session.test-support.js";
 import { buildCliArgs, resolveSystemPromptUsage } from "./helpers.js";
 
 // Minimal backend config matching the Anthropic claude-cli backend shape.
@@ -240,54 +239,5 @@ describe("buildCliArgs — issue #80374", () => {
         resumeAt: "assistant-before-turn",
       }),
     ).toThrow("does not support checkpointed session resume");
-  });
-});
-
-// ─── buildClaudeLiveArgs (Path 4: live-stdio strip guard) ───────────────────
-
-describe("buildClaudeLiveArgs — issue #80374 (live-stdio path)", () => {
-  const ARGS_WITH_SP = [
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--append-system-prompt-file",
-    PROMPT_FILE,
-  ];
-
-  it("legacy 'first': strips --append-system-prompt-file on resume", () => {
-    const liveArgs = buildClaudeLiveArgs({
-      args: ARGS_WITH_SP,
-      backend: BACKEND_FIRST as CliBackendConfig,
-      systemPrompt: SYSTEM_PROMPT,
-      useResume: true,
-    });
-    expect(liveArgs).not.toContain("--append-system-prompt-file");
-    expect(liveArgs).not.toContain(PROMPT_FILE);
-  });
-
-  it("new 'always': keeps --append-system-prompt-file on resume (issue #80374)", () => {
-    const liveArgs = buildClaudeLiveArgs({
-      args: ARGS_WITH_SP,
-      backend: BACKEND_ALWAYS as CliBackendConfig,
-      systemPrompt: SYSTEM_PROMPT,
-      useResume: true,
-    });
-    expect(liveArgs).toContain("--append-system-prompt-file");
-    expect(liveArgs).toContain(PROMPT_FILE);
-  });
-
-  it("keeps --append-system-prompt-file when useResume=false (both 'first' and 'always')", () => {
-    for (const backend of [BACKEND_FIRST, BACKEND_ALWAYS]) {
-      const liveArgs = buildClaudeLiveArgs({
-        args: ARGS_WITH_SP,
-        backend: backend as CliBackendConfig,
-        systemPrompt: SYSTEM_PROMPT,
-        useResume: false,
-      });
-      expect(
-        liveArgs,
-        `systemPromptWhen=${backend.systemPromptWhen} fresh session should keep flag`,
-      ).toContain("--append-system-prompt-file");
-    }
   });
 });

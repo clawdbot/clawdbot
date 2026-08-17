@@ -19,6 +19,7 @@ import type {
   ShortTermRecallEntry,
 } from "./short-term-promotion-types.js";
 import {
+  compareStoreTimestampDesc,
   isShortTermMemoryPath,
   normalizeMemoryPathForWorkspace,
   normalizeSnippet,
@@ -34,12 +35,9 @@ function compareDreamingStatsEntryByRecency(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const aMs = a.lastRecalledAt ? Date.parse(a.lastRecalledAt) : Number.NEGATIVE_INFINITY;
-  const bMs = b.lastRecalledAt ? Date.parse(b.lastRecalledAt) : Number.NEGATIVE_INFINITY;
-  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
-    if (bMs !== aMs) {
-      return bMs - aMs;
-    }
+  const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
+  if (byTime !== 0) {
+    return byTime;
   }
   if (b.totalSignalCount !== a.totalSignalCount) {
     return b.totalSignalCount - a.totalSignalCount;
@@ -64,12 +62,9 @@ function compareDreamingStatsEntryByPromotion(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const aMs = a.promotedAt ? Date.parse(a.promotedAt) : Number.NEGATIVE_INFINITY;
-  const bMs = b.promotedAt ? Date.parse(b.promotedAt) : Number.NEGATIVE_INFINITY;
-  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
-    if (bMs !== aMs) {
-      return bMs - aMs;
-    }
+  const byTime = compareStoreTimestampDesc(a.promotedAt, b.promotedAt);
+  if (byTime !== 0) {
+    return byTime;
   }
   return compareDreamingStatsEntryBySignals(a, b);
 }

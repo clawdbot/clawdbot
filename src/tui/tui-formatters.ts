@@ -7,7 +7,7 @@ import type { SessionGoal } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 import type { SessionInfo } from "./tui-types.js";
@@ -26,7 +26,8 @@ const ALPHANUMERIC_RE = /[A-Za-z0-9]/;
 const TOKENISH_MIN_LENGTH = 24;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
 const CJK_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
-const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
+const BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const BIDI_CONTROL_GLOBAL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 // Fenced code blocks (``` or ~~~). Lazy on content; tolerates info string after
@@ -62,7 +63,7 @@ export function formatTuiFooter(params: {
   const traceLabel = trace === "raw" ? "trace:raw" : trace === "on" ? "trace" : null;
   const reasoningLabel =
     reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
-  return [
+  const footer = [
     `agent ${params.agentLabel}`,
     `session ${params.sessionLabel}`,
     formatModelFooter({ model: sessionInfo.model, thinkingLevel: params.thinkingLevel }),
@@ -76,6 +77,7 @@ export function formatTuiFooter(params: {
   ]
     .filter(Boolean)
     .join(" | ");
+  return sanitizeRenderableLine(footer);
 }
 
 function hasControlChars(text: string): boolean {
@@ -104,6 +106,33 @@ function stripControlChars(text: string): string {
     }
   }
   return sanitized;
+}
+
+function sanitizeTerminalControlsAndBinary(text: string): string {
+  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
+  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
+  const withoutControlChars = hasControlChars(withoutAnsi)
+    ? stripControlChars(withoutAnsi)
+    : withoutAnsi;
+  const withoutBidiControls = BIDI_CONTROL_RE.test(withoutControlChars)
+    ? withoutControlChars.replace(BIDI_CONTROL_GLOBAL_RE, "")
+    : withoutControlChars;
+  return withoutBidiControls.includes("\uFFFD")
+    ? withoutBidiControls
+        .split("\n")
+        .map((line) => redactBinaryLikeLine(line))
+        .join("\n")
+    : withoutBidiControls;
+}
+
+export function isTerminalSafeAutocompleteValue(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f) || BIDI_CONTROL_RE.test(char)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isCopySensitiveToken(token: string): boolean {
@@ -211,10 +240,21 @@ function redactBinaryLikeLine(line: string): string {
 }
 
 function isolateRtlLine(line: string): string {
-  if (!RTL_SCRIPT_RE.test(line) || BIDI_CONTROL_RE.test(line)) {
+  if (!RTL_SCRIPT_RE.test(line)) {
     return line;
   }
   return `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}`;
+}
+
+export function isolateRtlRenderedLine(line: string): string {
+  if (!RTL_SCRIPT_RE.test(stripAnsi(line))) {
+    return line;
+  }
+  const padding = line.match(/^(\s*)(.*\S)(\s*)$/u);
+  if (!padding) {
+    return line;
+  }
+  return `${padding[1]}${RTL_ISOLATE_START}${padding[2]}${RTL_ISOLATE_END}${padding[3]}`;
 }
 
 function applyRtlIsolation(text: string): string {
@@ -227,35 +267,33 @@ function applyRtlIsolation(text: string): string {
     .join("\n");
 }
 
-export function sanitizeRenderableText(text: string): string {
+export function sanitizeMarkdownSource(text: string): string {
   if (!text) {
     return text;
   }
 
-  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
-  const hasReplacementChars = text.includes("\uFFFD");
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
-  const hasControls = hasControlChars(text);
-  if (!hasAnsi && !hasReplacementChars && !hasLongTokens && !hasControls) {
-    return applyRtlIsolation(text);
+  const controlSafe = sanitizeTerminalControlsAndBinary(text);
+  if (controlSafe === text && !hasLongTokens) {
+    return text;
   }
 
-  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
-  const withoutControlChars = hasControls ? stripControlChars(withoutAnsi) : withoutAnsi;
-  const redacted = hasReplacementChars
-    ? withoutControlChars
-        .split("\n")
-        .map((line) => redactBinaryLikeLine(line))
-        .join("\n")
-    : withoutControlChars;
-  const tokenSafe = LONG_TOKEN_TEST_RE.test(redacted)
-    ? transformOutsideCode(redacted, (segment) =>
+  return LONG_TOKEN_TEST_RE.test(controlSafe)
+    ? transformOutsideCode(controlSafe, (segment) =>
         LONG_TOKEN_TEST_RE.test(segment)
           ? segment.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
           : segment,
       )
-    : redacted;
-  return applyRtlIsolation(tokenSafe);
+    : controlSafe;
+}
+
+export function sanitizeRenderableText(text: string): string {
+  return applyRtlIsolation(sanitizeMarkdownSource(text));
+}
+
+export function sanitizeRenderableLine(text: string): string {
+  const line = sanitizeTerminalControlsAndBinary(text).replace(/\s+/gu, " ").trim();
+  return applyRtlIsolation(line);
 }
 
 /** Render error causes without exposing secrets or terminal control sequences. */
@@ -507,7 +545,7 @@ export function extractContentFromMessage(message: unknown): string {
 }
 
 function extractAssistantRenderableContent(record: Record<string, unknown>): string {
-  const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
+  const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
   const pairingQr = extractPairingQrTerminalText(record);
   const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
   if (content) {
@@ -642,7 +680,7 @@ export function extractTuiAbortedText(message: unknown, includeThinking: boolean
   return extractTextFromMessage(message, { includeThinking, includeAttachments: false });
 }
 
-export function isCommandMessage(message: unknown): boolean {
+export function isCommandMarkedMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -710,7 +748,7 @@ export function formatContextUsageLine(params: {
   return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
 }
 
-export function asString(value: unknown, fallback = ""): string {
+export function formatPrimitiveString(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;
   }

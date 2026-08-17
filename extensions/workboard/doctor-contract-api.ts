@@ -2,7 +2,7 @@
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -10,7 +10,8 @@ import type {
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
 } from "./src/persistence-types.js";
-import { createWorkboardSqliteStores, resolveWorkboardSqlitePath } from "./src/sqlite-store.js";
+// Doctor enumeration cold-loads this closure; sqlite-store pulls the
+// plugin-state-runtime/kysely graph, so it stays behind lazy imports below.
 
 const MAX_CARDS = 2000;
 
@@ -176,6 +177,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "workboard-28-kv-to-sqlite",
     label: "Workboard .28 plugin-state KV",
     async detectLegacyState(params) {
+      const { resolveWorkboardSqlitePath } = await import("./src/sqlite-store.js");
       const env = migrationEnv(params);
       const cards = await openLegacyStore<PersistedWorkboardCard>({
         context: params.context,
@@ -212,6 +214,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       };
     },
     async migrateLegacyState(params) {
+      const { createWorkboardSqliteStores } = await import("./src/sqlite-store.js");
       const env = migrationEnv(params);
       const cards = openLegacyStore<PersistedWorkboardCard>({
         context: params.context,

@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { AgentRunResultView } from "../agents/agent-run-result.js";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 import {
   buildModelAliasIndex,
   legacyModelKey,
@@ -28,7 +30,10 @@ export type SetupInferenceTestPlan = {
   provider: string;
   model: string;
   modelRef: string;
+  /** Authored/staged config used for route, auth, and persistence decisions. */
   config: OpenClawConfig;
+  /** Execution-only projection that admits the reserved OpenClaw agent. */
+  executionConfig?: OpenClawConfig;
   /** Execution identity used by the real OpenClaw turn. */
   agentId?: string;
   /** Default-agent owner whose model/runtime config is being selected. */
@@ -73,59 +78,30 @@ export function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConf
   };
 }
 
-export type RunResult = {
-  payloads?: Array<{ text?: string; isError?: boolean }>;
-  meta?: {
-    executionTrace?: { winnerProvider?: string; winnerModel?: string };
-    finalAssistantVisibleText?: string;
-    finalAssistantRawText?: string;
-    livenessState?: string;
-    error?: { kind?: string; message?: string };
-  };
-};
-
-export function extractRunText(result: RunResult): string | undefined {
-  return (
-    result.meta?.finalAssistantVisibleText ??
-    result.meta?.finalAssistantRawText ??
-    result.payloads
-      ?.map((payload) => payload.text?.trim())
-      .filter(Boolean)
-      .join("\n")
-  );
-}
-
-export function extractRunTerminalError(result: RunResult): string | undefined {
-  const errorPayload = result.payloads?.find((payload) => payload.isError === true)?.text?.trim();
-  const hasMetaError = result.meta?.error !== undefined;
-  const metaError = result.meta?.error?.message?.trim();
-  const livenessState = result.meta?.livenessState?.trim().toLowerCase();
-  if (
-    !errorPayload &&
-    !hasMetaError &&
-    livenessState !== "blocked" &&
-    livenessState !== "abandoned"
-  ) {
-    return undefined;
-  }
-  return (
-    metaError ||
-    errorPayload ||
-    (livenessState ? `Inference ended in the ${livenessState} state.` : "Inference failed.")
-  );
-}
-
-export function extractRunWinnerError(
+export async function extractRunWinnerError(
   plan: SetupInferenceTestPlan,
-  result: RunResult,
-): string | undefined {
+  result: AgentRunResultView,
+): Promise<string | undefined> {
   const winnerProvider = result.meta?.executionTrace?.winnerProvider?.trim();
   const winnerModel = result.meta?.executionTrace?.winnerModel?.trim();
   if (!winnerProvider || !winnerModel) {
     return "The inference run did not report which provider and model produced its reply.";
   }
-  if (winnerProvider === plan.provider && winnerModel === plan.model) {
-    return undefined;
+  if (winnerProvider === plan.provider) {
+    if (winnerModel === plan.model) {
+      return undefined;
+    }
+    const { resolveDirectBundledProviderPolicySurface } =
+      await import("../plugins/provider-policy-surface.js");
+    if (
+      resolveDirectBundledProviderPolicySurface(plan.provider)?.isResponseModelEquivalent?.({
+        provider: plan.provider,
+        requestedModelId: plan.model,
+        responseModelId: winnerModel,
+      }) === true
+    ) {
+      return undefined;
+    }
   }
   return `The inference run answered through ${winnerProvider}/${winnerModel} instead of the requested ${plan.provider}/${plan.model}. Disable model-routing overrides or choose the working route directly, then retry.`;
 }
@@ -213,7 +189,11 @@ export function parseRef(modelRef: string): { provider: string; model: string } 
     : { provider: modelRef.slice(0, slash), model: modelRef.slice(slash + 1) };
 }
 
-export function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef: string): unknown {
+export function projectSetupTargetModelMetadata(
+  config: OpenClawConfig,
+  modelRef: string,
+  agentId?: string,
+): unknown {
   const target = parseRef(modelRef);
   const canonicalKey = modelKey(target.provider, target.model);
   const keys = new Set(
@@ -232,7 +212,7 @@ export function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef
           : { exists: false },
       ]),
     );
-  const defaultAgentId = resolveDefaultAgentId(config);
+  const defaultAgentId = agentId ? normalizeAgentId(agentId) : resolveDefaultAgentId(config);
   const agent = listAgentEntries(config).find(
     (entry) => normalizeAgentId(entry.id) === defaultAgentId,
   );
@@ -261,25 +241,31 @@ export function resolveSetupAgentRuntimeId(
   return undefined;
 }
 
+const SETUP_STATUS_BY_FAILOVER_REASON = {
+  auth: "auth",
+  auth_permanent: "auth",
+  format: "format",
+  rate_limit: "rate_limit",
+  overloaded: "rate_limit",
+  billing: "billing",
+  server_error: "unknown",
+  timeout: "timeout",
+  tls_certificate: "unknown",
+  context_overflow: "unknown",
+  model_not_found: "format",
+  session_expired: "unknown",
+  empty_response: "unknown",
+  no_error_details: "unknown",
+  unclassified: "unknown",
+  unknown: "unknown",
+} satisfies Record<FailoverReason, SetupInferenceFailureStatus>;
+
 export function mapFailoverReasonToSetupStatus(
   reason?: string | null,
 ): SetupInferenceFailureStatus {
-  if (reason === "auth" || reason === "auth_permanent") {
-    return "auth";
-  }
-  if (reason === "rate_limit" || reason === "overloaded") {
-    return "rate_limit";
-  }
-  if (reason === "billing") {
-    return "billing";
-  }
-  if (reason === "timeout") {
-    return "timeout";
-  }
-  if (reason === "format" || reason === "model_not_found") {
-    return "format";
-  }
-  return "unknown";
+  return reason
+    ? (SETUP_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
+    : "unknown";
 }
 
 export function prepareManualAuthForActivation(params: {
@@ -290,6 +276,7 @@ export function prepareManualAuthForActivation(params: {
   modelRef: string;
   providerId: string;
   pluginId?: string;
+  agentId?: string;
 }): {
   config: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
@@ -320,6 +307,7 @@ function copySelectedModelMetadata(params: {
   target: OpenClawConfig;
   prepared: OpenClawConfig;
   modelRef: string;
+  agentId?: string;
 }): void {
   const preparedDefaultModels = params.prepared.agents?.defaults?.models;
   if (preparedDefaultModels && Object.hasOwn(preparedDefaultModels, params.modelRef)) {
@@ -340,7 +328,9 @@ function copySelectedModelMetadata(params: {
     };
   }
 
-  const defaultAgentId = resolveDefaultAgentId(params.target);
+  const defaultAgentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveDefaultAgentId(params.target);
   const preparedAgent = listAgentEntries(params.prepared).find(
     (agent) => normalizeAgentId(agent.id) === defaultAgentId,
   );
@@ -394,6 +384,7 @@ export function projectManualInferenceConfig(params: {
   modelRef: string;
   providerId: string;
   pluginId?: string;
+  agentId?: string;
 }): OpenClawConfig {
   const config = structuredClone(params.baseConfig);
   if (params.selectedProfile && params.selectedProfileId) {
@@ -441,6 +432,7 @@ export function projectManualInferenceConfig(params: {
     target: config,
     prepared: params.preparedConfig,
     modelRef: params.modelRef,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   return config;
 }

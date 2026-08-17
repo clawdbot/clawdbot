@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { generateExportHtmlVendorAssets } from "../../../../scripts/runtime-postbuild.mjs";
+import { generateExportHtmlVendorAssets } from "../../../../scripts/runtime-postbuild.mts";
 
 type SessionEntry = {
   id: string;

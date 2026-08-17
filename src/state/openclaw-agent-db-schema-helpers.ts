@@ -21,14 +21,18 @@ import {
   AGENT_V14_BOARD_SCHEMA_SQL,
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
+import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engine-turn-outbox-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
+import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
+import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
   AGENT_V14_CORE_SCHEMA_SQL,
   AGENT_V14_SESSION_SHARING_SCHEMA_SQL,
 } from "./openclaw-agent-session-sharing-schema.js";
+import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "./openclaw-agent-session-transcript-archive-schema.js";
 import {
   STANDING_INTENTS_FTS_SHADOW_TABLES,
   STANDING_INTENTS_FTS_TABLE,
@@ -42,9 +46,13 @@ type ExistingAgentSchemaMeta = {
 };
 
 const AGENT_SCHEMA_COMPATIBILITY = {
+  allowCompatibleAdditiveColumns: true,
   allowedMissingTables: [
     MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
     MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+    CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
+    MESSAGE_TOOL_RUN_OUTCOMES_TABLE,
+    SESSION_TRANSCRIPT_ARCHIVES_TABLE,
     STANDING_INTENTS_TABLE,
     STANDING_INTENTS_FTS_TABLE,
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
@@ -60,6 +68,12 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     },
   ],
 } satisfies SqliteSchemaCompatibility;
+
+function hasRetiredAgentStateLeaseSchema(database: DatabaseSync): boolean {
+  return Boolean(
+    database.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = 'state_leases'").get(),
+  );
+}
 
 export function assertOpenClawAgentSchemaContains(
   database: DatabaseSync,
@@ -84,6 +98,11 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
   if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw new Error(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
+    );
+  }
+  if (hasRetiredAgentStateLeaseSchema(database)) {
+    throw new Error(
+      `OpenClaw agent database ${options.pathname} retains retired state_leases storage; run openclaw doctor --fix before using it.`,
     );
   }
   assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
@@ -114,6 +133,19 @@ function repairAndAssertAgentSchemaGroup(
   assertOpenClawAgentSchemaContains(database, pathname, schemaSql);
 }
 
+const SESSION_KEY_CONTRACT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_contract (";
+const SESSION_KEY_CONTRACT_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_windows (";
+
+/** Ensure the additive session-key contract table inside the caller's transaction. */
+export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
+  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_START);
+  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_END, start);
+  if (start === -1 || end === -1) {
+    throw new Error("OpenClaw agent session-key contract schema markers are missing.");
+  }
+  db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Idempotent additive lazy ensure.
+}
+
 export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   database: DatabaseSync,
   options: { agentId: string; pathname: string },
@@ -138,8 +170,13 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     );
   }
 
+  ensureSessionEntryValidityProjection(database);
+  ensureSessionKeyContractSchemaInTransaction(database);
+
   // v14 always owned the core schema. Board and collaboration groups were
   // lazy, but a partially present group still has to be complete and canonical.
+  // Keep this preflight before full CREATE IF NOT EXISTS convergence: otherwise
+  // a missing stable v14 table could be recreated empty and hide data loss.
   repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_V14_CORE_SCHEMA_SQL);
   if (hasAnyCanonicalTable(database, AGENT_V14_SESSION_SHARING_SCHEMA_SQL)) {
     repairAndAssertAgentSchemaGroup(

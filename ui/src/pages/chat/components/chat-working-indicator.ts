@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
 import "../../../components/elapsed-time.ts";
-import { icons } from "../../../components/icons.ts";
+import type { ApplicationCloudStartupStatus } from "../../../app/cloud-session-startup.ts";
 import "../../../components/working-phrase.ts";
+import { icons } from "../../../components/icons.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
@@ -25,6 +26,53 @@ const TURN_RECAP_DURATION_UNITS = [
 
 function startupStatusLabel(phase: ChatRunStartupPhase): string {
   return t(STARTUP_STATUS_LABEL_KEYS[phase]);
+}
+
+function cloudStartupStatusLabel(status: ApplicationCloudStartupStatus): string {
+  if (status.phase === "pending") {
+    return t("newSession.starting");
+  }
+  return status.phase === "sending" || status.phase === "active"
+    ? t("chat.composer.sendingMessage")
+    : t("sessionsView.cloudWorkerPlacement", { state: status.phase });
+}
+
+export function renderCloudStartupStatus(
+  status: ApplicationCloudStartupStatus | null | undefined,
+  onRetry?: () => void,
+) {
+  if (!status) {
+    return nothing;
+  }
+  if (status.phase === "failed") {
+    return html`
+      <div class="chat-error chat-cloud-startup-error" role="alert">
+        <span class="chat-error__dot" aria-hidden="true"></span>
+        <span class="chat-error__content"
+          >${t("newSession.cloudStartFailed", {
+            error: status.error ?? t("newSession.createFailed"),
+          })}</span
+        >
+        ${status.retryable && onRetry
+          ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>
+              ${t("common.retry")}
+            </button>`
+          : nothing}
+      </div>
+    `;
+  }
+  return html`
+    <div class="chat-working-indicator chat-cloud-startup" role="status" aria-live="polite">
+      <div class="chat-bubble chat-reading-indicator" aria-hidden="true">${icons.claw}</div>
+      <span class="chat-working-indicator__status">
+        <span>${cloudStartupStatusLabel(status)}</span>
+        <openclaw-elapsed-time
+          class="chat-working-indicator__elapsed"
+          .startMs=${status.startedAt}
+        ></openclaw-elapsed-time>
+      </span>
+    </div>
+  `;
 }
 
 function formatTurnRecapDuration(ms: number): string {
@@ -51,15 +99,20 @@ function formatTurnRecapDuration(ms: number): string {
   return new Intl.ListFormat(locale, { style: "long", type: "unit" }).format(parts);
 }
 
+// 0 is a valid count (command-only turns); only null/undefined means "unknown".
+function outputTokensLabel(outputTokens: number): string {
+  return outputTokens === 1
+    ? t("chat.turnRecap.tokensOne")
+    : t("chat.turnRecap.tokens", { count: formatCompactTokenCount(outputTokens) });
+}
+
 function renderLiveOutputTokens(outputTokens: number | null | undefined) {
   if (outputTokens === null || outputTokens === undefined) {
     return nothing;
   }
   return html`
     <span aria-hidden="true">·</span>
-    <span class="chat-working-indicator__tokens">
-      ${t("chat.outputTokens", { count: formatCompactTokenCount(outputTokens) })}
-    </span>
+    <span class="chat-working-indicator__tokens">${outputTokensLabel(outputTokens)}</span>
   `;
 }
 
@@ -74,6 +127,9 @@ export function renderChatWorkingIndicator(
 ) {
   const waitingApproval = options.waitingApproval === true;
   const continuation = options.presentation === "continuation";
+  // Streaming tokens are the real liveness signal; the whimsical phrase only
+  // covers the stretch before any usage data exists.
+  const hasTokens = options.outputTokens !== null && options.outputTokens !== undefined;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   return html`
@@ -107,19 +163,20 @@ export function renderChatWorkingIndicator(
                 ${renderLiveOutputTokens(options.outputTokens)}
               `
             : html`
-                <span class=${continuation ? "" : "agent-chat__sr-only"}
-                  >${t("common.working")}</span
-                >
+                <span class=${continuation ? "" : "sr-only"}>${t("common.working")}</span>
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}
                 ></openclaw-elapsed-time>
-                <openclaw-working-phrase
-                  aria-hidden="true"
-                  .startMs=${part.startedAt}
-                  .seed=${part.key}
-                ></openclaw-working-phrase>
-                ${renderLiveOutputTokens(options.outputTokens)}
+                ${hasTokens
+                  ? renderLiveOutputTokens(options.outputTokens)
+                  : html`
+                      <openclaw-working-phrase
+                        aria-hidden="true"
+                        .startMs=${part.startedAt}
+                        .seed=${part.key}
+                      ></openclaw-working-phrase>
+                    `}
               `}
       </span>
     </div>
@@ -136,13 +193,8 @@ export function renderTurnRecapRow(
   const continuation = options.presentation === "continuation";
   // Sub-second turns still read as one second; terminal recaps favor full words.
   const duration = formatTurnRecapDuration(recap.runtimeMs);
-  // 0 is a valid count (command-only turns); only null means "unknown".
   const tokens =
-    typeof recap.outputTokens === "number"
-      ? recap.outputTokens === 1
-        ? t("chat.turnRecap.tokensOne")
-        : t("chat.turnRecap.tokens", { count: formatCompactTokenCount(recap.outputTokens) })
-      : null;
+    typeof recap.outputTokens === "number" ? outputTokensLabel(recap.outputTokens) : null;
   return html`
     <div
       class="chat-tasks-status chat-turn-recap ${continuation

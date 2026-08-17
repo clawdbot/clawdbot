@@ -27,6 +27,7 @@ import type {
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
@@ -36,7 +37,7 @@ const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
 type Row = Record<string, unknown>;
 type WorkboardSqliteStores = {
-  cards: WorkboardKeyedStore;
+  cards: WorkboardCardStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
   subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
@@ -424,21 +425,119 @@ function createDatabase(dbPath: string): {
   }
 }
 
-function childRows(db: DatabaseSync, table: string, cardId: string): Row[] {
+// Every child table a card row expands into. Reading one card issues one query per
+// entry here; reading the whole board that way is a query per card per table, which
+// is why the batch read path preloads them instead.
+const CARD_CHILD_TABLES = [
+  "workboard_card_labels",
+  "workboard_card_events",
+  "workboard_card_attempts",
+  "workboard_card_comments",
+  "workboard_card_links",
+  "workboard_card_proof",
+  "workboard_card_artifacts",
+  "workboard_card_attachments",
+  "workboard_worker_logs",
+  "workboard_card_diagnostics",
+  "workboard_card_notifications",
+] as const;
+
+/**
+ * Child rows for a whole batch of cards, grouped by card id.
+ *
+ * Present only on the batch read path. `lookup` passes none and keeps issuing the
+ * per-card queries, which is already the cheapest shape for a single card.
+ */
+type CardChildRows = {
+  byTable: Map<string, Map<string, Row[]>>;
+  workerProtocol: Map<string, Row>;
+};
+
+function groupByCardId(rows: Row[]): Map<string, Row[]> {
+  const grouped = new Map<string, Row[]>();
+  for (const row of rows) {
+    const cardId = stringValue(row, "card_id");
+    if (!cardId) {
+      continue;
+    }
+    const bucket = grouped.get(cardId);
+    if (bucket) {
+      bucket.push(row);
+    } else {
+      grouped.set(cardId, [row]);
+    }
+  }
+  return grouped;
+}
+
+function loadCardChildRows(db: DatabaseSync): CardChildRows {
+  const byTable = new Map<string, Map<string, Row[]>>();
+  for (const table of CARD_CHILD_TABLES) {
+    // Same order the per-card query produces, so grouped buckets stay ordinal-sorted.
+    byTable.set(
+      table,
+      groupByCardId(
+        db.prepare(`SELECT * FROM ${table} ORDER BY card_id ASC, ordinal ASC`).all() as Row[],
+      ),
+    );
+  }
+  const workerProtocol = new Map<string, Row>();
+  for (const row of db.prepare("SELECT * FROM workboard_worker_protocol").all() as Row[]) {
+    const cardId = stringValue(row, "card_id");
+    if (cardId) {
+      workerProtocol.set(cardId, row);
+    }
+  }
+  return { byTable, workerProtocol };
+}
+
+function childRows(
+  db: DatabaseSync,
+  table: string,
+  cardId: string,
+  preloaded?: CardChildRows,
+): Row[] {
+  const cached = preloaded?.byTable.get(table);
+  if (cached) {
+    const rows = cached.get(cardId) ?? [];
+    // Each table is read once per card. Release the raw rows as the decoded card
+    // is built instead of retaining both complete representations of the board.
+    cached.delete(cardId);
+    return rows;
+  }
   return db
     .prepare(`SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`)
     .all(cardId) as Row[];
 }
 
-function readLabels(db: DatabaseSync, cardId: string): string[] {
-  return childRows(db, "workboard_card_labels", cardId).flatMap((row) => {
+function workerProtocolRow(
+  db: DatabaseSync,
+  cardId: string,
+  preloaded?: CardChildRows,
+): Row | undefined {
+  if (preloaded) {
+    const row = preloaded.workerProtocol.get(cardId);
+    preloaded.workerProtocol.delete(cardId);
+    return row;
+  }
+  return db.prepare("SELECT * FROM workboard_worker_protocol WHERE card_id = ?").get(cardId) as
+    | Row
+    | undefined;
+}
+
+function readLabels(db: DatabaseSync, cardId: string, preloaded?: CardChildRows): string[] {
+  return childRows(db, "workboard_card_labels", cardId, preloaded).flatMap((row) => {
     const label = stringValue(row, "label");
     return label ? [label] : [];
   });
 }
 
-function readEvents(db: DatabaseSync, cardId: string): WorkboardEvent[] | undefined {
-  const events = childRows(db, "workboard_card_events", cardId).map((row) => {
+function readEvents(
+  db: DatabaseSync,
+  cardId: string,
+  preloaded?: CardChildRows,
+): WorkboardEvent[] | undefined {
+  const events = childRows(db, "workboard_card_events", cardId, preloaded).map((row) => {
     const event: WorkboardEvent = {
       id: requiredString(row, "id"),
       kind: requiredString(row, "kind") as WorkboardEvent["kind"],
@@ -490,9 +589,13 @@ function readExecution(row: Row): WorkboardExecution | undefined {
   };
 }
 
-function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined {
+function readMetadata(
+  db: DatabaseSync,
+  row: Row,
+  preloaded?: CardChildRows,
+): WorkboardMetadata | undefined {
   const cardId = requiredString(row, "id");
-  const attempts = childRows(db, "workboard_card_attempts", cardId).map((child) => {
+  const attempts = childRows(db, "workboard_card_attempts", cardId, preloaded).map((child) => {
     const entry: WorkboardRunAttempt = {
       id: requiredString(child, "id"),
       status: requiredString(child, "status") as WorkboardRunAttempt["status"],
@@ -528,7 +631,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     }
     return entry;
   });
-  const comments = childRows(db, "workboard_card_comments", cardId).map((child) => {
+  const comments = childRows(db, "workboard_card_comments", cardId, preloaded).map((child) => {
     const entry: WorkboardComment = {
       id: requiredString(child, "id"),
       body: requiredString(child, "body"),
@@ -540,7 +643,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     }
     return entry;
   });
-  const links = childRows(db, "workboard_card_links", cardId).map((child) => {
+  const links = childRows(db, "workboard_card_links", cardId, preloaded).map((child) => {
     const entry: WorkboardLink = {
       id: requiredString(child, "id"),
       type: requiredString(child, "type") as WorkboardLink["type"],
@@ -560,7 +663,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     }
     return entry;
   });
-  const proof = childRows(db, "workboard_card_proof", cardId).map((child) => {
+  const proof = childRows(db, "workboard_card_proof", cardId, preloaded).map((child) => {
     const entry: WorkboardProof = {
       id: requiredString(child, "id"),
       status: requiredString(child, "status") as WorkboardProof["status"],
@@ -584,7 +687,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     }
     return entry;
   });
-  const artifacts = childRows(db, "workboard_card_artifacts", cardId).map((child) => {
+  const artifacts = childRows(db, "workboard_card_artifacts", cardId, preloaded).map((child) => {
     const entry: WorkboardArtifact = {
       id: requiredString(child, "id"),
       createdAt: requiredNumber(child, "created_at"),
@@ -607,25 +710,27 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     }
     return entry;
   });
-  const attachments = childRows(db, "workboard_card_attachments", cardId).map((child) => {
-    const entry: WorkboardAttachment = {
-      id: requiredString(child, "id"),
-      cardId: requiredString(child, "card_id"),
-      createdAt: requiredNumber(child, "created_at"),
-      fileName: requiredString(child, "file_name"),
-      byteSize: requiredNumber(child, "byte_size"),
-    };
-    const mimeType = stringValue(child, "mime_type");
-    const note = stringValue(child, "note");
-    if (mimeType) {
-      entry.mimeType = mimeType;
-    }
-    if (note) {
-      entry.note = note;
-    }
-    return entry;
-  });
-  const workerLogs = childRows(db, "workboard_worker_logs", cardId).map((child) => {
+  const attachments = childRows(db, "workboard_card_attachments", cardId, preloaded).map(
+    (child) => {
+      const entry: WorkboardAttachment = {
+        id: requiredString(child, "id"),
+        cardId: requiredString(child, "card_id"),
+        createdAt: requiredNumber(child, "created_at"),
+        fileName: requiredString(child, "file_name"),
+        byteSize: requiredNumber(child, "byte_size"),
+      };
+      const mimeType = stringValue(child, "mime_type");
+      const note = stringValue(child, "note");
+      if (mimeType) {
+        entry.mimeType = mimeType;
+      }
+      if (note) {
+        entry.note = note;
+      }
+      return entry;
+    },
+  );
+  const workerLogs = childRows(db, "workboard_worker_logs", cardId, preloaded).map((child) => {
     const entry: WorkboardWorkerLog = {
       id: requiredString(child, "id"),
       createdAt: requiredNumber(child, "created_at"),
@@ -642,40 +747,42 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     }
     return entry;
   });
-  const diagnostics = childRows(db, "workboard_card_diagnostics", cardId).map((child) => ({
-    kind: requiredString(child, "kind") as WorkboardDiagnostic["kind"],
-    severity: requiredString(child, "severity") as WorkboardDiagnostic["severity"],
-    title: requiredString(child, "title"),
-    detail: requiredString(child, "detail"),
-    firstSeenAt: requiredNumber(child, "first_seen_at"),
-    lastSeenAt: requiredNumber(child, "last_seen_at"),
-    count: requiredNumber(child, "count"),
-    actions: (parseJson(child.actions_json) as WorkboardDiagnostic["actions"] | undefined) ?? [],
-  }));
-  const notifications = childRows(db, "workboard_card_notifications", cardId).map((child) => {
-    const entry: WorkboardNotification = {
-      id: requiredString(child, "id"),
-      kind: requiredString(child, "kind") as WorkboardNotification["kind"],
-      createdAt: requiredNumber(child, "created_at"),
-      message: requiredString(child, "message"),
-    };
-    const sequence = numberValue(child, "sequence");
-    const sessionKey = stringValue(child, "session_key");
-    const runId = stringValue(child, "run_id");
-    if (sequence !== undefined) {
-      entry.sequence = sequence;
-    }
-    if (sessionKey) {
-      entry.sessionKey = sessionKey;
-    }
-    if (runId) {
-      entry.runId = runId;
-    }
-    return entry;
-  });
-  const protocol = db
-    .prepare("SELECT * FROM workboard_worker_protocol WHERE card_id = ?")
-    .get(cardId) as Row | undefined;
+  const diagnostics = childRows(db, "workboard_card_diagnostics", cardId, preloaded).map(
+    (child) => ({
+      kind: requiredString(child, "kind") as WorkboardDiagnostic["kind"],
+      severity: requiredString(child, "severity") as WorkboardDiagnostic["severity"],
+      title: requiredString(child, "title"),
+      detail: requiredString(child, "detail"),
+      firstSeenAt: requiredNumber(child, "first_seen_at"),
+      lastSeenAt: requiredNumber(child, "last_seen_at"),
+      count: requiredNumber(child, "count"),
+      actions: (parseJson(child.actions_json) as WorkboardDiagnostic["actions"] | undefined) ?? [],
+    }),
+  );
+  const notifications = childRows(db, "workboard_card_notifications", cardId, preloaded).map(
+    (child) => {
+      const entry: WorkboardNotification = {
+        id: requiredString(child, "id"),
+        kind: requiredString(child, "kind") as WorkboardNotification["kind"],
+        createdAt: requiredNumber(child, "created_at"),
+        message: requiredString(child, "message"),
+      };
+      const sequence = numberValue(child, "sequence");
+      const sessionKey = stringValue(child, "session_key");
+      const runId = stringValue(child, "run_id");
+      if (sequence !== undefined) {
+        entry.sequence = sequence;
+      }
+      if (sessionKey) {
+        entry.sessionKey = sessionKey;
+      }
+      if (runId) {
+        entry.runId = runId;
+      }
+      return entry;
+    },
+  );
+  const protocol = workerProtocolRow(db, cardId, preloaded);
   const automation = parseJson(row.automation_json) as WorkboardMetadata["automation"] | undefined;
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   const stale = parseJson(row.stale_json) as WorkboardMetadata["stale"] | undefined;
@@ -717,18 +824,19 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
   });
 }
 
-function readCard(db: DatabaseSync, row: Row): WorkboardCard {
+function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows): WorkboardCard {
   const card: WorkboardCard = {
     id: requiredString(row, "id"),
     title: requiredString(row, "title"),
     status: requiredString(row, "status") as WorkboardCard["status"],
     priority: requiredString(row, "priority") as WorkboardCard["priority"],
-    labels: readLabels(db, requiredString(row, "id")),
+    labels: readLabels(db, requiredString(row, "id"), preloaded),
     position: requiredNumber(row, "position"),
     createdAt: requiredNumber(row, "created_at"),
     updatedAt: requiredNumber(row, "updated_at"),
   };
-  const metadata = readMetadata(db, row);
+  const metadata = readMetadata(db, row, preloaded);
+  const events = readEvents(db, card.id, preloaded);
   return {
     ...card,
     ...(stringValue(row, "notes") ? { notes: stringValue(row, "notes") } : {}),
@@ -744,7 +852,7 @@ function readCard(db: DatabaseSync, row: Row): WorkboardCard {
     ...(numberValue(row, "completed_at") !== undefined
       ? { completedAt: numberValue(row, "completed_at") }
       : {}),
-    ...(readEvents(db, card.id) ? { events: readEvents(db, card.id) } : {}),
+    ...(events ? { events } : {}),
     ...(metadata ? { metadata } : {}),
   };
 }
@@ -1088,7 +1196,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
   }
 }
 
-class WorkboardSqliteCardStore implements WorkboardKeyedStore {
+class WorkboardSqliteCardStore implements WorkboardCardStore {
   constructor(private readonly db: DatabaseSync) {}
 
   async register(key: string, value: PersistedWorkboardCard): Promise<void> {
@@ -1123,13 +1231,40 @@ class WorkboardSqliteCardStore implements WorkboardKeyedStore {
   }
 
   async entries(): Promise<Array<{ key: string; value: PersistedWorkboardCard }>> {
-    return (
-      this.db
-        .prepare("SELECT * FROM workboard_cards ORDER BY created_at ASC, id ASC")
-        .all() as Row[]
-    ).map((row) => ({
+    const rows = this.db
+      .prepare("SELECT * FROM workboard_cards ORDER BY created_at ASC, id ASC")
+      .all() as Row[];
+    // One query per child table for the whole board instead of one per table per card.
+    // node:sqlite is synchronous, so those queries run on the event loop thread.
+    const preloaded = loadCardChildRows(this.db);
+    return rows.map((row) => ({
       key: requiredString(row, "id"),
-      value: { version: 1, card: readCard(this.db, row) },
+      value: { version: 1, card: readCard(this.db, row, preloaded) },
+    }));
+  }
+
+  async listBoardAggregates() {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            board_id,
+            status,
+            COUNT(*) AS total,
+            SUM(CASE WHEN archived_at IS NOT NULL AND archived_at <> 0 THEN 1 ELSE 0 END) AS archived,
+            MAX(updated_at) AS updated_at
+          FROM workboard_cards
+          GROUP BY board_id, status
+          ORDER BY board_id ASC, status ASC
+        `,
+      )
+      .all() as Row[];
+    return rows.map((row) => ({
+      boardId: requiredString(row, "board_id"),
+      status: requiredString(row, "status") as WorkboardCard["status"],
+      total: requiredNumber(row, "total"),
+      archived: requiredNumber(row, "archived"),
+      updatedAt: requiredNumber(row, "updated_at"),
     }));
   }
 }

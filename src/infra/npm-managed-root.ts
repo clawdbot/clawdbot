@@ -3,7 +3,7 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -65,16 +65,7 @@ type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
 type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-active-host";
 
 function readDependencyRecord(value: unknown): Record<string, string> {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const dependencies: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (typeof raw === "string") {
-      dependencies[key] = raw;
-    }
-  }
-  return dependencies;
+  return filterStringRecord(value) ?? {};
 }
 
 function isSafePackageName(name: string): boolean {
@@ -747,6 +738,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   npmRoot: string;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, string>> {
   const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
   const dependencies = readDependencyRecord(manifest.dependencies);
@@ -787,6 +779,8 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
     const npmPlanOptions = {
       cwd: tempRoot,
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: false,
         npmConfigCwd: tempRoot,
@@ -900,6 +894,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   overrideOmissions?: ManagedNpmOverrideOmissions;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<boolean> {
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
@@ -910,6 +905,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     npmRoot: params.npmRoot,
     runCommand: params.runCommand,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   const managedPeerDependencyNames = new Set(
     Object.keys(peerPins).filter(
@@ -977,6 +973,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   npmRoot: string;
   packageRoot?: string | null;
   timeoutMs?: number;
+  signal?: AbortSignal;
   logger?: ManagedNpmRootLogger;
   runCommand?: ManagedNpmRootRunCommand;
 }): Promise<boolean> {
@@ -1034,6 +1031,8 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
     const result = await command(npmArgs, {
       cwd: params.npmRoot,
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: true,
         npmConfigCwd: params.npmRoot,

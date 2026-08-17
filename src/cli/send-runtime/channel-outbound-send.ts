@@ -4,6 +4,7 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 
@@ -96,7 +97,8 @@ export function createChannelOutboundRuntimeSend(params: {
         return await outbound.sendMedia(buildContext());
       }
       if (!outbound?.sendText) {
-        throw new Error(params.unavailableMessage);
+        const cause = new Error(params.unavailableMessage);
+        throw new PlatformMessageNotDispatchedError(params.unavailableMessage, { cause });
       }
       return await outbound.sendText(buildContext());
     },

@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeSmsAllowFrom, normalizeSmsPhoneNumber } from "./phone.js";
+import { parseSmsPublicWebhookUrl } from "./public-webhook-url.js";
 import type { ResolvedSmsAccount, SmsChannelConfig } from "./types.js";
 
 const CHANNEL_ID = "sms";
@@ -143,10 +144,13 @@ export function inspectSmsAccount(cfg: OpenClawConfig, accountId?: string | null
     configured,
     tokenStatus: account.authToken ? "available" : "missing",
     webhookPath: account.webhookPath,
-    signatureValidation:
-      account.dangerouslyDisableSignatureValidation || account.publicWebhookUrl
-        ? "configured"
-        : "missing-public-url",
+    signatureValidation: account.dangerouslyDisableSignatureValidation
+      ? "configured"
+      : !account.publicWebhookUrl
+        ? "missing-public-url"
+        : parseSmsPublicWebhookUrl(account.publicWebhookUrl)
+          ? "configured"
+          : "invalid-public-url",
   };
 }
 

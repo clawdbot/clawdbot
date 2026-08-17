@@ -10,6 +10,9 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 - **Operators** (you, or the macOS app): direct LAN/Tailnet WebSocket is simplest when the Gateway is reachable; SSH tunneling is the universal fallback.
 - **Nodes** (iOS/Android and other devices): connect to the Gateway **WebSocket** (LAN/tailnet or SSH tunnel).
 
+Remote clients can continue the same Gateway-owned conversation by URL or short
+reference. See [Session synchronization and attachment](/concepts/session-attachment).
+
 ## The core idea
 
 The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gateway.port`). For remote use, either expose it through Tailscale Serve / a trusted LAN-Tailnet bind, or forward the loopback port over SSH.
@@ -103,7 +106,12 @@ Gateway credential resolution follows one shared contract across call/probe/stat
   - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
   - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
 - Node-host local-mode exception: environment credentials stay first and `gateway.remote.token` / `gateway.remote.password` are ignored because node commands target an explicit host and port.
-- Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
+- Remote startup/status/wizard probes with SecretRef support treat configured
+  `gateway.remote.token` and `gateway.remote.password` as authoritative for the configured
+  target. Ambient environment credentials are considered only when neither remote credential
+  is configured. If a configured remote SecretRef cannot be resolved, the probe warns and does
+  not fall back to environment credentials; a separately configured sibling credential that
+  resolves successfully remains usable.
 - Gateway env overrides use `OPENCLAW_GATEWAY_*` only.
 
 ## Chat UI remote access

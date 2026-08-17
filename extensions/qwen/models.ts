@@ -68,175 +68,52 @@ export function resolveQwenTokenPlanBaseUrl(region: QwenTokenPlanRegion): string
   return QWEN_TOKEN_PLAN_BASE_URLS[region];
 }
 
-// Token Plan is credit-based, so per-token prices do not map to its billing model.
-// This curated picker catalog keeps current recommendations plus one selectable compatibility row.
-export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
-  {
-    id: QWEN_37_PLUS_MODEL_ID,
-    name: QWEN_37_PLUS_MODEL_ID,
-    reasoning: true,
-    input: ["text", "image"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: QWEN_36_PLUS_MODEL_ID,
-    name: QWEN_36_PLUS_MODEL_ID,
-    reasoning: true,
-    input: ["text", "image"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: "qwen3-coder-next",
-    name: "qwen3-coder-next",
-    reasoning: true,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 262_144,
-    maxTokens: 65_536,
-  },
-  {
-    id: "kimi-k2.5",
-    name: "kimi-k2.5",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 262_144,
-    maxTokens: 98_304,
-  },
-  {
-    id: "glm-5",
-    name: "glm-5",
-    reasoning: true,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 202_752,
-    maxTokens: 16_384,
-  },
-  {
-    id: "MiniMax-M2.5",
-    name: "MiniMax-M2.5",
-    reasoning: true,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 196_608,
-    maxTokens: 32_768,
-  },
+type QwenCatalogModelRow = readonly [
+  id: string,
+  reasoning: boolean,
+  input: ModelDefinitionConfig["input"],
+  contextWindow: number,
+  maxTokens: number,
 ];
 
-export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
-  {
-    id: "qwen3.5-plus",
-    name: "qwen3.5-plus",
-    reasoning: false,
-    input: ["text", "image"],
+function buildQwenCatalogModels(rows: readonly QwenCatalogModelRow[]): ModelDefinitionConfig[] {
+  return rows.map(([id, reasoning, input, contextWindow, maxTokens]) => ({
+    id,
+    name: id,
+    reasoning,
+    input,
     cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: QWEN_36_FLASH_MODEL_ID,
-    name: QWEN_36_FLASH_MODEL_ID,
-    reasoning: true,
-    input: ["text", "image"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: QWEN_36_PLUS_MODEL_ID,
-    name: QWEN_36_PLUS_MODEL_ID,
-    reasoning: true,
-    input: ["text", "image"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: QWEN_37_MAX_MODEL_ID,
-    name: QWEN_37_MAX_MODEL_ID,
-    reasoning: true,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: QWEN_37_PLUS_MODEL_ID,
-    name: QWEN_37_PLUS_MODEL_ID,
-    reasoning: true,
-    input: ["text", "image"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: "qwen3-max-2026-01-23",
-    name: "qwen3-max-2026-01-23",
-    reasoning: false,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 262_144,
-    maxTokens: 65_536,
-  },
-  {
-    id: "qwen3-coder-next",
-    name: "qwen3-coder-next",
-    reasoning: false,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 262_144,
-    maxTokens: 65_536,
-  },
-  {
-    id: "qwen3-coder-plus",
-    name: "qwen3-coder-plus",
-    reasoning: false,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: "MiniMax-M2.5",
-    name: "MiniMax-M2.5",
-    reasoning: true,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 1_000_000,
-    maxTokens: 65_536,
-  },
-  {
-    id: "glm-5",
-    name: "glm-5",
-    reasoning: false,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 202_752,
-    maxTokens: 16_384,
-  },
-  {
-    id: "glm-4.7",
-    name: "glm-4.7",
-    reasoning: false,
-    input: ["text"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 202_752,
-    maxTokens: 16_384,
-  },
-  {
-    id: "kimi-k2.5",
-    name: "kimi-k2.5",
-    reasoning: false,
-    input: ["text", "image"],
-    cost: QWEN_DEFAULT_COST,
-    contextWindow: 262_144,
-    maxTokens: 32_768,
-  },
-];
+    contextWindow,
+    maxTokens,
+  }));
+}
+
+// Token Plan is credit-based, so per-token prices do not map to its billing model.
+// This curated picker catalog keeps current recommendations plus one selectable compatibility row.
+export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> =
+  buildQwenCatalogModels([
+    [QWEN_37_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
+    [QWEN_36_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
+    ["qwen3-coder-next", true, ["text"], 262_144, 65_536],
+    ["kimi-k2.5", true, ["text", "image"], 262_144, 98_304],
+    ["glm-5", true, ["text"], 202_752, 16_384],
+    ["MiniMax-M2.5", true, ["text"], 196_608, 32_768],
+  ]);
+
+export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = buildQwenCatalogModels([
+  [QWEN_DEFAULT_MODEL_ID, false, ["text", "image"], 1_000_000, 65_536],
+  [QWEN_36_FLASH_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
+  [QWEN_36_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
+  [QWEN_37_MAX_MODEL_ID, true, ["text"], 1_000_000, 65_536],
+  [QWEN_37_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
+  ["qwen3-max-2026-01-23", false, ["text"], 262_144, 65_536],
+  ["qwen3-coder-next", false, ["text"], 262_144, 65_536],
+  ["qwen3-coder-plus", false, ["text"], 1_000_000, 65_536],
+  ["MiniMax-M2.5", true, ["text"], 1_000_000, 65_536],
+  ["glm-5", false, ["text"], 202_752, 16_384],
+  ["glm-4.7", false, ["text"], 202_752, 16_384],
+  ["kimi-k2.5", false, ["text", "image"], 262_144, 32_768],
+]);
 
 export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
   const trimmed = baseUrl?.trim();

@@ -102,7 +102,7 @@ async function allocateTempHomeBase(prefix: string): Promise<string> {
   return base;
 }
 
-export async function withTempHome<T>(
+export async function withTempHomeCore<T>(
   fn: (home: string) => Promise<T>,
   opts: {
     env?: Record<string, EnvValue>;

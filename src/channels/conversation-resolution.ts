@@ -10,7 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveTargetPrefixedChannel,
-  stripTargetKindPrefix,
+  stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../infra/outbound/channel-target-prefix.js";
@@ -19,7 +19,6 @@ import { normalizeConversationTargetRef } from "../infra/outbound/session-bindin
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "./plugins/index.js";
-import { resolveExplicitDeliveryTargetCompat } from "./plugins/target-parsing-loaded.js";
 import {
   resolveBundledChannelThreadBindingDefaultPlacement,
   resolveBundledChannelThreadBindingInboundConversation,
@@ -189,7 +188,7 @@ function resolveFallbackConversationTargetId(params: {
   if (!target) {
     return undefined;
   }
-  const withoutKind = stripTargetKindPrefix(target);
+  const withoutKind = stripOutboundTargetKindPrefix(target);
   const withoutTopic =
     params.preserveExplicitTopicSuffix && /:topic:/iu.test(withoutKind)
       ? withoutKind
@@ -252,18 +251,6 @@ function resolveChannelTargetId(params: {
       preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
     });
     return conversationId || withoutProvider || normalizedTarget;
-  }
-
-  const parsedTarget = resolveExplicitDeliveryTargetCompat({
-    channel: params.channel,
-    rawTarget: target,
-  });
-  if (parsedTarget?.to) {
-    return (
-      resolveConversationIdFromTargets({
-        targets: [parsedTarget.to],
-      }) ?? parsedTarget.to
-    );
   }
 
   return target;

@@ -182,11 +182,7 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
     defaultModel,
     models: ids,
     resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "deepinfra",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "deepinfra", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

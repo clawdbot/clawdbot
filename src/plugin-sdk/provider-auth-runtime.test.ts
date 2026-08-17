@@ -2,9 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { getFreePort } from "../test-utils/ports.js";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
 
@@ -122,6 +122,45 @@ describe("plugin-sdk provider-auth-runtime", () => {
     controller.abort();
 
     await expect(callback).rejects.toThrow("OAuth callback cancelled");
+  });
+
+  it("binds the redirect host when the public hostname option is omitted", async () => {
+    const port = await getFreePort();
+    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+      expectedState: "state-1",
+      timeoutMs: 5_000,
+      port,
+      callbackPath: "/callback",
+      redirectUri: `http://127.0.0.1:${port}/callback`,
+      successTitle: "OAuth complete",
+    });
+
+    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
+    expect(response.status).toBe(200);
+    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+  });
+
+  it("keeps an explicit localhost bind compatible with an IPv4 redirect", async () => {
+    const port = await getFreePort();
+    let markReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+      expectedState: "state-1",
+      timeoutMs: 5_000,
+      port,
+      callbackPath: "/callback",
+      redirectUri: `http://127.0.0.1:${port}/callback`,
+      hostname: "localhost",
+      successTitle: "OAuth complete",
+      onProgress: markReady,
+    });
+
+    await ready;
+    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
+    expect(response.status).toBe(200);
+    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
 
   it("does not echo CORS for unallowlisted callback origins but keeps waiting", async () => {

@@ -36,6 +36,7 @@ export type {
   EnvironmentSelection,
   EnvironmentSummary,
   EnvironmentsListResult,
+  NodeWorkerBundleStatus,
   GatewayEvent,
   GatewayRequestOptions,
   JsonObject,
@@ -62,6 +63,7 @@ export type {
   ToolInvokeResult,
   WorkspaceSelection,
   WorkerEnvironmentMetadata,
+  WorkerEnvironmentProfileSummary,
   WorkerEnvironmentState,
   WorkerTunnelStatus,
 } from "./types.js";

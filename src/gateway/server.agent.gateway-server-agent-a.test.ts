@@ -2,8 +2,18 @@
  * Gateway server-agent integration tests for agent startup and session dispatch.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type OperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  type AgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -14,14 +24,13 @@ import {
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
-import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
+import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
-  agentCommand,
+  agentCommandMock,
   installGatewayTestHooks,
-  agentDiscoveryMock,
   rpcReq,
   testState,
   writeSessionStore,
@@ -34,14 +43,21 @@ const gatewaySuite = installConnectedSessionStoreGatewaySuite("openclaw-gw-sessi
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
 
-const TEXT_ONLY_AGENT_MODEL = {
+type GatewayModelFixture = {
+  id: string;
+  name: string;
+  provider: string;
+  input: Array<"text" | "image">;
+};
+
+const TEXT_ONLY_AGENT_MODEL: GatewayModelFixture = {
   id: "deepseek-v4-flash",
   name: "DeepSeek V4 Flash",
   provider: "ollama-cloud",
   input: ["text"],
 };
 
-const VISION_AGENT_MODEL = {
+const VISION_AGENT_MODEL: GatewayModelFixture = {
   id: "gemma4:31b",
   name: "Gemma 4 31B",
   provider: "ollama-cloud",
@@ -95,17 +111,36 @@ async function runMainAgentDeliveryWithSession(params: {
   }
 }
 
-async function setGatewayModelCatalogForTest(
-  models: typeof agentDiscoveryMock.models,
-): Promise<void> {
+async function setGatewayModelCatalogForTest(models: GatewayModelFixture[]): Promise<void> {
   testState.sessionStorePath = gatewaySuite.sessionStorePath;
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = models;
-  await resetPreparedModelCatalogForTest();
+  await resetPreparedModelCatalogStateForTest();
   const [
     { refreshPreparedModelRuntimeSnapshots },
-    { clearRuntimeConfigSnapshot, getRuntimeConfig },
+    { clearRuntimeConfigSnapshot, getRuntimeConfig, writeConfigFile },
   ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
+  await writeConfigFile({
+    models: {
+      providers: Object.fromEntries(
+        [...new Set(models.map((model) => model.provider))].map((provider) => [
+          provider,
+          {
+            baseUrl: `https://${provider}.example.test/v1`,
+            models: models
+              .filter((model) => model.provider === provider)
+              .map((model) => ({
+                id: model.id,
+                name: model.name,
+                input: model.input,
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              })),
+          },
+        ]),
+      ),
+    },
+  });
   clearRuntimeConfigSnapshot();
   await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }
@@ -226,7 +261,7 @@ const defaultRegistry = createRegistry([
 
 describe("gateway server agent", () => {
   beforeEach(() => {
-    vi.mocked(agentCommand).mockClear();
+    vi.mocked(agentCommandMock).mockClear();
     testState.agentsConfig = undefined;
     testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
@@ -247,7 +282,7 @@ describe("gateway server agent", () => {
       },
     });
     let subordinateAdmissionClosed: boolean | undefined;
-    vi.mocked(agentCommand).mockImplementationOnce(async () => {
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
       const suspension = tryBeginGatewaySuspendAdmission(() => {});
       expect(suspension).not.toBeNull();
       try {
@@ -437,6 +472,121 @@ describe("gateway server agent", () => {
     expect(call.sessionId).toBe("sess-ops");
   });
 
+  test("agent resolves a bare key through configured fixed-store ownership", async () => {
+    testState.agentsConfig = {
+      ownership: "explicit",
+      entries: { ops: {}, research: {} },
+    };
+    testState.agentConfig = { sessionStore: { agentId: "ops" } };
+    const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/io.js");
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    await setTestSessionStore({
+      agentId: "ops",
+      entries: {
+        global: {
+          sessionId: "sess-ops-global",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "hi",
+      sessionKey: "global",
+      idempotencyKey: "idem-agent-owned-global",
+    });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+
+    const call = await waitForAgentCommandCall("idem-agent-owned-global");
+    expect(call.agentId).toBe("ops");
+    expect(call.sessionKey).toBe("global");
+    expect(call.sessionId).toBe("sess-ops-global");
+  });
+
+  test("agent rejects an ownerless bare key before session preparation", async () => {
+    testState.agentsConfig = {
+      ownership: "explicit",
+      entries: { ops: {}, research: {} },
+    };
+    const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/io.js");
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "hi",
+      sessionKey: "global",
+      idempotencyKey: "idem-agent-ownerless-global",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("has no explicit owner"),
+    });
+    expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
+  });
+
+  test.each(["success", "error"] as const)(
+    "agent executes a group-only run without a resolved session key and closes authority after %s",
+    async (outcome) => {
+      let admittedAuthority: AgentRunDelegatedAuthority | undefined;
+      let finishExecution!: () => void;
+      const executionFinished = new Promise<void>((resolve) => {
+        finishExecution = resolve;
+      });
+      vi.mocked(agentCommandMock).mockImplementationOnce(async (rawOpts) => {
+        const opts = rawOpts as {
+          runId: string;
+          operationalRunInstance: OperationalRunInstanceRef;
+          onAdmittedRunContext?: (context: AdmittedRunContext) => void | Promise<void>;
+        };
+        const preparedRunAdmission = prepareAgentRunAdmission({
+          cfg: {},
+          operationalRunInstance: opts.operationalRunInstance,
+          facts: {
+            runId: opts.runId,
+            agentId: "main",
+            ingress: {
+              kind: "system",
+              boundary: "gateway-agent-sessionless-test",
+              state: "present",
+            },
+          },
+        });
+        try {
+          const admittedRunContext = await preparedRunAdmission.admit("embedded");
+          admittedAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+          expect(admittedAuthority).toBeDefined();
+          await opts.onAdmittedRunContext?.(admittedRunContext);
+          expect(validateAgentRunDelegatedAuthority(admittedAuthority!)).toBe(true);
+          if (outcome === "error") {
+            throw new Error("sessionless provider failure");
+          }
+        } finally {
+          preparedRunAdmission.close();
+          finishExecution();
+        }
+      });
+
+      const runId = `idem-agent-group-only-sessionless-${outcome}`;
+      const res = await rpcReq(gatewaySuite.ws, "agent", {
+        message: "hi",
+        groupId: "group-sessionless",
+        groupChannel: "discord",
+        groupSpace: "guild-sessionless",
+        idempotencyKey: runId,
+      });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+
+      const call = await waitForAgentCommandCall(runId);
+      await executionFinished;
+      expect(call.sessionKey).toBeUndefined();
+      expect(admittedAuthority).toBeDefined();
+      expect(validateAgentRunDelegatedAuthority(admittedAuthority!)).toBe(false);
+    },
+  );
+
   test("agent rejects unknown reply channel", async () => {
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
@@ -446,7 +596,7 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("unknown channel");
 
-    const spy = vi.mocked(agentCommand);
+    const spy = vi.mocked(agentCommandMock);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -461,7 +611,7 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("does not match session key agent");
 
-    const spy = vi.mocked(agentCommand);
+    const spy = vi.mocked(agentCommandMock);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -474,7 +624,7 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("malformed session key");
 
-    const spy = vi.mocked(agentCommand);
+    const spy = vi.mocked(agentCommandMock);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -636,7 +786,8 @@ describe("gateway server agent", () => {
       expect(res.ok).toBe(false);
       expect(res.error?.code).toBe("INVALID_REQUEST");
       expect(res.error?.message).toContain("Channel is required");
-      expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
+      expect(res.error?.message).not.toMatch(/^Error:/u);
+      expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
     } finally {
       testState.allowFrom = undefined;
     }

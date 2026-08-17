@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CliBackendAuthProfilePreparationError } from "openclaw/plugin-sdk/cli-backend";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
@@ -52,6 +53,31 @@ function restoreEnv(name: string, value: string | undefined): void {
 }
 
 describe("Gemini CLI isolated completion", () => {
+  it("keeps an incompatible explicit profile out of shared auth health", async () => {
+    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+      const preparation = buildGoogleGeminiCliBackend().prepareExecution?.({
+        workspaceDir,
+        agentDir: path.join(workspaceDir, "agent"),
+        provider: "google-gemini-cli",
+        modelId: "gemini-3.1-flash-lite",
+        authProfileId: "vercel-ai-gateway:default",
+        authCredential: {
+          type: "api_key",
+          provider: "vercel-ai-gateway",
+          key: "vercel-key",
+        },
+        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        isolatedCompletionCwd: workspaceDir,
+        isolatedCompletionModelId: "gemini-3.1-flash-lite",
+        isolatedCompletionPrompt: "Return JSON.",
+        isolatedCompletionSystemPrompt: "Return only valid JSON.",
+      } as GeminiPrepareContext);
+
+      await expect(preparation).rejects.not.toBeInstanceOf(CliBackendAuthProfilePreparationError);
+      await expect(preparation).rejects.toThrow(/vercel-ai-gateway auth profile/);
+    });
+  });
+
   it("stages a prompt-only environment through native overrides", async () => {
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const isolatedCompletionCwd = path.join(workspaceDir, "isolated-cwd");

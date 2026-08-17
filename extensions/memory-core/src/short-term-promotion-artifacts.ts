@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import {
   deriveConceptTags,
   summarizeConceptTagScriptCoverage,
@@ -53,10 +52,6 @@ export function resolveShortTermRecallLockPath(workspaceDir: string): string {
 
 export async function auditShortTermPromotionArtifacts(params: {
   workspaceDir: string;
-  qmd?: {
-    dbPath?: string;
-    collections?: number;
-  };
 }): Promise<ShortTermAuditSummary> {
   const workspaceDir = params.workspaceDir.trim();
   const storePath = resolveStorePath(workspaceDir);
@@ -155,49 +150,6 @@ export async function auditShortTermPromotionArtifacts(params: {
     }
   }
 
-  let qmd: ShortTermAuditSummary["qmd"];
-  if (params.qmd) {
-    qmd = {
-      dbPath: params.qmd.dbPath,
-      collections: params.qmd.collections,
-    };
-    if (typeof params.qmd.collections === "number" && params.qmd.collections <= 0) {
-      issues.push({
-        severity: "warn",
-        code: "qmd-collections-empty",
-        message: "QMD reports zero managed collections.",
-        fixable: false,
-      });
-    }
-    const dbPath = params.qmd.dbPath?.trim();
-    if (dbPath) {
-      try {
-        const stat = await fs.stat(dbPath);
-        qmd.dbBytes = stat.size;
-        if (!stat.isFile() || stat.size <= 0) {
-          issues.push({
-            severity: "error",
-            code: "qmd-index-empty",
-            message: "QMD index file exists but is empty.",
-            fixable: false,
-          });
-        }
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code === "ENOENT") {
-          issues.push({
-            severity: "error",
-            code: "qmd-index-missing",
-            message: "QMD index file is missing.",
-            fixable: false,
-          });
-        } else {
-          throw err;
-        }
-      }
-    }
-  }
-
   return {
     storePath,
     lockPath,
@@ -211,7 +163,6 @@ export async function auditShortTermPromotionArtifacts(params: {
     invalidEntryCount,
     danglingEntryCount,
     issues,
-    ...(qmd ? { qmd } : {}),
   };
 }
 

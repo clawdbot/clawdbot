@@ -1,9 +1,6 @@
 // Discord plugin module implements embeds behavior.
 import type { APIEmbed } from "discord-api-types/v10";
-
-function clean<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
-}
+import { stripUndefinedFields as clean } from "./undefined-fields.js";
 
 export class Embed {
   title?: string;

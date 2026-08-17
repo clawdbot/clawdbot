@@ -13,32 +13,66 @@ export const terminalPanelStyles = css`
     bottom: 0;
     --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
   }
+  .tp--main {
+    /* Main mode owns the content region; later sibling docks may overlay it. */
+    top: var(--shell-topbar-height, 0);
+    left: var(--shell-nav-width, 0);
+    right: 0;
+    bottom: 0;
+    --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
+  }
   .tp--fullscreen {
     inset: 0;
   }
-  .tp-header {
-    background: var(--bg, #0e1015);
+  .tp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
   }
-  .tp-icon.is-active {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+  .tp-header .tabstrip-tab__icon {
+    color: var(--muted, #8a919e);
+  }
+  /* Same glyph system as the side panel rail. Positioned so the session
+     menu anchors to the header, not its mid-toolbar trigger: a
+     trigger-anchored menu wider than the icons spills past the panel's
+     left edge, and header anchoring makes 100% mean "panel width". */
+  .tp-header {
+    --rail-header-action-glyph-size: 15px;
+
+    position: relative;
+  }
+  .tp-header .tabstrip-tab__icon svg,
+  .tp-header .tp-icon svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 1.6px;
+  }
+  .tp-dock-modes {
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
   .tp-session-picker {
-    position: relative;
+    position: static;
   }
   .tp-session-menu {
     position: absolute;
     z-index: 4;
-    top: 31px;
-    right: 0;
-    width: min(360px, calc(100vw - 24px));
+    top: calc(100% + 3px);
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: 360px;
+    /* Both edges are pinned, so the menu can never reach past the panel; the
+       auto margin keeps it right-aligned under its trigger while it fits. */
+    margin-left: auto;
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
-    border: 1px solid var(--border, #262b34);
-    border-radius: 8px;
-    background: var(--bg, #0e1015);
-    box-shadow: 0 12px 30px rgb(0 0 0 / 35%);
-    padding: 6px;
+    padding: var(--menu-padding);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--menu-radius);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
   }
   .tp-session-menu__header {
     display: flex;
@@ -49,13 +83,18 @@ export const terminalPanelStyles = css`
     font-size: 12px;
     font-weight: 600;
   }
+  /* Refreshing the list is not destructive, so it reads as a plain action. */
   .tp-session-refresh {
     border: 0;
     background: transparent;
-    color: var(--accent, #ff5c5c);
+    color: var(--muted, #8a919e);
     font: inherit;
     font-weight: 500;
     padding: 2px 4px;
+  }
+  .tp-session-refresh:hover,
+  .tp-session-refresh:focus-visible {
+    color: var(--text, #d7dae0);
   }
   .tp-session {
     display: grid;
@@ -64,7 +103,8 @@ export const terminalPanelStyles = css`
     gap: 8px;
     width: 100%;
     border: 0;
-    border-radius: 6px;
+    min-height: var(--menu-item-height);
+    border-radius: var(--menu-item-radius);
     background: transparent;
     color: var(--text, #d7dae0);
     padding: 7px 8px;
@@ -72,7 +112,7 @@ export const terminalPanelStyles = css`
   }
   .tp-session:not(:disabled):hover,
   .tp-session:not(:disabled):focus-visible {
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+    background: var(--bg-hover);
   }
   .tp-session:disabled {
     opacity: 0.55;
@@ -142,9 +182,22 @@ export const terminalPanelStyles = css`
     animation: tp-spin 0.8s linear infinite;
   }
   .tp-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     padding: 10px 12px;
     font-size: 12px;
     color: var(--danger, #ff6b6b);
+  }
+  .tp-error .btn {
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--text);
+    padding: 6px 10px;
+    font: inherit;
   }
   @keyframes tp-spin {
     to {

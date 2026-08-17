@@ -115,6 +115,9 @@ export type InstalledPluginIndexRecord = {
   packageBuild?: OpenClawPackageBuild;
   manifestPath: string;
   manifestHash: string;
+  /** Hash of the doctor-contract artifact selected by the runtime resolver. */
+  doctorContractHash?: string;
+  doctorContractFile?: InstalledPluginFileSignature;
   manifestFile?: InstalledPluginFileSignature;
   format?: PluginManifestRecord["format"];
   bundleFormat?: PluginManifestRecord["bundleFormat"];
@@ -145,6 +148,8 @@ export type InstalledPluginIndex = {
   migrationVersion: typeof INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION;
   policyHash: string;
   generatedAtMs: number;
+  /** Selected workspace used to build this index. Missing for omitted and legacy scopes. */
+  workspaceDir?: string;
   refreshReason?: InstalledPluginIndexRefreshReason;
   installRecords: Readonly<Record<string, InstalledPluginInstallRecordInfo>>;
   plugins: readonly InstalledPluginIndexRecord[];

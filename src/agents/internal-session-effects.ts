@@ -5,7 +5,7 @@ import {
   forkSessionFromParentTranscript,
   loadExactSessionEntry,
   replaceTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
@@ -96,7 +96,7 @@ export async function prepareInternalSessionEffectsSession(params: {
     ]);
   }
   const now = Date.now();
-  const entry = await upsertSessionEntry(scope, {
+  const entry = await upsertSessionEntryCore(scope, {
     ...buildSessionCreationStamp({ via: "internal", actor: { type: "system" } }),
     delivery: { kind: "internal" },
     sessionId: scope.sessionId,

@@ -127,6 +127,8 @@ function collectDescribedImageAttachmentIndices(ctx: MsgContext): Set<number> {
 type InboundMediaNoteProjection = {
   text?: string;
   media: MediaFact[];
+  /** Original ctx.media fact positions aligned with `media`, for index-based identity. */
+  mediaIndexes?: number[];
 };
 
 /** Formats prompt-visible attachment text and retains facts that still need native hydration. */
@@ -147,7 +149,7 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
       : [];
   });
   if (entries.length === 0) {
-    return { media: [] };
+    return { media: [], mediaIndexes: [] };
   }
 
   const transcribedAudioIndices = collectTranscribedAudioAttachmentIndices(ctx, facts.length);
@@ -175,13 +177,14 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
     return true;
   });
   if (visibleEntries.length === 0) {
-    return { media: [] };
+    return { media: [], mediaIndexes: [] };
   }
   const describedImageIndices = collectDescribedImageAttachmentIndices(ctx);
   const media = visibleEntries.map((entry) => ({
     ...entry.fact,
     ...(describedImageIndices.has(entry.index) ? { hydrationSuppressed: true } : {}),
   }));
+  const mediaIndexes = visibleEntries.map((entry) => entry.index);
   if (visibleEntries.length === 1) {
     return {
       text: formatMediaAttachedLine({
@@ -190,6 +193,7 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
         url: visibleEntries[0]?.url,
       }),
       media,
+      mediaIndexes,
     };
   }
 
@@ -206,5 +210,5 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
       }),
     );
   }
-  return { text: lines.join("\n"), media };
+  return { text: lines.join("\n"), media, mediaIndexes };
 }

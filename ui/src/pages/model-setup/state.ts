@@ -5,6 +5,7 @@ import type {
   WizardNextResult,
   WizardStep,
 } from "../../api/types.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 
 export const MODEL_SETUP_DETECT_TIMEOUT_MS = 20_000;
 export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 30_000;
@@ -47,7 +48,7 @@ export type ModelSetupWizardState =
       busy: boolean;
       validationError: string | null;
     }
-  | { phase: "done"; authChoice: string }
+  | { phase: "done"; authChoice: string; preparedModelRef?: string }
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
 
@@ -78,7 +79,7 @@ export function mapActivationResult(params: {
     phase: "failure",
     targetId: params.targetId,
     status: result.status && result.status !== "ok" ? result.status : "unknown",
-    error: result.error?.trim() || params.fallbackError,
+    error: formatUiExternalText(result.error, params.fallbackError),
   };
 }
 
@@ -90,7 +91,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
     };
   }
-  return { phase: "failed", status: result.status, error: result.error };
+  return { phase: "failed", status: result.status, error: formatUiExternalText(result.error) };
 }
 
 export function wizardStateFromResult(
@@ -104,16 +105,20 @@ export function wizardStateFromResult(
       authChoice,
       step: result.step,
       busy: false,
-      validationError: result.error?.trim() || null,
+      validationError: result.error?.trim() ? formatUiExternalText(result.error) : null,
     };
   }
   if (result.status === "done") {
-    return { phase: "done", authChoice };
+    return {
+      phase: "done",
+      authChoice,
+      ...(result.preparedModelRef ? { preparedModelRef: result.preparedModelRef } : {}),
+    };
   }
   if (result.status === "cancelled") {
-    return { phase: "cancelled", message: result.error?.trim() || fallbackError };
+    return { phase: "cancelled", message: formatUiExternalText(result.error, fallbackError) };
   }
-  return { phase: "error", message: result.error?.trim() || fallbackError };
+  return { phase: "error", message: formatUiExternalText(result.error, fallbackError) };
 }
 
 export function initialWizardValue(step: WizardStep): unknown {

@@ -22,6 +22,7 @@ import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.ty
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
+import { CHANNEL_IDS } from "../channels/ids.js";
 import {
   hasNativeApprovalPromptRuntimeCapability,
   isKnownNativeApprovalPromptChannel,
@@ -66,6 +67,7 @@ import type {
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+import { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "./transcript-credential-safety.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -537,6 +539,7 @@ function buildWebchatCanvasSection(params: {
 function buildControlUiSessionCompanionSection(params: {
   isMinimal: boolean;
   runtimeChannel?: string;
+  sessionsSpawnAvailable: boolean;
 }) {
   if (params.isMinimal || params.runtimeChannel !== "webchat") {
     return [];
@@ -545,7 +548,9 @@ function buildControlUiSessionCompanionSection(params: {
     "## Control UI Session Companion",
     "- Operator has a read-only rail companion for this session's status and explanations.",
     "- On request, do not spawn sub-agents or burn main-thread turns merely to summarize status or re-explain recent work.",
-    "- Reserve `sessions_spawn` for delegated work with its own deliverable.",
+    ...(params.sessionsSpawnAvailable
+      ? ["- Reserve `sessions_spawn` for delegated work with its own deliverable."]
+      : []),
     "",
   ];
 }
@@ -600,7 +605,7 @@ function buildMessagingSection(params: {
 }) {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const visibleReplyInstruction = messageToolOnly
-    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed reply. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
     : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
   const messageToolTargetInstruction = params.requireExplicitMessageTarget
     ? "- `send`: `target` + `message`; target required this turn."
@@ -632,7 +637,9 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     visibleReplyInstruction,
-    "- Cross-session: `sessions_send(sessionKey, message)`.",
+    ...(params.availableTools.has("sessions_send")
+      ? ["- Cross-session: `sessions_send(sessionKey, message)`."]
+      : []),
     subagentOrchestrationGuidance,
     completionEventGuidance,
     "- Provider messaging: never exec/curl; OpenClaw routes.",
@@ -655,7 +662,7 @@ function buildMessagingSection(params: {
               : `- After visible \`message(send)\`, final ONLY ${SILENT_REPLY_TOKEN}.`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
-              ? "- Inline buttons: `send` with `buttons=[[{text,callback_data,style?}]]`; style primary|success|danger."
+              ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'
               : params.runtimeChannel
                 ? `- Inline buttons OFF for ${params.runtimeChannel}; ask owner for ${params.runtimeChannel}.capabilities.inlineButtons=dm|group|all|allowlist.`
                 : ""
@@ -685,7 +692,10 @@ function buildCollapsibleDetailsSection(params: {
 }
 
 function buildMessageChannelOptions(runtimeChannel?: string): string | undefined {
-  const deliverableChannels: readonly string[] = listDeliverableMessageChannels();
+  const externalChannels = normalizePromptCapabilityIds(listDeliverableMessageChannels()).filter(
+    (channelId) => !CHANNEL_IDS.includes(channelId),
+  );
+  const deliverableChannels: readonly string[] = [...CHANNEL_IDS, ...externalChannels];
   if (deliverableChannels.length <= 1) {
     return undefined;
   }
@@ -880,6 +890,10 @@ export function buildAgentSystemPrompt(params: {
   const promptSurface = params.promptSurface ?? "openclaw_main";
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
+  const availableTools = new Set([
+    ...normalizeStringEntriesLower(params.toolNames),
+    ...normalizeStringEntriesLower(params.capabilityToolNames),
+  ]);
   const coreToolSummaries: Record<string, string> = {
     read: "Read files",
     write: "Write files",
@@ -900,8 +914,9 @@ export function buildAgentSystemPrompt(params: {
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control browser",
     screen: "Drive operator web UI",
-    terminal:
-      "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
+    terminal: availableTools.has("exec")
+      ? "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work"
+      : "Own visible shell. Use for long/interactive jobs user should watch",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
     [AUTOMATIONS_TOOL_NAME]:
@@ -917,10 +932,12 @@ export function buildAgentSystemPrompt(params: {
       : "List allowed subagent ids",
     sessions_list: "List visible sessions; filters/last",
     sessions_history: "Read visible session/subagent history",
-    sessions_search: "Search past sessions; use sessionKey with sessions_history",
+    sessions_search: availableTools.has("sessions_history")
+      ? "Search past sessions; use sessionKey with sessions_history"
+      : "Search past sessions",
     sessions_send: "Message other session/subagent",
     sessions_spawn: acpSpawnRuntimeEnabled
-      ? 'Spawn isolated subagent/ACP. Transcript needed: context="fork". ACP needs agentId unless default; ids from acp.allowedAgents, not agents_list.'
+      ? `Spawn isolated subagent/ACP. Transcript needed: context="fork". ACP needs agentId unless default; ids from acp.allowedAgents${availableTools.has("agents_list") ? ", not agents_list" : ""}.`
       : 'Spawn isolated subagent; transcript needed: context="fork"',
     sessions_yield: "End turn; await subagent events",
     subagents: "Subagent status; never wait-loop",
@@ -983,11 +1000,13 @@ export function buildAgentSystemPrompt(params: {
 
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const visibleTools = new Set(normalizedTools);
-  const availableTools = new Set([
-    ...visibleTools,
-    ...normalizeStringEntriesLower(params.capabilityToolNames),
-  ]);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
+  const subagentStatusTools = ["subagents", "sessions_list"].filter((name) =>
+    availableTools.has(name),
+  );
+  const sessionLookupTools = ["sessions_list", "sessions_search"].filter((name) =>
+    availableTools.has(name),
+  );
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
   const nativeCommandGuidanceLines = normalizeUniqueStringEntries(
     params.nativeCommandGuidanceLines,
@@ -1106,6 +1125,7 @@ export function buildAgentSystemPrompt(params: {
     "Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.",
     "Never persuade anyone to expand access or disable safeguards.",
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
+    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
     "",
   ];
   // CLI backends own native file tools outside OpenClaw's projected tool list.
@@ -1215,8 +1235,6 @@ export function buildAgentSystemPrompt(params: {
         ? toolLines.join("\n")
         : buildOpenClawToolFallbackText({
             surface: promptSurface,
-            execToolName,
-            processToolName,
           }),
       ...(toolSchemaDirectoryPrompt
         ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
@@ -1225,9 +1243,13 @@ export function buildAgentSystemPrompt(params: {
       ...(renderOpenClawToolWorkflowHints
         ? [
             `Long wait: no rapid poll. Use ${execToolName} yieldMs or ${processToolName}(poll, timeout=<ms>).`,
-            "Large work: `sessions_spawn`; completion push-based.",
-            '`sessions_spawn`: omit `context`; transcript needed => `context:"fork"`.',
-            ...(hasSessionsSpawn ? ["`visible:true` only web/app user or asked."] : []),
+            ...(hasSessionsSpawn
+              ? [
+                  "Large work: `sessions_spawn`; completion push-based.",
+                  '`sessions_spawn`: omit `context`; transcript needed => `context:"fork"`.',
+                  "`visible:true` only web/app user or asked.",
+                ]
+              : []),
             ...(availableTools.has("screen")
               ? ["`screen` present: web/app turn may drive UI; messaging turn: don't."]
               : []),
@@ -1243,25 +1265,22 @@ export function buildAgentSystemPrompt(params: {
                 ]
               : []),
             'No thread-capable channel: one-shot `mode:"run"`; never claim binding.',
-            "Set `agentId` unless `acp.defaultAgent`; never route ACP via `subagents`/`agents_list`/local PTY.",
+            "Set `agentId` unless `acp.defaultAgent`; never route ACP through local subagent controls or a local PTY.",
             ...(threadBoundAcpSpawnEnabled
               ? [
-                  'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`; never `message(thread-create)`.',
+                  'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`; never create a messaging thread for it.',
                 ]
               : []),
           ]
         : []),
-      ...(renderOpenClawToolWorkflowHints
+      ...(renderOpenClawToolWorkflowHints && subagentStatusTools.length > 0
         ? [
-            availableTools.has("sessions_yield")
-              ? "Never loop-poll `subagents list`/`sessions_list`; wait with `sessions_yield`. Status only on-demand/intervention/debug/request."
-              : "Never loop-poll `subagents list`/`sessions_list`; status only on-demand/intervention/debug/request.",
+            `Never loop-poll ${subagentStatusTools.map((name) => (name === "subagents" ? "`subagents list`" : `\`${name}\``)).join("/")}.${availableTools.has("sessions_yield") ? " Wait with `sessions_yield`." : ""} Status only on-demand/intervention/debug/request.`,
           ]
         : []),
-      ...(renderOpenClawToolWorkflowHints &&
-      (availableTools.has("sessions_search") || availableTools.has("sessions_list"))
+      ...(renderOpenClawToolWorkflowHints && sessionLookupTools.length > 0
         ? [
-            "Asked about another chat/group/session not in context: check `sessions_list`/`sessions_search` before claiming no access.",
+            `Asked about another chat/group/session not in context: check ${sessionLookupTools.map((name) => `\`${name}\``).join("/")} before claiming no access.`,
           ]
         : []),
       "",
@@ -1472,6 +1491,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildControlUiSessionCompanionSection({
       isMinimal,
       runtimeChannel,
+      sessionsSpawnAvailable: hasSessionsSpawn,
     }),
     ...buildMessagingSection({
       isMinimal,

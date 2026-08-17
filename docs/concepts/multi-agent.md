@@ -51,7 +51,7 @@ when personas must not share compiled wiki knowledge.
 | -------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Config                           | `~/.openclaw/openclaw.json`                                                            | `OPENCLAW_CONFIG_PATH`                                                                      |
 | State dir                        | `~/.openclaw`                                                                          | `OPENCLAW_STATE_DIR`                                                                        |
-| Default agent's workspace        | `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set)      | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
+| Default agent's workspace        | `<stateDir>/workspace` (`~/.openclaw-<profile>/workspace` for a named profile)         | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
 | Other agents' workspace          | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.entries.*.workspace`                                                                |
 | Agent dir                        | `~/.openclaw/agents/<agentId>/agent`                                                   | `agents.entries.*.agentDir`                                                                 |
 | Sessions and transcripts         | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`                             | —                                                                                           |
@@ -63,7 +63,7 @@ If you configure nothing, OpenClaw runs one agent:
 
 - `agentId` defaults to `main`.
 - Sessions key as `agent:main:<mainKey>` (default `mainKey` is `main`).
-- Workspace defaults to `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set to something other than `default`).
+- Workspace defaults to `<stateDir>/workspace` (`~/.openclaw/workspace` for the default install and `~/.openclaw-<profile>/workspace` for a named profile).
 - State defaults to `~/.openclaw/agents/main/agent`.
 
 ## Agent helper
@@ -81,6 +81,20 @@ Add `bindings` to route inbound messages (the wizard offers to do this for you),
 ```bash
 openclaw agents list --bindings
 ```
+
+### Agent provenance
+
+OpenClaw records how each configured agent was created: `operator` for CLI,
+onboarding, and Gateway requests; `agent` when the system agent requested it;
+and `claw` when a Claw install added it. Agent-created entries also retain the
+requesting agent id. Inspect the current creation hierarchy with:
+
+```bash
+openclaw agents list --tree
+```
+
+Deleted creators remain historical provenance. If the creator is no longer in
+the configured roster, its children appear at the root of the tree.
 
 ## Quick start
 
@@ -161,44 +175,14 @@ an explicit agent when multiple agents are configured. See
 [Memory Wiki per-agent vaults](/plugins/memory-wiki#per-agent-vaults) for bridge
 filtering, migration, and trust-boundary details.
 
-## Cross-agent QMD memory search
+## Cross-agent memory search
 
-To let one agent search another agent's QMD session transcripts, add extra collections under `agents.entries.*.memory.search.qmd.extraCollections`. Use `memory.search.qmd.extraCollections` when every agent should share the same collections.
-
-```json5
-{
-  agents: {
-    defaults: {
-      workspace: "~/workspaces/main",
-    },
-    entries: {
-      main: {
-        default: true,
-        workspace: "~/workspaces/main",
-        memory: {
-          search: {
-            qmd: {
-              extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "notes-main"
-            },
-          },
-        },
-      },
-      family: { workspace: "~/workspaces/family" },
-    },
-  },
-  memory: {
-    backend: "qmd",
-    search: {
-      qmd: {
-        extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
-      },
-    },
-    qmd: { includeDefaultMemory: false },
-  },
-}
-```
-
-An extra-collection path can be shared across agents, but its `name` stays explicit when the path is outside the agent workspace. Paths inside the workspace stay agent-scoped so each agent keeps its own transcript search set.
+The QMD cross-agent search path was removed. Builtin memory does not search
+another agent's transcript corpus; each agent searches only its own configured
+memory and eligible same-agent session sources. Put intentionally shared
+Markdown in an explicit shared `memory.search.extraPaths` directory when the
+same reference material should be indexed by multiple agents. For the full
+upgrade path, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
 ## One WhatsApp number, multiple people (DM split)
 

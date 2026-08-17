@@ -15,6 +15,10 @@ struct NotificationManager {
     }()
 
     func send(title: String, body: String, sound: String?, priority: NotificationPriority? = nil) async -> Bool {
+        guard PermissionManager.notificationCenterAvailable else {
+            self.logger.warning("notification skipped: process has no bundle identity")
+            return false
+        }
         let center = UNUserNotificationCenter.current()
         let status = await center.notificationSettings()
         if status.authorizationStatus == .notDetermined {
@@ -23,7 +27,7 @@ struct NotificationManager {
                 self.logger.warning("notification permission denied (request)")
                 return false
             }
-        } else if status.authorizationStatus != .authorized {
+        } else if !PermissionManager.isNotificationAuthorized(status: status.authorizationStatus) {
             self.logger.warning("notification permission denied status=\(status.authorizationStatus.rawValue)")
             return false
         }

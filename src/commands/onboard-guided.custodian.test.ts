@@ -7,22 +7,31 @@ import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
-import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
+import {
+  runGuidedOnboarding as runGuidedOnboardingImpl,
+  type GuidedOnboardingDeps,
+} from "./onboard-guided.js";
+
+const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
+  runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({ version: 1 as const, profiles: {} })),
 );
+const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
-vi.mock("./auth-choice-prompt.js", async (importActual) => ({
-  ...(await importActual<typeof import("./auth-choice-prompt.js")>()),
+vi.mock("./auth-choice-prompt.js", () => ({
   promptAuthChoiceGrouped,
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
+vi.mock("../plugins/provider-setup-availability.js", () => ({
+  detectAvailableSetupProviderIds,
+}));
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -123,6 +132,7 @@ vi.mock("./onboard-agent.js", () => ({
     agentId: "main",
     bootstrapPending: true,
   }),
+  validateFirstOnboardingAgentName: () => undefined,
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -213,6 +223,7 @@ function setupDeps(params: {
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
   runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
   runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
+  runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
   applySetup?: GuidedOnboardingDeps["applySetup"];
   handoffMode?: GuidedOnboardingDeps["handoffMode"];
 }) {
@@ -255,11 +266,14 @@ function setupDeps(params: {
     runAppRecommendations:
       params.runAppRecommendations ??
       vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
-    runBrowserHandoff: vi.fn(async () => ({
-      handedOff: false as const,
-      reason: "gateway-unreachable" as const,
-    })),
+    runBrowserHandoff:
+      params.runBrowserHandoff ??
+      (vi.fn(async () => ({
+        handedOff: false as const,
+        reason: "timeout" as const,
+      })) as GuidedOnboardingDeps["runBrowserHandoff"]),
     runSystemAgentChat,
+    platform: "linux",
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
   } satisfies GuidedOnboardingDeps;
 }
@@ -282,6 +296,8 @@ describe("runGuidedOnboarding custodian flow", () => {
     restoreTerminalState.mockClear();
     promptAuthChoiceGrouped.mockReset();
     ensureAuthProfileStore.mockClear();
+    detectAvailableSetupProviderIds.mockReset();
+    detectAvailableSetupProviderIds.mockResolvedValue(new Set());
     readConfigFileSnapshot.mockReset();
     readConfigFileSnapshot.mockImplementation(async () => {
       return {
@@ -1075,7 +1091,7 @@ describe("runGuidedOnboarding custodian flow", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
-    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true, "main");
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("config write raced");
   });

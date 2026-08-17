@@ -3,19 +3,100 @@
  * Centralizes canonical SQLite display paths and cross-agent OAuth refresh lock paths.
  */
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
+import { readConfigMachineState } from "../../state/config-machine-state.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
+
+export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
+const SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT = 256;
+
+export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
+
+// Explicit env callers can address another state root in the same process.
+// Pin each root once so later row changes require an owner-controlled restart.
+const sharedAuthStoreOwnershipByDatabasePath = new Map<string, SharedAuthStoreOwnership>();
+
+class InvalidSharedAuthStoreOwnershipError extends Error {
+  readonly code = "INVALID_SHARED_AUTH_STORE_OWNERSHIP" as const;
+  readonly action = "openclaw doctor --fix" as const;
+  readonly stateKey = SHARED_AUTH_STORE_STATE_KEY;
+
+  constructor(value: unknown) {
+    super(
+      `Config machine state ${SHARED_AUTH_STORE_STATE_KEY} has an invalid shared auth store location (${JSON.stringify(value)}); run openclaw doctor --fix.`,
+    );
+    this.name = "InvalidSharedAuthStoreOwnershipError";
+  }
+}
+
+function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership {
+  if (value === undefined) {
+    return { location: "legacy-main" };
+  }
+  if (
+    isRecord(value) &&
+    Object.keys(value).length === 1 &&
+    (value.location === "legacy-main" || value.location === "state-db")
+  ) {
+    return { location: value.location };
+  }
+  throw new InvalidSharedAuthStoreOwnershipError(value);
+}
+
+/** Resolve the process-stable owner of the shared auth store. */
+export function resolveSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): SharedAuthStoreOwnership {
+  const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
+  const cached = sharedAuthStoreOwnershipByDatabasePath.get(databasePath);
+  if (cached) {
+    return cached;
+  }
+  if (sharedAuthStoreOwnershipByDatabasePath.size >= SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT) {
+    throw new Error(
+      "Shared auth store ownership cache exceeded its process root limit; restart OpenClaw.",
+    );
+  }
+  const ownership = parseSharedAuthStoreOwnership(
+    readConfigMachineState<unknown>(SHARED_AUTH_STORE_STATE_KEY, { env, path: databasePath }),
+  );
+  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
+  return ownership;
+}
+
+/** Update the process-stable cache after this process commits the ownership row. */
+export function noteCommittedSharedAuthStoreOwnership(
+  ownership: SharedAuthStoreOwnership,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
+  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
+}
+
+/** Resolve the canonical shared auth database path. */
+export function resolveSharedAuthStorePath(env: NodeJS.ProcessEnv = process.env): string {
+  if (resolveSharedAuthStoreOwnership(env).location === "state-db") {
+    return resolveOpenClawStateSqlitePath(env);
+  }
+  return path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
+}
 
 /** Resolve the user-facing auth profile database path. */
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
-  const pathname = resolveAuthProfileDatabasePath(agentDir);
+  const pathname = agentDir
+    ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
+    : resolveSharedAuthStorePath();
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
 /** Resolve the user-facing auth state database path. */
 export function resolveAuthStatePathForDisplay(agentDir?: string): string {
-  const pathname = resolveAuthProfileDatabasePath(agentDir);
+  const pathname = agentDir
+    ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
+    : resolveSharedAuthStorePath();
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 

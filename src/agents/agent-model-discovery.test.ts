@@ -20,9 +20,7 @@ beforeEach(() => {
   clearCurrentPluginMetadataSnapshot();
 });
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 function writeModelsJson(agentDir: string, modelId: string): void {
   fs.writeFileSync(

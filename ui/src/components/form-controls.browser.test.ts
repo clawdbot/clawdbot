@@ -22,12 +22,16 @@ let mobileContext: BrowserContext;
 function readUiCss(): string {
   const files = [
     "ui/src/styles/base.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/config.css",
-    "ui/src/styles/settings.css",
+    "ui/src/styles/board.css",
     "ui/src/styles/layout.css",
+    "ui/src/styles/layout.mobile.css",
+    "ui/src/styles/components.css",
+    "ui/src/styles/settings.css",
+    "ui/src/styles/config.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/sidebar-markdown.css",
+    "ui/src/styles/chat/sidebar.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
 }
@@ -321,7 +325,7 @@ describeBrowserLayout("touch-primary form controls", () => {
 });
 
 describeBrowserLayout("mount fallback cursor", () => {
-  it("uses the default cursor for its controls and the pointer for its real link", async () => {
+  it("advertises its controls with the hand in a browser tab, alongside its real link", async () => {
     const page = await desktopContext.newPage();
     try {
       await page.setContent(readStyleSheet("ui/index.html"));
@@ -340,9 +344,11 @@ describeBrowserLayout("mount fallback cursor", () => {
         };
       });
 
+      // A browser tab is display-mode: browser, so the fallback follows the same
+      // cursor policy as the app it is standing in for.
       expect(cursors).toEqual({
-        retry: "default",
-        wait: "default",
+        retry: "pointer",
+        wait: "pointer",
         docs: "pointer",
       });
     } finally {
@@ -352,7 +358,189 @@ describeBrowserLayout("mount fallback cursor", () => {
 });
 
 describeBrowserLayout("app chrome interaction styles", () => {
-  it("keeps sidebars compact while preserving normal content scroll and text entry", async () => {
+  it("scales sidebar typography with the Control UI text-size preference", async () => {
+    const page = await desktopContext.newPage();
+    try {
+      await page.setViewportSize({ width: 1200, height: 800 });
+      await page.setContent(`
+        <!doctype html>
+        <html>
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <span class="nav-item__text">Navigation</span>
+            <span class="sidebar-recent-session__name">Recent session</span>
+            <span class="session-row-trail">3m</span>
+            <div class="sidebar-session-catalog-host__head">
+              <span class="sidebar-session-catalog-host__label">Local host</span>
+              <span class="sidebar-session-catalog-host__count">100</span>
+            </div>
+            <button class="sidebar-session-catalog-project__head">
+              <span class="sidebar-session-catalog-project__label">Project</span>
+              <span class="sidebar-session-catalog-project__count">100</span>
+            </button>
+            <span class="sidebar-agent-card__name">Agent</span>
+            <span class="settings-sidebar__item-label">Settings</span>
+            <span class="sidebar-file-view__path">workspace/file.ts</span>
+            <span class="chat-workspace-rail__file-badge">3 files</span>
+            <span class="session-menu__shortcut">⌘K</span>
+            <div class="file-view__search">
+              <input value="query" />
+              <span class="file-view__search-counter">1/2</span>
+            </div>
+            <div class="sidebar-recent-session">
+              <button class="sidebar-child-session-toggle">
+                <span class="sidebar-child-session-toggle__count">100</span>
+              </button>
+            </div>
+            <span class="file-view__save-notice">Unsaved changes</span>
+            <article class="sidebar-markdown"><pre><code>const scaled = true;</code></pre></article>
+            <article class="md-preview-dialog__reader sidebar-markdown">
+              <h3>Preview heading</h3>
+              <p>Agent file preview</p>
+              <table><tbody><tr><td>Preview cell</td></tr></tbody></table>
+            </article>
+          </body>
+        </html>
+      `);
+
+      const selectors = [
+        ".nav-item__text",
+        ".sidebar-recent-session__name",
+        ".session-row-trail",
+        ".sidebar-session-catalog-host__count",
+        ".sidebar-session-catalog-project__count",
+        ".sidebar-agent-card__name",
+        ".settings-sidebar__item-label",
+        ".sidebar-file-view__path",
+        ".chat-workspace-rail__file-badge",
+        ".session-menu__shortcut",
+        ".file-view__search-counter",
+        ".file-view__save-notice",
+        ".sidebar-markdown pre code",
+        ".md-preview-dialog__reader.sidebar-markdown > p",
+        ".md-preview-dialog__reader.sidebar-markdown > h3",
+        ".md-preview-dialog__reader.sidebar-markdown td",
+      ];
+      const readFontSizes = () =>
+        page.evaluate((targets) => {
+          return Object.fromEntries(
+            targets.map((selector) => {
+              const node = document.querySelector(selector);
+              if (!(node instanceof HTMLElement)) {
+                throw new Error(`Missing sidebar typography fixture ${selector}`);
+              }
+              return [selector, Number.parseFloat(getComputedStyle(node).fontSize)];
+            }),
+          );
+        }, selectors);
+
+      const baseline = await readFontSizes();
+      const baselineInput = await page.$eval(".file-view__search input", (node) =>
+        Number.parseFloat(getComputedStyle(node).fontSize),
+      );
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+      });
+      const scaled = await readFontSizes();
+      const scaledInput = await page.$eval(".file-view__search input", (node) =>
+        Number.parseFloat(getComputedStyle(node).fontSize),
+      );
+
+      for (const selector of selectors) {
+        const baselineSize = baseline[selector];
+        const scaledSize = scaled[selector];
+        if (baselineSize === undefined || scaledSize === undefined) {
+          throw new Error(`Missing computed sidebar font size for ${selector}`);
+        }
+        expect(scaledSize, selector).toBeCloseTo(baselineSize * 1.4, 1);
+      }
+      expect(baselineInput).toBe(12);
+      expect(scaledInput).toBeCloseTo(12 * 1.4, 1);
+      for (const selector of [
+        ".sidebar-child-session-toggle",
+        ".sidebar-session-catalog-host__count",
+        ".sidebar-session-catalog-project__count",
+      ]) {
+        const fits = await page.$eval(selector, (node) => node.scrollWidth <= node.clientWidth);
+        expect(fits, selector).toBe(true);
+      }
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+
+  it("scales mobile sidebar variants while preserving the coarse-pointer input floor", async () => {
+    const page = await mobileContext.newPage();
+    try {
+      await page.setContent(`
+        <!doctype html>
+        <html>
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <style>${readUiCss()}</style>
+          </head>
+          <body>
+            <div class="shell shell--mobile-nav">
+              <span class="nav-item">Mobile navigation</span>
+              <div class="file-view__search"><input value="query" /></div>
+              <div class="sidebar-agent-menu__filter"><input value="agent" /></div>
+              <input class="settings-sidebar__search-input" value="settings" />
+              <div class="sidebar-recent-session sidebar-recent-session--child">
+                <span class="sidebar-recent-session__name">Child session</span>
+                <span class="session-row-trail">3m</span>
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+
+      const readSizes = () =>
+        page.evaluate(() => {
+          const fontSize = (selector: string) => {
+            const node = document.querySelector(selector);
+            if (!(node instanceof HTMLElement)) {
+              throw new Error(`Missing mobile sidebar fixture ${selector}`);
+            }
+            return Number.parseFloat(getComputedStyle(node).fontSize);
+          };
+          return {
+            childName: fontSize(".sidebar-recent-session--child .sidebar-recent-session__name"),
+            childTrail: fontSize(".sidebar-recent-session--child .session-row-trail"),
+            coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
+            agentFilter: fontSize(".sidebar-agent-menu__filter input"),
+            fileSearch: fontSize(".file-view__search input"),
+            settingsSearch: fontSize(".settings-sidebar__search-input"),
+            navItem: fontSize(".shell--mobile-nav .nav-item"),
+          };
+        });
+
+      const baseline = await readSizes();
+      expect(baseline).toMatchObject({
+        childName: 12,
+        childTrail: 10,
+        coarsePointer: true,
+        agentFilter: 16,
+        fileSearch: 16,
+        settingsSearch: 16,
+        navItem: 12,
+      });
+
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+      });
+      const scaled = await readSizes();
+      expect(scaled.agentFilter).toBeCloseTo(12 * 1.4, 1);
+      expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
+      expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
+      expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
+      expect(scaled.settingsSearch).toBeCloseTo(12.5 * 1.4, 1);
+      expect(scaled.navItem).toBeCloseTo(12 * 1.4, 1);
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+
+  it("uses one canonical scrollbar width while preserving normal content scroll and text entry", async () => {
     const page = await desktopContext.newPage();
     try {
       await page.setViewportSize({ width: 1200, height: 800 });
@@ -375,6 +563,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <div style="height: 200px"></div>
             </main>
             <section class="chat-thread" style="height: 100px">Selectable transcript</section>
+            <div class="board-tabs__track">Hidden horizontal rail</div>
           </body>
         </html>
       `);
@@ -403,6 +592,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
           regularSidebarSelection: style(".sidebar-shell__body").userSelect,
           settingsSidebarScrollbar: scrollbarWidth(".settings-sidebar__nav"),
           settingsSidebarSelection: style(".settings-sidebar__nav").userSelect,
+          // The board tab rail intentionally hides its scrollbar (a drag/wheel
+          // affordance, not a styling variant); the new blanket
+          // `* { scrollbar-width: thin }` rule in base.css must not win over
+          // its higher-specificity `scrollbar-width: none`.
+          hiddenRailScrollbarWidth: style(".board-tabs__track").scrollbarWidth,
         };
       });
 
@@ -410,10 +604,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
         chatSelection: "text",
         chromeSelection: "none",
         contentScrollbar: "12px",
+        hiddenRailScrollbarWidth: "none",
         inputSelection: "text",
-        regularSidebarScrollbar: "6px",
+        regularSidebarScrollbar: "12px",
         regularSidebarSelection: "none",
-        settingsSidebarScrollbar: "6px",
+        settingsSidebarScrollbar: "12px",
         settingsSidebarSelection: "none",
       });
     } finally {

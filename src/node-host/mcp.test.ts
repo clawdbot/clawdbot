@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import { startNodeHostMcpManager } from "./mcp.js";
 
 function tool(name: string, description?: string): Tool {
@@ -64,24 +65,19 @@ async function startManagerWithTools(listed: ReadonlyArray<{ serverName: string;
   );
 }
 
-describe("node host MCP manager", () => {
-  it("counts only enabled servers with valid identifiers", async () => {
-    const manager = await startNodeHostMcpManager(
-      {
-        docs: { command: "docs" },
-        disabled: { command: "disabled", enabled: false },
-        " ": { command: "blank" },
-      },
-      {
-        createClient: () => createClient(),
-        resolveTransport: () => transport,
-        warn: vi.fn(),
-      },
-    );
-    expect(manager.configuredServerCount).toBe(1);
-    await manager.close();
+function itWithFrozenClock(name: string, run: () => Promise<void>): void {
+  it(name, async () => {
+    // Size and pagination proofs must not spend the separately tested catalog deadline.
+    useFrozenTime(1_000);
+    try {
+      await run();
+    } finally {
+      useRealTime();
+    }
   });
+}
 
+describe("node host MCP manager", () => {
   it("starts independent MCP servers concurrently", async () => {
     let releaseFirst: (() => void) | undefined;
     const firstReady = new Promise<void>((resolve) => {
@@ -127,7 +123,6 @@ describe("node host MCP manager", () => {
       warn,
     });
 
-    expect(manager.configuredServerCount).toBe(2);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('server "broken" failed'));
     expect(manager.descriptors).toEqual([
       {
@@ -193,7 +188,42 @@ describe("node host MCP manager", () => {
     await untrusted.close();
   });
 
-  it("bounds untrusted descriptor count and schema bytes", async () => {
+  it("withdraws only a closed server's descriptors and notifies the owner", async () => {
+    const closed = createClient({ tools: [tool("closed-tool")] });
+    const healthy = createClient({ tools: [tool("healthy-tool")] });
+    const onDescriptorsChanged = vi.fn();
+    const manager = await startNodeHostMcpManager(
+      { closed: { command: "closed" }, healthy: { command: "healthy" } },
+      {
+        createClient: (serverName) => (serverName === "closed" ? closed : healthy),
+        resolveTransport: () => transport,
+        onDescriptorsChanged,
+        warn: vi.fn(),
+      },
+    );
+
+    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toEqual([
+      "closed",
+      "healthy",
+    ]);
+    closed.onclose?.();
+
+    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toEqual(["healthy"]);
+    expect(onDescriptorsChanged).toHaveBeenCalledOnce();
+    expect(onDescriptorsChanged).toHaveBeenCalledWith();
+    await expect(
+      manager.callMcpTool({ server: "closed", tool: "closed-tool" }),
+    ).rejects.toMatchObject({ code: "MCP_SERVER_UNAVAILABLE" });
+    await expect(manager.callMcpTool({ server: "healthy", tool: "healthy-tool" })).resolves.toEqual(
+      { content: [{ type: "text", text: "ok" }] },
+    );
+
+    closed.onclose?.();
+    await manager.close();
+    expect(onDescriptorsChanged).toHaveBeenCalledOnce();
+  });
+
+  itWithFrozenClock("bounds untrusted descriptor count and schema bytes", async () => {
     const tools = Array.from({ length: 130 }, (_, index) =>
       tool(`tool-${String(index).padStart(3, "0")}`),
     );
@@ -210,10 +240,16 @@ describe("node host MCP manager", () => {
       false,
     );
     expect(Buffer.byteLength(JSON.stringify(manager.descriptors))).toBeLessThan(10 * 1024 * 1024);
+    await expect(manager.callMcpTool({ server: "docs", tool: "oversized" })).rejects.toMatchObject({
+      code: "MCP_TOOL_UNAVAILABLE",
+    });
+    await expect(manager.callMcpTool({ server: "docs", tool: "tool-129" })).rejects.toMatchObject({
+      code: "MCP_TOOL_UNAVAILABLE",
+    });
     await manager.close();
   });
 
-  it("keeps global descriptor ordering across catalog pages", async () => {
+  itWithFrozenClock("keeps global descriptor ordering across catalog pages", async () => {
     const firstPage = Array.from({ length: 128 }, (_, index) =>
       tool(`z-${String(index).padStart(3, "0")}`),
     );
@@ -291,7 +327,7 @@ describe("node host MCP manager", () => {
     expect(healthy.close).toHaveBeenCalledOnce();
   });
 
-  it("isolates endless unique-cursor pagination at the page ceiling", async () => {
+  itWithFrozenClock("isolates endless unique-cursor pagination at the page ceiling", async () => {
     let page = 0;
     const endless = createClient({
       list: async () => {
@@ -305,9 +341,7 @@ describe("node host MCP manager", () => {
       { endless: { command: "endless" }, healthy: { command: "healthy" } },
       {
         createClient: (serverName) => (serverName === "endless" ? endless : healthy),
-        // Prove the page ceiling without loaded CI accidentally hitting the
-        // catalog deadline; timeout behavior has its own dedicated coverage.
-        resolveTransport: () => ({ ...transport, requestTimeoutMs: 1_000 }),
+        resolveTransport: () => transport,
         warn,
       },
     );
@@ -367,12 +401,9 @@ describe("node host MCP manager", () => {
     }
   });
 
-  it("isolates an oversized multi-page catalog at the accumulated byte ceiling", async () => {
-    // Large-page byte counting must not spend this unrelated wall-clock deadline;
-    // the preceding case separately proves strict catalog timeout enforcement.
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    try {
+  itWithFrozenClock(
+    "isolates an oversized multi-page catalog at the accumulated byte ceiling",
+    async () => {
       const largeTool = {
         ...tool("large"),
         inputSchema: { type: "object" as const, description: "x".repeat(6 * 1024 * 1024) },
@@ -399,12 +430,10 @@ describe("node host MCP manager", () => {
       expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
 
       await manager.close();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
-  it("isolates a listing that exceeds the retained candidate ceiling", async () => {
+  itWithFrozenClock("isolates a listing that exceeds the retained candidate ceiling", async () => {
     const overflowing = createClient({
       tools: Array.from({ length: 16_385 }, (_, index) => tool(`tool-${index}`)),
     });

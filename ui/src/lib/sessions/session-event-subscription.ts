@@ -1,4 +1,9 @@
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { formatUiError } from "../format-error.ts";
 
 type SessionEventSubscriptionScope = {
   client: GatewayBrowserClient;
@@ -46,6 +51,7 @@ export function createSessionEventSubscriptionOwner(params: {
         const response = await scope.client.request<{ subscribed?: boolean }>(
           "sessions.subscribe",
           {},
+          { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
         );
         if (!isCurrent(scope, expectedGeneration)) {
           return;
@@ -63,8 +69,18 @@ export function createSessionEventSubscriptionOwner(params: {
         if (!isCurrent(scope, expectedGeneration)) {
           return;
         }
-        params.onError(scope, String(error));
-        const delayMs = params.retryDelayMs(error);
+        // A connected transport can outlive an application acknowledgement.
+        // Only this idempotent observer turns its typed deadline into a retry.
+        const failure =
+          error instanceof GatewayProtocolRequestTimeoutError
+            ? new GatewayRequestError({
+                code: error.code,
+                message: error.message,
+                retryable: true,
+              })
+            : error;
+        params.onError(scope, formatUiError(failure));
+        const delayMs = params.retryDelayMs(failure);
         if (delayMs === null || !isCurrent(scope, expectedGeneration)) {
           return;
         }

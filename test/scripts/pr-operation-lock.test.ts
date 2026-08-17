@@ -27,11 +27,26 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const escapedPipeHolderPidFiles = new Set<string>();
+afterEach(async () => {
+  const failures: unknown[] = [];
+  for (const pidFile of escapedPipeHolderPidFiles) {
+    try {
+      await cleanupRecordedProcessGroup(pidFile);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  escapedPipeHolderPidFiles.clear();
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "failed to clean up escaped notification-pipe holders");
+  }
+});
 const repoRoot = process.cwd();
 const commonScript = join(repoRoot, "scripts/pr-lib/common.sh");
 const lockScript = join(repoRoot, "scripts/pr-lib/operation-lock.sh");
 const processGroupRunner = join(repoRoot, "scripts/pr-lib/process-group-runner.mjs");
-const managedChildUrl = pathToFileURL(join(repoRoot, "scripts/lib/managed-child-process.mjs")).href;
+const managedChildUrl = pathToFileURL(join(repoRoot, "scripts/lib/managed-child-process.mts")).href;
 const worktreeScript = join(repoRoot, "scripts/pr-lib/worktree.sh");
 const lockRef = "refs/openclaw/pr-operation-locks/42";
 const detachedChildren = new WeakSet<ChildProcess>();
@@ -169,10 +184,33 @@ function writeOperationFixture(repoDir: string, name: string, commands: string[]
   return fixture;
 }
 
+function writeEscapedPipeHolderLauncher(repoDir: string, pidFile: string) {
+  const holderScript = writeFixtureFile(
+    repoDir,
+    "escaped-pipe-holder.mjs",
+    "setInterval(() => {}, 1000);\n",
+  );
+  return writeFixtureFile(repoDir, "escaped-pipe-holder-launcher.mjs", [
+    'import { spawn } from "node:child_process";',
+    'import fs from "node:fs";',
+    `const child = spawn(process.execPath, [${JSON.stringify(holderScript)}], {`,
+    "  detached: true,",
+    '  stdio: ["ignore", "ignore", "ignore", 3],',
+    "});",
+    `fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+    "child.unref();",
+  ]);
+}
+
 function installPrCliFixture(repoDir: string) {
   const files = [
     "scripts/pr",
+    "scripts/watch-pr-ci.mjs",
+    "scripts/watch-pr-ci.mts",
     "scripts/lib/plain-gh.sh",
+    "scripts/lib/plain-gh.mjs",
+    "scripts/lib/direct-run.mjs",
+    "scripts/lib/tsx-cli-shim.mjs",
     "scripts/pr-lib/worktree.sh",
     "scripts/pr-lib/operation-lock.sh",
     "scripts/pr-lib/process-group-runner.mjs",
@@ -601,6 +639,35 @@ describe("scripts/pr process-group platform guard", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("use WSL on Windows");
   });
+  it.runIf(process.platform !== "win32")(
+    "preserves the child status when the completion marker cannot be written",
+    async () => {
+      const repoDir = createRepo();
+      const fixture = writeFixtureFile(repoDir, "closed-completion-fd.sh", [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `source '${lockScript}'`,
+        "exit 7",
+      ]);
+      chmodSync(fixture, 0o755);
+      const child = spawnDetached("bash", [fixture], {
+        cwd: repoDir,
+        env: {
+          ...process.env,
+          OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
+          OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
+          OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
+        },
+        stdio: "ignore",
+      });
+      try {
+        await waitForExit(child);
+        expect(child.exitCode).toBe(7);
+      } finally {
+        await cleanupChildren(child);
+      }
+    },
+  );
 });
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -835,6 +902,38 @@ describePosix("scripts/pr per-PR operation lock", () => {
       env,
     });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(refExists(repoDir)).toBe(false);
+  });
+  it("releases a validation-phase lock when temporary storage is unavailable", () => {
+    const repoDir = createRepo();
+    const { binDir, cli } = installPrCliFixture(repoDir);
+    const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
+    writeFileSync(
+      reviewScript,
+      `${readFileSync(reviewScript, "utf8")}\nreview_init() { printf 'review ran\\n'; }\n`,
+    );
+    for (const command of ["gh", "jq", "pnpm", "rg"]) {
+      const stub = join(binDir, command);
+      writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+      chmodSync(stub, 0o755);
+    }
+    const mktempStub = join(binDir, "mktemp");
+    writeFileSync(mktempStub, "#!/bin/sh\necho 'mktemp: No space left on device' >&2\nexit 1\n");
+    chmodSync(mktempStub, 0o755);
+
+    const result = spawnSync(cli, ["review-init", "42"], {
+      cwd: repoDir,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    expect(result.stderr).toContain("mktemp: No space left on device");
+    expect(result.stderr).toContain("temporary-storage preflight failed");
+    expect(result.stderr).toContain("Free disk space or set TMPDIR");
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+    expect(result.stderr).not.toContain("scripts/pr lock-recover");
+    expect(result.stdout).not.toContain("review ran");
     expect(refExists(repoDir)).toBe(false);
   });
   it.each([["--dryrun"], ["--dry-run", "extra"]])(
@@ -1226,7 +1325,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(refOid(repoDir)).toBe(ownerOid);
     recoverOperationLock(repoDir, ownerOid);
   });
-  it("uses successful command return as the trusted completion contract", async () => {
+  it("releases after leader completion despite an fd-closing detached daemon", async () => {
     const repoDir = createRepo();
     const daemonPidFile = join(repoDir, "unrelated-daemon-pgid");
     const daemonScript = writeFixtureFile(
@@ -1325,31 +1424,85 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await cleanupRecordedProcessGroup(nestedPidFile, nestedPgid);
     }
   });
-  it("exits after a bounded wait when a detached child keeps the notification pipe open", async () => {
+  it("warns and releases after leader completion when an escaped child keeps the notification pipe open", async () => {
+    const repoDir = createRepo();
+    const operationPgidFile = join(repoDir, "clean-pipe-holder-operation-pgid");
+    const holderPidFile = join(repoDir, "clean-pipe-holder-pgid");
+    escapedPipeHolderPidFiles.add(holderPidFile);
+    const launcherScript = writeEscapedPipeHolderLauncher(repoDir, holderPidFile);
+
+    const result = await runSupervisedOperation(
+      repoDir,
+      "clean-pipe-holder-operation.sh",
+      [
+        `printf '%s\\n' "$$" >'${operationPgidFile}'`,
+        "acquire_pr_operation_lock 42",
+        `node '${launcherScript}'`,
+      ],
+      { accelerateTimeouts: true },
+    );
+
+    const operationPgid = await waitForProcessId(operationPgidFile);
+    const holderPgid = await waitForProcessId(holderPidFile);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(operationPgid).not.toBe(holderPgid);
+    expect(processGroupExists(operationPgid)).toBe(false);
+    expect(processGroupExists(holderPgid)).toBe(true);
+    expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).toContain("Warning:");
+    expect(result.stderr).toContain("group=dead, pipe=open");
+    expect(result.stderr).toContain("#124583");
+  }, 15_000);
+  it("retains a clean-exit lock when the leader completion marker is suppressed", async () => {
+    const repoDir = createRepo();
+    const holderPidFile = join(repoDir, "suppressed-completion-holder-pgid");
+    escapedPipeHolderPidFiles.add(holderPidFile);
+    const launcherScript = writeEscapedPipeHolderLauncher(repoDir, holderPidFile);
+    let holderPgid: number | undefined;
+    try {
+      const result = await runSupervisedOperation(
+        repoDir,
+        "suppressed-completion-operation.sh",
+        ["acquire_pr_operation_lock 42", "trap - EXIT", `node '${launcherScript}'`],
+        { accelerateTimeouts: true },
+      );
+      holderPgid = await waitForProcessId(holderPidFile);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(processGroupExists(holderPgid)).toBe(true);
+      const ownerOid = refOid(repoDir);
+      expect(result.stderr).toContain("reason: notification pipe still open after drain deadline");
+      expect(result.stderr).toContain(
+        "scripts/pr operation lifetime did not drain (group=dead, pipe=open)",
+      );
+      expect(result.stderr).not.toContain("Warning:");
+      const blocked = probeOperationLock(repoDir);
+      expect(blocked.status, `${blocked.stdout}\n${blocked.stderr}`).toBe(0);
+      expect(blocked.stdout.trim()).toBe("2");
+      killProcessGroup(holderPgid, "SIGKILL");
+      expect(await waitFor(() => !processGroupExists(holderPgid!))).toBe(true);
+      recoverOperationLock(repoDir, ownerOid);
+    } finally {
+      await cleanupRecordedProcessGroup(holderPidFile, holderPgid);
+    }
+  }, 15_000);
+  it("retains a failed side-effects lock when an escaped child keeps the notification pipe open", async () => {
     const repoDir = createRepo();
     const nestedPidFile = join(repoDir, "pipe-holder-pgid");
-    const nestedScript = writeFixtureFile(
-      repoDir,
-      "pipe-holder.mjs",
-      "setInterval(() => {}, 1000);\n",
-    );
-    const launcherScript = writeFixtureFile(repoDir, "pipe-holder-launcher.mjs", [
-      'import { spawn } from "node:child_process";',
-      'import fs from "node:fs";',
-      `const child = spawn(process.execPath, [${JSON.stringify(nestedScript)}], {`,
-      "  detached: true,",
-      '  stdio: ["ignore", "ignore", "ignore", 3],',
-      "});",
-      `fs.writeFileSync(${JSON.stringify(nestedPidFile)}, String(child.pid));`,
-      "process.exit(1);",
-    ]);
+    escapedPipeHolderPidFiles.add(nestedPidFile);
+    const launcherScript = writeEscapedPipeHolderLauncher(repoDir, nestedPidFile);
     let nestedPgid: number | undefined;
     try {
       const startedAt = Date.now();
       const result = await runSupervisedOperation(
         repoDir,
         "pipe-holder-operation.sh",
-        ["acquire_pr_operation_lock 42", `node '${launcherScript}'`],
+        [
+          "acquire_pr_operation_lock 42",
+          "begin_pr_operation_validation_phase",
+          "mark_pr_operation_side_effects_started",
+          `node '${launcherScript}'`,
+          "exit 1",
+        ],
         { accelerateTimeouts: true },
       );
       const elapsed = Date.now() - startedAt;
@@ -1359,6 +1512,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(processGroupExists(nestedPgid)).toBe(true);
       expect(result.stderr).toContain("operation lifetime did not drain");
       const ownerOid = refOid(repoDir);
+      expect(result.stderr).toContain(
+        "reason: child exited with code 1; notification pipe still open after drain deadline",
+      );
       killProcessGroup(nestedPgid, "SIGKILL");
       expect(await waitFor(() => !processGroupExists(nestedPgid!))).toBe(true);
       recoverOperationLock(repoDir, ownerOid);
@@ -1919,9 +2075,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("23 23");
   });
-  it("accepts only nonempty docs-only file lists", () => {
+  it("parses docs and mixed file lists without temp files or producer processes", () => {
     const repoDir = createRepo();
+    const unusableTmpDir = join(repoDir, "missing-tmp");
     const result = runLockShell(repoDir, [
+      `TMPDIR='${unusableTmpDir}'`,
+      "printf() { echo 'unexpected producer' >&2; return 99; }",
       "set +e",
       "file_list_is_docsish_only ''",
       'empty_status="$?"',
@@ -1929,10 +2088,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
       'docs_status="$?"',
       "file_list_is_docsish_only $'docs/guide.md\\nsrc/index.ts'",
       'mixed_status="$?"',
-      'printf "%s %s %s\\n" "$empty_status" "$docs_status" "$mixed_status"',
+      'command printf "%s %s %s\\n" "$empty_status" "$docs_status" "$mixed_status"',
     ]);
     expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("1 0 1");
+    expect(result.stderr).not.toContain("unexpected producer");
+    expect(readFileSync(commonScript, "utf8")).not.toMatch(/done\s+(?:<<<|<\s*<\()/u);
   });
   it("prunes a registered worktree whose directory is already gone", () => {
     const repoDir = createRepo();

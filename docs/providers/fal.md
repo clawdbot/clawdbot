@@ -35,8 +35,10 @@ generation.
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "fal/fal-ai/flux/dev",
+          mediaModels: {
+            image: {
+              primary: "fal/fal-ai/flux/dev",
+            },
           },
         },
       },
@@ -110,8 +112,10 @@ To use Krea 2 Medium:
 {
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "fal/krea/v2/medium/text-to-image",
+      mediaModels: {
+        image: {
+          primary: "fal/krea/v2/medium/text-to-image",
+        },
       },
     },
   },
@@ -166,8 +170,10 @@ The bundled `fal` video-generation provider defaults to
     {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "fal/bytedance/seedance-2.0/fast/text-to-video",
+          mediaModels: {
+            video: {
+              primary: "fal/bytedance/seedance-2.0/fast/text-to-video",
+            },
           },
         },
       },
@@ -180,8 +186,10 @@ The bundled `fal` video-generation provider defaults to
     {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
+          mediaModels: {
+            video: {
+              primary: "fal/bytedance/seedance-2.0/fast/reference-to-video",
+            },
           },
         },
       },
@@ -200,8 +208,10 @@ The bundled `fal` video-generation provider defaults to
     {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "fal/fal-ai/heygen/v2/video-agent",
+          mediaModels: {
+            video: {
+              primary: "fal/fal-ai/heygen/v2/video-agent",
+            },
           },
         },
       },
@@ -228,8 +238,10 @@ Use fal as the default music provider:
 {
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "fal/fal-ai/minimax-music/v2.6",
+      mediaModels: {
+        music: {
+          primary: "fal/fal-ai/minimax-music/v2.6",
+        },
       },
     },
   },

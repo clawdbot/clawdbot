@@ -12,13 +12,12 @@ import {
   resolveExpiresAtMsFromEpochSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
-
-const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 import { updateAuthProfileStoreWithLock } from "./store.js";
 import type {
   AuthProfileBlockedSource,
@@ -33,6 +32,8 @@ import {
   isModelScopedCooldownReason,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
+
+const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
@@ -71,6 +72,12 @@ function logDroppedAuthProfileBookkeeping(kind: string, profileId: string): void
     profileId,
     tags: ["auth_profiles", "persistence"],
   });
+}
+
+const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
+
+export function resolveInlineProviderApiKeyUsageId(provider: string): string {
+  return `${INLINE_API_KEY_USAGE_ID_PREFIX}${normalizeProviderId(provider)}`;
 }
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
@@ -245,12 +252,6 @@ function applyWhamCooldownResult(params: {
       resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
     ),
   };
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 async function probeWhamForCooldown(
@@ -761,6 +762,20 @@ export function resolveProfileUnusableUntilForDisplay(
   return resolveProfileUnusableUntil(stats);
 }
 
+export function resolveInlineProviderApiKeyUnusableUntil(
+  store: AuthProfileStore,
+  provider: string,
+): number | null {
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return null;
+  }
+  const stats = store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
+  if (!stats) {
+    return null;
+  }
+  return resolveProfileUnusableUntil(stats);
+}
+
 function resetUsageStats(
   existing: ProfileUsageStats | undefined,
   overrides?: Partial<ProfileUsageStats>,
@@ -1117,6 +1132,67 @@ export async function markAuthProfileBlockedUntil(params: {
   }
   if (updated === null) {
     logDroppedAuthProfileBookkeeping("blocked_until", profileId);
+  }
+}
+
+export async function markInlineProviderApiKeyFailure(params: {
+  store: AuthProfileStore;
+  provider: string;
+  reason: AuthProfileFailureReason;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  runId?: string;
+  modelId?: string;
+}): Promise<void> {
+  const { store, provider, reason, agentDir, runId, modelId } = params;
+  if (
+    (reason !== "auth" && reason !== "auth_permanent" && reason !== "billing") ||
+    isAuthCooldownBypassedForProvider(provider)
+  ) {
+    return;
+  }
+
+  const usageId = resolveInlineProviderApiKeyUsageId(provider);
+  const cfgResolved = resolveAuthCooldownConfig();
+
+  let nextStats: ProfileUsageStats | undefined;
+  let previousStats: ProfileUsageStats | undefined;
+  let updateTime = 0;
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+    agentDir,
+    updater: (freshStore) => {
+      const now = Date.now();
+      previousStats = freshStore.usageStats?.[usageId];
+      updateTime = now;
+      nextStats = computeNextProfileUsageStats({
+        existing: previousStats ?? {},
+        now,
+        reason,
+        cfgResolved,
+        modelId,
+      });
+      updateUsageStatsEntry(freshStore, usageId, () => nextStats as ProfileUsageStats);
+      return true;
+    },
+  });
+  if (updated) {
+    store.usageStats = updated.usageStats;
+    if (nextStats) {
+      logAuthProfileFailureStateChange({
+        runId,
+        profileId: usageId,
+        provider,
+        reason,
+        previous: previousStats,
+        next: nextStats,
+        now: updateTime,
+      });
+    }
+    notifyAuthProfileFailureHook();
+    return;
+  }
+  if (updated === null) {
+    logDroppedAuthProfileBookkeeping("inline_api_key_failure", usageId);
   }
 }
 

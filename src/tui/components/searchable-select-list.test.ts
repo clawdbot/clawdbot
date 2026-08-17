@@ -332,11 +332,8 @@ describe("SearchableSelectList", () => {
 
   it("discards compiled regexes from previous searches", () => {
     const queryLength = 300;
-    const list = new SearchableSelectList(
-      [{ value: "match", label: "a".repeat(queryLength) }],
-      5,
-      mockTheme,
-    );
+    const label = "a".repeat(queryLength);
+    const list = new SearchableSelectList([{ value: "match", label }], 5, mockTheme);
 
     for (let index = 0; index < queryLength; index += 1) {
       list.handleInput("a");
@@ -345,7 +342,8 @@ describe("SearchableSelectList", () => {
 
     const regexCache = (list as unknown as { regexCache: Map<string, RegExp> }).regexCache;
     expect(regexCache.size).toBe(1);
-    expect(list.render(queryLength + 10).join("\n")).toContain(`*${"a".repeat(queryLength)}*`);
+    expect(regexCache.has(label)).toBe(true);
+    expect(list.render(queryLength + 10).join("\n")).toContain(`*${label}*`);
   });
 
   it("shows no match message when filter yields no results", () => {
@@ -398,6 +396,52 @@ describe("SearchableSelectList", () => {
     list.handleInput("\r");
 
     expect(selectedValue).toBe("anthropic/claude-3-opus");
+  });
+
+  it("sanitizes rendered fields before applying trusted highlighting", () => {
+    const attacks = [
+      "\u001b[38;5;201m",
+      "\u001b[3J",
+      "\u001b]0;search-title\u0007",
+      "\u001b]52;c;search-clipboard\u0007",
+      "\u009b2K",
+      "\u009d0;search-c1-title\u009c",
+    ];
+    const rawValue = `selector-value-start${attacks[1]}selector-value-end\r\nمرحبا\tשלום`;
+    const description = `selector-description-start${attacks[3]}selector-description-end\n東京`;
+    const list = new SearchableSelectList(
+      [
+        {
+          value: rawValue,
+          label: attacks.join(""),
+          description,
+          searchText: "selector-target",
+        },
+      ],
+      5,
+      ansiHighlightTheme,
+    );
+    let selectedValue: string | undefined;
+    list.onSelect = (item) => {
+      selectedValue = item.value;
+    };
+
+    typeInput(list, "selector");
+    const rendered = list.render(160).join("\n");
+    const plainRendered = stripAnsi(rendered);
+
+    expect(rendered).toContain("\u001b[31mselector\u001b[0m-value-start");
+    expect(plainRendered).toContain("selector-description-startselector-description-end 東京");
+    expect(plainRendered).toContain("مرحبا שלום");
+    expect(plainRendered).toContain("\u2067");
+    expect(plainRendered).toContain("\u2069");
+    for (const attack of attacks) {
+      expect(rendered).not.toContain(attack);
+    }
+    expect(rendered).not.toContain("selector-value-end\r\nمرحبا\tשלום");
+
+    list.handleInput("\r");
+    expect(selectedValue).toBe(rawValue);
   });
 
   it("calls onCancel when escape is pressed", () => {

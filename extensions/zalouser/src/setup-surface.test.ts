@@ -7,9 +7,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import "./zalo-js.test-mocks.js";
-import { zalouserSetupWizard } from "./setup-surface.js";
-import { zalouserSetupPlugin } from "./setup-test-helpers.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
   checkZaloAuthenticatedMock,
   logoutZaloProfileMock,
@@ -17,6 +16,8 @@ import {
   resolveZaloGroupsByEntriesMock,
   startZaloQrLoginMock,
 } from "./zalo-js.test-mocks.js";
+import { zalouserSetupWizard } from "./setup-surface.js";
+import { zalouserSetupPlugin } from "./setup-test-helpers.js";
 
 const zalouserConfigure = createPluginSetupWizardConfigure(zalouserSetupPlugin);
 

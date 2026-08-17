@@ -190,7 +190,7 @@ describe("detectChangedScope", () => {
     });
     expect(detectChangedScope(["apps/ios/Sources/RootTabs.swift"])).toEqual({
       runNode: false,
-      runMacos: true,
+      runMacos: false,
       runIosBuild: true,
       runAndroid: false,
       runWindows: false,
@@ -262,6 +262,7 @@ describe("detectChangedScope", () => {
     for (const helperPath of [
       "scripts/ios-team-id.sh",
       "scripts/ios-write-swift-filelist.mjs",
+      "scripts/ios-write-swift-filelist.mts",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
       "scripts/lib/release-version.mjs",
@@ -511,7 +512,7 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
       runUiTests: false,
     });
-    expect(detectChangedScope(["scripts/npm-runner.mjs"])).toEqual({
+    expect(detectChangedScope(["scripts/npm-runner.mts"])).toEqual({
       runNode: true,
       runMacos: false,
       runIosBuild: false,
@@ -522,7 +523,7 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
       runUiTests: false,
     });
-    expect(detectChangedScope(["scripts/lib/format-generated-module.mjs"])).toEqual({
+    expect(detectChangedScope(["scripts/lib/format-generated-module.mts"])).toEqual({
       runNode: true,
       runMacos: false,
       runIosBuild: false,
@@ -866,7 +867,7 @@ describe("detectChangedScope", () => {
     "ui/src/pages/chat/chat-realtime.test.ts",
     "ui/package.json",
     "test/vitest/vitest.shared.config.ts",
-    "scripts/ensure-playwright-chromium.mjs",
+    "scripts/ensure-playwright-chromium.mts",
   ])("runs control-ui tests for %s", (changedPath) => {
     expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
   });
@@ -881,7 +882,7 @@ describe("detectChangedScope", () => {
         bundledCapabilityMetadataPath,
         "src/plugins/contracts/registry.ts",
         "src/plugins/contracts/tts-contract-suites.ts",
-        "scripts/test-projects.test-support.mjs",
+        "scripts/test-projects.test-support.mts",
         "test/scripts/test-projects.test.ts",
       ]),
     ).toEqual({
@@ -896,10 +897,13 @@ describe("detectChangedScope", () => {
       detectNodeFastScope([
         "scripts/check-changed.mjs",
         "scripts/ci-changed-scope.mjs",
-        "scripts/run-vitest.mjs",
-        "scripts/test-projects.test-support.d.mts",
+        "scripts/run-vitest.mts",
+        "scripts/test-projects.test-support.mts",
         "src/commands/status.scan-result.test.ts",
+        "src/scripts/ci-changed-scope.control-ui.test.ts",
+        "src/scripts/ci-changed-scope.native-i18n.test.ts",
         "src/scripts/ci-changed-scope.test.ts",
+        "src/scripts/ci-changed-scope.windows.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/run-vitest.test.ts",
         "test/scripts/test-projects.test.ts",
@@ -1008,43 +1012,46 @@ describe("detectChangedScope", () => {
     expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).changed_paths_json).toBe("null");
   });
 
-  it("keeps direct CLI preflight empty diffs as no-op scope", () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-"));
+  it("loads from a zero-install tree and keeps empty diffs as no-op scope", () => {
+    const repoDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-")),
+    );
     tempDirs.push(repoDir);
     const outputPath = path.join(repoDir, "github-output.txt");
-    const scriptPath = path.resolve("scripts/ci-changed-scope.mjs");
+    const scriptPath = path.join(repoDir, "scripts/ci-changed-scope.mjs");
 
     execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
     execFileSync("git", ["config", "user.email", "ci@example.invalid"], { cwd: repoDir });
     execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
+    for (const sourcePath of [
+      "scripts/ci-changed-scope.mjs",
+      "scripts/lib/changed-path-facts.mjs",
+      "scripts/lib/direct-run.mjs",
+      "scripts/lib/merge-head-diff-base.mjs",
+    ]) {
+      writeRepoFile(repoDir, sourcePath, fs.readFileSync(path.resolve(sourcePath), "utf8"));
+    }
     fs.writeFileSync(path.join(repoDir, "README.md"), "test\n", "utf8");
     execFileSync("git", ["add", "README.md"], { cwd: repoDir });
     execFileSync("git", ["commit", "-m", "test"], { cwd: repoDir });
 
+    expect(fs.existsSync(path.join(repoDir, "node_modules"))).toBe(false);
     execFileSync(process.execPath, [scriptPath, "--base", "HEAD", "--head", "HEAD"], {
       cwd: repoDir,
       env: { ...process.env, GITHUB_OUTPUT: outputPath },
     });
 
-    expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8"))).toEqual({
-      run_node: "false",
-      run_macos: "false",
-      run_ios_build: "false",
-      run_android: "false",
-      run_windows: "false",
-      run_skills_python: "false",
-      run_changed_smoke: "false",
-      run_node_fast_only: "false",
-      run_node_fast_plugin_contracts: "false",
-      run_node_fast_ci_routing: "false",
-      run_fast_install_smoke: "false",
-      run_full_install_smoke: "false",
-      run_control_ui_i18n: "false",
-      strict_control_ui_i18n: "false",
-      run_ui_tests: "false",
-      run_native_i18n: "false",
-      strict_native_i18n: "false",
-      changed_paths_json: "[]",
-    });
+    const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
+    expect(Object.keys(output).toSorted()).toEqual(
+      "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
+        " ",
+      ),
+    );
+    expect(output.changed_paths_json).toBe("[]");
+    for (const [key, value] of Object.entries(output)) {
+      if (key !== "changed_paths_json") {
+        expect(value, key).toBe("false");
+      }
+    }
   });
 });

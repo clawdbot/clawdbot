@@ -1255,28 +1255,33 @@ describe("msteamsPlugin message actions", () => {
 
   it.each([
     {
+      action: "read",
+      params: { to: graphChannelTarget, messageId: "msg-1" },
+      runtimeMock: getMessageMSTeamsMock,
+    },
+    {
       action: "edit",
-      params: { to: targetChannelId, messageId: "msg-1", content: "updated" },
+      params: { to: graphChannelTarget, messageId: "msg-1", content: "updated" },
       runtimeMock: editMessageMSTeamsMock,
     },
     {
       action: "delete",
-      params: { to: targetChannelId, messageId: "msg-1" },
+      params: { to: graphChannelTarget, messageId: "msg-1" },
       runtimeMock: deleteMessageMSTeamsMock,
     },
     {
       action: "pin",
-      params: { to: targetChannelId, messageId: "msg-1" },
+      params: { to: graphChannelTarget, messageId: "msg-1" },
       runtimeMock: pinMessageMSTeamsMock,
     },
     {
       action: "unpin",
-      params: { to: targetChannelId, pinnedMessageId: "pin-1" },
+      params: { to: graphChannelTarget, pinnedMessageId: "pin-1" },
       runtimeMock: unpinMessageMSTeamsMock,
     },
     {
       action: "react",
-      params: { to: targetChannelId, messageId: "msg-1", emoji: "like" },
+      params: { to: graphChannelTarget, messageId: "msg-1", emoji: "like" },
       runtimeMock: reactMessageMSTeamsMock,
     },
   ])("rejects a blocked $action target before the provider operation", async (testCase) => {

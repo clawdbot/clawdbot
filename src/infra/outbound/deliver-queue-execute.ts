@@ -24,17 +24,13 @@ import {
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { runOutboundDeliveryCommitHooks } from "./delivery-commit-hooks.js";
-import {
-  completeDurableDelivery,
-  rejectDurableDelivery,
-  suppressDurableDelivery,
-} from "./delivery-completion.js";
+import { rejectDurableDelivery, settleDurableDelivery } from "./delivery-completion.js";
 import {
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,
@@ -51,7 +47,15 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   queueId: string | null,
   auditStartedAt: number,
   producerClaimId?: string,
+  producerLeaseSignal?: AbortSignal,
 ): Promise<OutboundDeliveryResult[]> {
+  // Lease loss revokes queue mutation authority. Caller cancellation still
+  // follows the normal abort cleanup path through the combined signal.
+  const throwIfProducerLeaseLost = (): void => {
+    if (producerLeaseSignal?.aborted) {
+      throw producerLeaseSignal.reason;
+    }
+  };
   const payloadCount = params.preparedBatch?.sourcePayloadCount ?? params.payloads.length;
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
@@ -65,9 +69,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     ownsAuditTerminal && hasTrustedMessageAuditListeners()
       ? ([] as OutboundPayloadDeliveryOutcome[])
       : undefined;
-  // Recipient custody must observe ambiguous adapter outcomes even when no
-  // audit listener is installed; audit subscriptions are not delivery proof.
-  const stablePayloadOutcomes = producerClaimId
+  const reusableProducerClaimId = params.reusePendingDeliveryIntent ? producerClaimId : undefined;
+  // Reusable producer custody must observe ambiguous adapter outcomes even when
+  // no audit listener is installed; audit subscriptions are not delivery proof.
+  const stablePayloadOutcomes = reusableProducerClaimId
     ? ([] as OutboundPayloadDeliveryOutcome[])
     : undefined;
   const queuePolicy = params.queuePolicy ?? "best_effort";
@@ -78,9 +83,22 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     params.requireUnknownSendReconciliation === true && platformQueueId !== undefined;
   let queuedPreSendState: QueuedPreSendState | undefined;
   let queuedPostSendState: QueuedPostSendState | undefined;
+  let platformSendStarted = false;
   let platformSendRoute: PlatformSendRoute | undefined;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
+  const settleDeliveryCompletion = async (
+    result: OutboundDeliveryResult | undefined,
+  ): Promise<void> => {
+    if (!params.deliveryCompletion) {
+      return;
+    }
+    await settleDurableDelivery(
+      params.deliveryCompletion,
+      result ? { result } : { platformSendStarted },
+      platformQueueStateDir,
+    );
+  };
   // Deliberately process-local: message_sent is best-effort after queue
   // settlement, not a durable plugin outbox or a reason to retry delivery.
   const messageSentEvents: MessageSentEvent[] = [];
@@ -118,6 +136,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       })
     : undefined;
   const ackOwnedQueue = (options?: { suppressCompletionReceipt?: boolean }) => {
+    throwIfProducerLeaseLost();
     if (!queueOwner) {
       throw new Error("Queued delivery acknowledgement requires a queue id");
     }
@@ -127,19 +146,22 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     record: typeof failDelivery | typeof failDeliveryAfterPlatformSend,
     error: string,
   ) => {
+    throwIfProducerLeaseLost();
     if (!queueOwner) {
       throw new Error("Queued delivery failure requires a queue id");
     }
     return queueOwner.fail(record, error);
   };
   const persistOwnedPostSendState = () => {
+    throwIfProducerLeaseLost();
     if (!queueId) {
       throw new Error("Queued delivery post-send state requires a queue id");
     }
     return persistQueuedPostSendState({
       queueId,
       queuePolicy,
-      ...(producerClaimId ? { producerClaimId } : {}),
+      ...(reusableProducerClaimId ? { producerClaimId: reusableProducerClaimId } : {}),
+      ...(producerClaimId ? { expectedPlatformSendAttemptId: producerClaimId } : {}),
     });
   };
   const emitTerminals = (
@@ -174,6 +196,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       : { deliveryQueueId: undefined }),
     requiredUnknownSendReconciliation: exactReconciliationRequired,
     onPlatformSendStart: async (route) => {
+      params.abortSignal?.throwIfAborted();
       platformSendRoute = route;
       if (platformQueueId && !exactReconciliationRequired && queuedPreSendState === undefined) {
         queuedPreSendState = await persistQueuedPreSendState({
@@ -190,10 +213,16 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           queuedPostSendState = "acked";
         }
       }
+      params.abortSignal?.throwIfAborted();
       await params.onPlatformSendStart?.(route);
+      params.abortSignal?.throwIfAborted();
+      platformSendStarted = true;
     },
     onPlatformSendDispatch: async () => {
-      if (platformQueueId && queuedPreSendState !== "acked") {
+      params.abortSignal?.throwIfAborted();
+      // Once any payload returns an identity, unknown-after-send protects the whole batch.
+      // A later payload dispatch must not regress that durable evidence to attempt-started.
+      if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
         try {
           if (producerClaimId) {
             await markDeliveryPlatformSendDispatched(
@@ -211,6 +240,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           }
           queuedPreSendState ??= "marked";
         } catch (dispatchMarkError) {
+          // Any SQLite-fenced live producer must prove it still owns the row at
+          // dispatch. Continuing after a failed refresh can outlive the lease and
+          // let recovery duplicate a recipient-visible send.
           if (exactReconciliationRequired || producerClaimId) {
             throw dispatchMarkError;
           }
@@ -219,9 +251,12 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       }
+      params.abortSignal?.throwIfAborted();
       await params.onPlatformSendDispatch?.();
+      params.abortSignal?.throwIfAborted();
     },
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
+      throwIfProducerLeaseLost();
       hadPartialFailure = true;
       lastPayloadError = err;
       partialFailuresAreProvenNotSent &&= isProvenDeliveryNotSentError(err);
@@ -251,9 +286,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   let platformResultsReturned = false;
 
   try {
+    throwIfProducerLeaseLost();
     const results = await deliverOutboundPayloadsCore(wrappedParams);
     // Core reconciles adapter progress objects with hook-bearing final results.
     deliveredResults = results;
+    throwIfProducerLeaseLost();
     platformResultsReturned = true;
     if (
       queueId &&
@@ -274,13 +311,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       });
     }
     if (!queueId) {
-      if (params.deliveryCompletion) {
-        if (results.length > 0) {
-          completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
-        } else {
-          suppressDurableDelivery(params.deliveryCompletion);
-        }
-      }
+      await settleDeliveryCompletion(results.at(-1));
       if (!params.deferCommitHooks) {
         flushMessageSentEvents();
         await runOutboundDeliveryCommitHooks(results);
@@ -334,13 +365,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       } else {
-        if (params.deliveryCompletion) {
-          if (results.length > 0) {
-            completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
-          } else {
-            suppressDurableDelivery(params.deliveryCompletion);
-          }
-        }
         const postSendState =
           queuedPostSendState ??
           (results.length > 0 || queuedPreSendState === "marked"
@@ -348,6 +372,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             : queuedPreSendState === "acked"
               ? "acked"
               : undefined);
+        await settleDeliveryCompletion(results.at(-1));
         if (results.length === 0 && postSendState === "marked") {
           // The provider was invoked but returned no recipient-visible identity;
           // never convert that ambiguous platform outcome into a success receipt.
@@ -421,9 +446,16 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
     return results;
   } catch (err) {
+    throwIfProducerLeaseLost();
     if (err instanceof OutboundDeliveryError && err.results.length > 0) {
       deliveredResults = err.results;
     }
+    const hasPlatformSendEvidence =
+      deliveredResults.length > 0 ||
+      queuedPreSendState === "marked" ||
+      queuedPostSendState === "marked" ||
+      (err instanceof OutboundDeliveryError && err.sentBeforeError) ||
+      stablePayloadOutcomes?.some((outcome) => outcome.status === "sent") === true;
     if (queueId) {
       if (queuedPreSendState === "acked") {
         // Best-effort fallback removed durable custody before provider I/O.
@@ -438,13 +470,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           }),
         );
       } else if (isDeliveryAbortError(err)) {
-        const ambiguousStableAbort =
-          producerClaimId !== undefined &&
-          (deliveredResults.length > 0 ||
-            queuedPreSendState === "marked" ||
-            queuedPostSendState === "marked" ||
-            stablePayloadOutcomes?.some((outcome) => outcome.status === "sent"));
-        if (ambiguousStableAbort) {
+        if (hasPlatformSendEvidence) {
           if (queuedPostSendState !== "failed") {
             await recordOwnedQueueFailure(
               failDeliveryAfterPlatformSend,
@@ -457,6 +483,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
               outcome: "unknown",
               failureStage: "platform_send",
             }),
+          );
+        } else if (params.abortSignal?.aborted !== true) {
+          await recordOwnedQueueFailure(failDelivery, formatErrorMessage(err)).catch(
+            (failErr: unknown) => {
+              log.warn(
+                `failed to preserve queued delivery ${queueId} after provider abort: ${formatErrorMessage(failErr)}`,
+              );
+            },
           );
         } else if (
           await (
@@ -526,7 +560,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                 terminalRejectionHandled = true;
               } else {
                 if (params.deliveryCompletion) {
-                  rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
+                  await rejectDurableDelivery(
+                    params.deliveryCompletion,
+                    permanentRejection.message,
+                    platformQueueStateDir,
+                  );
                   ownerRejected = true;
                 }
                 await (producerClaimId

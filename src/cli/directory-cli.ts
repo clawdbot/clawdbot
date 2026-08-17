@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Directory CLI for chat-channel identity lookup: self, peers, groups, and group members.
 import {
   normalizeOptionalString,
@@ -5,16 +6,20 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatHelpExamples } from "./help-format.js";
@@ -37,6 +42,12 @@ function buildRows(entries: Array<{ id: string; name?: string | undefined }>) {
   }));
 }
 
+function formatDirectoryScope(channelId: string, accountId: string): string {
+  const channel = JSON.stringify(sanitizeTerminalText(channelId));
+  const account = JSON.stringify(sanitizeTerminalText(accountId));
+  return `channel ${channel}, account ${account}`;
+}
+
 function printDirectoryList(params: {
   title: string;
   emptyMessage: string;
@@ -50,7 +61,7 @@ function printDirectoryList(params: {
   const tableWidth = getTerminalTableWidth();
   defaultRuntime.log(`${theme.heading(params.title)} ${theme.muted(`(${params.entries.length})`)}`);
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: tableWidth,
       columns: [
         { key: "ID", header: "ID", minWidth: 16, flex: true },
@@ -131,17 +142,18 @@ export function registerDirectoryCli(program: Command) {
     const selection = explicitChannel
       ? {
           channel: resolvedExplicit?.channelId,
+          plugin: resolvedExplicit?.plugin,
         }
       : await resolveMessageChannelSelection({
           cfg,
           channel: opts.channel ?? null,
         });
-    const channelId = selection.channel;
-    const plugin =
-      resolvedExplicit?.plugin ?? (channelId ? getChannelPlugin(channelId) : undefined);
+    const selectedChannelId = selection.channel;
+    const plugin = selection.plugin;
     if (!plugin) {
-      throw new Error(`Unsupported channel: ${String(channelId)}`);
+      throw new Error(`Unsupported channel: ${String(selectedChannelId)}`);
     }
+    const channelId = selectedChannelId ?? plugin.id;
     const accountId =
       normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
     return { cfg, channelId, accountId, plugin };
@@ -183,12 +195,28 @@ export function registerDirectoryCli(program: Command) {
       defaultRuntime.writeJson(result);
       return;
     }
-    printDirectoryList({ title: params.title, emptyMessage: params.emptyMessage, entries: result });
+    printDirectoryList({
+      title: params.title,
+      emptyMessage: `${params.emptyMessage} for ${formatDirectoryScope(channelId, accountId)}.`,
+      entries: result,
+    });
+  };
+
+  const runDirectoryAction = async (opts: { json?: unknown }, action: () => Promise<void>) => {
+    try {
+      await action();
+    } catch (err) {
+      if (opts.json) {
+        throw err;
+      }
+      defaultRuntime.error(danger(formatErrorMessage(err)));
+      defaultRuntime.exit(1);
+    }
   };
 
   withChannel(directory.command("self").description("Show the current account user")).action(
-    async (opts) => {
-      try {
+    (opts) =>
+      runDirectoryAction(opts, async () => {
         const { cfg, channelId, accountId, plugin } = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
@@ -198,18 +226,36 @@ export function registerDirectoryCli(program: Command) {
           throw new Error(`Channel ${channelId} does not support directory self`);
         }
         const result = await fn({ cfg, accountId, runtime: defaultRuntime });
-        if (opts.json) {
-          defaultRuntime.writeJson(result);
+        if (!result) {
+          const unsupported = fn === nullChannelDirectorySelf;
+          if (opts.json) {
+            defaultRuntime.writeJson({
+              status: "unavailable",
+              channel: channelId,
+              accountId,
+              reason: unsupported
+                ? "self-identity-unsupported"
+                : "plugin-returned-no-self-identity",
+            });
+          } else {
+            defaultRuntime.log(
+              theme.muted(
+                unsupported
+                  ? `Channel ${JSON.stringify(sanitizeTerminalText(channelId))} does not expose a self identity.`
+                  : `No self identity was returned for ${formatDirectoryScope(channelId, accountId)}. Verify the account is configured and authenticated, then retry.`,
+              ),
+            );
+          }
           return;
         }
-        if (!result) {
-          defaultRuntime.log(theme.muted("Not available."));
+        if (opts.json) {
+          defaultRuntime.writeJson(result);
           return;
         }
         const tableWidth = getTerminalTableWidth();
         defaultRuntime.log(theme.heading("Self"));
         defaultRuntime.log(
-          renderTable({
+          renderTerminalSafeTable({
             width: tableWidth,
             columns: [
               { key: "ID", header: "ID", minWidth: 16, flex: true },
@@ -218,50 +264,40 @@ export function registerDirectoryCli(program: Command) {
             rows: buildRows([result]),
           }).trimEnd(),
         );
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    },
+      }),
   );
 
   const peers = directory.command("peers").description("Peer directory (contacts/users)");
   withChannel(peers.command("list").description("List peers"))
     .option("--query <text>", "Optional search query")
     .option("--limit <n>", "Limit results")
-    .action(async (opts) => {
-      try {
+    .action((opts) =>
+      runDirectoryAction(opts, async () => {
         await runDirectoryList({
           opts,
           action: "listPeers",
           unsupported: "peers",
           title: "Peers",
-          emptyMessage: "No peers found.",
+          emptyMessage: "No peers found",
         });
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
+      }),
+    );
 
   const groups = directory.command("groups").description("Group directory");
   withChannel(groups.command("list").description("List groups"))
     .option("--query <text>", "Optional search query")
     .option("--limit <n>", "Limit results")
-    .action(async (opts) => {
-      try {
+    .action((opts) =>
+      runDirectoryAction(opts, async () => {
         await runDirectoryList({
           opts,
           action: "listGroups",
           unsupported: "groups",
           title: "Groups",
-          emptyMessage: "No groups found.",
+          emptyMessage: "No groups found",
         });
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
+      }),
+    );
 
   withChannel(
     groups
@@ -270,8 +306,8 @@ export function registerDirectoryCli(program: Command) {
       .requiredOption("--group-id <id>", "Group id"),
   )
     .option("--limit <n>", "Limit results")
-    .action(async (opts) => {
-      try {
+    .action((opts) =>
+      runDirectoryAction(opts, async () => {
         const limit = parseLimit(opts.limit);
         const { cfg, channelId, accountId, plugin } = await resolve({
           channel: opts.channel as string | undefined,
@@ -298,12 +334,9 @@ export function registerDirectoryCli(program: Command) {
         }
         printDirectoryList({
           title: "Group Members",
-          emptyMessage: "No group members found.",
+          emptyMessage: `No group members found for group ${JSON.stringify(sanitizeTerminalText(groupId))}, ${formatDirectoryScope(channelId, accountId)}.`,
           entries: result,
         });
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
+      }),
+    );
 }

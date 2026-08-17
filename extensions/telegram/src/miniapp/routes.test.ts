@@ -5,6 +5,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createTelegramMiniAppLaunchTickets,
+  type TelegramMiniAppLaunchTickets,
+} from "./launch-ticket.js";
 
 type OpenClawPluginHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 
@@ -33,6 +37,7 @@ const { registerTelegramMiniAppRoutes } = await import("./routes.js");
 
 const BOT_TOKEN = "fixture";
 let signedNonceSequence = 0;
+let launchTickets: TelegramMiniAppLaunchTickets;
 
 class MockResponse {
   statusCode = 200;
@@ -59,7 +64,7 @@ function createRoute(cfg: OpenClawConfig): OpenClawPluginHttpRouteParams {
       route = params;
     },
   });
-  registerTelegramMiniAppRoutes(api);
+  registerTelegramMiniAppRoutes(api, launchTickets);
   if (!route) {
     throw new Error("expected miniapp route registration");
   }
@@ -111,8 +116,19 @@ function signedInitData(userId: string, nonce: string): string {
   return params.toString();
 }
 
+function authBody(params: { userId?: string; nonce: string; accountId?: string }): string {
+  const userId = params.userId ?? "123456";
+  const accountId = params.accountId ?? "default";
+  return JSON.stringify({
+    initData: signedInitData(userId, params.nonce),
+    accountId,
+    launchTicket: launchTickets.issue({ accountId, userId }),
+  });
+}
+
 describe("registerTelegramMiniAppRoutes", () => {
   beforeEach(() => {
+    launchTickets = createTelegramMiniAppLaunchTickets();
     issueDeviceBootstrapToken.mockClear();
     resolveTelegramMiniAppUrls.mockClear();
   });
@@ -138,10 +154,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       method: "POST",
       url: "/__openclaw_tg_miniapp/auth",
       contentType: "application/json; charset=utf-8",
-      body: JSON.stringify({
-        initData: signedInitData("123456", "success"),
-        accountId: "default",
-      }),
+      body: authBody({ nonce: "success" }),
     });
 
     expect(res.statusCode).toBe(200);
@@ -168,12 +181,13 @@ describe("registerTelegramMiniAppRoutes", () => {
   it("rejects replayed init-data without minting again", async () => {
     const route = createRoute(config());
     const initData = signedInitData("123456", "replay");
+    const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
     await callRoute({
       route,
       method: "POST",
       url: "/__openclaw_tg_miniapp/auth",
       contentType: "application/json",
-      body: JSON.stringify({ initData }),
+      body: JSON.stringify({ initData, launchTicket }),
       ip: "203.0.113.20",
     });
     const replay = await callRoute({
@@ -181,7 +195,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       method: "POST",
       url: "/__openclaw_tg_miniapp/auth",
       contentType: "application/json",
-      body: JSON.stringify({ initData }),
+      body: JSON.stringify({ initData, launchTicket }),
       ip: "203.0.113.20",
     });
 
@@ -193,6 +207,7 @@ describe("registerTelegramMiniAppRoutes", () => {
   it("reserves validated init-data before minting", async () => {
     const route = createRoute(config());
     const initData = signedInitData("123456", "concurrent");
+    const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
 
     const responses = await Promise.all([
       callRoute({
@@ -200,7 +215,7 @@ describe("registerTelegramMiniAppRoutes", () => {
         method: "POST",
         url: "/__openclaw_tg_miniapp/auth",
         contentType: "application/json",
-        body: JSON.stringify({ initData }),
+        body: JSON.stringify({ initData, launchTicket }),
         ip: "203.0.113.21",
       }),
       callRoute({
@@ -208,7 +223,7 @@ describe("registerTelegramMiniAppRoutes", () => {
         method: "POST",
         url: "/__openclaw_tg_miniapp/auth",
         contentType: "application/json",
-        body: JSON.stringify({ initData }),
+        body: JSON.stringify({ initData, launchTicket }),
         ip: "203.0.113.22",
       }),
     ]);
@@ -219,17 +234,66 @@ describe("registerTelegramMiniAppRoutes", () => {
 
   it("rejects non-owner Mini App auth requests", async () => {
     const route = createRoute(config(["999999"]));
+    const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
     const res = await callRoute({
       route,
       method: "POST",
       url: "/__openclaw_tg_miniapp/auth",
       contentType: "application/json",
-      body: JSON.stringify({ initData: signedInitData("123456", "non-owner") }),
+      body: JSON.stringify({
+        initData: signedInitData("123456", "non-owner"),
+        launchTicket,
+      }),
       ip: "203.0.113.30",
     });
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toBe("Restricted to the bot owner.");
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(
+      launchTickets.consume({ ticket: launchTicket, accountId: "default", userId: "123456" }),
+    ).toBe(true);
+  });
+
+  it("rejects owner init-data without an issued launch ticket", async () => {
+    const route = createRoute(config());
+    const res = await callRoute({
+      route,
+      method: "POST",
+      url: "/__openclaw_tg_miniapp/auth",
+      contentType: "application/json",
+      body: JSON.stringify({
+        initData: signedInitData("123456", "missing-ticket"),
+        launchTicket: "not-issued",
+      }),
+      ip: "203.0.113.31",
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toBe("This link expired. Reopen the dashboard from your bot chat.");
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+  });
+
+  it("does not consume a launch ticket when URL resolution fails", async () => {
+    resolveTelegramMiniAppUrls.mockRejectedValueOnce(new Error("not published"));
+    const route = createRoute(config());
+    const initData = signedInitData("123456", "url-retry");
+    const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
+    const request = {
+      route,
+      method: "POST",
+      url: "/__openclaw_tg_miniapp/auth",
+      contentType: "application/json",
+      body: JSON.stringify({ initData, launchTicket }),
+      ip: "203.0.113.32",
+    };
+
+    const unavailable = await callRoute(request);
+    const retry = await callRoute(request);
+
+    expect(unavailable.statusCode).toBe(503);
+    expect(retry.statusCode).toBe(200);
+    expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
   });
 
   it("rate-limits repeated auth requests by IP", async () => {
@@ -241,7 +305,7 @@ describe("registerTelegramMiniAppRoutes", () => {
         method: "POST",
         url: "/__openclaw_tg_miniapp/auth",
         contentType: "application/json",
-        body: JSON.stringify({ initData: signedInitData("123456", `rate-${i}`) }),
+        body: authBody({ nonce: `rate-${i}` }),
         ip: "203.0.113.40",
       });
     }

@@ -6,6 +6,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { claimAgentRunContext, getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -50,7 +51,9 @@ function createController(options: {
   runId?: string;
 }) {
   let lifecycleGeneration = options.lifecycleGeneration;
+  const runId = options.runId ?? "run-1";
   let params: LaneParams = {
+    admittedRunContext: createTestAdmittedRunContext(runId),
     agentId: "main",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -58,7 +61,7 @@ function createController(options: {
     workspaceDir: "/tmp/workspace",
     prompt: "hello",
     timeoutMs: 30_000,
-    runId: options.runId ?? "run-1",
+    runId,
     lifecycleGeneration,
     trigger: options.trigger,
     enqueue: options.enqueue,

@@ -19,8 +19,6 @@ import { setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 const saveRemoteMedia = vi.fn();
-const saveMediaBuffer = vi.fn();
-const readRemoteMediaBuffer = vi.fn();
 const rootRead = vi.fn();
 const { triggerInternalHookMock } = vi.hoisted(() => ({
   triggerInternalHookMock: vi.fn<(event: unknown) => Promise<void>>(async () => undefined),
@@ -43,35 +41,11 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", () => ({
   }),
 }));
 
-vi.mock("./bot/delivery.resolve-media.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
-  );
+vi.mock("./telegram-media.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./telegram-media.runtime.js")>();
   return {
-    readRemoteMediaBuffer: (...args: unknown[]) => readRemoteMediaBuffer(...args),
-    formatErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
-    logVerbose: () => {},
-    MediaFetchError: actual.MediaFetchError,
-    resolveTelegramApiBase: (apiRoot?: string) =>
-      apiRoot?.trim() ? apiRoot.replace(/\/+$/u, "") : "https://api.telegram.org",
-    retryAsync: async (fn: () => unknown) => await fn(),
-    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
-    saveRemoteMedia: async (...args: unknown[]) => {
-      try {
-        return await saveRemoteMedia(...args);
-      } catch (err) {
-        if (err instanceof actual.MediaFetchError) {
-          throw err;
-        }
-        throw new actual.MediaFetchError(
-          "fetch_failed",
-          err instanceof Error ? err.message : String(err),
-          { cause: err },
-        );
-      }
-    },
-    shouldRetryTelegramTransportFallback: vi.fn(() => false),
-    warn: (s: string) => s,
+    ...actual,
+    saveRemoteMedia: (...args: unknown[]) => saveRemoteMedia(...args),
   };
 });
 
@@ -391,7 +365,9 @@ function expectTelegramDownloadWarning(messageId: number, warning?: string) {
 
 function rejectFirstTelegramAlbumDownloadWhen(partial: boolean) {
   if (partial) {
-    saveRemoteMedia.mockRejectedValueOnce(new Error("MediaFetchError: Failed to fetch media"));
+    saveRemoteMedia.mockRejectedValueOnce(
+      new MediaFetchError("fetch_failed", "Failed to fetch media"),
+    );
   }
 }
 
@@ -399,9 +375,10 @@ async function rejectTelegramAlbumDownload(shutdown: AbortController, abort: boo
   if (abort) {
     shutdown.abort();
   }
-  throw abort
+  const cause = abort
     ? Object.assign(new Error("aborted"), { name: "AbortError" })
-    : new Error("MediaFetchError: Failed to fetch media");
+    : new Error("Failed to fetch media");
+  throw new MediaFetchError("fetch_failed", cause.message, { cause });
 }
 
 describe("createTelegramBot channel_post media", () => {
@@ -443,7 +420,7 @@ describe("createTelegramBot channel_post media", () => {
         const response = await params.fetchImpl(params.url);
         const buffer = new Uint8Array(await response.arrayBuffer());
         if (buffer.length > params.maxBytes) {
-          throw new Error(`media exceeds ${params.maxBytes} MB limit`);
+          throw new MediaFetchError("max_bytes", `payload exceeds maxBytes ${params.maxBytes}`);
         }
         return {
           path: "/tmp/telegram-media.bin",
@@ -451,8 +428,6 @@ describe("createTelegramBot channel_post media", () => {
         };
       },
     );
-    saveMediaBuffer.mockReset();
-    readRemoteMediaBuffer.mockReset();
     rootRead.mockReset();
   });
 
@@ -532,7 +507,6 @@ describe("createTelegramBot channel_post media", () => {
 
   it("dispatches an oversized channel_post as a type-only media fact", async () => {
     setOpenChannelPostConfig();
-
     const fetchSpy = createImageFetchSpy({
       body: new Uint8Array([0xff, 0xd8, 0xff, 0x00]),
       contentType: "image/jpeg",
@@ -550,13 +524,16 @@ describe("createTelegramBot channel_post media", () => {
     );
 
     expect(replySpy).toHaveBeenCalledOnce();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
     expectTypeOnlyMediaPayload("image");
     fetchSpy.mockRestore();
   });
 
   it("notifies users when media download fails for direct messages", async () => {
     setOpenTelegramDirectConfig();
-    saveRemoteMedia.mockRejectedValueOnce(new Error("MediaFetchError: Failed to fetch media"));
+    saveRemoteMedia.mockRejectedValueOnce(
+      new MediaFetchError("fetch_failed", "Failed to fetch media"),
+    );
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("fetch failed"));
     try {
       createTelegramBot({ token: "tok" });
@@ -627,23 +604,25 @@ describe("createTelegramBot channel_post media", () => {
     {
       name: "retryable shutdown abort",
       messageId: 98076,
-      error: Object.assign(new Error("aborted"), { name: "AbortError" }),
+      error: new MediaFetchError("fetch_failed", "aborted", {
+        cause: Object.assign(new Error("aborted"), { name: "AbortError" }),
+      }),
       result: { kind: "failed-retryable", error: expect.any(MediaFetchError) },
-      warnings: 0,
+      warning: undefined,
     },
     {
       name: "permanent oversized media",
       messageId: 98077,
       error: new MediaFetchError("max_bytes", "Failed to fetch media: payload exceeds maxBytes 10"),
       result: { kind: "completed" },
-      warnings: 1,
+      warning: "⚠️ File too large. Maximum size is 100MB.",
     },
     {
       name: "permanent SSRF rejection",
       messageId: 98078,
-      error: new Error("blocked by SSRF guard: private address"),
+      error: new MediaFetchError("fetch_failed", "blocked by SSRF guard: private address"),
       result: { kind: "completed" },
-      warnings: 1,
+      warning: "⚠️ Failed to download media. Please try again.",
     },
   ])("preserves durable replay handling for $name (#98076)", async (testCase) => {
     setOpenTelegramDirectConfig();
@@ -661,13 +640,12 @@ describe("createTelegramBot channel_post media", () => {
       withTelegramSpooledReplayUpdate(update, () => handler(ctx)),
     );
     expect(result).toEqual(testCase.result);
-    expect(sendMessageSpy).toHaveBeenCalledTimes(testCase.warnings);
-    expect(replySpy).toHaveBeenCalledTimes(testCase.warnings);
-    expect(sendMessageSpy.mock.calls[0]?.[1]).toEqual(
-      [undefined, "⚠️ Failed to download media. Please try again."][testCase.warnings],
-    );
-    if (testCase.warnings) {
-      expectTelegramDownloadWarning(testCase.messageId);
+    const expectedWarnings = testCase.warning ? 1 : 0;
+    expect(sendMessageSpy).toHaveBeenCalledTimes(expectedWarnings);
+    expect(replySpy).toHaveBeenCalledTimes(expectedWarnings);
+    expect(sendMessageSpy.mock.calls[0]?.[1]).toBe(testCase.warning);
+    if (testCase.warning) {
+      expectTelegramDownloadWarning(testCase.messageId, testCase.warning);
       expectTypeOnlyMediaPayload("document");
     }
   });
@@ -901,7 +879,7 @@ describe("createTelegramBot channel_post media", () => {
       groups: { "*": { requireMention: true, ...(testCase.ingest ? { ingest: true } : {}) } },
       ...("denyPatterns" in testCase ? { providerPolicy: { mode: "deny" } } : {}),
     });
-    saveRemoteMedia.mockRejectedValueOnce(new Error("MediaFetchError: ECONNRESET"));
+    saveRemoteMedia.mockRejectedValueOnce(new MediaFetchError("fetch_failed", "ECONNRESET"));
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNRESET"));
     try {
       createTelegramBot({ token: "tok" });
@@ -937,7 +915,8 @@ describe("createTelegramBot channel_post media", () => {
     saveRemoteMedia.mockImplementationOnce(async () => {
       if (shutdownAbort) {
         shutdown.abort();
-        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+        const cause = Object.assign(new Error("aborted"), { name: "AbortError" });
+        throw new MediaFetchError("fetch_failed", "aborted", { cause });
       }
       throw new MediaFetchError("http_error", "rate limited", { status: 429 });
     });

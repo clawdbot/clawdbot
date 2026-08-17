@@ -49,6 +49,7 @@ const {
   runQaCoverageReportCommand,
   runQaJsonlReplayCommand,
   runQaLabSelfCheckCommand,
+  runQaManualLaneCommand,
   runQaProfileCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
@@ -65,6 +66,7 @@ const {
   runQaCoverageReportCommand: vi.fn(),
   runQaJsonlReplayCommand: vi.fn(),
   runQaLabSelfCheckCommand: vi.fn(),
+  runQaManualLaneCommand: vi.fn(),
   runQaProfileCommand: vi.fn(),
   runQaProviderServerCommand: vi.fn(),
   runQaSuiteCommand: vi.fn(),
@@ -123,6 +125,7 @@ vi.mock("./cli.runtime.js", () => ({
   runQaCoverageReportCommand,
   runQaJsonlReplayCommand,
   runQaLabSelfCheckCommand,
+  runQaManualLaneCommand,
   runQaProfileCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
@@ -141,6 +144,7 @@ describe("qa cli registration", () => {
     runQaCoverageReportCommand.mockReset();
     runQaJsonlReplayCommand.mockReset();
     runQaLabSelfCheckCommand.mockReset();
+    runQaManualLaneCommand.mockReset();
     runQaProfileCommand.mockReset();
     runQaProviderServerCommand.mockReset();
     runQaSuiteCommand.mockReset();
@@ -880,7 +884,7 @@ describe("qa cli registration", () => {
       providerMode: "live-frontier",
       primaryModel: undefined,
       alternateModel: undefined,
-      fastMode: false,
+      fastMode: undefined,
       allowFailures: false,
       scenarioIds: [],
       listScenarios: false,
@@ -888,6 +892,20 @@ describe("qa cli registration", () => {
       credentialSource: undefined,
       credentialRole: undefined,
     });
+  });
+
+  it.each([
+    ["suite", ["qa", "suite"]],
+    ["profile", ["qa", "run", "--qa-profile", "smoke-ci"]],
+    ["manual", ["qa", "manual", "--message", "hello"]],
+  ])("preserves omitted --fast intent for %s runs", async (_name, args) => {
+    await program.parseAsync(["node", "openclaw", ...args]);
+
+    const call =
+      runQaSuiteCommand.mock.calls[0]?.[0] ??
+      runQaProfileCommand.mock.calls[0]?.[0] ??
+      runQaManualLaneCommand.mock.calls[0]?.[0];
+    expect(call?.fastMode).toBeUndefined();
   });
 
   it("forwards --list-scenarios for telegram runs", async () => {

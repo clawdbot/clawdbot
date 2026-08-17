@@ -11,13 +11,16 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramMessageProcessorTurnContext } from "./bot-handlers.types.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
   type TelegramMediaRef,
 } from "./bot-message-context.js";
-import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
-import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
+import type {
+  TelegramMessageContextOptions,
+  TelegramPromptContextEntry,
+} from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import {
   createTelegramSpooledReplayParticipant,
@@ -27,7 +30,6 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
-  type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
@@ -67,23 +69,11 @@ type TelegramMessageProcessorDeps = Omit<
 > & {
   runtime: RuntimeEnv;
   telegramDeps: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "allowFrom" | "groupAllowFrom" | "replyToMode">;
-};
-
-export type TelegramMessageProcessorTurnContext = {
-  cfg: OpenClawConfig;
-  telegramCfg: TelegramAccountConfig;
-  onDispatchStart?: () => Promise<void> | void;
-  /** One-way cancellation from an outer spool owner into an isolated retry attempt. */
-  spooledReplayAbortSignal?: AbortSignal;
-  spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
-  finalizeSpooledReplayResult?: (
-    result: TelegramMessageProcessingResult,
-    phase: "adopted" | "terminal",
-  ) => Promise<TelegramMessageProcessingResult>;
-  completeSpooledReplayAfterIrrevocableAdoption?: (
-    error: unknown,
-  ) => Promise<TelegramMessageProcessingResult> | TelegramMessageProcessingResult;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "ownerAgentId" | "allowFrom" | "groupAllowFrom" | "replyToMode"
+  >;
 };
 
 export function resolveTelegramMessageTurnSettings(params: {
@@ -138,11 +128,15 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     sendChatActionHandler,
     runtime,
     telegramDeps,
+    buildContext,
     opts,
   } = deps;
   const sessionRuntime = {
-    ...(telegramDeps.buildChannelInboundEventContext
-      ? { buildChannelInboundEventContext: telegramDeps.buildChannelInboundEventContext }
+    ...((buildContext ?? telegramDeps.buildChannelInboundEventContext)
+      ? {
+          buildChannelInboundEventContext:
+            buildContext ?? telegramDeps.buildChannelInboundEventContext,
+        }
       : {}),
     ...(telegramDeps.readSessionUpdatedAt
       ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
@@ -213,6 +207,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       bot,
       cfg: turnCfg,
       account,
+      ownerAgentId: opts.ownerAgentId,
       historyLimit: turnSettings.historyLimit,
       dmHistoryLimit: turnSettings.dmHistoryLimit,
       groupHistories,
@@ -438,7 +433,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
             },
             onAbandoned: () => {
               if (!adopted) {
-                void settle({ kind: "skipped" }, "terminal");
+                void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
               }
               // Generic reply abandonment is synchronous; Telegram has no
               // owner-local resource teardown gated on core claim release.

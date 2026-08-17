@@ -1,14 +1,19 @@
+import { readControlUiBuildMismatchId } from "@openclaw/gateway-client/browser";
+import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-contract.js";
 // Control UI module owns the application gateway store: the reactive
 // snapshot around GatewayBrowserClient consumed by the app shell.
 import type { EventLogEntry } from "../api/event-log.ts";
 import {
   GatewayBrowserClient,
+  resolveGatewayErrorDetailCode,
   type GatewayBrowserClientOptions,
   type GatewayEventListener,
   type GatewayHelloOk,
 } from "../api/gateway.ts";
-import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
+import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
+import { t } from "../i18n/index.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
+import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -20,6 +25,7 @@ import type {
 } from "./context.ts";
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import { loadSettings, patchSettings, persistSessionToken } from "./settings.ts";
+import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts";
 
 type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
@@ -66,7 +72,11 @@ export function createApplicationGateway(
   initialPassword = "",
   initialBootstrapToken = "",
   createClient: GatewayClientFactory = defaultClientFactory,
-  options: { persistDefaultConnectionSettings?: boolean } = {},
+  options: {
+    persistDefaultConnectionSettings?: boolean;
+    basePath?: string;
+    bootstrapProfile?: ControlUiBootstrapProfileHint;
+  } = {},
 ): ApplicationGateway {
   let settings = initialSettings;
   let persistConnectionSettings = options.persistDefaultConnectionSettings !== false;
@@ -74,6 +84,7 @@ export function createApplicationGateway(
     gatewayUrl: settings.gatewayUrl,
     token: settings.token,
     bootstrapToken: initialBootstrapToken,
+    ...(options.bootstrapProfile ? { bootstrapProfile: options.bootstrapProfile } : {}),
     password: initialPassword,
   };
   let snapshot: ApplicationGatewaySnapshot = {
@@ -263,7 +274,14 @@ export function createApplicationGateway(
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
-    const nextConnection = { ...connection, ...connectionOverrides };
+    const nextConnection = {
+      ...connection,
+      ...connectionOverrides,
+      ...(connectionOverrides.bootstrapToken !== undefined &&
+      connectionOverrides.bootstrapProfile === undefined
+        ? { bootstrapProfile: undefined }
+        : {}),
+    };
     const hasRequestedSessionKey = requestedSessionKey !== undefined;
     const nextSessionKey = hasRequestedSessionKey
       ? requestedSessionKey.trim()
@@ -288,6 +306,7 @@ export function createApplicationGateway(
         settings: { token: nextConnection.token },
         password: nextConnection.password,
       }),
+      options.basePath,
     );
     updateSettings(
       {
@@ -311,13 +330,44 @@ export function createApplicationGateway(
       bootstrapToken: nextConnection.bootstrapToken.trim()
         ? nextConnection.bootstrapToken
         : undefined,
+      bootstrapProfile: nextConnection.bootstrapProfile,
       password: nextConnection.password.trim() ? nextConnection.password : undefined,
       clientName: "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
+      clientBuildId: CONTROL_UI_BUILD_INFO.buildId,
       mode: "webchat",
       instanceId: generateUUID(),
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
+          return;
+        }
+        const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
+        const controlUiBuildFresh = !(
+          isSameOriginGateway(nextConnection.gatewayUrl) &&
+          (exactBuildIdentityAvailable || everConnected) &&
+          controlUiBuildDiffersFrom({
+            version: hello.server?.version,
+            buildId: hello.server?.buildId,
+            controlUiBuildSource: hello.server?.controlUiBuildSource,
+          })
+        );
+        if (!controlUiBuildFresh) {
+          // Keep every connected-only drain fenced. The stale document may
+          // render the shell and refresh action, but it must not mutate state.
+          setSnapshot({
+            ...snapshot,
+            client: nextClient,
+            phase: "reconnecting",
+            hello,
+            canvasPluginSurfaceUrl: null,
+            selfUser: null,
+            lastError: null,
+            lastErrorCode: null,
+          });
+          const targetBuildId = hello.server?.buildId?.trim() || hello.server?.version?.trim();
+          if (targetBuildId) {
+            void scheduleStaleChunkReload({ buildId: targetBuildId });
+          }
           return;
         }
         setAvatarGatewayOrigin(
@@ -327,8 +377,9 @@ export function createApplicationGateway(
             settings: { token: nextConnection.token },
             password: nextConnection.password,
           }),
+          options.basePath,
         );
-        connection = { ...connection, bootstrapToken: "" };
+        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         if (persistConnectionSettings) {
           settings = loadSettings();
         }
@@ -382,21 +433,31 @@ export function createApplicationGateway(
           return;
         }
         stopCanvasSurfaceLease();
+        const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
+        if (mismatchedBuildId) {
+          void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
+        }
+        const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
         setSnapshot({
           ...snapshot,
           client: nextClient,
-          phase: everConnected
-            ? willRetry
-              ? "reconnecting"
-              : "offline"
-            : willRetry
-              ? "connecting"
-              : "stopped",
+          phase:
+            mismatchedBuildId !== null
+              ? "reload-required"
+              : everConnected
+                ? willRetry
+                  ? "reconnecting"
+                  : "offline"
+                : willRetry
+                  ? "connecting"
+                  : "stopped",
           hello: null,
           canvasPluginSurfaceUrl: null,
           selfUser: null,
-          lastError: error?.message ?? `disconnected (${code}): ${reason || "no reason"}`,
-          lastErrorCode: error?.code ?? null,
+          lastError: error?.message
+            ? formatUiError(error.message)
+            : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
+          lastErrorCode,
         });
       },
       onGap: ({ expected, received }) => {
@@ -512,6 +573,14 @@ export function createApplicationGateway(
     },
   };
   return gateway;
+}
+
+function isSameOriginGateway(gatewayUrl: string): boolean {
+  try {
+    return new URL(gatewayUrl.replace(/^ws/u, "http")).origin === globalThis.location?.origin;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | null {

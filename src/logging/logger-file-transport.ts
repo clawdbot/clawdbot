@@ -283,7 +283,7 @@ if (process.env.VITEST !== "true") {
 }
 
 /** Enqueues one serialized record without waiting for filesystem I/O. */
-export function enqueueFileLog(entry: FileLogQueueEntry): void {
+function enqueueFileLog(entry: FileLogQueueEntry): void {
   if (processExiting) {
     writeEntriesSync([entry]);
     return;
@@ -305,7 +305,7 @@ export function enqueueFileLog(entry: FileLogQueueEntry): void {
 }
 
 /** Waits until every record currently queued for the async transport has settled. */
-export async function flushFileLogQueue(): Promise<void> {
+async function flushFileLogQueue(): Promise<void> {
   for (;;) {
     if (scheduledFlush) {
       clearImmediate(scheduledFlush);
@@ -323,7 +323,7 @@ export async function flushFileLogQueue(): Promise<void> {
 }
 
 /** Synchronously rescues pending records for process.exit() and crash-adjacent paths. */
-export function drainFileLogQueueSync(): void {
+function drainFileLogQueueSync(): void {
   if (scheduledFlush) {
     clearImmediate(scheduledFlush);
     scheduledFlush = null;
@@ -339,15 +339,15 @@ export function drainFileLogQueueSync(): void {
   writeEntriesSync(entries);
 }
 
-export function setFileLogQueueMaxRecordsForTests(value?: number): void {
+function setFileLogQueueMaxRecordsForTests(value?: number): void {
   maxQueuedRecords = Math.max(1, value ?? DEFAULT_MAX_QUEUED_RECORDS);
 }
 
-export function setFileLogAppenderForTests(value?: FileLogAppender): void {
+function setFileLogAppenderForTests(value?: FileLogAppender): void {
   appendFile = value ?? appendRegularFile;
 }
 
-export function resetFileLogTransportForTests(): void {
+function resetFileLogTransportForTests(): void {
   drainFileLogQueueSync();
   removeProcessHooks();
   processExiting = false;
@@ -355,3 +355,12 @@ export function resetFileLogTransportForTests(): void {
   maxQueuedRecords = DEFAULT_MAX_QUEUED_RECORDS;
   warnedRotationFiles.clear();
 }
+
+export const fileLogTransport = {
+  drainSync: drainFileLogQueueSync,
+  enqueue: enqueueFileLog,
+  flush: flushFileLogQueue,
+  resetForTests: resetFileLogTransportForTests,
+  setAppenderForTests: setFileLogAppenderForTests,
+  setMaxQueuedRecordsForTests: setFileLogQueueMaxRecordsForTests,
+};

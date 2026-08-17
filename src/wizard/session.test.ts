@@ -81,6 +81,32 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
   });
 
+  test("returns the exact prepared model only on the terminal result", async () => {
+    const session = new WizardSession(async (_prompter, _signal, owner) => {
+      owner.setPreparedModelRef("ollama/qwen3:0.6b");
+    });
+
+    await expect(session.next()).resolves.toEqual({
+      done: true,
+      status: "done",
+      preparedModelRef: "ollama/qwen3:0.6b",
+    });
+  });
+
+  test("does not expose a prepared model when the wizard fails", async () => {
+    const session = new WizardSession(async (_prompter, _signal, owner) => {
+      owner.setPreparedModelRef("ollama/qwen3:0.6b");
+      throw new Error("activation setup failed");
+    });
+
+    await expect(session.next()).resolves.toMatchObject({
+      done: true,
+      status: "error",
+      error: "Error: activation setup failed",
+    });
+    expect(await session.next()).not.toHaveProperty("preparedModelRef");
+  });
+
   test("attaches an explicit browser destination to the next client step", async () => {
     const session = new WizardSession(async (prompter) => {
       await prompter.openUrl?.("https://provider.example/oauth?state=state-1");

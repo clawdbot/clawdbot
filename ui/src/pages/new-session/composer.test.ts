@@ -17,9 +17,14 @@ function renderComposer(
     canSubmit?: boolean;
     requiresModifier?: boolean;
     submitDisabledReason?: string;
+    blockedSubmitNotice?: string;
+    terminalAction?: {
+      canStart: boolean;
+      disabledReason?: string;
+      onStart: () => void;
+    };
     submitting?: boolean;
     messageLocked?: boolean;
-    incognitoDisabledReason?: string;
     visibility?: NewSessionVisibility;
     draftAvailable?: boolean;
     onVisibilityChange?: (visibility: NewSessionVisibility) => void;
@@ -50,10 +55,11 @@ function renderComposer(
       modelControl: new NewSessionModelControl(() => undefined),
       requiresModifier: overrides.requiresModifier ?? false,
       submitDisabledReason: overrides.submitDisabledReason,
+      blockedSubmitNotice: overrides.blockedSubmitNotice,
+      terminalAction: overrides.terminalAction,
       submitting: overrides.submitting ?? false,
       textareaController,
       messageLocked: overrides.messageLocked,
-      incognitoDisabledReason: overrides.incognitoDisabledReason,
       onInput: overrides.onInput ?? (() => undefined),
       onVisibilityChange: overrides.onVisibilityChange,
       onSubmit: overrides.onSubmit ?? (() => undefined),
@@ -93,7 +99,7 @@ describe("new-session composer keyboard submission", () => {
     { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
     { label: "Ctrl+Enter", requiresModifier: true, ctrlKey: true, metaKey: false },
     { label: "Meta+Enter", requiresModifier: true, ctrlKey: false, metaKey: true },
-  ])("keeps $label native when starting a session is disabled", (testCase) => {
+  ])("keeps $label native when submission is silently gated", (testCase) => {
     const onSubmit = vi.fn();
     const { composer } = renderComposer({
       canSubmit: false,
@@ -145,6 +151,94 @@ describe("new-session composer keyboard submission", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("forwards Enter to onSubmit while a reasoned gate blocks submission", () => {
+    // Silent-swallow regression: an Enter press during a transient gate
+    // (preference restore, reconnect) must reach the submission flow so it
+    // can surface the blocking reason, not die in the keydown handler.
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({
+      canSubmit: false,
+      submitDisabledReason: "Restoring your last session setup…",
+      onSubmit,
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" });
+
+    textarea.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("renders the blocked-submit notice near the composer", () => {
+    const { composer } = renderComposer({
+      canSubmit: false,
+      blockedSubmitNotice: "Restoring your last session setup…",
+    });
+    const notice = composer.querySelector<HTMLElement>(".new-session-page__blocked-submit");
+
+    expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");
+  });
+});
+
+describe("new-session composer start control", () => {
+  it("keeps the plain Start button unchanged when the terminal action is hidden", () => {
+    const { composer } = renderComposer();
+
+    expect(composer.querySelectorAll(".chat-send-btn")).toHaveLength(1);
+    expect(composer.querySelector(".new-session-page__start-split")).toBeNull();
+    expect(composer.querySelector("wa-dropdown-item[value='start-terminal']")).toBeNull();
+  });
+
+  it("marks the Start button busy while the session is starting", () => {
+    const { composer } = renderComposer({ submitting: true });
+    const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
+
+    expect(start?.getAttribute("aria-busy")).toBe("true");
+    expect(start?.getAttribute("aria-label")).toBe("Starting…");
+  });
+
+  it("renders the terminal action as a secondary split-button menu item", () => {
+    const onStart = vi.fn();
+    const { composer } = renderComposer({
+      terminalAction: { canStart: true, onStart },
+    });
+    const trigger = composer.querySelector<HTMLButtonElement>(
+      ".new-session-page__start-menu-trigger",
+    );
+    const item = composer.querySelector<HTMLElement>("wa-dropdown-item[value='start-terminal']");
+
+    expect(composer.querySelector(".new-session-page__start-split")).not.toBeNull();
+    expect(trigger?.disabled).toBe(false);
+    expect(trigger?.getAttribute("aria-label")).toBe("Start in terminal");
+    expect(item?.textContent?.trim()).toBe("Start in terminal");
+    item?.click();
+    expect(onStart).toHaveBeenCalledOnce();
+  });
+
+  it("disables the terminal action with its existing tooltip reason pattern", () => {
+    const onStart = vi.fn();
+    const reason = "This Gateway does not support this session action.";
+    const { composer } = renderComposer({
+      terminalAction: { canStart: false, disabledReason: reason, onStart },
+    });
+    const trigger = composer.querySelector<HTMLButtonElement>(
+      ".new-session-page__start-menu-trigger",
+    );
+    const item = composer.querySelector<HTMLElement>("wa-dropdown-item[value='start-terminal']");
+    const tooltips = composer.querySelectorAll<HTMLElement>("openclaw-tooltip");
+
+    expect(trigger?.disabled).toBe(true);
+    expect(item?.hasAttribute("disabled")).toBe(true);
+    expect((tooltips[1] as HTMLElement & { content?: string })?.content).toBe(reason);
+    item?.click();
+    expect(onStart).not.toHaveBeenCalled();
   });
 });
 
@@ -250,60 +344,47 @@ describe("new-session composer sizing lifecycle", () => {
 });
 
 describe("new-session composer attachment drops", () => {
-  it("surfaces authorization reasons on disabled session controls", () => {
+  it("surfaces authorization reasons on the disabled submit control", () => {
     const { composer } = renderComposer({
       canSubmit: false,
-      incognitoDisabledReason: "This action requires operator.admin access.",
       submitDisabledReason: "This action requires operator.write access.",
     });
     const submitTooltip = composer.querySelector<HTMLElement>("openclaw-tooltip");
-    const incognito = composer.querySelector<HTMLButtonElement>('[role="switch"]');
 
     expect((submitTooltip as HTMLElement & { content?: string })?.content).toBe(
       "This action requires operator.write access.",
     );
-    expect(incognito?.disabled).toBe(true);
-    expect(incognito?.title).toBe("This action requires operator.admin access.");
   });
 
-  it("renders only the incognito pill when drafts are unavailable, off by default", () => {
-    const onVisibilityChange = vi.fn();
-    const { composer } = renderComposer({ onVisibilityChange });
+  it("places the attachment menu in the composer footer", () => {
+    const { composer } = renderComposer();
+    const attachmentMenu = composer.querySelector<HTMLElement>(".agent-chat__attach-menu");
+
+    expect(attachmentMenu?.closest(".agent-chat__composer-footer")).not.toBeNull();
+    expect(attachmentMenu?.closest(".agent-chat__composer-input-row")).toBeNull();
+  });
+
+  it("keeps page-level incognito out of the composer when drafts are unavailable", () => {
+    const { composer } = renderComposer();
     const switches = composer.querySelectorAll<HTMLButtonElement>('[role="switch"]');
 
-    expect(switches).toHaveLength(1);
-    expect(switches[0]?.getAttribute("aria-checked")).toBe("false");
-    switches[0]?.click();
-    expect(onVisibilityChange).toHaveBeenCalledWith("incognito");
+    expect(switches).toHaveLength(0);
   });
 
-  it("renders a distinct active state when incognito is selected", () => {
-    const { composer } = renderComposer({ visibility: "incognito" });
-    const toggle = composer.querySelector<HTMLButtonElement>('[role="switch"]');
-
-    expect(toggle?.getAttribute("aria-checked")).toBe("true");
-    expect(toggle?.classList.contains("new-session-page__visibility--active")).toBe(true);
-  });
-
-  it("keeps the visibility pills mutually exclusive", () => {
+  it("lets the draft pill replace page-level incognito", () => {
     const onVisibilityChange = vi.fn();
     const { composer } = renderComposer({
       draftAvailable: true,
       visibility: "incognito",
       onVisibilityChange,
     });
-    const [draftPill, incognitoPill] = Array.from(
-      composer.querySelectorAll<HTMLButtonElement>('[role="switch"]'),
-    );
+    const draftPill = composer.querySelector<HTMLButtonElement>('[role="switch"]');
 
     expect(draftPill?.textContent).toContain("Draft");
     expect(draftPill?.getAttribute("aria-checked")).toBe("false");
-    expect(incognitoPill?.getAttribute("aria-checked")).toBe("true");
 
     draftPill?.click();
     expect(onVisibilityChange).toHaveBeenCalledWith("draft");
-    incognitoPill?.click();
-    expect(onVisibilityChange).toHaveBeenCalledWith("normal");
   });
 
   it("adds a dropped file through the shared attachment handling", async () => {

@@ -1,20 +1,24 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import {
+  loadChatMetadata,
+  peekChatMetadata,
+  rememberChatMetadata,
+  type ChatMetadataResult,
+} from "../../lib/chat/chat-metadata-store.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import {
-  areUiSessionKeysEquivalent,
-  resolveUiDefaultAgentId,
-} from "../../lib/sessions/session-key.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory, type ChatMetadataResult, type ChatState } from "./chat-history.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { applyModelCatalogResult, loadModels } from "./models.ts";
+import { loadModels } from "./models.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -47,83 +51,17 @@ type ChatMetadataRequest = {
 };
 
 type ChatMetadataRefreshOptions = {
-  preserveModelCatalogOnFallback?: boolean;
   requestVersion?: number;
 };
-
-type ChatMetadataCacheEntry =
-  | { kind: "result"; result: ChatMetadataResult }
-  | { kind: "pending"; pending: Promise<ChatMetadataResult> };
-
-const chatMetadataCache = new WeakMap<GatewayBrowserClient, Map<string, ChatMetadataCacheEntry>>();
 
 const EMPTY_CHAT_METADATA_APPLY_RESULT: ChatMetadataApplyResult = {
   commands: false,
   models: false,
 };
 
-function chatMetadataAgentKey(agentId: string | null | undefined): string {
-  return agentId?.trim() ?? "";
-}
-
-function metadataCacheFor(client: GatewayBrowserClient): Map<string, ChatMetadataCacheEntry> {
-  let cache = chatMetadataCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    chatMetadataCache.set(client, cache);
-  }
-  return cache;
-}
-
-function rememberChatMetadata(
-  client: GatewayBrowserClient,
-  agentId: string | null | undefined,
-  result: ChatMetadataResult,
+export function retireChatMetadataRequests(
+  host: Pick<ChatPageHost, "chatMetadataRequestVersion">,
 ): void {
-  metadataCacheFor(client).set(chatMetadataAgentKey(agentId), { kind: "result", result });
-}
-
-function loadChatMetadata(
-  client: GatewayBrowserClient,
-  agentId: string | null | undefined,
-): Promise<ChatMetadataResult> {
-  const cache = metadataCacheFor(client);
-  const key = chatMetadataAgentKey(agentId);
-  const cached = cache.get(key);
-  if (cached?.kind === "result") {
-    return Promise.resolve(cached.result);
-  }
-  if (cached?.kind === "pending") {
-    return cached.pending;
-  }
-  const pending = client
-    .request<ChatMetadataResult>("chat.metadata", agentId ? { agentId } : {})
-    .then(
-      (result) => {
-        const current = cache.get(key);
-        if (current?.kind === "pending" && current.pending === pending) {
-          cache.set(key, { kind: "result", result });
-        }
-        return result;
-      },
-      (error: unknown) => {
-        const current = cache.get(key);
-        if (current?.kind === "pending" && current.pending === pending) {
-          cache.delete(key);
-        }
-        throw error;
-      },
-    );
-  cache.set(key, { kind: "pending", pending });
-  return pending;
-}
-
-export function invalidateChatMetadataCache(
-  host: Pick<ChatPageHost, "chatMetadataRequestVersion" | "client">,
-): void {
-  if (host.client) {
-    chatMetadataCache.delete(host.client);
-  }
   host.chatMetadataRequestVersion += 1;
 }
 
@@ -151,9 +89,11 @@ function applyChatMetadataResult(
   result: ChatMetadataResult,
   fields: { commands?: boolean; models?: boolean } = {},
 ): ChatMetadataApplyResult {
-  const models = fields.models === false ? undefined : applyModelCatalogResult(result.models);
+  const models =
+    fields.models === false || !Array.isArray(result.models) ? undefined : result.models;
   if (models) {
     host.chatModelCatalog = models;
+    host.chatModelCatalogError = null;
   }
   const commandsApplied =
     fields.commands === false
@@ -166,6 +106,17 @@ function applyChatMetadataResult(
   return { commands: commandsApplied, models: Boolean(models) };
 }
 
+function seedChatModelCatalogFromStore(host: ChatPageHost, client: GatewayBrowserClient): void {
+  const cached = peekChatMetadata(client, resolveChatAgentId(host));
+  if (!Array.isArray(cached?.models)) {
+    return;
+  }
+  // A warm snapshot turns mount-time loading into refreshing; the in-flight
+  // request still owns the authoritative apply.
+  host.chatModelCatalog = cached.models;
+  host.chatModelCatalogError = null;
+}
+
 function ownsChatMetadataRequest(request: ChatMetadataRequest): boolean {
   return (
     request.host.client === request.client &&
@@ -176,9 +127,17 @@ function ownsChatMetadataRequest(request: ChatMetadataRequest): boolean {
 }
 
 async function refreshCompatibilityModelCatalog(request: ChatMetadataRequest) {
-  const models = await loadModels(request.client);
+  const agentId = request.agentId?.trim();
+  if (!agentId) {
+    return;
+  }
+  const models = await loadModels(request.client, {
+    agentId,
+    preparedOnly: true,
+  });
   if (ownsChatMetadataRequest(request)) {
     request.host.chatModelCatalog = models;
+    request.host.chatModelCatalogError = null;
   }
 }
 
@@ -190,17 +149,9 @@ async function refreshCompatibilityCommands(request: ChatMetadataRequest) {
   });
 }
 
-function canUseCompatibilityModelCatalog(
-  host: ChatPageHost,
-  agentId: string | null | undefined,
-): boolean {
-  return agentId === resolveUiDefaultAgentId(host);
-}
-
 async function refreshMissingChatMetadata(
   request: ChatMetadataRequest,
   applied: ChatMetadataApplyResult,
-  opts?: ChatMetadataRefreshOptions,
 ): Promise<void> {
   if (!ownsChatMetadataRequest(request)) {
     return;
@@ -208,17 +159,9 @@ async function refreshMissingChatMetadata(
   const commandsRefresh = applied.commands
     ? Promise.resolve()
     : refreshCompatibilityCommands(request);
-  const preserveModels = opts?.preserveModelCatalogOnFallback;
-  const modelsRefresh =
-    applied.models || preserveModels
-      ? Promise.resolve()
-      : canUseCompatibilityModelCatalog(request.host, request.agentId)
-        ? refreshCompatibilityModelCatalog(request)
-        : Promise.resolve().then(() => {
-            if (ownsChatMetadataRequest(request)) {
-              request.host.chatModelCatalog = [];
-            }
-          });
+  const modelsRefresh = applied.models
+    ? Promise.resolve()
+    : refreshCompatibilityModelCatalog(request);
   await Promise.allSettled([commandsRefresh, modelsRefresh]);
 }
 
@@ -230,6 +173,7 @@ export async function refreshChatMetadata(
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
+    host.chatModelCatalogError = null;
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
   if (host.chatMetadataRequestVersion !== requestVersion) {
@@ -239,9 +183,10 @@ export async function refreshChatMetadata(
   const agentId = resolveChatAgentId(host);
   const request = { host, client, agentId, version: requestVersion };
   host.chatModelsLoading = true;
+  seedChatModelCatalogFromStore(host, client);
   try {
-    if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
-      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);
+    if (isGatewayMethodAdvertised(host, "chat.metadata") === false) {
+      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT);
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
 
@@ -251,12 +196,12 @@ export async function refreshChatMetadata(
     }
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
     if (!metadataApplied.models || !metadataApplied.commands) {
-      await refreshMissingChatMetadata(request, metadataApplied, opts);
+      await refreshMissingChatMetadata(request, metadataApplied);
     }
     return metadataApplied;
   } catch {
     if (ownsChatMetadataRequest(request)) {
-      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);
+      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT);
     }
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   } finally {
@@ -273,7 +218,10 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   const client = host.client;
   const connectionEpoch = host.connectionEpoch;
   try {
-    const result = await loadModelAuthStatus(client, opts);
+    const result = await loadModelAuthStatus(client, {
+      ...opts,
+      agentId: resolveChatAgentId(host),
+    });
     if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
       return;
     }
@@ -284,7 +232,45 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
       return;
     }
     host.modelAuthStatusResult = { ts: 0, providers: [] };
-    host.modelAuthStatusError = err instanceof Error ? err.message : String(err);
+    host.modelAuthStatusError = formatUiError(err);
+  }
+}
+
+export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promise<void> {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  const client = host.client;
+  const agentId = resolveChatAgentId(host);
+  const connectionEpoch = host.connectionEpoch;
+  const ownsRequest = () =>
+    host.client === client &&
+    host.connected &&
+    host.connectionEpoch === connectionEpoch &&
+    resolveChatAgentId(host) === agentId;
+  host.chatModelsLoading = true;
+  host.chatModelCatalogError = null;
+  host.requestUpdate?.();
+  try {
+    const models = await loadModels(client, {
+      agentId,
+      rejectOnFailure: true,
+    });
+    if (ownsRequest()) {
+      host.chatModelCatalog = models;
+      host.chatModelCatalogError = null;
+    }
+  } catch (error) {
+    if (ownsRequest()) {
+      // Keep the startup/prepared snapshot usable while making the failed
+      // discovery and its retry path visible in the open picker.
+      host.chatModelCatalogError = formatUiError(error);
+    }
+  } finally {
+    if (ownsRequest()) {
+      host.chatModelsLoading = false;
+      host.requestUpdate?.();
+    }
   }
 }
 
@@ -299,7 +285,7 @@ async function refreshChat(
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host as unknown as ChatState, {
+  const historyLoad = loadChatHistory(host, {
     deferBranches: opts?.deferBranches === true,
     startup: opts?.startup === true,
   });
@@ -319,7 +305,11 @@ async function refreshChat(
     const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
-      archivedFilter: host.sessionsArchivedFilter,
+      // The routed chat remains visible after archive even though the active
+      // roster excludes it. Keep its descriptor in shared session state until
+      // navigation changes; otherwise the pane briefly falls back to the raw
+      // key while the sidebar lineage reload catches up.
+      archivedFilter: history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
     });
     const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
     if (reconciled) {
@@ -396,13 +386,14 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     opts?.startup &&
     host.client &&
     host.connected &&
-    isGatewayMethodAdvertised(host as unknown as ChatState, "chat.startup") !== false,
+    isGatewayMethodAdvertised(host, "chat.startup") !== false,
   );
   const startupMetadataRequestVersion = ownsStartupMetadata
     ? ++host.chatMetadataRequestVersion
     : null;
-  if (ownsStartupMetadata) {
+  if (ownsStartupMetadata && host.client) {
     host.chatModelsLoading = true;
+    seedChatModelCatalogFromStore(host, host.client);
   }
 
   const refresh = refreshChat(host, {
@@ -433,8 +424,6 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
         rememberChatMetadata(client, agentId, metadata);
         const applied = applyChatMetadataResult(host, client, agentId, metadata);
         if (!applied.models || !applied.commands) {
-          // chat.startup owns the first metadata load. Fill only omitted fields here;
-          // a parallel chat.metadata request would repeat the same catalog discovery.
           await refreshMissingChatMetadata(request, applied);
         }
       } finally {

@@ -1,6 +1,6 @@
 // Sms tests cover accounts plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
-import { listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
+import { inspectSmsAccount, listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
 import { SmsChannelConfigSchema } from "./config-schema.js";
 import type { SmsChannelConfig } from "./types.js";
 
@@ -65,6 +65,24 @@ describe("SMS account config", () => {
       dmPolicy: "pairing",
       allowFrom: [],
       textChunkLimit: 1500,
+    });
+  });
+
+  it("reports an invalid public webhook URL without unconfiguring SMS credentials", () => {
+    expect(
+      inspectSmsAccount({
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            publicWebhookUrl: "https://sms_gateway.example.com/webhooks/sms",
+          },
+        },
+      }),
+    ).toMatchObject({
+      configured: true,
+      signatureValidation: "invalid-public-url",
     });
   });
 

@@ -2,10 +2,17 @@
 // command scopes, and gateway enforcement around node client identity.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
+import {
+  type HelloOk,
+  MIN_NODE_PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
+import {
+  approveNodePairing,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/device-pairing-node.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
-import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { resolveNodeIdFromNodeList } from "../shared/node-resolve.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -63,6 +70,7 @@ async function connectNodeClient(params: {
   deviceFamily?: string;
   caps?: string[];
   onHelloOk?: (hello: HelloOk) => void;
+  protocol?: "current" | "legacy";
 }) {
   return await connectGatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
@@ -70,10 +78,12 @@ async function connectNodeClient(params: {
     role: "node",
     clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: params.displayName ?? "node-command-pin",
-    clientVersion: "1.0.0",
-    platform: params.platform ?? "macos",
-    deviceFamily: params.deviceFamily ?? "Mac",
+    clientVersion: params.protocol === "legacy" ? "2026.5.7" : "1.0.0",
+    platform: params.protocol === "legacy" ? "darwin" : (params.platform ?? "macos"),
+    deviceFamily: params.protocol === "legacy" ? undefined : (params.deviceFamily ?? "Mac"),
     mode: GATEWAY_CLIENT_MODES.NODE,
+    minProtocol: params.protocol === "legacy" ? MIN_NODE_PROTOCOL_VERSION : undefined,
+    maxProtocol: params.protocol === "legacy" ? MIN_NODE_PROTOCOL_VERSION : undefined,
     scopes: [],
     caps: params.caps,
     commands: params.commands,
@@ -718,6 +728,63 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
+    test("normalizes a fresh v3 node pairing to canonical metadata", async () => {
+      const legacyNode = loadDeviceIdentity("node-v3-pairing-normalization");
+      const connected = await connectNodeClient({
+        port: getStarted().port,
+        deviceIdentity: legacyNode.identity,
+        commands: [],
+        protocol: "legacy",
+      });
+      try {
+        expect(await getPairedDevice(legacyNode.identity.deviceId)).toMatchObject({
+          platform: "macos",
+          deviceFamily: "Mac",
+          clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          clientMode: GATEWAY_CLIENT_MODES.NODE,
+        });
+        expect(
+          (await listDevicePairing()).pending.find(
+            (entry) => entry.deviceId === legacyNode.identity.deviceId,
+          ),
+        ).toBeUndefined();
+      } finally {
+        await connected.stopAndWait();
+      }
+    });
+
+    test("normalizes signed blank desktop family before device metadata reapproval", async () => {
+      const pairedNode = await pairDeviceIdentity({
+        name: "node-blank-family-reconnect",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        platform: "macos",
+        deviceFamily: "Mac",
+      });
+      const nodeClient = await connectNodeClient({
+        port: getStarted().port,
+        deviceIdentity: pairedNode.identity,
+        commands: [],
+        platform: "darwin",
+        deviceFamily: "   ",
+      });
+      try {
+        expect(await getPairedDevice(pairedNode.identity.deviceId)).toMatchObject({
+          platform: "macos",
+          deviceFamily: "Mac",
+        });
+        expect(
+          (await listDevicePairing()).pending.filter(
+            (entry) => entry.deviceId === pairedNode.identity.deviceId,
+          ),
+        ).toEqual([]);
+      } finally {
+        await nodeClient.stopAndWait();
+      }
+    });
+
     test("withholds plugin surface URLs until the node capability is approved", async () => {
       // The shared Gateway harness disables Canvas startup; expose its descriptor
       // so this handshake test exercises production capability issuance.

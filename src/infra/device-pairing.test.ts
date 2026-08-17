@@ -1,4 +1,5 @@
 // Covers device pairing, token, and role lifecycle behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -7,34 +8,37 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
+import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import {
+  approveNodePairing,
+  requestNodePairing,
+  updatePairedNodeBins,
+} from "./device-pairing-node.js";
 import {
   loadDevicePairingStoreState,
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
 } from "./device-pairing-store.js";
 import {
-  approveBootstrapDevicePairing,
-  approveControlUiDeviceAuthMigrationPairing,
-  approveDevicePairing,
   ensureDeviceToken,
+  revokeDeviceToken,
+  rotateDeviceToken,
+  verifyDeviceToken,
+} from "./device-pairing-tokens.js";
+import {
   getPairedDevice,
   hasEffectivePairedDeviceRole,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
-  onEffectiveOperatorDevicePaired,
   removePairedDevice,
   requestDevicePairing,
   rejectDevicePairing,
   resolveNodePairingGeneration,
-  revokeDeviceToken,
-  rotateDeviceToken,
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
-  verifyDeviceToken,
   withPairedDeviceRecords,
   type PairedDevice,
 } from "./device-pairing.js";
-import { approveNodePairing, requestNodePairing, updatePairedNodeBins } from "./node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "./push-apns.js";
 
 type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
@@ -117,16 +121,7 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, message: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(message);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "message");
 
 function expectRecordFields(
   value: unknown,
@@ -207,107 +202,6 @@ async function makeDevicePairingDir(): Promise<string> {
 }
 
 describe("device pairing tokens", () => {
-  test("notifies effective-operator listeners for owner and bootstrap approvals", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const pairedDevices: Array<{ deviceId: string; publicKey: string; scopes: string[] }> = [];
-    const unsubscribe = onEffectiveOperatorDevicePaired((device) => {
-      pairedDevices.push(device);
-    });
-    try {
-      const nodeRequest = await requestDevicePairing(
-        {
-          deviceId: "listener-node",
-          publicKey: "listener-node-key",
-          role: "node",
-          scopes: [],
-        },
-        baseDir,
-      );
-      await approveDevicePairing(nodeRequest.request.requestId, { callerScopes: [] }, baseDir);
-
-      const ownerRequest = await requestDevicePairing(
-        {
-          deviceId: "listener-owner",
-          publicKey: "listener-owner-key",
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-        baseDir,
-      );
-      await approveDevicePairing(
-        ownerRequest.request.requestId,
-        { callerScopes: ["operator.read"] },
-        baseDir,
-      );
-
-      const bootstrapRequest = await requestDevicePairing(
-        {
-          deviceId: "listener-bootstrap",
-          publicKey: "listener-bootstrap-key",
-          role: "operator",
-          scopes: ["operator.read"],
-          silent: true,
-        },
-        baseDir,
-      );
-      await approveBootstrapDevicePairing(
-        bootstrapRequest.request.requestId,
-        FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        baseDir,
-      );
-
-      expect(pairedDevices).toEqual([
-        {
-          deviceId: "listener-owner",
-          publicKey: "listener-owner-key",
-          scopes: ["operator.read"],
-        },
-        {
-          deviceId: "listener-bootstrap",
-          publicKey: "listener-bootstrap-key",
-          scopes: ["operator.read"],
-        },
-      ]);
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  test("allows migration approval when existing operators cannot manage pairings", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const readOnlyRequest = await requestDevicePairing(
-      {
-        deviceId: "read-only-owner",
-        publicKey: "read-only-owner-key",
-        role: "operator",
-        scopes: ["operator.read"],
-      },
-      baseDir,
-    );
-    await approveDevicePairing(
-      readOnlyRequest.request.requestId,
-      { callerScopes: ["operator.read"] },
-      baseDir,
-    );
-    const migrationRequest = await requestDevicePairing(
-      {
-        deviceId: "migration-owner",
-        publicKey: "migration-owner-key",
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      baseDir,
-    );
-
-    await expect(
-      approveControlUiDeviceAuthMigrationPairing(
-        migrationRequest.request.requestId,
-        { callerScopes: ["operator.pairing"] },
-        baseDir,
-      ),
-    ).resolves.toMatchObject({ status: "approved" });
-  });
-
   beforeAll(async () => {
     suiteBaseDir = await suiteRootTracker.setup();
   });

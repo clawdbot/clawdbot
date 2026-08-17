@@ -1,3 +1,4 @@
+import { normalizeNullableString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type {
   WorkboardCard,
@@ -7,6 +8,8 @@ import type {
   WorkboardStatus,
   WorkboardUiState,
 } from "./types.ts";
+
+export { normalizeString };
 
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 
@@ -168,7 +171,7 @@ export function staleSessionState(session: GatewaySessionRow): WorkboardStaleSta
   return {
     detectedAt: Date.now(),
     lastSessionUpdatedAt: session.updatedAt,
-    reason: "Linked thread has not reported recent activity.",
+    reason: "Linked session has not reported recent activity.",
   };
 }
 
@@ -178,8 +181,4 @@ export function workboardCardSessionKey(card: WorkboardCard): string | undefined
 
 export function workboardCardRunId(card: WorkboardCard): string | undefined {
   return card.runId ?? card.execution?.runId;
-}
-
-export function normalizeString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }

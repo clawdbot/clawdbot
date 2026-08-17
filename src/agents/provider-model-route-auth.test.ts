@@ -6,6 +6,7 @@ import {
 } from "./provider-model-auth-source-plan.js";
 import {
   resolveProviderModelRouteMaterializationAuthMode,
+  selectProviderModelAuthSources,
   selectProviderModelRouteAuth,
 } from "./provider-model-route-auth.js";
 
@@ -38,12 +39,16 @@ function profile(
   return { kind: "profile", profileId, mode, readiness, cooldown };
 }
 
-function direct(mode: string): ProviderModelAuthDirectSource {
+function direct(
+  mode: string,
+  authorization: ProviderModelAuthDirectSource["authorization"] = "declared",
+): ProviderModelAuthDirectSource {
   return {
     kind: "direct",
     mode,
     readiness: "ready",
     evidence: "provider-config",
+    authorization,
   };
 }
 
@@ -404,5 +409,71 @@ describe("provider model route auth", () => {
         runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
       },
     });
+  });
+});
+
+describe("ambient credential admission", () => {
+  const ambient = (mode: string): ProviderModelAuthDirectSource => direct(mode, "ambient");
+  const ready = (profileId: string, mode: string) => profile(profileId, mode, "ready");
+  const select = (plan: Parameters<typeof selectProviderModelAuthSources>[0]["plan"]) =>
+    selectProviderModelAuthSources({ provider: "openai", plan });
+
+  it("drops an ambient fallback queued behind usable profiles", () => {
+    const decision = select(
+      buildProviderModelAuthSourcePlan({
+        profiles: [ready("openai:chatgpt", "oauth")],
+        fallback: ambient("api-key"),
+      }),
+    );
+
+    expect(decision).toMatchObject({ kind: "selected" });
+    expect(decision.kind === "selected" && decision.attempts).toMatchObject([{ kind: "profile" }]);
+  });
+
+  it("keeps a declared fallback queued behind usable profiles", () => {
+    const decision = select(
+      buildProviderModelAuthSourcePlan({
+        profiles: [ready("openai:chatgpt", "oauth")],
+        fallback: direct("api-key"),
+      }),
+    );
+
+    expect(decision.kind === "selected" && decision.attempts).toMatchObject([
+      { kind: "profile" },
+      { kind: "direct" },
+    ]);
+  });
+
+  it("keeps an ambient fallback when the provider declares no profiles", () => {
+    const decision = select(
+      buildProviderModelAuthSourcePlan({ profiles: [], fallback: ambient("api-key") }),
+    );
+
+    expect(decision.kind === "selected" && decision.attempts).toMatchObject([{ kind: "direct" }]);
+  });
+
+  it("does not substitute an ambient fallback for all-unavailable profiles", () => {
+    const decision = select(
+      buildProviderModelAuthSourcePlan({
+        profiles: [profile("openai:chatgpt", "oauth", "unavailable")],
+        fallback: ambient("api-key"),
+      }),
+    );
+
+    expect(decision.kind === "selected" && decision.attempts).toMatchObject([]);
+  });
+
+  it("does not re-admit an ambient fallback when route filtering empties the profile list", () => {
+    // Rebuild shape used by selectProviderModelRouteAuth when narrowing to a
+    // route-compatible subset: no profiles survive, but the operator declared one.
+    const decision = select(
+      buildProviderModelAuthSourcePlan({
+        profiles: [],
+        declaredProfileCount: 1,
+        fallback: ambient("api-key"),
+      }),
+    );
+
+    expect(decision.kind === "selected" && decision.attempts).toMatchObject([]);
   });
 });

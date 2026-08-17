@@ -1,20 +1,33 @@
-export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type {
+  CronJob as ProtocolCronJob,
+  CronListParams,
+  CronRunLogEntry as ProtocolCronRunLogEntry,
+  CronRunsParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { AgentsListResult as ProtocolAgentsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
-import type { CronJobBase } from "../../../src/cron/types-shared.js";
-import type { CronPayload as CoreCronPayload } from "../../../src/cron/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
-  SessionBoardFace,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
+export type {
+  CronJob,
+  CronRunLogEntry,
+  UpdateAvailable,
+  UpdateHoldResult,
+  UpdateScheduleState,
+} from "../../../packages/gateway-protocol/src/index.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
@@ -28,10 +41,9 @@ export type ChannelsPairingRequest =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
 export type SessionVisibility =
   import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
-type SessionSharingRole =
-  import("../../../packages/gateway-protocol/src/index.js").SessionSharingRole;
 export type SessionMembersListResult =
   import("../../../packages/gateway-protocol/src/index.js").SessionMembersListResult;
+export type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 export type ChannelsStatusSnapshot = ChannelsStatusResult;
 export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
 export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][string][number];
@@ -253,30 +265,7 @@ export type ConfigSchemaResponse = {
   generatedAt: string;
 };
 
-export type PresenceEntry = {
-  deviceId?: string | null;
-  instanceId?: string | null;
-  host?: string | null;
-  ip?: string | null;
-  version?: string | null;
-  platform?: string | null;
-  deviceFamily?: string | null;
-  modelIdentifier?: string | null;
-  roles?: string[] | null;
-  scopes?: string[] | null;
-  mode?: string | null;
-  lastInputSeconds?: number | null;
-  reason?: string | null;
-  text?: string | null;
-  ts?: number | null;
-  user?: {
-    id: string;
-    email?: string | null;
-    name?: string | null;
-    avatarUrl?: string | null;
-  } | null;
-  watchedSessions?: string[] | null;
-};
+export type PresenceEntry = ProtocolPresenceEntry;
 
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
@@ -295,16 +284,12 @@ export type GatewayThinkingLevelOption = {
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
-export type AgentsListResult = {
-  defaultId: string;
-  mainKey: string;
-  scope: string;
-  agents: GatewayAgentRow[];
-};
+export type AgentsListResult = ProtocolAgentsListResult;
 
 export type AgentIdentityResult = {
   agentId: string;
   name: string;
+  nameSource?: "config" | "agent" | "workspace" | "default";
   avatar: string;
   avatarSource?: string | null;
   avatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -417,7 +402,6 @@ export type ArtifactDownloadResult = {
   expiresAt?: string;
 };
 
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 type SubagentRunState = "active" | "interrupted" | "historical";
 
 type SessionCompactionCheckpointReason =
@@ -452,62 +436,20 @@ type SessionCompactionCheckpointPreview = Pick<
   "checkpointId" | "createdAt" | "reason"
 >;
 
-export type GatewaySessionRow = {
-  key: string;
-  visibility?: SessionVisibility;
-  sharingRole?: SessionSharingRole;
-  incognito?: true;
-  spawnedBy?: string;
-  controlOwnerSessionKey?: string;
-  /** Collector swarm group that owns this child session, when applicable. */
-  swarmGroupId?: string;
-  parentSessionKey?: string;
-  /** Managed worktree bound to this session (repo checkout + branch). */
-  worktree?: { id: string; branch: string; repoRoot: string };
-  /** Session-scoped exec node binding (exec host=node routing). */
-  execNode?: string;
-  spawnedWorkspaceDir?: string;
-  spawnedCwd?: string;
-  execCwd?: string;
-  forkedFromParent?: boolean;
-  spawnDepth?: number;
-  subagentRole?: "orchestrator" | "leaf";
-  subagentControlScope?: "children" | "none";
-  createdVia?: "operator" | "spawn" | "channel" | "cron" | "talk" | "run" | "plugin" | "internal";
-  createdActor?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
-  createdAt?: number;
-  forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
-  previousSessionId?: string;
+export type GatewaySessionRow = SessionRow & {
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
-  kind: "direct" | "group" | "global" | "unknown";
-  label?: string;
+  icon?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
-  /** Preferred Control UI face for generic session navigation. */
-  boardFace?: SessionBoardFace;
-  displayName?: string;
-  derivedTitle?: string;
-  channel?: string;
   surface?: string;
   subject?: string;
   room?: string;
   space?: string;
-  updatedAt: number | null;
-  unread?: boolean;
-  lastReadAt?: number;
   agentStatus?: SessionAgentStatus;
   observerDigest?: Pick<
     SessionObserverDigest,
     "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
-  lastActivityAt?: number;
-  archived?: boolean;
-  archivedAt?: number;
-  archivedBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
-  pinned?: boolean;
-  pinnedAt?: number;
-  icon?: string;
-  sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
@@ -515,25 +457,14 @@ export type GatewaySessionRow = {
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: FastMode;
-  toolOverrides?: import("../lib/sessions/patch.js").SessionToolOverrides;
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  estimatedCostUsd?: number;
-  status?: SessionRunStatus;
-  /** Compact user-facing reason for the latest failed or timed-out run. */
-  lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
-  /** Active transcript-branch leaf returned with chat history. */
-  activeLeafEntryId?: string | null;
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
@@ -543,15 +474,11 @@ export type GatewaySessionRow = {
   runtimeMs?: number;
   /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
   runtimeSampledAt?: number;
-  childSessions?: string[];
-  model?: string;
-  modelProvider?: string;
   modelSelectionLocked?: boolean;
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
-  queueMode?: "steer" | "followup" | "collect" | "interrupt";
-  effectiveQueueMode?: "steer" | "followup" | "collect" | "interrupt";
+  queueMode?: QueueMode;
+  effectiveQueueMode?: QueueMode;
   agentRuntime?: GatewayAgentRuntime;
-  contextTokens?: number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   goal?: SessionGoal;
@@ -601,6 +528,7 @@ export type SessionsBranchesSwitchResult =
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  archivedAt?: number;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -622,110 +550,15 @@ export type {
   SessionUsageTimeSeries,
 } from "../pages/usage/data-types.ts";
 
-export type CronRunStatus = "ok" | "error" | "skipped";
-export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
-export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
-export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
-export type CronRunScope = "job" | "all";
-export type CronRunsStatusValue = CronRunStatus;
-export type CronRunsStatusFilter = "all" | CronRunStatus;
-export type CronSortDir = "asc" | "desc";
-
-type CronSchedule =
-  | { kind: "at"; at: string }
-  | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
-  | { kind: "on-exit"; command: string; cwd?: string }
-  | {
-      kind: "stream";
-      command: string[];
-      cwd?: string;
-      mode?: "line" | "match";
-      match?: string;
-      batchMs?: number;
-      maxBatchBytes?: number;
-    };
-
-type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
-type CronWakeMode = "next-heartbeat" | "now";
-
-export type CronPayload = CoreCronPayload;
-
-type CronCompletionDestination = {
-  mode: "webhook";
-  to: string;
-};
-
-type CronDelivery = {
-  mode: "none" | "announce" | "webhook";
-  channel?: string;
-  to?: string;
-  threadId?: string | number;
-  accountId?: string;
-  bestEffort?: boolean;
-  completionDestination?: CronCompletionDestination;
-  failureDestination?: CronFailureDestination;
-};
-
-type CronFailureDestination = {
-  channel?: string;
-  to?: string;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-};
-
-type CronFailureAlert = {
-  after?: number;
-  channel?: string;
-  to?: string;
-  cooldownMs?: number;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-};
-
-type CronJobState = {
-  nextRunAtMs?: number;
-  runningAtMs?: number;
-  lastRunAtMs?: number;
-  lastRunStatus?: CronRunStatus;
-  lastStatus?: CronRunStatus;
-  lastError?: string;
-  lastErrorReason?: string;
-  lastDurationMs?: number;
-  consecutiveErrors?: number;
-  autoDisabled?: {
-    reason: "consecutive-failures" | "schedule-errors";
-    atMs: number;
-    consecutiveErrors: number;
-  };
-  lastDelivered?: boolean;
-  lastDeliveryStatus?: CronDeliveryStatus;
-  lastDeliveryError?: string;
-  lastFailureNotificationDelivered?: boolean;
-  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
-  lastFailureNotificationDeliveryError?: string;
-  lastFailureAlertAtMs?: number;
-  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
-  streamError?: string;
-  streamConsecutiveFailures?: number;
-  streamRestartExhausted?: boolean;
-  streamSourceIdentity?: string;
-  streamDroppedBatches?: number;
-  streamCoalescedBatches?: number;
-  streamLastStartedAtMs?: number;
-  streamLastExitAtMs?: number;
-};
-
-export type CronJob = CronJobBase<
-  CronSchedule,
-  CronSessionTarget,
-  CronWakeMode,
-  CronPayload,
-  CronDelivery,
-  CronFailureAlert | false
-> & {
-  state?: CronJobState;
-};
+export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
+export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;
+export type CronJobsEnabledFilter = NonNullable<CronListParams["enabled"]>;
+export type CronJobsSortBy = NonNullable<CronListParams["sortBy"]>;
+export type CronRunScope = NonNullable<CronRunsParams["scope"]>;
+export type CronRunsStatusValue = NonNullable<CronRunsParams["statuses"]>[number];
+export type CronRunsStatusFilter = NonNullable<CronRunsParams["status"]>;
+export type CronSortDir = NonNullable<CronListParams["sortDir"]>;
+export type CronPayload = ProtocolCronJob["payload"];
 
 export type CronStatus = {
   enabled: boolean;
@@ -748,44 +581,18 @@ export type CronRunResult =
     }
   | { ok: false };
 
-export type CronRunLogEntry = {
-  ts: number;
-  jobId: string;
-  action?: "finished";
-  status?: CronRunStatus;
-  durationMs?: number;
-  error?: string;
-  summary?: string;
-  delivered?: boolean;
-  deliveryStatus?: CronDeliveryStatus;
-  deliveryError?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  runAtMs?: number;
-  nextRunAtMs?: number;
-  model?: string;
-  provider?: string;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-    cache_read_tokens?: number;
-    cache_write_tokens?: number;
-  };
-  jobName?: string;
-};
-
 export type CronJobsListResult = {
-  jobs: CronJob[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-  nextOffset?: number | null;
-  hasMore?: boolean;
+  jobs: ProtocolCronJob[];
+  snapshotRevision: string;
+  total: number;
+  limit: number;
+  offset: number;
+  nextOffset: number | null;
+  hasMore: boolean;
 };
 
 export type CronRunsResult = {
-  entries: CronRunLogEntry[];
+  entries: ProtocolCronRunLogEntry[];
   total?: number;
   limit?: number;
   offset?: number;
@@ -811,6 +618,8 @@ export type SkillClawHubLink =
       valid: true;
       registry: string;
       slug: string;
+      ownerHandle?: string;
+      requestedReference?: string;
       installedVersion: string;
       installedAt: number;
       originPath?: string;
@@ -894,11 +703,16 @@ export type ModelCatalogEntry = {
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingDefault?: string;
   supportsTools?: boolean;
   agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;
   apiKeySupported?: boolean;
 };
+
+export type ModelCatalogProviderOutcome =
+  import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;
@@ -930,4 +744,3 @@ export type SystemAgentSetupVerifyResult =
 export type WizardNextResult =
   import("../../../packages/gateway-protocol/src/schema.js").WizardNextResult;
 export type WizardStep = import("../../../packages/gateway-protocol/src/schema.js").WizardStep;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

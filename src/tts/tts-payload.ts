@@ -1,8 +1,11 @@
 import { markReplyPayloadAsTtsSupplement, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose, logVerbose } from "../globals.js";
 import { resolveSendableOutboundReplyParts } from "../infra/outbound/reply-payload-parts.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { parseTtsDirectives } from "./directives.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
 import type { SpeechVoiceOption } from "./provider-types.js";
@@ -23,7 +26,7 @@ import {
   resolveTtsSettingsSnapshot,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
-import { textToSpeech, type TtsAudioPersistence } from "./tts-synthesis.js";
+import { textToSpeechCore, type TtsAudioPersistence } from "./tts-synthesis.js";
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
 
@@ -76,7 +79,7 @@ function hasLegacyFinalMediaDirective(text: string): boolean {
   return /(?:^|\n)\s*MEDIA\s*:/i.test(text);
 }
 
-export async function maybeApplyTtsToPayload(
+export async function maybeApplyTtsToPayloadCore(
   params: {
     payload: ReplyPayload;
     cfg: OpenClawConfig;
@@ -214,7 +217,7 @@ export async function maybeApplyTtsToPayload(
   }
 
   const ttsStart = Date.now();
-  const result = await textToSpeech(
+  const result = await textToSpeechCore(
     {
       text: textForAudio,
       cfg,
@@ -266,5 +269,13 @@ export async function maybeApplyTtsToPayload(
 
   const latency = Date.now() - ttsStart;
   logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);
-  return nextPayload;
+  const channelId =
+    explicitTtsText && nextPayload.channelData ? normalizeMessageChannel(params.channel) : null;
+  const hasChannelData = channelId
+    ? getChannelPlugin(channelId)?.messaging?.hasStructuredReplyPayload?.({ payload: nextPayload })
+    : undefined;
+  // Channel-owned content checks keep transport-only metadata from silently dropping the answer.
+  return explicitTtsText && !hasReplyPayloadContent(nextPayload, { hasChannelData })
+    ? { ...nextPayload, text: explicitTtsText }
+    : nextPayload;
 }

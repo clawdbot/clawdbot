@@ -10,7 +10,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
@@ -23,7 +23,7 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
-import { collectExplicitAllowlist, normalizeToolName } from "../agents/tool-policy.js";
+import { collectExplicitAllowlist, normalizeToolPolicyName } from "../agents/tool-policy.js";
 import {
   inspectRuntimeToolInputSchemas,
   type RuntimeToolSchemaDiagnostic,
@@ -31,7 +31,11 @@ import {
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js";
-import { gatewayProbeResultSawGateway } from "../commands/gateway-health-auth-diagnostic.js";
+import {
+  GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+  gatewayProbeResultSawGateway,
+  gatewayProbeResultWasRateLimited,
+} from "../commands/gateway-health-auth-diagnostic.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getSystemdCgroupHygieneSummary,
@@ -44,11 +48,12 @@ import {
   formatLocalAudioSelection,
   inspectLocalAudioSelection,
 } from "../media-understanding/local-audio.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../skills/discovery/status.js";
+import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime>>;
@@ -59,12 +64,10 @@ function formatGatewayHealthTarget(url: string): string {
   return redactSensitiveUrlLikeString(url);
 }
 
-export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[] {
-  const agentId = resolveDefaultAgentId(cfg);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+export function detectUnavailableSkills(cfg: OpenClawConfig, workspaceDir: string) {
   const report = buildWorkspaceSkillStatus(workspaceDir, {
     config: cfg,
-    agentId,
+    agentId: tryResolveSoleAgentId(cfg),
   });
   return collectUnavailableAgentSkills(report);
 }
@@ -131,10 +134,22 @@ export async function collectGatewayHealthFindings(
     config: ctx.cfg,
     json: true,
   });
+  const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
+  if (gatewayProbeResultWasRateLimited(probe)) {
+    return [
+      {
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+        path: mode === "remote" ? "gateway.remote.url" : "gateway.mode",
+        target: formatGatewayHealthTarget(probeDetails.url),
+        fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
+      },
+    ];
+  }
   if (gatewayProbeResultSawGateway(probe)) {
     return [];
   }
-  const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
   return [
     {
       checkId: "core/doctor/gateway-health",
@@ -601,14 +616,14 @@ function groupProviderCatalogsForDoctor(providers: readonly ProviderPlugin[]): {
 
 export async function collectProviderCatalogProjectionFindings(
   cfg: OpenClawConfig,
+  workspaceDir?: string,
 ): Promise<readonly HealthFinding[]> {
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
-  const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
+  const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
   const env = process.env;
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  let providers: Awaited<ReturnType<typeof resolvePluginProviders>>;
+  let providers: Awaited<ReturnType<typeof resolvePluginProvidersCore>>;
   try {
-    providers = resolvePluginProviders({
+    providers = resolvePluginProvidersCore({
       config: cfg,
       workspaceDir,
       env,
@@ -826,7 +841,6 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
       modelId: params.modelRef.model,
     }),
     warn: () => {},
-    toolPolicyAuditLogLevel: "debug",
   });
   return collectNormalizedToolSchemaFindings({
     agentId: params.agentId,
@@ -889,7 +903,6 @@ function collectAgentRuntimeToolSchemaFindings(params: {
       modelContextWindowTokens: params.model.contextWindow,
       allowGatewaySubagentBinding: true,
       emitBeforeToolCallDiagnostics: false,
-      toolPolicyAuditLogLevel: "debug",
     });
   } catch (error) {
     return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
@@ -962,8 +975,8 @@ function synthesizeBundleMcpAllowlistSentinelName(params: {
   safeServerName: string;
   allowlistEntry: string;
 }): string | undefined {
-  const normalized = normalizeToolName(params.allowlistEntry);
-  const serverPrefix = normalizeToolName(`${params.safeServerName}${TOOL_NAME_SEPARATOR}`);
+  const normalized = normalizeToolPolicyName(params.allowlistEntry);
+  const serverPrefix = normalizeToolPolicyName(`${params.safeServerName}${TOOL_NAME_SEPARATOR}`);
   if (normalized.startsWith(serverPrefix)) {
     return normalized;
   }
@@ -1039,7 +1052,6 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
         modelId: params.modelRef.model,
       }),
       warn: () => {},
-      toolPolicyAuditLogLevel: "debug",
     }).length > 0
   );
 }
@@ -1069,6 +1081,7 @@ function isAcpRuntimeAgent(cfg: OpenClawConfig, agentId: string): boolean {
 
 export async function collectRuntimeToolSchemaFindings(
   cfg: OpenClawConfig,
+  options?: { runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner },
 ): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
   const bundleRuntimeByWorkspace = new Map<string, BundleMcpToolRuntime>();
@@ -1079,78 +1092,30 @@ export async function collectRuntimeToolSchemaFindings(
       if (isAcpRuntimeAgent(cfg, agentId)) {
         continue;
       }
-      const catalog = await loadPreparedModelCatalog({
-        config: cfg,
-        agentId,
-        agentDir: resolveAgentDir(cfg, agentId),
-      });
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const modelRef = resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-        allowPluginNormalization: true,
-      });
-      const model = buildDoctorRuntimeModel({
-        entry: findModelInCatalog(catalog, modelRef.provider, modelRef.model),
-        provider: modelRef.provider,
-        modelId: modelRef.model,
-      });
-      if (!supportsModelTools(model)) {
-        continue;
-      }
-      findings.push(
-        ...collectAgentRuntimeToolSchemaFindings({
+      const collectForAgent = async () => {
+        const catalog = await loadPreparedModelCatalog({
+          config: cfg,
+          agentId,
+          agentDir: resolveAgentDir(cfg, agentId),
+          readOnly: true,
+          providerDiscoveryProviderIds: [],
+        });
+        const modelRef = resolveDefaultModelForAgent({
           cfg,
           agentId,
-          workspaceDir,
-          modelRef,
-          model,
-        }),
-      );
-      if (!shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })) {
-        continue;
-      }
-      if (
-        !bundleRuntimeByWorkspace.has(workspaceDir) &&
-        !bundleRuntimeLoadErrorsByWorkspace.has(workspaceDir)
-      ) {
-        try {
-          bundleRuntimeByWorkspace.set(
-            workspaceDir,
-            await createBundleMcpToolRuntime({
-              workspaceDir,
-              cfg,
-            }),
-          );
-        } catch (error) {
-          bundleRuntimeLoadErrorsByWorkspace.set(
-            workspaceDir,
-            bundleMcpRuntimeLoadFailureFinding(error),
-          );
-        }
-      }
-      const bundleRuntimeLoadError = bundleRuntimeLoadErrorsByWorkspace.get(workspaceDir);
-      if (bundleRuntimeLoadError) {
-        if (!reportedBundleRuntimeLoadErrors.has(workspaceDir)) {
-          findings.push(bundleRuntimeLoadError);
-          reportedBundleRuntimeLoadErrors.add(workspaceDir);
-        }
-        continue;
-      }
-      const bundleRuntime = bundleRuntimeByWorkspace.get(workspaceDir);
-      if (bundleRuntime) {
-        if (bundleRuntime.diagnostics && bundleRuntime.diagnostics.length > 0) {
-          const policyActiveDiagnostics = filterPolicyActiveBundleMcpDiagnostics({
-            diagnostics: bundleRuntime.diagnostics,
-            cfg,
-            agentId,
-            modelRef,
-          });
-          findings.push(...policyActiveDiagnostics.map(bundleMcpRuntimeDiagnosticFinding));
+          allowPluginNormalization: true,
+        });
+        const model = buildDoctorRuntimeModel({
+          entry: findModelInCatalog(catalog, modelRef.provider, modelRef.model),
+          provider: modelRef.provider,
+          modelId: modelRef.model,
+        });
+        if (!supportsModelTools(model)) {
+          return;
         }
         findings.push(
-          ...collectBundleMcpRuntimeToolSchemaFindings({
-            bundleRuntime,
+          ...collectAgentRuntimeToolSchemaFindings({
             cfg,
             agentId,
             workspaceDir,
@@ -1158,6 +1123,63 @@ export async function collectRuntimeToolSchemaFindings(
             model,
           }),
         );
+        if (!shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })) {
+          return;
+        }
+        if (
+          !bundleRuntimeByWorkspace.has(workspaceDir) &&
+          !bundleRuntimeLoadErrorsByWorkspace.has(workspaceDir)
+        ) {
+          try {
+            bundleRuntimeByWorkspace.set(
+              workspaceDir,
+              await createBundleMcpToolRuntime({
+                workspaceDir,
+                cfg,
+              }),
+            );
+          } catch (error) {
+            bundleRuntimeLoadErrorsByWorkspace.set(
+              workspaceDir,
+              bundleMcpRuntimeLoadFailureFinding(error),
+            );
+          }
+        }
+        const bundleRuntimeLoadError = bundleRuntimeLoadErrorsByWorkspace.get(workspaceDir);
+        if (bundleRuntimeLoadError) {
+          if (!reportedBundleRuntimeLoadErrors.has(workspaceDir)) {
+            findings.push(bundleRuntimeLoadError);
+            reportedBundleRuntimeLoadErrors.add(workspaceDir);
+          }
+          return;
+        }
+        const bundleRuntime = bundleRuntimeByWorkspace.get(workspaceDir);
+        if (bundleRuntime) {
+          if (bundleRuntime.diagnostics && bundleRuntime.diagnostics.length > 0) {
+            const policyActiveDiagnostics = filterPolicyActiveBundleMcpDiagnostics({
+              diagnostics: bundleRuntime.diagnostics,
+              cfg,
+              agentId,
+              modelRef,
+            });
+            findings.push(...policyActiveDiagnostics.map(bundleMcpRuntimeDiagnosticFinding));
+          }
+          findings.push(
+            ...collectBundleMcpRuntimeToolSchemaFindings({
+              bundleRuntime,
+              cfg,
+              agentId,
+              workspaceDir,
+              modelRef,
+              model,
+            }),
+          );
+        }
+      };
+      if (options?.runWithPluginMetadataSnapshot) {
+        await options.runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, collectForAgent);
+      } else {
+        await collectForAgent();
       }
     }
   } finally {

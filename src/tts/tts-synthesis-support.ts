@@ -1,3 +1,4 @@
+import { normalizeOptionalString as readTtsResultString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -405,10 +406,6 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   }
 
   return buildTtsFailureResult(errors, attemptedProviders, attempts, persona?.id);
-}
-
-function readTtsResultString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resolveTtsResultModel(

@@ -2,8 +2,9 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { CoreConfig } from "../types.js";
 import { hasPendingDiscussionOpenForDestination } from "./binding-generation.js";
 import {
-  bindingMatchesActiveSessionIncarnation,
+  attachBindingToCurrentActiveSession,
   getClickClackDiscussionBindingStore,
+  type ClickClackDiscussionBinding,
 } from "./binding-store.js";
 import { resolveDiscussionBindingAccount } from "./eligibility.js";
 import { discussionSessionKey } from "./naming.js";
@@ -44,26 +45,37 @@ export function resolveClickClackDiscussionRoute(params: {
   if (matched.binding.serverBaseUrl !== params.serverBaseUrl.replace(/\/+$/u, "")) {
     return { state: "revoked" };
   }
-  if (matched.binding.archived) {
-    return { state: "revoked" };
-  }
   if (resolveDiscussionBindingAccount(params.config, matched.binding).state !== "active") {
     return { state: "revoked" };
   }
-  if (
-    !bindingMatchesActiveSessionIncarnation(params.runtime, matched.sessionKey, matched.binding)
-  ) {
+  let binding: ClickClackDiscussionBinding | undefined;
+  try {
+    binding = attachBindingToCurrentActiveSession({
+      runtime: params.runtime,
+      store,
+      sessionKey: matched.sessionKey,
+      binding: matched.binding,
+    });
+  } catch (error) {
+    params.runtime.logging
+      .getChildLogger({ plugin: "clickclack", feature: "discussions" })
+      .warn(
+        `discussion attachment refresh failed for channel ${params.channelId}: ${String(error)}`,
+      );
+    return { state: "revoked" };
+  }
+  if (!binding) {
     return { state: "revoked" };
   }
   const sessionKey = discussionSessionKey({
     runtime: params.runtime,
-    agentId: matched.binding.agentId,
+    agentId: binding.agentId,
     mainSessionKey: matched.sessionKey,
-    sessionId: matched.binding.sessionId,
+    sessionId: binding.sessionId,
     accountId: params.accountId,
-    serverBaseUrl: matched.binding.serverBaseUrl,
-    channelId: matched.binding.channelId,
-    externalRef: matched.binding.externalRef,
+    serverBaseUrl: binding.serverBaseUrl,
+    channelId: binding.channelId,
+    externalRef: binding.externalRef,
   });
   if (!sessionKey) {
     return { state: "revoked" };
@@ -71,7 +83,7 @@ export function resolveClickClackDiscussionRoute(params: {
   return {
     state: "active",
     route: {
-      agentId: matched.binding.agentId,
+      agentId: binding.agentId,
       sessionKey,
       systemPrompt: [
         "You are the side agent for a ClickClack discussion attached to an OpenClaw session.",

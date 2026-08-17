@@ -1,16 +1,15 @@
 // Isolated agent session tests cover session creation and metadata for cron runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { SessionOrigin } from "../../config/sessions/types.js";
+import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
-  resolveSessionFilePath: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
+  resolveSessionFilePathCore: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
 }));
 
 vi.mock("../../config/sessions/reset-policy.js", () => ({
@@ -165,6 +164,60 @@ describe("resolveCronSession", () => {
       }),
     ).toThrow('Session "agent:main:main" is archived. Restore it before starting new work.');
     expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rolls an archived isolated heartbeat session into a fresh run", () => {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:main:heartbeat",
+      entry: {
+        sessionId: "archived-heartbeat-session-id",
+        updatedAt: NOW_MS - 1000,
+        archivedAt: NOW_MS,
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      },
+      forceNew: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.previousSessionId).toBe("archived-heartbeat-session-id");
+    expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session-id");
+    expect(result.sessionEntry.archivedAt).toBeUndefined();
+    expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
+  });
+
+  it("keeps an initializing isolated heartbeat blocked during forced rollover", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "initializing-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+          initializationPending: true,
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+        },
+        forceNew: true,
+      }),
+    ).toThrow(
+      'Session "agent:main:main:heartbeat" is still initializing. Retry after initialization completes.',
+    );
+    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps an archived isolated heartbeat read-only without forceNew", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "archived-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+        },
+      }),
+    ).toThrow(
+      'Session "agent:main:main:heartbeat" is archived. Restore it before starting new work.',
+    );
   });
 
   // New tests for session reuse behavior (#18027)
@@ -417,7 +470,6 @@ describe("resolveCronSession", () => {
             lastActivityAt: NOW_MS - 1_000,
           },
           authProfileOverride: "auto-auth",
-          authProfileOverrideSource: "auto",
           authProfileOverrideCompactionCount: 2,
           modelOverride: "auto-model",
           providerOverride: "anthropic",
@@ -511,6 +563,22 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
       expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
+    });
+
+    it("stamps a legacy source-less user auth override on fresh sessions", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-legacy-auth",
+          updatedAt: NOW_MS - 1_000,
+          authProfileOverride: "work-profile",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
+      expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
+      expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
     });
 
     it("preserves non-delivery ambient session context for non-isolated expiration rollovers", () => {

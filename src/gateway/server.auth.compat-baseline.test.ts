@@ -10,7 +10,7 @@ import {
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
   createSignedDevice,
-  getFreePort,
+  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   readConnectChallengeNonce,
@@ -18,7 +18,7 @@ import {
   originForPort,
   rpcReq,
   restoreGatewayToken,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
   installGatewayTestHooks,
 } from "./server.auth.test-helpers.js";
@@ -137,7 +137,7 @@ async function expectLocalCliSharedAuthScopesPreserved(
 
 describe("gateway auth compatibility baseline", () => {
   describe("token mode", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port = 0;
     let prevToken: string | undefined;
 
@@ -145,8 +145,8 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "token", token: "secret" };
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-      port = await getFreePort();
-      server = await startGatewayServer(port);
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port);
     });
 
     afterAll(async () => {
@@ -240,8 +240,9 @@ describe("gateway auth compatibility baseline", () => {
       );
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
         await import("../infra/device-identity.js");
-      const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
-        await import("../infra/device-pairing.js");
+      const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+      const { rotateDeviceToken } = await import("../infra/device-pairing-tokens.js");
+      const { requestDevicePairing } = await import("../infra/device-pairing.js");
 
       const identity = loadOrCreateDeviceIdentity({ path: identityPath });
       const pending = await requestDevicePairing({
@@ -299,7 +300,7 @@ describe("gateway auth compatibility baseline", () => {
   });
 
   describe("password mode", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port = 0;
     let prevToken: string | undefined;
 
@@ -307,8 +308,8 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "password", password: "secret" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getFreePort();
-      server = await startGatewayServer(port);
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port);
     });
 
     afterAll(async () => {
@@ -356,7 +357,7 @@ describe("gateway auth compatibility baseline", () => {
   });
 
   describe("none mode", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port = 0;
     let prevToken: string | undefined;
 
@@ -364,8 +365,8 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "none" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getFreePort();
-      server = await startGatewayServer(port, { controlUiEnabled: true });
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port, { controlUiEnabled: true });
     });
 
     afterAll(async () => {
@@ -438,8 +439,8 @@ describe("gateway auth compatibility baseline", () => {
       try {
         const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
           await import("../infra/device-identity.js");
-        const { approveDevicePairing, requestDevicePairing } =
-          await import("../infra/device-pairing.js");
+        const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+        const { requestDevicePairing } = await import("../infra/device-pairing.js");
         const nonce = await readConnectChallengeNonce(ws);
         const identityPath = path.join(
           os.tmpdir(),

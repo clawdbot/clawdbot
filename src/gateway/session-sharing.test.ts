@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { GatewayClient } from "./server-methods/types.js";
+import { sessionGroupHandlers } from "./server-methods/sessions-groups.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import {
+  listSessionGroupDefaults,
+  putSessionGroups,
+  updateSessionGroupDefaults,
+} from "./session-groups.js";
 import {
   allowedSessionVisibilities,
   authorizeIncognitoSessionTarget,
@@ -12,6 +18,7 @@ import {
   createSessionListEntryFilter,
   resolveSessionSharingRole,
   resolveSessionVisibility,
+  SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
@@ -82,11 +89,148 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
       ...(createdActor ? { createdActor } : {}),
     },
     storeKey: "agent:main:main",
+    storeKeys: ["agent:main:main"],
     storePath: "/tmp/sessions.json",
   };
 }
 
 describe("session sharing policy", () => {
+  it("requires participation before sessions.create can adopt a categorized key", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:dashboard:categorized-adoption";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-categorized-adoption",
+          updatedAt: 1,
+          visibility: "read-only",
+          category: "Personal",
+          createdActor: { type: "human", id: "owner@example.com" },
+        },
+      );
+
+      const authorization = resolveSessionMutationAuthorization({
+        client: client({ user: "viewer@example.com" }),
+        method: "sessions.create",
+        requestParams: { key: sessionKey, category: "Projects" },
+        context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
+      });
+
+      expect(authorization.error).toMatchObject({
+        details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+      });
+    });
+  });
+
+  it("rechecks group members before committing a defaults update", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      putSessionGroups(["Race"]);
+      updateSessionGroupDefaults("Race", { cwd: "/repos/race", worktree: true });
+      const viewer = client({ user: "viewer@example.com" });
+      const context = {
+        getRuntimeConfig: () => ({}),
+        getSessionEventSubscriberConnIds: () => new Set<string>(),
+      } as unknown as GatewayRequestContext;
+      const authorization = resolveSessionMutationAuthorization({
+        client: viewer,
+        method: "sessions.groups.update",
+        requestParams: { name: " Race ", cwd: null, worktree: false },
+        context,
+      });
+      expect(authorization.error).toBeNull();
+
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:late-restricted-member" },
+        {
+          sessionId: "session-late-restricted-member",
+          updatedAt: 1,
+          visibility: "read-only",
+          category: "Race",
+          createdActor: { type: "human", id: "owner@example.com" },
+        },
+      );
+
+      await expect(
+        sessionGroupHandlers["sessions.groups.update"]?.({
+          params: { name: " Race ", cwd: null, worktree: false },
+          client: viewer,
+          context,
+          sessionMutationAuthorization: authorization.authorization,
+          respond: () => undefined,
+        } as never),
+      ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
+      expect(listSessionGroupDefaults()).toEqual([
+        { name: "Race", cwd: "/repos/race", worktree: true },
+      ]);
+    });
+  });
+
+  it("filters group defaults and blocks updates for sessions the caller cannot mutate", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      putSessionGroups(["Projects", "Personal"]);
+      updateSessionGroupDefaults("Projects", { cwd: "/repos/projects", worktree: true });
+      updateSessionGroupDefaults("Personal", { cwd: "/repos/personal", worktree: false });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:restricted-project" },
+        {
+          sessionId: "session-restricted-project",
+          updatedAt: 1,
+          visibility: "read-only",
+          category: "Projects",
+          createdActor: { type: "human", id: "owner@example.com" },
+        },
+      );
+      const viewer = client({ user: "viewer@example.com" });
+      const context = {
+        getRuntimeConfig: () => ({}),
+        getSessionEventSubscriberConnIds: () => new Set<string>(),
+      } as unknown as GatewayRequestContext;
+
+      expect(
+        resolveSessionMutationAuthorization({
+          client: viewer,
+          method: "sessions.groups.update",
+          requestParams: { name: "Projects", cwd: null, worktree: false },
+          context,
+        }).error,
+      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+
+      const responses: Parameters<RespondFn>[] = [];
+      await sessionGroupHandlers["sessions.groups.defaults"]?.({
+        params: {},
+        client: viewer,
+        context,
+        respond: (...response: Parameters<RespondFn>) => responses.push(response),
+      } as never);
+      expect(responses).toEqual([
+        [
+          true,
+          { defaults: [{ name: "Personal", cwd: "/repos/personal", worktree: false }] },
+          undefined,
+        ],
+      ]);
+
+      const personalAuthorization = resolveSessionMutationAuthorization({
+        client: viewer,
+        method: "sessions.groups.update",
+        requestParams: { name: "Personal", cwd: null, worktree: false },
+        context,
+      });
+      expect(personalAuthorization.error).toBeNull();
+      const updateResponses: Parameters<RespondFn>[] = [];
+      await sessionGroupHandlers["sessions.groups.update"]?.({
+        params: { name: "Personal", cwd: null, worktree: false },
+        client: viewer,
+        context,
+        sessionMutationAuthorization: personalAuthorization.authorization,
+        respond: (...response: Parameters<RespondFn>) => updateResponses.push(response),
+      } as never);
+      expect(updateResponses).toEqual([
+        [true, { ok: true, defaults: [{ name: "Personal", worktree: false }] }, undefined],
+      ]);
+    });
+  });
+
   it("reports an incognito denial against the caller's requested key", () => {
     const hiddenTarget = {
       ...target({ type: "human", id: "owner@example.com" }),
@@ -160,7 +304,7 @@ describe("session sharing policy", () => {
         incognito: true as const,
         createdActor: { type: "human" as const, id: "owner@example.com" },
       };
-      await upsertSessionEntry({ agentId: "main", sessionKey }, entry);
+      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
       const owner = client({ user: "owner@example.com" });
       const viewer = client({ user: "viewer@example.com" });
       const admin = client({ user: "admin@example.com", scopes: ["operator.admin"] });
@@ -223,11 +367,11 @@ describe("session sharing policy", () => {
 
   it("keeps agent scope for indirect run and approval authorization", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "global" },
         { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "work", sessionKey: "global" },
         {
           sessionId: "session-work-global",
@@ -236,7 +380,7 @@ describe("session sharing policy", () => {
           createdActor: { type: "human", id: "owner@example.com" },
         },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:solo-draft" },
         { sessionId: "session-solo-draft", updatedAt: 1, visibility: "draft" },
       );
@@ -306,7 +450,7 @@ describe("session sharing policy", () => {
   it("limits suggestion events to participants and the suggestion author", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:suggestions";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-suggestions",
@@ -351,7 +495,7 @@ describe("session sharing policy", () => {
   it("keeps draft typing events owner and admin only", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:draft-typing";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-draft",

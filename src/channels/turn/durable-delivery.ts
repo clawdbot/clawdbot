@@ -13,7 +13,10 @@ import {
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
-import { sendDurableMessageBatch } from "../message/send.js";
+import {
+  durableMessageBatchMayHaveReachedRecipient,
+  sendDurableMessageBatchCore,
+} from "../message/send.js";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
 import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
 
@@ -99,7 +102,7 @@ function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult
 }
 
 function resolveDurableSuppression(
-  send: Extract<Awaited<ReturnType<typeof sendDurableMessageBatch>>, { status: "suppressed" }>,
+  send: Extract<Awaited<ReturnType<typeof sendDurableMessageBatchCore>>, { status: "suppressed" }>,
 ): NonNullable<ChannelDeliveryResult["suppression"]> {
   const hookEffect = send.payloadOutcomes?.find(
     (outcome) => outcome.status === "suppressed",
@@ -145,7 +148,7 @@ function markDurableInboundReplyDeliveryErrorVisible(error: unknown): unknown {
 }
 
 /** Delivers final inbound replies through the durable message-send context when supported. */
-export async function deliverInboundReplyWithMessageSendContext(
+export async function deliverInboundReplyWithMessageSendContextCore(
   params: DurableInboundReplyDeliveryParams,
 ): Promise<DurableInboundReplyDeliveryResult> {
   if (params.info.kind !== "final") {
@@ -178,6 +181,7 @@ export async function deliverInboundReplyWithMessageSendContext(
   try {
     support = await resolveOutboundDurableFinalDeliverySupport({
       cfg: params.cfg,
+      agentId: params.agentId,
       channel,
       requirements: requiredCapabilities,
     });
@@ -204,8 +208,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     requesterSenderUsername: params.ctxPayload.SenderUsername,
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
-
-  const send = await sendDurableMessageBatch({
+  const send = await sendDurableMessageBatchCore({
     cfg: params.cfg,
     channel,
     to,
@@ -220,7 +223,9 @@ export async function deliverInboundReplyWithMessageSendContext(
     mediaAccess: params.mediaAccess,
     silent: params.silent,
     durability,
-    ...(durability === "required" ? { requireUnknownSendReconciliation: true } : {}),
+    ...(requiredCapabilities.reconcileUnknownSend === true
+      ? { requireUnknownSendReconciliation: true }
+      : {}),
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
@@ -239,7 +244,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     receipt: send.receipt,
     threadId: stringifyThreadId(threadId),
     ...(replyToId ? { replyToId } : {}),
-    visibleReplySent: send.status === "sent",
+    visibleReplySent: durableMessageBatchMayHaveReachedRecipient(send),
     ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
   });
   const delivery: ChannelDeliveryResult =
@@ -247,7 +252,9 @@ export async function deliverInboundReplyWithMessageSendContext(
       ? { ...receiptDelivery, suppression: resolveDurableSuppression(send) }
       : receiptDelivery;
   if (send.status === "suppressed") {
-    return { status: "handled_no_send", reason: "no_visible_result", delivery };
+    return delivery.visibleReplySent === true
+      ? { status: "handled_visible", delivery }
+      : { status: "handled_no_send", reason: "no_visible_result", delivery };
   }
   return { status: "handled_visible", delivery };
 }

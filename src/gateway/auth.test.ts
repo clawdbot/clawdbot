@@ -55,15 +55,16 @@ function createTailscaleForwardedReq(): TailscaleForwardedRequest {
       "x-forwarded-for": "100.64.0.1",
       "x-forwarded-proto": "https",
       "x-forwarded-host": "ai-hub.bone-egret.ts.net",
-      "tailscale-user-login": "peter",
+      "tailscale-user-login": "peter@github",
       "tailscale-user-name": "Peter",
+      "tailscale-user-profile-pic": "https://avatars.example.test/peter.png",
       "sec-fetch-site": "same-origin",
     },
   } as unknown as TailscaleForwardedRequest;
 }
 
 function createTailscaleWhois() {
-  return async () => ({ login: "peter", name: "Peter" });
+  return async () => ({ login: "peter@github", name: "Peter" });
 }
 
 function createAvatarBrowserOriginPolicy(
@@ -499,7 +500,12 @@ describe("gateway auth", () => {
 
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
-    expect(res.user).toBe("peter");
+    expect(res.user).toBe("peter@github");
+    expect(res.tailscaleIdentity).toEqual({
+      login: "peter@github",
+      name: "Peter",
+      profilePic: "https://avatars.example.test/peter.png",
+    });
   });
 
   it("allows an origin-less same-origin image through the profile avatar surface", async () => {
@@ -514,7 +520,7 @@ describe("gateway auth", () => {
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
     });
 
-    expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
+    expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter@github" });
     expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
     expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
   });
@@ -569,7 +575,7 @@ describe("gateway auth", () => {
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["https://control.example.com"]),
     });
 
-    expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
+    expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter@github" });
     expect(tailscaleWhois).toHaveBeenCalledOnce();
   });
 
@@ -716,14 +722,14 @@ describe("gateway auth", () => {
   it("enables tailscale header auth on the profile avatar HTTP wrapper", async () => {
     await expectTailscaleHeaderAuthResult({
       authorize: authorizeUserProfileAvatarHttpGatewayConnect,
-      expected: { ok: true, method: "tailscale", user: "peter" },
+      expected: { ok: true, method: "tailscale", user: "peter@github" },
     });
   });
 
   it("enables tailscale header auth on ws control-ui auth wrapper", async () => {
     await expectTailscaleHeaderAuthResult({
       authorize: authorizeWsControlUiGatewayConnect,
-      expected: { ok: true, method: "tailscale", user: "peter" },
+      expected: { ok: true, method: "tailscale", user: "peter@github" },
     });
   });
 

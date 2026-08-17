@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  readAmbientTranscriptWatermark as readAmbientTranscriptWatermarkFromEntry,
+  readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
@@ -12,25 +12,26 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
-import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
-export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePathCore,
+  resolveSessionStorePathCore,
+} from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
-  cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore as cleanupAccessorSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
-  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  patchSessionEntry as patchAccessorSessionEntry,
-  readSessionUpdatedAt as readAccessorSessionUpdatedAt,
+  patchSessionEntryCore as patchAccessorSessionEntry,
+  readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
+import { resolveSessionStoreEntryCore as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type {
@@ -51,6 +52,7 @@ import {
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 
 export {
   deliveryContextFromSession,
@@ -188,7 +190,7 @@ function materializeLegacyTranscriptFile(
     sessionId: marker.sessionId,
     storePath: marker.storePath,
   } as const;
-  const transcriptPath = resolveLegacySessionFilePath(marker.sessionId, undefined, {
+  const transcriptPath = resolveSessionFilePathCore(marker.sessionId, undefined, {
     agentId: marker.agentId,
     ...(options?.sessionsDir ? { sessionsDir: options.sessionsDir } : {}),
   });
@@ -330,7 +332,7 @@ export function resolveSessionFilePath(
   entry?: { sessionFile?: string },
   options?: { agentId?: string; sessionsDir?: string },
 ): string {
-  const resolved = resolveLegacySessionFilePath(sessionId, entry, options);
+  const resolved = resolveSessionFilePathCore(sessionId, entry, options);
   return materializeLegacyTranscriptFile(resolved, options);
 }
 
@@ -346,7 +348,7 @@ export function resolveStorePath(
   store?: string,
   options?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ): string {
-  const storePath = resolveSessionStorePath(store, options);
+  const storePath = resolveSessionStorePathCore(store, options);
   if (options?.agentId) {
     legacyStoreAgentIds.set(path.resolve(storePath), options.agentId);
   }
@@ -517,7 +519,7 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath =
     params.storePath ??
-    resolveSessionStorePath(undefined, {
+    resolveSessionStorePathCore(undefined, {
       agentId,
       env: params.env,
     });
@@ -565,7 +567,7 @@ export async function cleanupSessionLifecycleArtifacts(
 ): Promise<SessionLifecycleArtifactsCleanupResult> {
   const storePath =
     params.storePath ??
-    resolveSessionStorePath(params.sessionStore, {
+    resolveSessionStorePathCore(params.sessionStore, {
       agentId: params.agentId,
       env: params.env,
     });

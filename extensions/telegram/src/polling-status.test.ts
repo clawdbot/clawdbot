@@ -23,6 +23,7 @@ describe("createTelegramPollingStatusPublisher", () => {
     });
     expect(setStatus).toHaveBeenNthCalledWith(2, {
       mode: "polling",
+      running: true,
       connected: true,
       lastConnectedAt: 1234,
       lastEventAt: 1234,

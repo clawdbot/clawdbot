@@ -1,4 +1,5 @@
 // Tests approval command behavior for pending tool and execution requests.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelApprovalCapability,
@@ -24,12 +25,7 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function approvalResolverRequest(callIndex = 0) {
   const call = resolveApprovalOverGatewayMock.mock.calls[callIndex] as unknown[] | undefined;
@@ -47,7 +43,9 @@ function expectApprovalResolverCall(params: {
 }) {
   const request = approvalResolverRequest(params.callIndex ?? 0);
   expect(request).toHaveProperty("cfg");
-  expect(request).toHaveProperty("senderId");
+  const hasReviewer = Object.hasOwn(request, "channel");
+  expect(Object.hasOwn(request, "accountId")).toBe(hasReviewer);
+  expect(Object.hasOwn(request, "senderId")).toBe(hasReviewer);
   expect(request.approvalId).toBe(params.id);
   expect(request.decision).toBe(params.decision ?? "allow-once");
   expect(request.resolveMethod).toBe(
@@ -368,6 +366,7 @@ describe("handleApproveCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
     expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc12345" });
+    expect(approvalResolverRequest()).toMatchObject({ channel: "telegram", accountId: "work" });
   });
 
   it.each([
@@ -744,6 +743,12 @@ describe("handleApproveCommand", () => {
           method: "exec.approval.resolve",
           id: "abc",
         });
+        const request = approvalResolverRequest(
+          resolveApprovalOverGatewayMock.mock.calls.length - 1,
+        );
+        expect(request).not.toHaveProperty("channel");
+        expect(request).not.toHaveProperty("accountId");
+        expect(request).not.toHaveProperty("senderId");
       }
     }
   });

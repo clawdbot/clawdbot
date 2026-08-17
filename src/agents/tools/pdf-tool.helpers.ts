@@ -10,7 +10,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
-import { extractAssistantText } from "../embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 
 /** Normalized PDF model preference used by tool registration and execution. */
 type PdfModelConfig = { primary?: string; fallbacks?: string[] };
@@ -108,7 +108,7 @@ export function coercePdfAssistantText(params: {
   if (errorMessage) {
     fail(errorMessage);
   }
-  const text = extractAssistantText(params.message);
+  const text = extractEmbeddedAssistantText(params.message);
   const trimmed = text.trim();
   if (trimmed) {
     return trimmed;

@@ -5,7 +5,7 @@ import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
-import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
+import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 

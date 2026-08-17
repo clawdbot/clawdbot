@@ -38,7 +38,16 @@ function createContext(
   };
   const subscribe = () => () => undefined;
   return {
-    gateway: { snapshot, subscribe },
+    gateway: {
+      snapshot,
+      connection: {
+        gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
+      subscribe,
+    },
     agents: { subscribe, ensureList: vi.fn(async () => null) },
     agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
   } as unknown as ApplicationContext<RouteId>;
@@ -121,6 +130,37 @@ function createConnectedContext(
       }
     },
   };
+}
+
+function stubProfileAvatarProcessing() {
+  class StubUrl extends URL {
+    static override createObjectURL = vi.fn(() => "blob:avatar");
+    static override revokeObjectURL = vi.fn();
+  }
+  class StubImage {
+    decoding = "auto";
+    src = "";
+    naturalWidth = 512;
+    naturalHeight = 256;
+    decode = vi.fn(async () => undefined);
+  }
+  vi.stubGlobal("URL", StubUrl);
+  vi.stubGlobal("Image", StubImage);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    drawImage: vi.fn(),
+  } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type) => {
+    callback(new Blob([new Uint8Array([1, 2, 3])], { type: type ?? "image/png" }));
+  });
+}
+
+function selectProfileAvatar(page: ParentNode) {
+  const avatarInput = page.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(avatarInput, "files", {
+    configurable: true,
+    value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
+  });
+  avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 beforeEach(async () => {
@@ -250,7 +290,11 @@ it("falls back to the text avatar when the hero image fails to load", async () =
     agents: [
       {
         id: "main",
-        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/unloadable-avatar.png" },
+        identity: {
+          name: "Molty",
+          emoji: "🦞",
+          avatarUrl: "data:image/png;base64,unloadable",
+        },
       },
     ],
   };
@@ -261,7 +305,7 @@ it("falls back to the text avatar when the hero image fails to load", async () =
 
   await page.updateComplete;
   const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
-  expect(image?.getAttribute("src")).toBe("/unloadable-avatar.png");
+  expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
   expect(page.querySelector(".profile-hero__avatar-text")).toBeNull();
 
   image?.dispatchEvent(new Event("error"));
@@ -269,6 +313,60 @@ it("falls back to the text avatar when the hero image fails to load", async () =
 
   expect(page.querySelector(".profile-hero__avatar-image")).toBeNull();
   expect(page.querySelector(".profile-hero__avatar-text")?.textContent).toBe("🦞");
+});
+
+it("fetches a protected hero avatar with the current Control UI credential", async () => {
+  const createObjectURL = vi.fn(() => "blob:hero-avatar");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectURL;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    blob: async () => new Blob(["avatar"], { type: "image/svg+xml" }),
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const harness = createConnectedContext(vi.fn() as GatewayBrowserClient["request"]);
+  harness.context.gateway.connection.token = "profile-token";
+  const agentsState = harness.context.agents.state as unknown as {
+    agentsList: {
+      defaultId: string;
+      agents: Array<{
+        id: string;
+        identity: { name: string; emoji: string; avatarUrl: string };
+      }>;
+    };
+  };
+  agentsState.agentsList = {
+    defaultId: "main",
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/avatar/main" },
+      },
+    ],
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => {
+    expect(fetchMock).toHaveBeenCalledWith("/avatar/main", {
+      headers: { Authorization: "Bearer profile-token" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(
+      page.querySelector<HTMLImageElement>(".profile-hero__avatar-image")?.getAttribute("src"),
+    ).toBe("blob:hero-avatar");
+  });
+
+  page.remove();
+  await waitForFast(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar"));
 });
 
 it("retries the identity bootstrap when users.self returns no profile", async () => {
@@ -363,10 +461,11 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
   await Promise.all([pageWithIdentity.loadIdentity(), pageWithIdentity.loadIdentity()]);
   expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1);
 
-  rejectIdentity?.(new Error("identity unavailable"));
+  rejectIdentity?.(new Error("identity unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
   await waitForFast(() => expect(refresh.disabled).toBe(false));
   expect(refresh.textContent?.trim()).toBe(t("common.refresh"));
-  expect(page.textContent).toContain("identity unavailable");
+  expect(page.textContent).toContain("identity unavailable: OPENAI_API_KEY=sk-123...cdef");
+  expect(page.textContent).not.toContain("sk-1234567890abcdef");
 
   refresh.click();
   await waitForFast(() =>
@@ -437,6 +536,8 @@ it("replaces an in-flight identity request after a same-client reconnect", async
 });
 
 it("bootstraps and refreshes the connected user's profile through users.self", async () => {
+  let avatarRevision = "avatar-content-hash-png";
+  let publishAvatarPresence: (() => void) | undefined;
   let profile: UserProfile = {
     id: "profile-1",
     displayName: "Ada",
@@ -469,7 +570,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
         hasAvatar: true,
         updatedAt: 4,
       };
-      return { profile };
+      publishAvatarPresence?.();
+      return { profile, avatarRevision };
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -478,6 +580,10 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     email: "ada@example.test",
     name: "Ada",
   });
+  publishAvatarPresence = () =>
+    harness.context.gateway.updateSelfUser?.({
+      avatarUrl: `/api/users/${profile.id}/avatar?v=${avatarRevision}`,
+    });
   const provider = createApplicationContextProvider(harness.context);
   const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
   provider.append(page);
@@ -515,31 +621,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   displayNameInput.value = "Unsaved draft";
   displayNameInput.dispatchEvent(new Event("input", { bubbles: true }));
   await page.updateComplete;
-  class StubUrl extends URL {
-    static override createObjectURL = vi.fn(() => "blob:avatar");
-    static override revokeObjectURL = vi.fn();
-  }
-  class StubImage {
-    decoding = "auto";
-    src = "";
-    naturalWidth = 512;
-    naturalHeight = 256;
-    decode = vi.fn(async () => undefined);
-  }
-  vi.stubGlobal("URL", StubUrl);
-  vi.stubGlobal("Image", StubImage);
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-    drawImage: vi.fn(),
-  } as unknown as CanvasRenderingContext2D);
-  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type) => {
-    callback(new Blob([new Uint8Array([1, 2, 3])], { type: type ?? "image/png" }));
-  });
-  const avatarInput = page.querySelector<HTMLInputElement>('input[type="file"]')!;
-  Object.defineProperty(avatarInput, "files", {
-    configurable: true,
-    value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
-  });
-  avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
+  stubProfileAvatarProcessing();
+  selectProfileAvatar(page);
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.setAvatar")).toBe(true),
   );
@@ -548,10 +631,43 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   );
   await page.updateComplete;
   expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain(
-    "/api/users/profile-1/avatar?v=4",
+    `/api/users/profile-1/avatar?v=${avatarRevision}`,
   );
+  expect(
+    (
+      page.querySelector("openclaw-viewer-avatar") as
+        | (HTMLElement & { user?: AuthenticatedUser })
+        | null
+    )?.user?.avatarUrl,
+  ).toBe(`/api/users/profile-1/avatar?v=${avatarRevision}`);
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
+  );
+
+  const avatarRequestCount = request.mock.calls.filter(
+    ([method]) => method === "users.setAvatar",
+  ).length;
+  avatarRevision = "response-content-hash-png";
+  publishAvatarPresence = undefined;
+  selectProfileAvatar(page);
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.setAvatar")).toHaveLength(
+      avatarRequestCount + 1,
+    ),
+  );
+  await waitForFast(() =>
+    expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain(
+      `/api/users/profile-1/avatar?v=${avatarRevision}`,
+    ),
+  );
+  await waitForFast(() =>
+    expect(
+      (
+        page.querySelector("openclaw-viewer-avatar") as
+          | (HTMLElement & { user?: AuthenticatedUser })
+          | null
+      )?.user?.avatarUrl,
+    ).toContain(`/api/users/profile-1/avatar?v=${avatarRevision}`),
   );
 
   omitNextProfile = true;

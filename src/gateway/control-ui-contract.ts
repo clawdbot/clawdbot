@@ -3,11 +3,19 @@
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+/** Fragment marker selecting the host-authorized browser-owner bootstrap profile. */
+export const CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM = "bootstrapProfile";
+export const CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT = "owner";
+export type ControlUiBootstrapProfileHint = typeof CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT;
+
 /** Authenticated same-origin prefix for plugin manifest/catalog icon bytes. */
 export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
 
 /** Authenticated same-origin prefix for allowlisted catalog icon bytes. */
 export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
+
+/** Authenticated same-origin prefix for a session workspace's own project icon. */
+export const CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX = "/__openclaw__/workspace-icon";
 
 /** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
 export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;
@@ -156,6 +164,8 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarReason?: string | null;
   assistantAgentId?: string;
   serverVersion?: string;
+  /** Exact immutable build serving this Control UI when available. */
+  serverBuildId?: string;
   /**
    * Git branch of a source-checkout (non-release) gateway install. Omitted for
    * package installs and mainline (main/master) checkouts so the UI only flags
@@ -172,5 +182,7 @@ export type ControlUiBootstrapConfig = {
    * switch removes the surface rather than showing a button that errors on open.
    */
   terminalEnabled?: boolean;
+  /** Whether the Labs-gated CLI agents model-picker group is enabled. */
+  cliAgentsEnabled?: boolean;
   pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
 };

@@ -25,7 +25,7 @@ vi.mock("../../secrets/runtime-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../secrets/runtime-state.js")>();
   return {
     ...actual,
-    getActiveSecretsRuntimeSnapshot: () => secretsMocks.activeSnapshot,
+    getActiveSecretsRuntimeSnapshotState: () => secretsMocks.activeSnapshot,
   };
 });
 

@@ -1,6 +1,11 @@
 // Isolated runtime.llm.complete tests cover zero-tool dispatch and policy enforcement.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+} from "../../infra/diagnostic-events.js";
+import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-listener-provenance.js";
 import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
@@ -62,6 +67,7 @@ function expectSingleCallFirstArg(mock: { mock: { calls: unknown[][] } }, expect
 
 describe("runtime.llm.complete isolated agent runtime", () => {
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     hoisted.prepareSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
@@ -70,6 +76,24 @@ describe("runtime.llm.complete isolated agent runtime", () => {
   });
 
   it("routes authorized isolated completion through the configured agent runtime", async () => {
+    const usageEvents: Array<{
+      hostPluginId?: string;
+      internal?: boolean;
+      trusted: boolean;
+      usage: unknown;
+    }> = [];
+    const stop = onTrustedInternalDiagnosticEvent(
+      markTrustedOtelDiagnosticListener((event, metadata, privateData) => {
+        if (event.type === "model.usage") {
+          usageEvents.push({
+            hostPluginId: (privateData as { hostPluginId?: string }).hostPluginId,
+            internal: metadata.internal,
+            trusted: metadata.trusted,
+            usage: event.usage,
+          });
+        }
+      }),
+    );
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce({
       provider: "openai",
       modelId: "gpt-5.5",
@@ -104,6 +128,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
         },
       }),
     );
+    stop();
 
     expectSingleCallFirstArg(hoisted.runIsolatedCompletion, {
       config: expect.any(Object),
@@ -124,8 +149,49 @@ describe("runtime.llm.complete isolated agent runtime", () => {
         owner: { kind: "harness", id: "openclaw" },
       },
       usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+      audit: { caller: { kind: "plugin", id: "llm-task" } },
     });
+    expect(usageEvents).toEqual([
+      {
+        hostPluginId: "llm-task",
+        internal: true,
+        trusted: true,
+        usage: {
+          input: 3,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          promptTokens: 3,
+          total: 5,
+        },
+      },
+    ]);
     expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
+  it("keeps usage-free isolated completions silent", async () => {
+    hoisted.runIsolatedCompletion.mockResolvedValueOnce({
+      text: "isolated",
+      provider: "openai",
+      model: "gpt-5.5",
+      owner: { kind: "cli", id: "claude-cli" },
+    });
+    const usageEvents: unknown[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "model.usage") {
+        usageEvents.push(event);
+      }
+    });
+    const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
+
+    const result = await llm.complete({
+      messages: [{ role: "user", content: "Return JSON" }],
+      execution: { mode: "isolated-agent-runtime" },
+    });
+    stop();
+
+    expect(result.usage).toEqual({});
+    expect(usageEvents).toEqual([]);
   });
 
   it("uses the authority-bound profile before the agent-configured profile", async () => {
@@ -408,6 +474,12 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     ["input-rejected", "LLM_ISOLATED_INPUT_REJECTED"],
     ["output-rejected", "LLM_COMPLETION_OUTPUT_REJECTED"],
   ] as const)("maps %s adapter failures to %s", async (adapterCode, publicCode) => {
+    const usageEvents: unknown[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "model.usage") {
+        usageEvents.push(event);
+      }
+    });
     hoisted.runIsolatedCompletion.mockRejectedValueOnce(
       Object.assign(new Error(`adapter ${adapterCode}`), { code: adapterCode }),
     );
@@ -419,5 +491,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
         execution: { mode: "isolated-agent-runtime" },
       }),
     ).rejects.toMatchObject({ code: publicCode });
+    stop();
+    expect(usageEvents).toEqual([]);
   });
 });

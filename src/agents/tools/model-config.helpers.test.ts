@@ -107,6 +107,7 @@ const hasDirectOpenAiKey = (
   });
 
 beforeEach(() => {
+  vi.stubEnv("OPENAI_API_KEY", "");
   authMocks.resolveEnvApiKey.mockReset();
   authMocks.resolveEnvApiKey.mockImplementation(
     (provider: string, _env?: unknown, options?: { config?: unknown }) =>
@@ -203,6 +204,83 @@ describe("hasProviderAuthForTool", () => {
       }),
     ).toBe(false);
     expect(authMocks.resolveEnvApiKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides inline provider keys during billing cooldown, keeping profile fallback", () => {
+    // Regression: hasProviderAuthForTool used to call the runtime availability
+    // check without the auth store, so inline provider keys in billing cooldown
+    // were still advertised as usable tool auth.
+    const cfg = {
+      models: {
+        providers: {
+          hatchery: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const cooldownStats = (disabledUntil: number) => ({
+      "inline-api-key:hatchery": { disabledUntil, disabledReason: "billing" as const },
+    });
+
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        cfg,
+        authStore: { version: 1, profiles: {}, usageStats: cooldownStats(Date.now() + 60_000) },
+      }),
+    ).toBe(false);
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        cfg,
+        authStore: { version: 1, profiles: {}, usageStats: cooldownStats(Date.now() - 60_000) },
+      }),
+    ).toBe(true);
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        cfg,
+        authStore: {
+          version: 1,
+          profiles: { "hatchery:default": apiKey("hatchery", "sk-profile") },
+          usageStats: cooldownStats(Date.now() + 60_000),
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("hides inline provider keys during billing cooldown from direct API-key tool auth", () => {
+    const cfg = {
+      models: {
+        providers: {
+          hatchery: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      hasDirectProviderApiKeyAuthForTool({
+        provider: "hatchery",
+        cfg,
+        authStore: {
+          version: 1,
+          profiles: {},
+          usageStats: {
+            "inline-api-key:hatchery": {
+              disabledUntil: Date.now() + 60_000,
+              disabledReason: "billing" as const,
+            },
+          },
+        },
+      }),
+    ).toBe(false);
   });
 });
 

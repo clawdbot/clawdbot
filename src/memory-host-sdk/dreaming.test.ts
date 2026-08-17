@@ -231,6 +231,29 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("does not require a default owner when no primary workspace is supplied", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        list: [
+          { id: "alpha", workspace: "/workspace/alpha" },
+          { id: "beta", workspace: "/workspace/beta" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
+      {
+        workspaceDir: "/workspace/alpha",
+        agentIds: ["alpha"],
+      },
+      {
+        workspaceDir: "/workspace/beta",
+        agentIds: ["beta"],
+      },
+    ]);
+  });
+
   it("includes the runtime primary workspace alongside configured subagent workspaces", () => {
     const cfg = {
       agents: {

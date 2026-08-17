@@ -23,10 +23,6 @@ const outputFile =
   path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
 const a2uiAppDir = path.join(pluginDir, "src", "host", "a2ui-app");
 const GIT_INPUT_DISCOVERY_TIMEOUT_MS = 5_000;
-const repoInputPaths = getBundleHashRepoInputPaths(rootDir);
-const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
-  normalizePath(path.relative(rootDir, inputPath)),
-);
 
 function fail(message) {
   console.error(message);
@@ -108,9 +104,12 @@ async function walkFiles(entryPath, files) {
   }
 }
 
-function listTrackedInputFiles() {
-  const result = spawnSync("git", ["ls-files", "--", ...relativeRepoInputPaths], {
-    cwd: rootDir,
+export function listTrackedInputFiles(runGit, repoRoot = rootDir) {
+  const relativeRepoInputPaths = getBundleHashRepoInputPaths(repoRoot).map((inputPath) =>
+    normalizePath(path.relative(repoRoot, inputPath)),
+  );
+  const result = runGit("git", ["ls-files", "--", ...relativeRepoInputPaths], {
+    cwd: repoRoot,
     encoding: "utf8",
     killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "pipe"],
@@ -122,14 +121,14 @@ function listTrackedInputFiles() {
   const trackedFiles = result.stdout
     .split("\n")
     .filter(Boolean)
-    .map((filePath) => path.join(rootDir, filePath))
+    .map((filePath) => path.join(repoRoot, filePath))
     .filter((filePath) => existsSync(filePath))
     .filter((filePath) => isBundleHashInputPath(filePath));
   return trackedFiles;
 }
 
 async function computeHash() {
-  let files = listTrackedInputFiles();
+  let files = listTrackedInputFiles(spawnSync);
   if (!files) {
     files = [];
     for (const inputPath of getBundleHashRepoInputPaths(rootDir)) {

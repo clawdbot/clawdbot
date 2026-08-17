@@ -1,4 +1,3 @@
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 // Stale-while-revalidate cache for models.authStatus provider usage enrichment.
 import {
   ensureAuthProfileStore,
@@ -10,6 +9,10 @@ import {
   fingerprintAuthProfileOwnerShape,
   fingerprintResolvedProviderAuth,
 } from "../../agents/execution-auth-binding.js";
+import {
+  resolveLegacyInheritedAuthAgentId,
+  resolveLegacyInheritedAuthDir,
+} from "../../agents/legacy-inherited-auth-dir.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -33,7 +36,7 @@ export type ProviderUsageStatus = Pick<
 
 type ProviderUsageCacheEntry = {
   agentDir: string;
-  configRef: object;
+  configRef: OpenClawConfig;
   credentialKey: string;
   providerKey: string;
   refreshedAt: number;
@@ -43,7 +46,7 @@ type ProviderUsageCacheEntry = {
 
 type ProviderUsageRefresh = {
   agentDir: string;
-  configRef: object;
+  configRef: OpenClawConfig;
   credentialKey: string;
   providerKey: string;
   promise: Promise<UsageSummary>;
@@ -155,7 +158,7 @@ function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSumm
 function scheduleProviderUsageRefresh(params: {
   agentId: string;
   agentDir: string;
-  configRef: object;
+  configRef: OpenClawConfig;
   credentialKey: string;
   providerIds: UsageProviderId[];
   providerKey: string;
@@ -173,6 +176,7 @@ function scheduleProviderUsageRefresh(params: {
   const promise = loadProviderUsageSummary({
     providers: params.providerIds,
     agentDir: params.agentDir,
+    config: params.configRef,
     timeoutMs: 3500,
   })
     .then((usage) => {
@@ -219,7 +223,7 @@ function scheduleProviderUsageRefresh(params: {
 type ProviderUsageCacheParams = {
   agentId: string;
   agentDir: string;
-  configRef: object;
+  configRef: OpenClawConfig;
   credentialKey: string;
   forceRefresh?: boolean;
   providerIds: UsageProviderId[];
@@ -302,8 +306,8 @@ export async function loadUsageStatusStaleWhileRevalidate(params: {
   config: OpenClawConfig;
   now?: number;
 }): Promise<UsageSummary> {
-  const agentId = resolveDefaultAgentId(params.config);
-  const agentDir = resolveAgentDir(params.config, agentId);
+  const agentId = resolveLegacyInheritedAuthAgentId(params.config);
+  const agentDir = resolveLegacyInheritedAuthDir(params.config);
   const store = ensureAuthProfileStore(agentDir, {
     externalCli: externalCliDiscoveryForConfigStatus({ cfg: params.config }),
   });

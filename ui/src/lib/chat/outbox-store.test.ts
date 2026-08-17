@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  listStoredDraftScopes,
   listStoredChatOutboxes,
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
@@ -19,6 +20,34 @@ afterEach(() => {
 });
 
 describe("stored outbox summaries", () => {
+  it("lists only non-empty drafts under the same scope used by sidebar sessions", () => {
+    const gatewayUrl = "ws://gateway.test/control";
+    sessionStorage.setItem(
+      `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: {
+          "thread-draft\u0000agent:main": {
+            draft: "finish this message",
+            draftRevision: 3,
+            updatedAt: 3,
+          },
+          "thread-empty\u0000agent:main": { draftRevision: 2, updatedAt: 2 },
+          "thread-queue\u0000agent:main": {
+            queue: [{ id: "queued", text: "queued", createdAt: 1 }],
+            updatedAt: 1,
+          },
+        },
+      }),
+    );
+    const state = { settings: { gatewayUrl } };
+
+    expect([...listStoredDraftScopes(state)]).toEqual([
+      storedChatOutboxScopeKey(resolveStoredChatOutboxScope(state, "thread-draft")),
+    ]);
+  });
+
   it("bridges matching storage events until the last subscriber leaves", () => {
     const addEventListener = vi.spyOn(window, "addEventListener");
     const removeEventListener = vi.spyOn(window, "removeEventListener");

@@ -1,3 +1,4 @@
+import { responsesPromptObserver } from "@openclaw/ai/internal/openai";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
@@ -64,6 +65,41 @@ describe("provider prompt state", () => {
     for (const runId of [firstRunId, ...otherRunIds]) {
       clearProviderPromptState(runId);
     }
+  });
+
+  it("records only bounded private observer evidence", async () => {
+    const runId = "provider-evidence";
+    const marker = "PRIVATE-PROVIDER-PROMPT-MARKER";
+    const state = getProviderPromptState(runId);
+    const recordEvent = vi.fn();
+    const observation = {
+      egress: "responses-sdk",
+      payloadVariant: "initial",
+      promptSource: "input.developer",
+      expectedChars: marker.length,
+      observedChars: marker.length,
+      matchesAssembledPrompt: true,
+    } as const;
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: async (_model, _context, options) => {
+        if (!options) {
+          throw new Error("missing stream options");
+        }
+        await options.onPayload?.({ input: marker }, model);
+        responsesPromptObserver.get(options)?.(observation);
+        return createResultStream("stop");
+      },
+      state,
+      effectiveContextTokenBudget: 128_000,
+      recordEvent,
+    });
+
+    const result = await wrapped(model, { systemPrompt: marker, messages: [], tools: [] });
+    await result.result();
+
+    expect(recordEvent).toHaveBeenCalledWith("provider.prompt.observed", observation);
+    expect(JSON.stringify({ calls: recordEvent.mock.calls, state })).not.toContain(marker);
+    clearProviderPromptState(runId);
   });
 
   it("observes the final replacement body and blocks its rejected replay before network send", async () => {

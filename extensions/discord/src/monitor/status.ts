@@ -1,5 +1,5 @@
 // Discord plugin module implements status behavior.
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 
 type DiscordMonitorStatusPatch = {
   connected?: boolean;
@@ -28,11 +28,9 @@ export type DiscordMonitorStatusSink = (patch: DiscordMonitorStatusPatch) => voi
 
 /** READY proves a prior terminal failure was repaired, so the account is restartable again. */
 export function createDiscordReadyStatusPatch(at: number = Date.now()) {
-  return {
-    ...createConnectedChannelStatusPatch(at),
-    lifecycle: "ready" as const,
-    terminalDisconnect: undefined,
+  return channelReadyPatch({
+    lastConnectedAt: at,
+    lastEventAt: at,
     lastDisconnect: null,
-    lastError: null,
-  };
+  });
 }

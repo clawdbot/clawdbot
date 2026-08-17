@@ -275,6 +275,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         reason: params?.reason,
         progress: progress ?? undefined,
         sessionsFullRetryDirty: this.sessionsFullRetryDirty,
+        sessionsReconcileDirty: this.sessionsReconcileDirty,
         sessionsDirtyFiles: this.sessionsDirtyFiles,
         syncArchiveFiles: async (targetedParams) => {
           await this.syncArchiveFiles({

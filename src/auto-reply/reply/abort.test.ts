@@ -3,9 +3,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveStorePath } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -76,7 +76,7 @@ const { subagentRegistryMocks, subagentRegistryDeps } = vi.hoisted(() => {
     (childSessionKey: string) => SubagentRunFixture | null
   >(() => null);
   const markSubagentRunTerminated = vi.fn<
-    typeof import("../../agents/subagent-registry.js").markSubagentRunTerminated
+    typeof import("../../agents/subagents/registry/subagent-registry.js").markSubagentRunTerminated
   >(() => 1);
   return {
     subagentRegistryMocks: {
@@ -95,11 +95,12 @@ const { subagentRegistryMocks, subagentRegistryDeps } = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../agents/subagent-registry.js", () => ({
-  getLatestSubagentRunByChildSessionKey: subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForRequester: subagentRegistryDeps.listSubagentRunsForRequester,
-  listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
+vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+}));
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
+  getLatestSubagentRunByChildSessionKey: subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
+  listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
 }));
 
 const acpManagerMocks = vi.hoisted(() => ({
@@ -279,7 +280,7 @@ describe("abort detection", () => {
         sessionKey: entry.childSessionKey,
         config: params.cfg,
       });
-      const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+      const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
       const sessionId =
         replyRunRegistry.resolveSessionId(entry.childSessionKey) ??
         loadSessionEntry({

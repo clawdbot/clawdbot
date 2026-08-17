@@ -5,6 +5,7 @@ import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { configureAiTransportHost } from "../host.js";
+import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
@@ -315,6 +316,9 @@ describe("ChatGPT Responses cached transport", () => {
   });
 
   it("does not prepare SSE requests or serialize full bodies for cached websocket turns", async () => {
+    const prompt = "PRIVATE-CACHED-WEBSOCKET-PROMPT";
+    const observations: ResponsesPromptObservation[] = [];
+    const order: string[] = [];
     const sentPayloads: string[] = [];
 
     class CachedWebSocket extends EventTarget {
@@ -326,6 +330,7 @@ describe("ChatGPT Responses cached transport", () => {
       }
 
       send(payload: string): void {
+        order.push("send");
         sentPayloads.push(payload);
         queueMicrotask(() => {
           this.dispatchEvent(
@@ -352,11 +357,20 @@ describe("ChatGPT Responses cached transport", () => {
       sessionId: "cached-hot-path",
       transport: "websocket-cached" as const,
     };
+    responsesPromptObserver.set(options, (observation) => {
+      order.push("observe");
+      observations.push(observation);
+    });
 
-    const first = await streamOpenAICodexResponses(model, context, options).result();
+    const first = await streamOpenAICodexResponses(
+      model,
+      { ...context, systemPrompt: prompt },
+      options,
+    ).result();
     const second = await streamOpenAICodexResponses(
       model,
       {
+        systemPrompt: prompt,
         messages: [...context.messages, { role: "user", content: "follow-up", timestamp: 2 }],
       },
       options,
@@ -368,6 +382,11 @@ describe("ChatGPT Responses cached transport", () => {
     expect(headerSet).not.toHaveBeenCalledWith("accept", "text/event-stream");
     expect(headerSet).not.toHaveBeenCalledWith("content-type", "application/json");
     expect(sentPayloads).toHaveLength(2);
+    expect(order).toEqual(["observe", "send", "observe", "send"]);
+    expect(observations).toHaveLength(2);
+    expect(observations.every((entry) => entry.egress === "native-codex-websocket")).toBe(true);
+    expect(observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);
+    expect(JSON.stringify(observations)).not.toContain(prompt);
 
     const continuation = JSON.parse(sentPayloads[1] as string) as {
       input?: unknown[];

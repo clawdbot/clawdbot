@@ -1,8 +1,16 @@
 // Feishu tests cover channel plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuPlugin } from "./channel.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
+
+describe("feishu target classification", () => {
+  it("distinguishes users from chats", () => {
+    expect(feishuPlugin.messaging?.inferTargetChatType?.({ to: "ou_owner" })).toBe("direct");
+    expect(feishuPlugin.messaging?.inferTargetChatType?.({ to: "oc_group" })).toBe("group");
+  });
+});
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -82,12 +90,7 @@ function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] 
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -304,6 +307,15 @@ describe("feishuPlugin actions", () => {
       "react",
       "reactions",
     ]);
+  });
+
+  it("declares native chat IDs as delivery targets for guarded message mutations", () => {
+    for (const action of ["edit", "pin", "unpin"] as const) {
+      expect(feishuPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
+        aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+        deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+      });
+    }
   });
 
   it("does not advertise reactions when disabled via actions config", () => {

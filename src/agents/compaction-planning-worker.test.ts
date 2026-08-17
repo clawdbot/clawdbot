@@ -2,11 +2,11 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { runCompactionPlanningWorker } from "./compaction-planning-worker-runtime.js";
 import {
   buildOversizedFallbackPlanWithWorker,
   buildSummaryChunksWithWorker,
 } from "./compaction-planning-worker.js";
-import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.test-support.js";
 import { estimateMessagesTokens } from "./compaction-planning.js";
 import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -27,12 +27,10 @@ function createSyntheticWorkerUrl(source: string): URL {
 }
 
 describe("compaction planning worker", () => {
-  let packagedSummaryChunks: Awaited<
-    ReturnType<typeof compactionPlanningWorkerTesting.runCompactionPlanningWorker>
-  >;
+  let packagedSummaryChunks: Awaited<ReturnType<typeof runCompactionPlanningWorker>>;
 
   beforeAll(async () => {
-    packagedSummaryChunks = await compactionPlanningWorkerTesting.runCompactionPlanningWorker({
+    packagedSummaryChunks = await runCompactionPlanningWorker({
       input: {
         kind: "summaryChunks",
         messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
@@ -40,21 +38,6 @@ describe("compaction planning worker", () => {
       },
       timeoutMs: 30_000,
     });
-  });
-
-  it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    // Hashed bundle names still resolve to the stable worker sibling emitted by
-    // the build, so runtime imports do not depend on the main chunk hash.
-    expect(
-      compactionPlanningWorkerTesting.resolveCompactionPlanningWorkerUrl(
-        "file:///repo/dist/agents/compaction-planning-worker.js",
-      ).pathname,
-    ).toBe("/repo/dist/agents/compaction-planning.worker.js");
-    expect(
-      compactionPlanningWorkerTesting.resolveCompactionPlanningWorkerUrl(
-        "file:///repo/dist/selection-abc123.js",
-      ).pathname,
-    ).toBe("/repo/dist/agents/compaction-planning.worker.js");
   });
 
   it("rejects invalid and retired worker input", () => {
@@ -235,7 +218,7 @@ describe("compaction planning worker", () => {
     `);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      await compactionPlanningWorkerTesting.runCompactionPlanningWorker({
+      await runCompactionPlanningWorker({
         input: {
           kind: "summaryChunks",
           messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
@@ -254,7 +237,7 @@ describe("compaction planning worker", () => {
 
   it("classifies missing worker runtime as unavailable", async () => {
     await expect(
-      compactionPlanningWorkerTesting.runCompactionPlanningWorker({
+      runCompactionPlanningWorker({
         input: {
           kind: "summaryChunks",
           messages: [makeMessage(1)],
@@ -284,20 +267,18 @@ describe("compaction planning worker", () => {
     const timer = new Promise<"timer">((resolve) => {
       setTimeout(() => resolve("timer"), 0);
     });
-    const planning = compactionPlanningWorkerTesting
-      .runCompactionPlanningWorker({
-        input: {
-          kind: "stageSplit",
-          messages: Array.from({ length: 180 }, (_, index) =>
-            makeMessage(index + 1, "x".repeat(12_000)),
-          ),
-          maxChunkTokens: 8000,
-          parts: 4,
-        },
-        timeoutMs: 30_000,
-        workerUrl,
-      })
-      .then(() => "planning" as const);
+    const planning = runCompactionPlanningWorker({
+      input: {
+        kind: "stageSplit",
+        messages: Array.from({ length: 180 }, (_, index) =>
+          makeMessage(index + 1, "x".repeat(12_000)),
+        ),
+        maxChunkTokens: 8000,
+        parts: 4,
+      },
+      timeoutMs: 30_000,
+      workerUrl,
+    }).then(() => "planning" as const);
 
     await expect(Promise.race([timer, planning])).resolves.toBe("timer");
     await expect(planning).resolves.toBe("planning");

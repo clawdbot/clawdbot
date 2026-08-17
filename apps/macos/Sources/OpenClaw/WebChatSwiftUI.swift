@@ -17,7 +17,7 @@ private enum WebChatSwiftUILayout {
 }
 
 enum WebChatTracePreferences {
-    static func displayOptions(defaults: UserDefaults = .standard) -> OpenClawChatDisplayOptions {
+    static func displayOptions(defaults: UserDefaults = AppDefaults.standard) -> OpenClawChatDisplayOptions {
         if let legacyValue = defaults.object(
             forKey: OpenClawChatWindowShell.assistantTraceDefaultsKey) as? Bool
         {
@@ -637,6 +637,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     func patchSession(
         key: String,
+        expectedSessionID: String? = nil,
         label: String??,
         category: String??,
         pinned: Bool?,
@@ -647,6 +648,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
+            expectedSessionID: expectedSessionID,
             label: label,
             category: category,
             pinned: pinned,
@@ -670,6 +672,13 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     func listQuestions() async throws -> [QuestionRecord] {
         let data = try await connection.request(OpenClawChatGatewayRequests.questionList())
         return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
+    }
+
+    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
+        let data = try await connection.request(OpenClawChatGatewayRequests.tasksList(
+            sessionKey: sessionKey,
+            agentID: agentID))
+        return try JSONDecoder().decode(TasksListResult.self, from: data).tasks
     }
 
     func getQuestion(id: String) async throws -> QuestionRecord {
@@ -841,9 +850,9 @@ private struct MacChatSurface: View {
     @State private var appState = AppStateStore.shared
     @State private var talkController = TalkModeController.shared
     @State private var audioInputCatalog = MacChatAudioInputCatalog()
-    @AppStorage(OpenClawChatWindowShell.assistantReasoningDefaultsKey)
+    @AppStorage(OpenClawChatWindowShell.assistantReasoningDefaultsKey, store: AppDefaults.standard)
     private var showsReasoning = WebChatTracePreferences.displayOptions().contains(.reasoning)
-    @AppStorage(OpenClawChatWindowShell.assistantToolActivityDefaultsKey)
+    @AppStorage(OpenClawChatWindowShell.assistantToolActivityDefaultsKey, store: AppDefaults.standard)
     private var showsToolActivity = WebChatTracePreferences.displayOptions().contains(.toolActivity)
 
     private let userAccent: Color?
@@ -962,26 +971,7 @@ private struct MacChatSurface: View {
             title: String(localized: "Catch me up"),
             prompt: String(localized: "Summarize what happened in my threads since yesterday.")),
     ]
-
-    #if DEBUG
-    var _testCapabilities: MacChatSurfaceCapabilities {
-        MacChatSurfaceCapabilities(
-            hasTalkControl: true,
-            hasSpeech: true,
-            hasVoiceNoteControl: true,
-            displayOptions: self.displayOptions)
-    }
-    #endif
 }
-
-#if DEBUG
-struct MacChatSurfaceCapabilities: Equatable {
-    let hasTalkControl: Bool
-    let hasSpeech: Bool
-    let hasVoiceNoteControl: Bool
-    let displayOptions: OpenClawChatDisplayOptions
-}
-#endif
 
 /// Bridges the view model's session switches out of the controller. The view
 /// model is constructed before `self`, so the closure targets this box and the
@@ -1110,9 +1100,9 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             },
             onThinkingPreferenceChanged: { level in
                 if let level {
-                    UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
+                    AppDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
                 } else {
-                    UserDefaults.standard.removeObject(forKey: webChatThinkingLevelDefaultsKey)
+                    AppDefaults.standard.removeObject(forKey: webChatThinkingLevelDefaultsKey)
                 }
             },
             onVerbosePreferenceChanged: { level in
@@ -1221,7 +1211,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         onClosed?()
     }
 
-    static func persistedThinkingLevel(defaults: UserDefaults = .standard) -> String? {
+    static func persistedThinkingLevel(defaults: UserDefaults = AppDefaults.standard) -> String? {
         let stored = defaults.string(forKey: webChatThinkingLevelDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -1233,14 +1223,14 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         return stored
     }
 
-    static func persistedVerboseLevel(defaults: UserDefaults = .standard) -> String? {
+    static func persistedVerboseLevel(defaults: UserDefaults = AppDefaults.standard) -> String? {
         let stored = defaults.string(forKey: webChatVerboseLevelDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         return OpenClawChatViewModel.verboseLevelOptions.contains(stored ?? "") ? stored : nil
     }
 
-    static func persistVerbosePreference(_ level: String?, defaults: UserDefaults = .standard) {
+    static func persistVerbosePreference(_ level: String?, defaults: UserDefaults = AppDefaults.standard) {
         if let level {
             defaults.set(level, forKey: webChatVerboseLevelDefaultsKey)
         } else {
@@ -1310,15 +1300,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
 
     var _testSceneBridgingOptions: NSHostingSceneBridgingOptions? {
         (self.contentController as? NSHostingController<MacChatSurface>)?.sceneBridgingOptions
-    }
-
-    var _testChatCapabilities: MacChatSurfaceCapabilities? {
-        if let hosting = contentController as? NSHostingController<MacChatSurface> {
-            return hosting.rootView._testCapabilities
-        }
-        return self.contentController.children
-            .compactMap { $0 as? NSHostingController<MacChatSurface> }
-            .first?.rootView._testCapabilities
     }
 
     var _testActiveAgentID: String? {

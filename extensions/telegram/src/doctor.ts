@@ -9,10 +9,14 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { asObjectRecord, collectChannelAccountScopes } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  collectChannelAccountScopes,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
+  listEnabledTelegramAccounts,
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
@@ -231,9 +235,10 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
     if (resolveTelegramPreviewStreamMode(account) === "off") {
       return [];
     }
-    const blockStreamingEnabled =
-      resolveChannelStreamingBlockEnabled(account) ??
-      cfg.agents?.defaults?.blockStreamingDefault === "on";
+    const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account, {
+      previewAvailable: true,
+      blockStreamingDefault: cfg.agents?.defaults?.blockStreamingDefault,
+    });
     if (
       blockStreamingEnabled ||
       !resolveChannelStreamingPreviewToolProgress(
@@ -580,6 +585,12 @@ export const telegramDoctor: ChannelDoctorAdapter = {
       hits: scanTelegramBotEndpointApiRoots(cfg),
       doctorFixCommand,
     }),
+    ...listEnabledTelegramAccounts(cfg)
+      .filter(({ config }) => Boolean(config.webhookUrl) && config.webhookPath === "/healthz")
+      .map(
+        ({ accountId }) =>
+          `- Telegram account "${accountId}" resolves webhookPath to /healthz, which is reserved for webhook listener health checks. Change webhookPath and the public webhook URL or proxy route before restarting OpenClaw.`,
+      ),
     ...collectTelegramSelectedQuoteToolProgressWarnings({
       hits: scanTelegramSelectedQuoteToolProgressWarnings(cfg),
     }),

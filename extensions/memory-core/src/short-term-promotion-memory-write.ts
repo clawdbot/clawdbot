@@ -10,13 +10,6 @@ export class MemoryWriteConflictError extends Error {
   }
 }
 
-class MemoryWriteCommittedError extends Error {
-  constructor(cause: unknown) {
-    super("MEMORY.md rename committed before a later write step failed", { cause });
-    this.name = "MemoryWriteCommittedError";
-  }
-}
-
 export async function resolveMemoryWritePath(filePath: string): Promise<string> {
   try {
     return await fs.realpath(filePath);
@@ -146,7 +139,9 @@ export async function writeMemoryContent(params: {
     // Append-only promotion retains the shipped writable-file fallback when
     // directory ACLs block temp-file replacement; consolidation never uses it.
     if (renameCommitted) {
-      throw new MemoryWriteCommittedError(error);
+      throw new Error("MEMORY.md rename committed before a later write step failed", {
+        cause: error,
+      });
     }
     if (
       !params.allowInPlaceFallback ||

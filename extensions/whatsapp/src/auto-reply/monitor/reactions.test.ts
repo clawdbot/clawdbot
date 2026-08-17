@@ -9,6 +9,7 @@ import { createWhatsAppStatusReactionController } from "./status-reaction.js";
 
 const hoisted = vi.hoisted(() => ({
   sendReactionWhatsApp: vi.fn(async () => undefined),
+  resolveGroupActivationFor: vi.fn(async (): Promise<"always" | "mention"> => "always"),
 }));
 
 vi.mock("../../send.js", () => ({
@@ -16,7 +17,7 @@ vi.mock("../../send.js", () => ({
 }));
 
 vi.mock("./group-activation.js", () => ({
-  resolveGroupActivationFor: vi.fn(async () => "always"),
+  resolveGroupActivationFor: hoisted.resolveGroupActivationFor,
 }));
 
 type TestMsgOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
@@ -231,6 +232,65 @@ describe("maybeSendAckReaction", () => {
 
     expect(ackReaction?.ackReactionValue).toBe("👀");
     expectAckReactionSent("work", cfg);
+  });
+
+  it.each([
+    {
+      name: "acks a mentioned group message",
+      scope: "group-mentions",
+      activation: "mention",
+      wasMentioned: true,
+      expected: true,
+    },
+    {
+      name: "skips an unmentioned inactive group message",
+      scope: "group-mentions",
+      activation: "mention",
+      wasMentioned: false,
+      expected: false,
+    },
+    {
+      name: "acks an activated group without a literal mention",
+      scope: "group-mentions",
+      activation: "always",
+      wasMentioned: false,
+      expected: true,
+    },
+    {
+      name: "acks every group message under group-all",
+      scope: "group-all",
+      activation: "mention",
+      wasMentioned: false,
+      expected: true,
+    },
+    {
+      name: "keeps direct-only scope out of groups",
+      scope: "direct",
+      activation: "always",
+      wasMentioned: true,
+      expected: false,
+    },
+  ] as const)("$name", async ({ scope, activation, wasMentioned, expected }) => {
+    const cfg = createConfig("ack");
+    cfg.messages!.ackReactionScope = scope;
+    hoisted.resolveGroupActivationFor.mockResolvedValue(activation);
+
+    const ackReaction = await runAckReaction({
+      cfg,
+      msg: createMessage({
+        platform: { chatJid: "120363000000000000@g.us" },
+        admission: {
+          conversation: { kind: "group", id: "120363000000000000@g.us" },
+        },
+        groupMention: { wasMentioned, requireMention: true },
+      }),
+      sessionKey: "whatsapp:default:120363000000000000@g.us",
+    });
+
+    expect(Boolean(ackReaction)).toBe(expected);
+    if (ackReaction) {
+      await expect(ackReaction.ackReactionPromise).resolves.toBe(true);
+    }
   });
 
   it("uses the canonical emoji preserved from agent identity", async () => {

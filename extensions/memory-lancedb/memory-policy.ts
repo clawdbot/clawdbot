@@ -1,5 +1,5 @@
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -17,7 +17,7 @@ export type AutoCaptureCursor = {
 };
 
 export function extractUserTextContent(message: unknown): string[] {
-  const msgObj = asRecord(message);
+  const msgObj = asOptionalRecord(message);
   if (!msgObj || msgObj.role !== "user") {
     return [];
   }
@@ -33,7 +33,7 @@ export function extractUserTextContent(message: unknown): string[] {
 
   const texts: string[] = [];
   for (const block of content) {
-    const blockObj = asRecord(block);
+    const blockObj = asOptionalRecord(block);
     if (blockObj?.type === "text" && typeof blockObj.text === "string") {
       texts.push(blockObj.text);
     }
@@ -67,7 +67,7 @@ function normalizeMaxChars(value: number | undefined, fallback: number): number 
 }
 
 export function messageFingerprint(message: unknown): string {
-  const msgObj = asRecord(message);
+  const msgObj = asOptionalRecord(message);
   if (!msgObj) {
     return `${typeof message}:${String(message)}`;
   }
@@ -163,6 +163,10 @@ function sanitizeRecallMemoryText(text: string): string | null {
   return looksLikeEnvelopeSludge(text) ? null : text;
 }
 
+function normalizeStoredMemoryText(text: string): string {
+  return text.replace(/\r\n?/gu, "\n").normalize("NFC").trim();
+}
+
 export async function findCleanDuplicateMemory(
   db: {
     search(
@@ -174,9 +178,19 @@ export async function findCleanDuplicateMemory(
   },
   agentId: string,
   vector: number[],
+  exactText?: string,
 ): Promise<MemorySearchResult | undefined> {
   const existing = await db.search(agentId, vector, DUPLICATE_SEARCH_LIMIT, 0.95);
-  return existing.find((result) => sanitizeRecallMemoryText(result.entry.text) !== null);
+  const normalizedExactText =
+    exactText === undefined ? undefined : normalizeStoredMemoryText(exactText);
+  return existing.find((result) => {
+    const cleanText = sanitizeRecallMemoryText(result.entry.text);
+    return (
+      cleanText !== null &&
+      (normalizedExactText === undefined ||
+        normalizeStoredMemoryText(cleanText) === normalizedExactText)
+    );
+  });
 }
 
 export function cleanMemorySearchResults(results: MemorySearchResult[]): Array<{

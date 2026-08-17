@@ -14,6 +14,11 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
+import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
+import {
+  copyAgentToolSourceExecutionGuard,
+  runAgentToolSourceExecutionGuard,
+} from "./agent-tool-source-execution-guard.js";
 import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
@@ -48,12 +53,19 @@ import type {
   HookContext,
   HookOutcome,
 } from "./agent-tools.before-tool-call.types.js";
+import {
+  createInternalExecutionPreparer,
+  readInternalExecutionControl,
+} from "./agent-tools.execution-preparer.js";
 import { validateToolExecutionParams } from "./agent-tools.execution-validation.js";
 import {
   BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
   BEFORE_TOOL_CALL_WRAPPED,
+  clearBeforeToolCallWrappedMarker,
+  getBeforeToolCallHookContext,
+  getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
@@ -62,9 +74,14 @@ import {
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolName } from "./tool-policy.js";
-import { formatToolExecutionErrorMessage } from "./tool-result-error.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  formatToolExecutionErrorMessage,
+  isTrustedToolExecutionPreflightError,
+  protectNetworkToolExecutionError,
+} from "./tool-result-error.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -74,6 +91,10 @@ type BeforeToolCallWrapperOptions = {
 };
 type ForwardedToolExecution = (...args: unknown[]) => ReturnType<AnyAgentTool["execute"]>;
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
+const INTERNAL_DISPOSED_RESULT = {
+  content: [],
+  details: { status: "skipped", deniedReason: "internal-dispose" },
+};
 
 /** Run tool-owned preparation while retaining the exact prepared object. */
 export async function prepareBeforeToolCallExecutionParams(params: {
@@ -279,9 +300,13 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate, ...executionArgs: unknown[]) => {
+      const prepareControl = readInternalExecutionControl(executionArgs.at(-1));
+      if (prepareControl) {
+        executionArgs.pop();
+      }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
-      const normalizedToolName = normalizeToolName(toolName || "tool");
+      const normalizedToolName = normalizeToolPolicyName(toolName || "tool");
       const trace =
         hookOptions.emitDiagnostics && ctx?.trace
           ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))
@@ -438,20 +463,6 @@ export function wrapToolWithBeforeToolCallHook(
           adjustedParams: outcome.params,
           finalizerMode: "wrapped",
         });
-        // A voice grant binds the post-finalizer execution shape. Consuming it
-        // earlier would let later alias or tool-owned rewrites escape the grant.
-        const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-          toolName,
-          params: executeParams,
-          ctx,
-        });
-        if (!voiceConfirmation.allowed) {
-          return await blockToolCall({
-            reason: voiceConfirmation.reason,
-            deniedReason: "client-voice-confirmation",
-            toolParams: executeParams,
-          });
-        }
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
         await validateToolExecutionParams(toolCallId, executeParams);
@@ -465,6 +476,32 @@ export function wrapToolWithBeforeToolCallHook(
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);
       }
+      let onImplementationStart: (() => void) | undefined;
+      if (prepareControl) {
+        const decision = await prepareControl.pause(executeParams);
+        if (!decision.launch) {
+          return INTERNAL_DISPOSED_RESULT;
+        }
+        onImplementationStart = decision.start;
+      }
+      // A voice grant binds the post-finalizer execution shape. Consume it only
+      // after steering can no longer suppress the prepared call.
+      const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
+        toolName,
+        params: executeParams,
+        ctx,
+      });
+      if (!voiceConfirmation.allowed) {
+        return await blockToolCall({
+          reason: voiceConfirmation.reason,
+          deniedReason: "client-voice-confirmation",
+          toolParams: executeParams,
+        });
+      }
+      // Host capabilities can close while hooks, approval, validation, or
+      // steering awaits. Recheck at the final synchronous source boundary.
+      runAgentToolSourceExecutionGuard(tool);
+      onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
@@ -476,13 +513,21 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const startedAt = Date.now();
       try {
-        const result = await (execute as ForwardedToolExecution)(
-          toolCallId,
-          executeParams,
-          signal,
-          onUpdate,
-          ...executionArgs,
-        );
+        let result: Awaited<ReturnType<ForwardedToolExecution>>;
+        try {
+          result = await (execute as ForwardedToolExecution)(
+            toolCallId,
+            executeParams,
+            signal,
+            onUpdate,
+            ...executionArgs,
+          );
+        } catch (error) {
+          throw tool.resultContentSource === "network" &&
+            getBeforeToolCallFailureDisposition(error) === undefined
+            ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
+            : error;
+        }
         const durationMs = Date.now() - startedAt;
         const terminalPresentation = resolveToolTerminalPresentation({
           tool,
@@ -511,6 +556,15 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           ctx,
         });
+        if (skillMatch) {
+          recordRunSkillUsage({
+            runId: ctx?.runId,
+            name: skillMatch.skillName,
+            source: skillMatch.skillSource,
+            activation: skillMatch.activation,
+            ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
+          });
+        }
         if (hookOptions.emitDiagnostics) {
           if (skillMatch) {
             emitSkillUsedDiagnostic({
@@ -555,7 +609,10 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           error: err,
-          resultContentSource: tool.resultContentSource,
+          resultContentSource:
+            isTrustedToolExecutionPreflightError(err) || (signal?.aborted && err === signal.reason)
+              ? undefined
+              : tool.resultContentSource,
           toolCallOrdinal,
         });
         throw err;
@@ -563,6 +620,23 @@ export function wrapToolWithBeforeToolCallHook(
     },
   };
   const executeWithHooks = wrappedTool.execute;
+  const prepareExecution = createInternalExecutionPreparer(async (params, control) => {
+    recordToolExecutionTracked(params.toolCallId, ctx?.runId);
+    try {
+      return (await Reflect.apply(executeWithHooks, wrappedTool, [
+        params.toolCallId,
+        params.args,
+        params.signal,
+        params.onUpdate,
+        ...(params.executionArgs ?? []),
+        control,
+      ])) as Awaited<ReturnType<AnyAgentTool["execute"]>>;
+    } finally {
+      // Timeout observers may consume this while the call is still pending.
+      clearTrackedToolExecution(params.toolCallId, ctx?.runId);
+    }
+  });
+  attachInternalToolExecutionPreparer(wrappedTool, prepareExecution);
   wrappedTool.execute = async (
     toolCallId,
     params,
@@ -570,20 +644,23 @@ export function wrapToolWithBeforeToolCallHook(
     onUpdate,
     ...executionArgs: unknown[]
   ) => {
-    recordToolExecutionTracked(toolCallId, ctx?.runId);
+    const prepared = await prepareExecution({
+      toolCallId,
+      args: params,
+      signal,
+      onUpdate,
+      executionArgs,
+    });
     try {
-      return await (executeWithHooks as ForwardedToolExecution)(
-        toolCallId,
-        params,
-        signal,
-        onUpdate,
-        ...executionArgs,
-      );
+      if (prepared.kind === "immediate") {
+        if (prepared.outcome.kind === "error") {
+          throw prepared.outcome.error;
+        }
+        return prepared.outcome.result;
+      }
+      return await prepared.execute();
     } finally {
-      // Timeout observers may consume this while the call is still pending. The
-      // wrapper owns final cleanup; every pre-body settle records the separate
-      // blocked fact, so direct callers cannot retain settled ids.
-      clearTrackedToolExecution(toolCallId, ctx?.runId);
+      prepared.dispose();
     }
   };
   copyPluginToolMeta(tool, wrappedTool);
@@ -614,14 +691,8 @@ export function rewrapToolWithBeforeToolCallHook(
   ctx?: HookContext,
   options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
-  const wrappedContext = taggedTool[BEFORE_TOOL_CALL_HOOK_CONTEXT];
-  const preservedContext =
-    wrappedContext && typeof wrappedContext === "object"
-      ? (wrappedContext as HookContext)
-      : undefined;
-  const sourceTool = source && typeof source === "object" ? (source as AnyAgentTool) : tool;
+  const preservedContext = getBeforeToolCallHookContext(tool);
+  const sourceTool = getBeforeToolCallSourceTool(tool) ?? tool;
   if (sourceTool === tool) {
     return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
   }
@@ -630,10 +701,11 @@ export function rewrapToolWithBeforeToolCallHook(
     ...tool,
     execute: sourceTool.execute,
   };
-  delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
+  clearBeforeToolCallWrappedMarker(rewrapSource);
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
   copyToolTerminalPresentation(tool, rewrapSource);
+  copyAgentToolSourceExecutionGuard(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }
 

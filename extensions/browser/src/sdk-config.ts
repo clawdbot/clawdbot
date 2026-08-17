@@ -1,7 +1,7 @@
 /**
  * Browser-local SDK config bridge plus Browser-specific default port helpers.
  */
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export {
   getRuntimeConfig,
@@ -64,41 +64,5 @@ export function deriveDefaultBrowserCdpPortRange(browserControlPort: number): Po
   };
 }
 
-type BooleanParseOptions = {
-  truthy?: string[];
-  falsy?: string[];
-};
-
-const DEFAULT_TRUTHY = ["true", "1", "yes", "on"] as const;
-const DEFAULT_FALSY = ["false", "0", "no", "off"] as const;
-
-function matchesBooleanToken(value: string, tokens: readonly string[]): boolean {
-  return tokens.includes(value);
-}
-
 /** Parses common string booleans with optional custom truthy/falsy tokens. */
-export function parseBooleanValue(
-  value: unknown,
-  options: BooleanParseOptions = {},
-): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  const candidates: Array<[boolean, readonly string[]]> = [
-    [true, options.truthy ?? DEFAULT_TRUTHY],
-    [false, options.falsy ?? DEFAULT_FALSY],
-  ];
-  for (const [parsed, tokens] of candidates) {
-    if (matchesBooleanToken(normalized, tokens)) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
+export { parseBooleanValue };

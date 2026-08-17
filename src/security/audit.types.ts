@@ -1,5 +1,5 @@
 /** Severity levels emitted by security audit checks. */
-export type SecurityAuditSeverity = "info" | "warn" | "critical";
+type SecurityAuditSeverity = "info" | "warn" | "critical";
 
 /** One actionable or informational security audit finding. */
 export type SecurityAuditFinding = {

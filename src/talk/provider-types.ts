@@ -1,4 +1,6 @@
 // Talk provider types describe realtime voice provider configuration and APIs.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkTransport } from "./talk-events.js";
 
@@ -67,6 +69,81 @@ export type RealtimeVoiceBridgeEvent = {
   responseId?: string;
 };
 
+export type RealtimeVoiceResponseError = {
+  code?: string;
+  message?: string;
+  type?: string;
+};
+
+type RealtimeVoiceResponseOutcomeBase = {
+  responseId?: string;
+};
+
+export type RealtimeVoiceResponseOutcome =
+  | (RealtimeVoiceResponseOutcomeBase & { status: "completed" })
+  | (RealtimeVoiceResponseOutcomeBase & { status: "cancelled"; reason?: string })
+  | (RealtimeVoiceResponseOutcomeBase & {
+      status: "failed" | "incomplete";
+      reason?: string;
+      error?: RealtimeVoiceResponseError;
+      message: string;
+    });
+
+/** Normalizes OpenAI-style realtime response status details into the shared Talk contract. */
+export function normalizeRealtimeVoiceResponseOutcome(params: {
+  providerLabel: string;
+  response: unknown;
+  responseId?: unknown;
+}): RealtimeVoiceResponseOutcome {
+  const response = isRecord(params.response) ? params.response : undefined;
+  const details = isRecord(response?.status_details) ? response.status_details : undefined;
+  const rawError = isRecord(details?.error) ? details.error : undefined;
+  const code = normalizeOptionalString(rawError?.code);
+  const errorMessage = normalizeOptionalString(rawError?.message);
+  const errorType = normalizeOptionalString(rawError?.type);
+  const error =
+    code || errorMessage || errorType
+      ? {
+          ...(code ? { code } : {}),
+          ...(errorMessage ? { message: errorMessage } : {}),
+          ...(errorType ? { type: errorType } : {}),
+        }
+      : undefined;
+  const reason = normalizeOptionalString(details?.reason);
+  const responseId =
+    normalizeOptionalString(response?.id) ?? normalizeOptionalString(params.responseId);
+  const base = responseId ? { responseId } : {};
+  switch (response?.status) {
+    case "completed":
+      return { ...base, status: "completed" };
+    case "cancelled":
+      return { ...base, status: "cancelled", ...(reason ? { reason } : {}) };
+    case "failed":
+    case "incomplete": {
+      const status = response.status;
+      const detail = [reason, errorMessage ?? code ?? errorType].filter(Boolean).join(": ");
+      return {
+        ...base,
+        status,
+        ...(reason ? { reason } : {}),
+        ...(error ? { error } : {}),
+        message: `${params.providerLabel} response ${status}${detail ? `: ${detail}` : ""}`,
+      };
+    }
+    default: {
+      const rawStatus = normalizeOptionalString(response?.status);
+      const detail = rawStatus ? `invalid status ${rawStatus}` : "missing terminal status";
+      return {
+        ...base,
+        status: "failed",
+        reason: "invalid_response_status",
+        error: { type: "invalid_response_status", message: detail },
+        message: `${params.providerLabel} response failed: ${detail}`,
+      };
+    }
+  }
+}
+
 export type RealtimeVoiceAudioClearReason = "barge-in";
 
 export type RealtimeVoiceBridgeCallbacks = {
@@ -75,6 +152,7 @@ export type RealtimeVoiceBridgeCallbacks = {
   onMark?: (markName: string) => void;
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
+  onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (event: RealtimeVoiceToolCallEvent) => void;
   onReady?: () => void;
   onError?: (error: Error) => void;
@@ -92,6 +170,8 @@ export type RealtimeVoiceProviderCapabilities = {
   /** True when provider VAD reports confirmed interruptions through onClearAudio("barge-in"). */
   handlesInputAudioBargeIn?: boolean;
   supportsToolCalls?: boolean;
+  /** True when user transcripts are reliable enough to gate responses on a leading wake name. */
+  supportsActivationNameGating?: boolean;
   supportsVideoFrames?: boolean;
   supportsSessionResumption?: boolean;
 };
@@ -139,6 +219,16 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   reasoningEffort?: string;
   /** Host-injected agent delegation runner for provider-owned realtime control channels. */
   runAgentConsult?: RealtimeVoiceAgentConsultRunner;
+  /** Host-owned control callbacks for browser media sessions whose provider wire stays server-side. */
+  gatewayControl?: RealtimeVoiceGatewayControl;
+};
+
+/** Narrow host/plugin seam for Gateway-owned control of a client-owned media session. */
+export type RealtimeVoiceGatewayControl = Omit<
+  RealtimeVoiceBridgeCallbacks,
+  "onAudio" | "onClearAudio" | "onMark"
+> & {
+  bindBridge: (bridge: RealtimeVoiceBridge) => void;
 };
 
 export type RealtimeVoiceBrowserAudioContract = {
@@ -207,7 +297,10 @@ export type RealtimeVoiceBridge = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;
-  sendUserMessage?(text: string): void;
+  sendUserMessage?(
+    text: string,
+    options?: { toolChoice?: { type: "function"; name: string } },
+  ): void;
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
   /**

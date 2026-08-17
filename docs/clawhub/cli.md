@@ -1,8 +1,9 @@
 ---
-summary: "ClawHub CLI entry points for discovering, installing, publishing, and verifying OpenClaw skills and plugins."
+summary: "ClawHub CLI entry points for discovering, installing, removing, publishing, and verifying OpenClaw skills and plugins."
 read_when:
   - You want to use ClawHub from the command line
   - You want to install ClawHub skills or plugins through OpenClaw
+  - You need to remove an installed ClawHub skill
   - You want to publish ClawHub packages
 title: "ClawHub CLI"
 ---
@@ -13,8 +14,8 @@ Two command-line surfaces talk to ClawHub:
 
 - `openclaw skills` / `openclaw plugins` - discover, install, and update
   packages for a local OpenClaw agent or Gateway.
-- The standalone `clawhub` CLI - publisher workflows: login, publish, sync,
-  and transfer.
+- The standalone `clawhub` CLI - remove installed skills and handle publisher
+  workflows including login, publish, sync, and transfer.
 
 ## Discover and install
 
@@ -59,6 +60,28 @@ enforces scan and force-install policy before returning a pinned commit.
   non-interactively.
 - **Official ClawHub publishers/packages and bundled OpenClaw sources** skip
   the trust prompt and security-verdict fetch entirely.
+
+## Remove an installed skill
+
+If the standalone ClawHub CLI is not already installed, install it explicitly:
+
+```bash
+npm i -g clawhub
+clawhub uninstall @owner/my-skill
+```
+
+The command asks for confirmation, then removes the installed skill directory
+and its ClawHub lockfile entry. Select the original agent workspace or shared
+OpenClaw state directory when the installation is outside the current workdir:
+
+```bash
+clawhub --workdir /path/to/agent-workspace uninstall @owner/my-skill
+clawhub --workdir ~/.openclaw uninstall @owner/my-skill
+```
+
+For a custom `OPENCLAW_STATE_DIR`, replace `~/.openclaw` with that configured
+directory. See [Remove a ClawHub skill](/cli/skills#remove-a-clawhub-skill) for
+workspace targeting and skill refresh behavior.
 
 ## Publish and maintain
 

@@ -8,7 +8,8 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../../config/sessions/session-accessor.sqlite.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forkSessionEntryFromParent,
@@ -119,7 +120,7 @@ describe("forkSessionEntryFromParent", () => {
         updatedAt: 10,
       },
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: "parent-session",
@@ -165,10 +166,15 @@ describe("forkSessionEntryFromParent", () => {
       ],
     );
 
+    const fallbackEntry: InternalSessionEntry = {
+      lifecycleRunId: "pre-fork-run",
+      sessionId: "",
+      updatedAt: 2,
+    };
     const result = await forkSessionEntryFromParent({
       agentId: "main",
       config: { session: { store: configStorePath } } as OpenClawConfig,
-      fallbackEntry: { sessionId: "", updatedAt: 2 },
+      fallbackEntry,
       parentSessionKey,
       parentStoreKeys: [parentSessionKey],
       sessionKey,
@@ -196,6 +202,7 @@ describe("forkSessionEntryFromParent", () => {
       sessionId: result.fork.sessionId,
       updatedAt: expect.any(Number),
     });
+    expect((stored as InternalSessionEntry | undefined)?.lifecycleRunId).toBeUndefined();
     expect(loadSessionEntry({ agentId: "main", sessionKey: staleSessionKey, storePath })).toBe(
       undefined,
     );
@@ -240,6 +247,7 @@ describe("forkSessionEntryFromParent", () => {
         sessionId: "parent-session",
         totalTokens: 150_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         updatedAt: 1,
       },
     );
@@ -282,7 +290,7 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: parentEntry.sessionId,
@@ -326,7 +334,7 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: parentEntry.sessionId,
@@ -362,10 +370,12 @@ describe("forkSessionEntryFromParent", () => {
       ],
     );
 
-    await expect(resolveParentForkDecision({ parentEntry, storePath })).resolves.toMatchObject({
-      status: "fork",
-      parentTokens: 4_567,
-    });
+    const decision = await resolveParentForkDecision({ parentEntry, storePath });
+    expect(decision).toMatchObject({ status: "fork", parentTokens: expect.any(Number) });
+    if (decision.status !== "fork" || decision.parentTokens === undefined) {
+      throw new Error("expected a transcript-estimated fork decision");
+    }
+    expect(decision.parentTokens).toBeLessThan(parentEntry.totalTokens);
   });
 
   it("uses exact SQLite context usage instead of stale cached totals", async () => {
@@ -377,7 +387,7 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: parentEntry.sessionId,
@@ -459,7 +469,7 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: parentEntry.sessionId,

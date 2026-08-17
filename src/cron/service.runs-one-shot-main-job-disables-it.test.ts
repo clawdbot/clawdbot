@@ -1,5 +1,6 @@
 // One-shot main job tests cover disabling cron jobs after a single run.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
@@ -16,7 +17,6 @@ import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
-  createDeferred,
   createNoopLogger,
   installCronTestHooks,
 } from "./service.test-harness.js";
@@ -428,7 +428,7 @@ describe("CronService", () => {
       return now;
     };
 
-    const heartbeatStarted = createDeferred<void>();
+    const heartbeatStarted = createDeferred();
     let resolveHeartbeat: ((res: HeartbeatRunResult) => void) | null = null;
     const runHeartbeatOnce = vi.fn(async () => {
       heartbeatStarted.resolve();
@@ -690,8 +690,7 @@ describe("CronService", () => {
   it("retries one-shot lifecycle claim conflicts instead of disabling the job (#106875)", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
-      error:
-        'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
     }));
     const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     const job = await runIsolatedAnnounceJobAndWait({
@@ -714,8 +713,7 @@ describe("CronService", () => {
   it("does not retry a lifecycle claim conflict after agent execution starts (#108428)", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
-      error:
-        'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
       executionStarted: true,
     }));
     const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);

@@ -56,6 +56,15 @@ const ICON_ROUTES = [
     pathname: `/__openclaw__/catalog-icon/${encodeURIComponent(CATALOG_ICON_URL)}`,
   },
 ] as const;
+const INVALID_ICON_ROUTES = [
+  { label: "blank plugin id", pathname: "/__openclaw__/plugin-icon/" },
+  { label: "invalid plugin id", pathname: "/__openclaw__/plugin-icon/%20" },
+  { label: "malformed plugin id", pathname: "/__openclaw__/plugin-icon/%zz" },
+  { label: "nested plugin id", pathname: "/__openclaw__/plugin-icon/one/two" },
+  { label: "blank catalog URL", pathname: "/__openclaw__/catalog-icon/" },
+  { label: "malformed catalog URL", pathname: "/__openclaw__/catalog-icon/%zz" },
+  { label: "nested catalog URL", pathname: "/__openclaw__/catalog-icon/one/two" },
+] as const;
 
 let port = 0;
 let server: ReturnType<typeof createServer>;
@@ -122,6 +131,20 @@ function request(pathname: string, options?: { token?: string; method?: string }
 }
 
 describe("Control UI plugin and catalog icon routes", () => {
+  it.each(INVALID_ICON_ROUTES)(
+    "claims $label instead of falling through to the Control UI",
+    async ({ pathname }) => {
+      const response = await request(pathname);
+
+      expect(response.status).toBe(404);
+      await expect(response.text()).resolves.toBe("Not Found");
+      expect(mocks.authorize).toHaveBeenCalledOnce();
+      expect(mocks.resolveIconUrl).not.toHaveBeenCalled();
+      expect(mocks.resolveCatalogIconUrl).not.toHaveBeenCalled();
+      expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(
     ICON_ROUTES.flatMap(({ label, pathname }) =>
       (["GET", "HEAD"] as const).map((method) => ({ label, method, pathname })),
@@ -317,6 +340,7 @@ describe("Control UI plugin and catalog icon routes", () => {
       const response = await request(pathname, { method: "HEAD" });
 
       expect(response.status).toBe(404);
+      expect(response.headers.get("content-length")).toBe("9");
       expect((await response.arrayBuffer()).byteLength).toBe(0);
       expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
     },

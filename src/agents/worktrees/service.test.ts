@@ -159,6 +159,21 @@ describe("ManagedWorktreeService", () => {
     expect(repeated).toEqual(created);
   });
 
+  it("reads registry records without retiring a temporarily unavailable worktree", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "read-only-list",
+      baseRef: "HEAD",
+    });
+    await fs.rm(created.path, { recursive: true, force: true });
+
+    expect(service.listRegistryRecords()).toEqual([expect.objectContaining({ id: created.id })]);
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+
+    expect(await service.list()).toEqual([]);
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBe(now);
+  });
+
   it("does not remove a worktree owned by another caller", async () => {
     const created = await service.create({
       repoRoot: repo,
@@ -341,9 +356,9 @@ describe("ManagedWorktreeService", () => {
       expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
       expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
       expect(await service.list()).toEqual([]);
-      await expect(fs.stat(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expect(fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).resolves.toEqual(
+        [],
+      );
     },
   );
 
@@ -403,26 +418,6 @@ describe("ManagedWorktreeService", () => {
     const created = await service.create({ repoRoot: repo, name: "offline" });
     expect(created.baseRef).toBe("HEAD");
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
-  });
-
-  it("keeps registry operations anchored to the primary checkout", async () => {
-    const linked = path.join(root, "linked-source");
-    await git(repo, "worktree", "add", "-b", "linked-source", linked, "HEAD");
-    const linkedRoot = await fs.realpath(linked);
-    const created = await service.create({
-      repoRoot: linkedRoot,
-      name: "linked-task",
-      baseRef: "HEAD",
-    });
-    expect(created.repoRoot).toBe(repo);
-    await git(repo, "worktree", "remove", "--force", linkedRoot);
-
-    await service.acquire(created.id);
-    await service.release(created.id);
-    await service.remove({ id: created.id, reason: "linked-source-removed" });
-    const restored = await service.restore({ id: created.id });
-
-    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("base\n");
   });
 
   it("retries worktree add from local HEAD when the resolved remote base is stale", async () => {

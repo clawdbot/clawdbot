@@ -12,6 +12,12 @@ import {
 import { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
 
 const isPluginMetadataSnapshotCompatible = vi.hoisted(() => vi.fn(() => true));
+const resolveProviderIdForAuth = vi.hoisted(() => vi.fn((provider: string) => provider));
+
+vi.mock("../provider-auth-aliases.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../provider-auth-aliases.js")>()),
+  resolveProviderIdForAuth,
+}));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   clearProviderRuntimePluginCacheForTest: vi.fn(),
@@ -397,6 +403,7 @@ describe("AgentRuntimePlan", () => {
   it("threads prepared tool metadata without discovery", () => {
     const metadataSnapshot = { plugins: [] };
     vi.mocked(resolveProviderRuntimePluginHandle).mockClear();
+    resolveProviderIdForAuth.mockClear();
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -406,6 +413,10 @@ describe("AgentRuntimePlan", () => {
     expect(plan.tools.preparedPlanning?.metadataSnapshot).toBe(metadataSnapshot);
     expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledWith(
       expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
+    );
+    expect(resolveProviderIdForAuth).toHaveBeenCalledWith(
+      "openai",
+      expect.objectContaining({ metadataSnapshot }),
     );
   });
 

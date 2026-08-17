@@ -10,14 +10,22 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
-import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
+import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import {
   MESSAGE_TOOL_DELIVERY_HINTS,
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
-import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import {
+  consumePreExecutionBlockedToolCall,
+  wrapToolWithBeforeToolCallHook,
+} from "../agent-tools.before-tool-call.js";
+type CreateMessageTool = typeof import("./message-tool-execution.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
@@ -147,6 +155,7 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 });
 
 type RunMessageActionInput = {
+  actionOrigin?: "message-tool";
   agentId?: string;
   broadcastAccountPlan?: {
     accountId: string;
@@ -338,7 +347,7 @@ function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
     handledBy: "plugin",
     payload: {},
     dryRun: true,
-  } satisfies MessageActionRunResult);
+  } satisfies MessageActionResult);
 }
 
 function getToolProperties(tool: ReturnType<CreateMessageTool>) {
@@ -369,13 +378,14 @@ beforeAll(async () => {
   ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
     await import("../../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
-  ({ createMessageTool } = await import("./message-tool.js"));
+  ({ createMessageTool } = await import("./message-tool-execution.js"));
   ({ createOpenClawTools } = await import("../openclaw-tools.js"));
 });
 
 const mintedTurnCapabilities: string[] = [];
 
 beforeEach(() => {
+  resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
   resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
@@ -389,6 +399,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetGlobalHookRunner();
   for (const token of mintedTurnCapabilities.splice(0)) {
     revokeMessageActionTurnCapability(token);
   }
@@ -491,8 +502,41 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
-  it("does not advertise the Codex-only final delivery control", () => {
+  it("reports model-authored send normalization without inviting a retry", async () => {
+    const notice =
+      "Content sent; location omitted because locations must be sent separately. Do not retry this send. Send a standalone location only if the user explicitly requested it.";
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "telegram",
+      to: "telegram:123",
+      handledBy: "plugin",
+      payload: { ok: true },
+      normalization: { locationOmitted: true, notice },
+      toolResult: {
+        content: [{ type: "text", text: "sent" }],
+        details: { ok: true },
+      },
+      dryRun: false,
+    } satisfies MessageActionResult);
+
+    const { call, result } = await executeSendWithResult({
+      action: { channel: "telegram", target: "telegram:123", message: "hello" },
+    });
+
+    expect(call?.actionOrigin).toBe("message-tool");
+    expect(result).toEqual({
+      content: [
+        { type: "text", text: "sent" },
+        { type: "text", text: notice },
+      ],
+      details: { ok: true },
+    });
+  });
+
+  it("does not advertise source-reply finality on ordinary message tools", () => {
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
+    expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
 
   it("advertises timeoutMs as a positive integer", () => {
@@ -602,7 +646,16 @@ describe("completion source-reply authority", () => {
 
     expect(getActionEnum(properties)).toEqual(["send"]);
     expect(Object.keys(properties).toSorted()).toEqual(
-      ["accountId", "action", "channel", "message", "replyTo", "target", "threadId"].toSorted(),
+      [
+        "accountId",
+        "action",
+        "channel",
+        "final",
+        "message",
+        "replyTo",
+        "target",
+        "threadId",
+      ].toSorted(),
     );
     expectStringSchema(properties.message, {
       description: "Text to send to the current source conversation.",
@@ -666,14 +719,6 @@ describe("completion source-reply authority", () => {
       args: { action: "send", message: "[[audio_as_voice]] completion" },
     },
     {
-      name: "inline reaction directive",
-      args: { action: "send", message: "[[react:🔥]] completion" },
-    },
-    {
-      name: "inline current-message reaction directive",
-      args: { action: "send", message: "[[react_to_current:🔥]] completion" },
-    },
-    {
       name: "inline local media directive",
       args: { action: "send", message: "completion\nMEDIA:./AGENTS.md" },
     },
@@ -692,10 +737,6 @@ describe("completion source-reply authority", () => {
     {
       name: "citation-obfuscated local media directive",
       args: { action: "send", message: "completion\nMEciteDIA:./AGENTS.md" },
-    },
-    {
-      name: "citation-obfuscated reaction directive",
-      args: { action: "send", message: "[[reciteact:🔥]] completion" },
     },
     {
       name: "citation-obfuscated reply directive",
@@ -727,10 +768,6 @@ describe("completion source-reply authority", () => {
       args: { action: "send", message: "[[audio_<final>as_voice]] completion" },
     },
     {
-      name: "sanitizer-assembled reaction directive",
-      args: { action: "send", message: "[[rea<final>ct:🔥]] completion" },
-    },
-    {
       name: "sanitizer-assembled local media directive",
       args: { action: "send", message: "completion\nME<final>DIA:./AGENTS.md" },
     },
@@ -744,7 +781,7 @@ describe("completion source-reply authority", () => {
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 
-  it("allows Codex final controls and matched canonical source-thread text sends", async () => {
+  it("allows shared final controls and matched canonical source-thread text sends", async () => {
     mockSendResult({ channel: "discord", to: "channel:source" });
     const tool = createRestrictedTool();
 
@@ -837,7 +874,7 @@ describe("poll vote echo guard", () => {
               details: { pollVotedOption: votedOption },
             },
             dryRun: false,
-          } as MessageActionRunResult)
+          } as MessageActionResult)
         : ({
             kind: "send",
             channel: "imessage",
@@ -846,7 +883,7 @@ describe("poll vote echo guard", () => {
             handledBy: "plugin",
             payload: {},
             dryRun: false,
-          } as MessageActionRunResult),
+          } as MessageActionResult),
     );
     return createMessageTool({
       currentChannelProvider: "imessage",
@@ -1011,11 +1048,13 @@ describe("message tool secret scoping", () => {
     const defaultTool = createMessageTool();
 
     expect(scopedTool.description).toContain('visible reply: action="send" + message');
+    expect(getToolProperties(scopedTool).final).toMatchObject({ type: "boolean" });
     expect(scopedTool.description).toContain("target defaults current source");
     expect(scopedTool.description).toContain("Final answer private");
     expect(explicitTargetTool.description).toContain("send needs target");
     expect(explicitTargetTool.description).not.toContain("target defaults current source");
     expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
+    expect(getToolProperties(defaultTool)).not.toHaveProperty("final");
   });
 
   it("forwards source reply delivery mode through createOpenClawTools", () => {
@@ -1025,6 +1064,7 @@ describe("message tool secret scoping", () => {
     }).find((candidate) => candidate.name === "message");
 
     expect(tool?.description).toContain('visible reply: action="send" + message');
+    expect(getToolProperties(tool!).final).toMatchObject({ type: "boolean" });
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {
@@ -1147,6 +1187,17 @@ describe("message tool secret scoping", () => {
     );
   });
 
+  it("preserves a host-supplied retry idempotency key", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi", idempotencyKey: "stable-retry-key" },
+      toolOptions: { runId: "run-message-tool" },
+    });
+
+    expect(input?.params?.idempotencyKey).toBe("stable-retry-key");
+  });
+
   it("keeps the Codex final control out of delivery and retry idempotency", async () => {
     mocks.runMessageAction
       .mockRejectedValueOnce(new Error("gateway timeout"))
@@ -1158,7 +1209,7 @@ describe("message tool secret scoping", () => {
         handledBy: "plugin",
         payload: {},
         dryRun: true,
-      } satisfies MessageActionRunResult);
+      } satisfies MessageActionResult);
 
     const tool = createMessageTool({
       getRuntimeConfig: mocks.getRuntimeConfig,
@@ -1409,10 +1460,10 @@ describe("message tool secret scoping", () => {
   });
 
   it("uses separate autogenerated idempotency keys for parallel identical sends", async () => {
-    const pending: Array<(value: MessageActionRunResult) => void> = [];
+    const pending: Array<(value: MessageActionResult) => void> = [];
     mocks.runMessageAction.mockImplementation(
       () =>
-        new Promise<MessageActionRunResult>((resolve) => {
+        new Promise<MessageActionResult>((resolve) => {
           pending.push(resolve);
         }),
     );
@@ -2553,6 +2604,117 @@ describe("message tool agent routing", () => {
 });
 
 describe("message tool explicit target guard", () => {
+  it("rejects a target removed by a hook before the mutation boundary", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: async () => ({ params: { target: "" } }),
+        },
+      ]),
+    );
+    const tool = wrapToolWithBeforeToolCallHook(
+      createMessageTool({
+        runMessageAction: mocks.runMessageAction as never,
+        requireExplicitTarget: true,
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:dm-user-1",
+      }),
+      { agentId: "main", sessionKey: "agent:main:heartbeat" },
+    );
+    const toolCallId = "heartbeat-target-removed";
+
+    await expect(
+      tool.execute(toolCallId, {
+        action: "send",
+        target: "telegram:dm-user-1",
+        message: "HEARTBEAT_OK",
+      }),
+    ).rejects.toThrow(/Explicit message target required/i);
+
+    expect(consumePreExecutionBlockedToolCall(toolCallId)).toBe(true);
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit-target send when requireExplicitTarget is set", async () => {
+    mocks.runMessageAction.mockResolvedValueOnce({
+      kind: "action",
+      channel: "telegram",
+      action: "send",
+      handledBy: "dry-run",
+      payload: { ok: true, dryRun: true, channel: "telegram", action: "send" },
+      dryRun: true,
+    });
+
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "telegram",
+      currentChannelId: "telegram:dm-user-1",
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "telegram:alert-channel",
+      message: "heartbeat alert",
+    });
+
+    const call = firstRunMessageActionInput();
+    expect(call?.params?.target).toBe("telegram:alert-channel");
+  });
+
+  it("allows an iMessage delivery alias when requireExplicitTarget is set", async () => {
+    const plugin = createChannelPlugin({
+      id: "imessage",
+      label: "iMessage",
+      docsPath: "/channels/imessage",
+      blurb: "iMessage test plugin",
+      actions: ["sendWithEffect"],
+      messageActionTargetAliases: {
+        sendWithEffect: {
+          aliases: ["chatGuid", "chatIdentifier", "chatId"],
+          deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+          resolveDeliveryTarget: ({ args }) =>
+            typeof args.chatGuid === "string" ? `chat_guid:${args.chatGuid}` : undefined,
+        },
+      },
+    });
+    const preparedChannel = {
+      id: "imessage",
+      actions: plugin.actions,
+      reconcilesUnknownSend: false,
+    };
+    const preparedMessageToolCatalog = {
+      version: 1,
+      channels: [preparedChannel],
+      getChannel: (id: string) => (id === preparedChannel.id ? preparedChannel : undefined),
+    };
+    mocks.runMessageAction.mockResolvedValueOnce({
+      kind: "action",
+      channel: "imessage",
+      action: "sendWithEffect",
+      handledBy: "dry-run",
+      payload: { ok: true, dryRun: true, channel: "imessage", action: "sendWithEffect" },
+      dryRun: true,
+    });
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "imessage",
+      preparedMessageToolCatalog,
+    });
+
+    await tool.execute("1", {
+      action: "sendWithEffect",
+      channel: "imessage",
+      chatGuid: "iMessage;+;chat0000",
+      effectId: "com.apple.messages.effect.CKConfettiEffect",
+      message: "heartbeat alert",
+    });
+
+    expect(firstRunMessageActionInput()?.params?.chatGuid).toBe("iMessage;+;chat0000");
+  });
+
   it("requires an explicit target for upload-file when configured", async () => {
     const tool = createMessageTool({
       runMessageAction: mocks.runMessageAction as never,
@@ -2585,6 +2747,21 @@ describe("message tool explicit target guard", () => {
       params: {
         action: "sticker",
         stickerId: "sticker-1",
+      },
+    },
+    {
+      action: "thread-create",
+      params: {
+        action: "thread-create",
+        threadName: "Heartbeat follow-up",
+      },
+    },
+    {
+      action: "edit",
+      params: {
+        action: "edit",
+        messageId: "message-1",
+        message: "Corrected heartbeat alert",
       },
     },
   ] as const)("requires an explicit target for $action when configured", async ({ params }) => {
@@ -2653,7 +2830,7 @@ describe("message tool loop detection action runner proof", () => {
           },
         },
         dryRun: false,
-      } satisfies MessageActionRunResult;
+      } satisfies MessageActionResult;
     });
   }
 
@@ -3746,6 +3923,13 @@ describe("message tool reasoning tag sanitization", () => {
       field: "message",
       input: "Thinking...\nI'll check that now",
       expected: "Thinking...\nI'll check that now",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+    {
+      field: "message",
+      input: "<internal>private reflection</internal>Visible answer",
+      expected: "Visible answer",
       target: "telegram:123",
       channel: "telegram",
     },

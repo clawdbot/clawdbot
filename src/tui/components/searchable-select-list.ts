@@ -14,6 +14,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
+import { sanitizeRenderableLine } from "../tui-formatters.js";
 
 const ANSI_ESCAPE = String.fromCharCode(27);
 const ANSI_SGR_REGEX = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, "g");
@@ -279,9 +280,12 @@ export class SearchableSelectList implements Component, Focusable {
   ): string {
     const prefix = isSelected ? "→ " : "  ";
     const prefixWidth = prefix.length;
-    const displayValue = this.getItemLabel(item);
+    const displayValue =
+      sanitizeRenderableLine(this.getItemLabel(item)) ||
+      sanitizeRenderableLine(item.value) ||
+      "(unnamed)";
 
-    const description = item.description;
+    const description = sanitizeRenderableLine(item.description ?? "");
     if (description) {
       const descriptionLayout = this.getDescriptionLayout(width, prefixWidth);
       if (descriptionLayout) {

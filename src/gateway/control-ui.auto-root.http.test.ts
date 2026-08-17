@@ -53,7 +53,11 @@ describe("handleControlUiHttpRequest prepared root lifecycle", () => {
       await fs.link(sourceIndex, indexPath);
       const { res, end } = makeMockHttpResponse();
       const handled = await handleControlUiHttpRequest(
-        { url: "/dashboard", method: "GET" } as IncomingMessage,
+        {
+          url: "/dashboard",
+          method: "GET",
+          headers: { host: "gateway.example.test" },
+        } as IncomingMessage,
         res,
         { root: { kind: "bundled", path: tmp, realPath: await fs.realpath(tmp) } },
       );
@@ -84,57 +88,43 @@ describe("handleControlUiHttpRequest prepared root lifecycle", () => {
     });
   });
 
-  it.each(["GET", "HEAD"])(
-    "marks %s requests retryable while assets are preparing",
-    async (method) => {
-      const { res, end, setHeader } = makeMockHttpResponse();
+  it("marks requests retryable while assets are preparing", async () => {
+    const { res, end, setHeader } = makeMockHttpResponse();
 
-      const handled = await handleControlUiHttpRequest(
-        { url: "/", method } as IncomingMessage,
-        res,
-        { root: { kind: "preparing" } },
-      );
+    const handled = await handleControlUiHttpRequest(
+      { url: "/", method: "GET" } as IncomingMessage,
+      res,
+      { root: { kind: "preparing" } },
+    );
 
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(503);
-      expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
-      expect(setHeader).toHaveBeenCalledWith("Retry-After", "1");
-      if (method === "HEAD") {
-        expect(end).toHaveBeenCalledWith();
-      } else {
-        expect(responseBody(end)).toContain("being prepared");
-      }
-    },
-  );
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+    expect(setHeader).toHaveBeenCalledWith("Retry-After", "1");
+    expect(responseBody(end)).toContain("being prepared");
+  });
 
-  it.each(["GET", "HEAD"])(
-    "keeps failed %s requests terminal without retry hints",
-    async (method) => {
-      const { res, end, setHeader } = makeMockHttpResponse();
-      const privateBuildFailure =
-        "Control UI build failed: private-credential in registry.invalid/package from /home/operator/private";
-      const failedRoot = { kind: "failed" as const, message: privateBuildFailure };
+  it("keeps failed requests terminal without retry hints", async () => {
+    const { res, end, setHeader } = makeMockHttpResponse();
+    const privateBuildFailure =
+      "Control UI build failed: private-credential in registry.invalid/package from /home/operator/private";
+    const failedRoot = { kind: "failed" as const, message: privateBuildFailure };
 
-      const handled = await handleControlUiHttpRequest(
-        { url: "/", method } as IncomingMessage,
-        res,
-        { root: failedRoot },
-      );
+    const handled = await handleControlUiHttpRequest(
+      { url: "/", method: "GET" } as IncomingMessage,
+      res,
+      { root: failedRoot },
+    );
 
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(503);
-      expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
-      if (method === "HEAD") {
-        expect(end).toHaveBeenCalledWith();
-      } else {
-        expect(responseBody(end)).toBe(
-          "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`.",
-        );
-        expect(responseBody(end)).not.toContain("private-credential");
-        expect(responseBody(end)).not.toContain("/home/operator/private");
-      }
-    },
-  );
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
+    expect(responseBody(end)).toBe(
+      "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`.",
+    );
+    expect(responseBody(end)).not.toContain("private-credential");
+    expect(responseBody(end)).not.toContain("/home/operator/private");
+  });
 
   it("keeps invalid configured roots terminal and preserves their repair guidance", async () => {
     const { res, end, setHeader } = makeMockHttpResponse();

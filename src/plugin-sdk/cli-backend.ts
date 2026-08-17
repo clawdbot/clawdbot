@@ -6,6 +6,7 @@ export type {
   CliBackendConfig,
   CliBackendExecutionMode,
   CliBackendJsonlUsage,
+  CliBackendLiveSessionRequirement,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
   CliBackendParseJsonlEvent,
@@ -22,6 +23,7 @@ export type {
   CliBackendThinkingLevel,
 } from "../plugins/types.js";
 export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
+export { CliBackendAuthProfilePreparationError } from "../plugins/cli-backend-errors.js";
 export {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,

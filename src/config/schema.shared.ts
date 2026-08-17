@@ -8,6 +8,7 @@ export type ConfigJsonSchemaObject = Record<string, unknown> & {
   properties?: Record<string, ConfigJsonSchemaObject>;
   required?: string[];
   additionalProperties?: ConfigJsonSchemaObject | boolean;
+  propertyNames?: ConfigJsonSchemaObject | boolean;
   items?: ConfigJsonSchemaObject | ConfigJsonSchemaObject[];
   anyOf?: ConfigJsonSchemaObject[];
   allOf?: ConfigJsonSchemaObject[];
@@ -47,20 +48,30 @@ export function schemaHasChildren(schema: ConfigJsonSchemaObject): boolean {
 export function findWildcardHintMatch<T>(params: {
   uiHints: Record<string, T>;
   path: string;
+  targetParts?: readonly string[];
   splitPath: (path: string) => string[];
+  includeAncestors?: boolean;
+  acceptHint?: (hint: T) => boolean;
 }): { path: string; hint: T } | null {
-  const targetParts = params.splitPath(params.path);
+  const targetParts = params.targetParts ?? params.splitPath(params.path);
   let bestMatch:
     | {
         path: string;
         hint: T;
+        partCount: number;
         wildcardCount: number;
       }
     | undefined;
 
   for (const [hintPath, hint] of Object.entries(params.uiHints)) {
+    if (params.acceptHint && !params.acceptHint(hint)) {
+      continue;
+    }
     const hintParts = params.splitPath(hintPath);
-    if (hintParts.length !== targetParts.length) {
+    if (
+      hintParts.length > targetParts.length ||
+      (!params.includeAncestors && hintParts.length !== targetParts.length)
+    ) {
       continue;
     }
 
@@ -83,9 +94,14 @@ export function findWildcardHintMatch<T>(params: {
     if (!matches) {
       continue;
     }
-    // Fewer wildcards means the hint is closer to the concrete path and should win.
-    if (!bestMatch || wildcardCount < bestMatch.wildcardCount) {
-      bestMatch = { path: hintPath, hint, wildcardCount };
+    // The deepest hint lets an explicit child override an inherited sensitive parent;
+    // choosing the parent instead could either leak the child or over-redact it.
+    if (
+      !bestMatch ||
+      hintParts.length > bestMatch.partCount ||
+      (hintParts.length === bestMatch.partCount && wildcardCount < bestMatch.wildcardCount)
+    ) {
+      bestMatch = { path: hintPath, hint, partCount: hintParts.length, wildcardCount };
     }
   }
 

@@ -39,7 +39,7 @@ actor CameraCaptureService {
     private let logger = Logger(subsystem: "ai.openclaw", category: "camera")
 
     func listDevices() -> [CameraDeviceInfo] {
-        Self.availableCameras().map { device in
+        CameraDeviceResolver.availableCameras().map { device in
             CameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
@@ -170,35 +170,12 @@ actor CameraCaptureService {
         }
     }
 
-    private nonisolated static func availableCameras() -> [AVCaptureDevice] {
-        var types: [AVCaptureDevice.DeviceType] = [
-            .builtInWideAngleCamera,
-            .continuityCamera,
-        ]
-        if let external = externalDeviceType() {
-            types.append(external)
-        }
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: types,
-            mediaType: .video,
-            position: .unspecified)
-        return session.devices
-    }
-
-    private nonisolated static func externalDeviceType() -> AVCaptureDevice.DeviceType? {
-        if #available(macOS 14.0, *) {
-            return .external
-        }
-        // Use raw value to avoid deprecated symbol in the SDK.
-        return AVCaptureDevice.DeviceType(rawValue: "AVCaptureDeviceTypeExternalUnknown")
-    }
-
     private nonisolated static func pickCamera(
         facing: CameraFacing,
         deviceId: String?) -> AVCaptureDevice?
     {
         if let deviceId, !deviceId.isEmpty {
-            if let match = availableCameras().first(where: { $0.uniqueID == deviceId }) {
+            if let match = CameraDeviceResolver.camera(deviceId: deviceId) {
                 return match
             }
         }

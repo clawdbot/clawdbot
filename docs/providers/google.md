@@ -35,7 +35,7 @@ the Gateway already runs inside a managed Google Cloud environment.
         Or pass the key directly:
 
         ```bash
-        openclaw onboard --non-interactive \
+        openclaw onboard --non-interactive --accept-risk --skip-health \
           --mode local \
           --auth-choice gemini-api-key \
           --gemini-api-key "$GEMINI_API_KEY"
@@ -224,8 +224,10 @@ To use Google as the default image provider:
 {
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "google/gemini-3.1-flash-image",
+      mediaModels: {
+        image: {
+          primary: "google/gemini-3.1-flash-image",
+        },
       },
     },
   },
@@ -252,8 +254,10 @@ To use Google as the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "google/veo-3.1-fast-generate-preview",
+      mediaModels: {
+        video: {
+          primary: "google/veo-3.1-fast-generate-preview",
+        },
       },
     },
   },
@@ -282,8 +286,10 @@ To use Google as the default music provider:
 {
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "google/lyria-3-clip-preview",
+      mediaModels: {
+        music: {
+          primary: "google/lyria-3-clip-preview",
+        },
       },
     },
   },

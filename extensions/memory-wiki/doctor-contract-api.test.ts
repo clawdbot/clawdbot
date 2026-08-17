@@ -1,6 +1,5 @@
 // Memory Wiki tests cover doctor migration of legacy source sync state.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type {
@@ -31,6 +30,7 @@ import {
   readMemoryWikiSourceSyncState,
   resolveMemoryWikiSourceSyncStatePath,
 } from "./src/source-sync-state.js";
+import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
 function requireStateMigration(id: string) {
   return expectDefined(
@@ -39,13 +39,7 @@ function requireStateMigration(id: string) {
   );
 }
 
-const tempDirs: string[] = [];
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-doctor-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createMemoryWikiTestHarness();
 
 function resolveLegacyImportRunRecordPath(vaultRoot: string, runId: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "import-runs", `${runId}.json`);
@@ -89,13 +83,10 @@ describe("memory-wiki doctor source sync migration", () => {
     configureMemoryWikiImportRunStateStore(undefined);
     resetPluginBlobStoreForTests();
     resetPluginStateStoreForTests();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
   });
 
   it("deletes rebuildable compiled cache files without importing them", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "vault");
     const cacheDir = path.join(vaultRoot, ".openclaw-wiki", "cache");
     const legacyPaths = [
@@ -126,7 +117,7 @@ describe("memory-wiki doctor source sync migration", () => {
   });
 
   it("skips configured vaults that have not been initialized", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "missing-vault");
     const params = migrationParams({ stateDir, vaultRoot });
     const migration = requireStateMigration("memory-wiki-compiled-cache-file-cleanup");
@@ -139,7 +130,7 @@ describe("memory-wiki doctor source sync migration", () => {
   });
 
   it("does not follow a symlinked legacy cache directory", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "vault");
     const externalCacheDir = path.join(stateDir, "external-cache");
     const externalCachePath = path.join(externalCacheDir, "agent-digest.json");
@@ -159,7 +150,7 @@ describe("memory-wiki doctor source sync migration", () => {
   });
 
   it("detects and migrates legacy source-sync.json into plugin state", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "vault");
     const legacyPath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
@@ -212,7 +203,7 @@ describe("memory-wiki doctor source sync migration", () => {
   });
 
   it("detects and migrates legacy import-run records into plugin state", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "vault");
     const legacyPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-alpha");
     const snapshotPath = path.join(
@@ -313,7 +304,7 @@ describe("memory-wiki doctor source sync migration", () => {
   });
 
   it("merges legacy entries with existing plugin state before archiving", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "vault");
     const legacyPath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
@@ -393,7 +384,7 @@ describe("memory-wiki doctor source sync migration", () => {
   });
 
   it("migrates legacy state from every configured agent vault", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "vaults");
     const agentIds = ["support", "marketing"];
     for (const agentId of agentIds) {

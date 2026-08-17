@@ -6,11 +6,11 @@
  * bundled channel schemas. Internal callers use this subpath only for the
  * bundled provider schemas; generic primitives come from channel-config-schema.
  */
-import { z, type ZodObject, type ZodOptional, type ZodType } from "zod";
+import type { ZodObject, ZodOptional, ZodType } from "zod";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
 } from "./facade-loader.js";
 
 export {
@@ -33,23 +33,6 @@ export {
   ToolPolicySchema,
 } from "./channel-config-schema.js";
 
-function createLegacyExternalChannelConfigSchema() {
-  return z.object({}).passthrough();
-}
-
-/**
- * @deprecated Compatibility for external channel packages published through 2026.7.1.
- * Their package manifests remain the validation owner. Remove after the minimum supported
- * Slack, Discord, Signal, and Teams packages use plugin-owned config schemas.
- */
-export const SlackConfigSchema = createLegacyExternalChannelConfigSchema();
-/** @deprecated See SlackConfigSchema. */
-export const DiscordConfigSchema = createLegacyExternalChannelConfigSchema();
-/** @deprecated See SlackConfigSchema. */
-export const SignalConfigSchema = createLegacyExternalChannelConfigSchema();
-/** @deprecated See SlackConfigSchema. */
-export const MSTeamsConfigSchema = createLegacyExternalChannelConfigSchema();
-
 type ChannelConfig = NonNullable<OpenClawConfig["channels"]>;
 type ConfigSchemaShape<TOutput extends object> = {
   -readonly [K in keyof TOutput]-?: Pick<TOutput, K> extends Required<Pick<TOutput, K>>
@@ -66,7 +49,7 @@ function loadBundledConfigSchema<TOutput extends object>(
   dirName: string,
   exportName: string,
 ): BundledObjectConfigSchema<TOutput> {
-  const schema = loadBundledPluginPublicSurfaceModuleSync<BundledConfigSchemaModule<TOutput>>({
+  const schema = loadBundledPluginPublicSurfaceModuleSyncCore<BundledConfigSchemaModule<TOutput>>({
     dirName,
     artifactBasename: "config-api.js",
   })[exportName];

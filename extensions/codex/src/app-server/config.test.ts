@@ -1,13 +1,15 @@
-// Codex tests cover config plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+// Codex tests cover config plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
+  isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -45,12 +47,7 @@ function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function expectFields(
   value: unknown,
@@ -370,10 +367,43 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
-  it("parses the native session discovery toggle", () => {
-    expect(readCodexPluginConfig({ sessionCatalog: { enabled: false } }).sessionCatalog).toEqual({
+  it("parses named native session discovery homes and rejects empty labels", () => {
+    expect(
+      readCodexPluginConfig({
+        sessionCatalog: {
+          enabled: false,
+          homes: [
+            " /srv/codex-string ",
+            { path: " /srv/codex-named ", label: " Named store " },
+            { path: " /srv/codex-default " },
+          ],
+        },
+      }).sessionCatalog,
+    ).toEqual({
       enabled: false,
+      homes: [
+        "/srv/codex-string",
+        { path: "/srv/codex-named", label: "Named store" },
+        { path: "/srv/codex-default" },
+      ],
     });
+    expect(
+      readCodexPluginConfig({ sessionCatalog: { homes: [{ path: "/srv/codex", label: " " }] } }),
+    ).toStrictEqual({});
+  });
+
+  it.each([
+    { transport: "unix", homeScope: "user" },
+    { transport: "websocket", url: "ws://127.0.0.1:39175" },
+  ] as const)("rejects additional session homes for $transport app servers", (appServer) => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: { appServer, sessionCatalog: { homes: ["/srv/codex-extra"] } },
+        env: {},
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
+    );
   });
 
   it("rejects unknown app-server fields", () => {
@@ -1450,6 +1480,11 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         },
       }).appServer?.experimental,
     ).toEqual({ sandboxExecServer: true });
+    expect(
+      isCodexSandboxExecServerEnabled(undefined, {
+        placementExecutionMode: "remote-exec",
+      }),
+    ).toBe(true);
   });
 
   it("rejects the retired dynamic tool profile key", () => {
@@ -1697,20 +1732,66 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ]);
   });
 
-  it("rejects unsupported native plugin identities", () => {
+  it.each([
+    "openai-curated",
+    "openai-curated-remote",
+    "openai-api-curated",
+    "workspace-directory",
+    "company-tools",
+    "openai-bundled",
+    "openai-primary-runtime",
+    "custom_market-42",
+  ])("accepts valid native plugin marketplace identity %s", (marketplaceName) => {
     const config = readCodexPluginConfig({
       codexPlugins: {
         enabled: true,
         plugins: {
           gmail: {
-            marketplaceName: "custom-market",
+            marketplaceName,
             pluginName: "gmail",
           },
         },
       },
     });
 
-    expect(config.codexPlugins).toBeUndefined();
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([
+      expect.objectContaining({ marketplaceName, pluginName: "gmail" }),
+    ]);
+  });
+
+  it.each(["", "../marketplace", "market/place", "market@place", " white-space", "trail "])(
+    "rejects unsafe native plugin marketplace identity %j",
+    (marketplaceName) => {
+      const config = readCodexPluginConfig({
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            gmail: {
+              marketplaceName,
+              pluginName: "gmail",
+            },
+          },
+        },
+      });
+
+      expect(config.codexPlugins).toBeUndefined();
+      expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
+    },
+  );
+
+  it("ignores an invalid marketplace identity when resolving raw native plugin policy", () => {
+    const config = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          gmail: {
+            marketplaceName: "../unsafe-marketplace",
+            pluginName: "gmail",
+          },
+        },
+      },
+    };
+
     expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
   });
 

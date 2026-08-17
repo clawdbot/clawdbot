@@ -139,7 +139,7 @@ acquire_pr_gates_lock() {
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   fi
-  node "$scripts_dir/pr-gates-lock.mjs" --status-file "$PR_GATES_LOCK_STATUS_FILE" &
+  node "$scripts_dir/pr-gates-lock.mts" --status-file "$PR_GATES_LOCK_STATUS_FILE" &
   PR_GATES_LOCK_PID=$!
   while [ ! -s "$PR_GATES_LOCK_STATUS_FILE" ]; do
     if ! kill -0 "$PR_GATES_LOCK_PID" 2>/dev/null; then
@@ -385,7 +385,13 @@ prepare_gates() {
   local has_changelog_update=false
   local unsupported_changelog_fragments=""
   local changed_path
-  while IFS= read -r changed_path; do
+  while [ -n "$changed_files" ]; do
+    changed_path="${changed_files%%$'\n'*}"
+    if [ "$changed_path" = "$changed_files" ]; then
+      changed_files=""
+    else
+      changed_files="${changed_files#*$'\n'}"
+    fi
     [ -n "$changed_path" ] || continue
     case "$changed_path" in
       CHANGELOG.md)
@@ -395,7 +401,7 @@ prepare_gates() {
         unsupported_changelog_fragments="${unsupported_changelog_fragments}${changed_path}"$'\n'
         ;;
     esac
-  done <<<"$changed_files"
+  done
   if [ -n "$unsupported_changelog_fragments" ]; then
     echo "Unsupported changelog fragment files detected:"
     printf '%s\n' "$unsupported_changelog_fragments"

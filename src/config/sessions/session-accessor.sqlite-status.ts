@@ -6,7 +6,7 @@ import type {
   SessionEntrySummary,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  hasValidSqliteSessionEntryIdentity,
+  hasValidSessionEntryIdentity,
   parseSqliteSessionEntryRecord,
 } from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
@@ -14,7 +14,7 @@ import type { SessionEntry } from "./types.js";
 
 type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 
-export function normalizeSqliteStatus(value: unknown): SessionEntryStatus | null {
+export function normalizeStatus(value: unknown): SessionEntryStatus | null {
   return value === "running" ||
     value === "done" ||
     value === "failed" ||
@@ -24,9 +24,9 @@ export function normalizeSqliteStatus(value: unknown): SessionEntryStatus | null
     : null;
 }
 
-export { hasValidSqliteSessionEntryIdentity };
+export { hasValidSessionEntryIdentity };
 
-export function parseSqliteSessionEntryJson(row: {
+export function parseSessionEntryJson(row: {
   current_session_id?: string;
   entry_json: string;
   updated_at?: number;
@@ -35,7 +35,7 @@ export function parseSqliteSessionEntryJson(row: {
   return record ? projectCanonicalSessionEntryShape(record) : null;
 }
 
-export function readSqliteSessionEntriesByStatus(
+export function readSessionEntriesByStatus(
   database: OpenClawAgentDatabase,
   statuses: readonly SessionEntryStatus[],
   sessionKeys?: readonly string[],
@@ -55,7 +55,7 @@ export function readSqliteSessionEntriesByStatus(
   }
   return executeSqliteQuerySync(database.db, query)
     .rows.flatMap((row) => {
-      const entry = parseSqliteSessionEntryJson(row);
+      const entry = parseSessionEntryJson(row);
       return entry ? [{ entry, sessionKey: row.session_key }] : [];
     })
     .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));

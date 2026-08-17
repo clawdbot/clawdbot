@@ -1,9 +1,12 @@
 // Feishu tests cover monitor.webhook e2e plugin behavior.
 import crypto from "node:crypto";
 import type { Server } from "node:http";
+import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
@@ -34,6 +37,24 @@ import { monitorFeishuProvider } from "./monitor.js";
 import { httpServers } from "./monitor.state.js";
 import { monitorWebhook } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+
+function createFeishuWebhookTestAccount(
+  accountId: string,
+  port: number,
+  webhookPath: string,
+): ResolvedFeishuAccount {
+  return {
+    accountId,
+    encryptKey: "encrypt_key",
+    config: {
+      enabled: true,
+      connectionMode: "webhook",
+      webhookHost: "127.0.0.1",
+      webhookPort: port,
+      webhookPath,
+    },
+  } as ResolvedFeishuAccount;
+}
 
 beforeAll(async () => {
   await import("./monitor.account.js");
@@ -74,6 +95,35 @@ async function postSignedPayload(url: string, payload: Record<string, unknown>) 
     method: "POST",
     headers: signFeishuPayload({ encryptKey: "encrypt_key", rawBody }),
     body: rawBody,
+  });
+}
+
+async function sendRawSignedFeishuRequest(params: {
+  port: number;
+  target: string;
+  method?: string;
+  rawBody: string;
+  headers: Record<string, string>;
+}): Promise<string> {
+  const rawHeaders = Object.entries(params.headers)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join("\r\n");
+
+  return await new Promise<string>((resolve, reject) => {
+    let response = "";
+    const socket = createConnection({ host: "127.0.0.1", port: params.port }, () => {
+      socket.end(
+        `${params.method ?? "POST"} ${params.target} HTTP/1.1\r\nHost: localhost\r\n` +
+          `${rawHeaders}\r\nContent-Length: ${Buffer.byteLength(params.rawBody)}\r\n` +
+          `Connection: close\r\n\r\n${params.rawBody}`,
+      );
+    });
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+    });
+    socket.on("end", () => resolve(response));
+    socket.on("error", reject);
   });
 }
 
@@ -374,6 +424,402 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
+  it("admits signed requests only on the configured POST webhook route", async () => {
+    const accountId = "signed-route-boundary";
+    const path = "/hook-e2e-signed-route-boundary";
+    const port = await getFreePort();
+    const encryptKey = "encrypt_key";
+    const handler = vi.fn(async () => ({ accepted: true }));
+    const eventDispatcher = new Lark.EventDispatcher({
+      encryptKey,
+      verificationToken: "verify_token",
+    });
+    eventDispatcher.register({ "test.route_boundary": handler });
+    const statusSink = vi.fn();
+    const abortController = new AbortController();
+    const monitorPromise = monitorWebhook({
+      account: createFeishuWebhookTestAccount(accountId, port, path),
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher,
+      statusSink,
+    });
+    const url = `http://127.0.0.1:${port}${path}`;
+    const rawBody = JSON.stringify({
+      schema: "2.0",
+      header: { event_type: "test.route_boundary" },
+      event: { marker: "signed-route-boundary" },
+    });
+    const headers = signFeishuPayload({ encryptKey, rawBody });
+    const requests = [
+      { label: "different route", route: "/hook-e2e-other", method: "POST", status: 404 },
+      { label: "route prefix", route: `${path}/nested`, method: "POST", status: 404 },
+      { label: "trailing slash", route: `${path}/`, method: "POST", status: 404 },
+      { label: "PUT method", route: path, method: "PUT", status: 405 },
+      { label: "DELETE method", route: path, method: "DELETE", status: 405 },
+      { label: "configured route", route: path, method: "POST", status: 200 },
+      {
+        label: "configured route with query",
+        route: `${path}?delivery=validated`,
+        method: "POST",
+        status: 200,
+      },
+    ];
+
+    try {
+      await waitUntilServerReady(url);
+      statusSink.mockClear();
+      const server = httpServers.get(accountId);
+      const requestListener = server?.listeners("request")[0];
+      if (!server || !requestListener) {
+        throw new Error("expected Feishu webhook request listener");
+      }
+      let malformedTargetError: unknown;
+      server.removeListener("request", requestListener);
+      server.on("request", (request, response) => {
+        try {
+          requestListener.call(server, request, response);
+        } catch (error) {
+          malformedTargetError = error;
+          response.statusCode = 500;
+          response.end("Webhook request handler threw");
+        }
+      });
+
+      const rawTargets = [
+        { label: "malformed authority", target: "//[" },
+        { label: "foreign authority", target: `//attacker${path}` },
+        { label: "duplicate-slash authority", target: `//localhost${path}` },
+        { label: "dot-segment traversal", target: `/other/..${path}` },
+        { label: "encoded dot-segment traversal", target: `/other/%2e%2e${path}` },
+        { label: "backslash authority", target: `/\\attacker${path}` },
+        { label: "backslash traversal", target: `/other\\..${path}` },
+        { label: "encoded separator", target: `${path}%2Fextra` },
+        { label: "raw fragment", target: `${path}#fragment` },
+        { label: "query fragment", target: `${path}?delivery=ok#fragment` },
+        { label: "invalid percent escape", target: `${path}%ZZ` },
+      ];
+      const observedRawTargets = [];
+
+      for (const rawTarget of rawTargets) {
+        const initialDispatches = handler.mock.calls.length;
+        const initialActivity = statusSink.mock.calls.length;
+        malformedTargetError = undefined;
+        const rawResponse = await sendRawSignedFeishuRequest({
+          port,
+          target: rawTarget.target,
+          rawBody,
+          headers,
+        });
+        observedRawTargets.push({
+          label: rawTarget.label,
+          statusLine: rawResponse.split("\r\n", 1)[0],
+          error: malformedTargetError instanceof Error ? malformedTargetError.message : undefined,
+          dispatched: handler.mock.calls.length > initialDispatches,
+          publishedActivity: statusSink.mock.calls.length > initialActivity,
+        });
+      }
+
+      expect(observedRawTargets).toEqual(
+        rawTargets.map((rawTarget) => ({
+          label: rawTarget.label,
+          statusLine: "HTTP/1.1 404 Not Found",
+          error: undefined,
+          dispatched: false,
+          publishedActivity: false,
+        })),
+      );
+
+      const observed = [];
+
+      for (const request of requests) {
+        const initialDispatches = handler.mock.calls.length;
+        const initialActivity = statusSink.mock.calls.length;
+        const response = await fetch(new URL(request.route, url), {
+          method: request.method,
+          headers,
+          body: rawBody,
+        });
+        await response.text();
+        observed.push({
+          label: request.label,
+          status: response.status,
+          allow: response.headers.get("allow"),
+          dispatched: handler.mock.calls.length > initialDispatches,
+          publishedActivity: statusSink.mock.calls.length > initialActivity,
+        });
+      }
+
+      expect(observed).toEqual(
+        requests.map((request) => ({
+          label: request.label,
+          status: request.status,
+          allow: request.status === 405 ? "POST" : null,
+          dispatched: request.status === 200,
+          publishedActivity: request.status === 200,
+        })),
+      );
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it.each([
+    ["root relative", "root", "old-root", "/old-root"],
+    ["account relative", "account", "old-account", "/old-account"],
+    ["root fragment", "root", "/old#fragment", "/old"],
+    ["account relative fragment", "account", "old#fragment", "/old"],
+    ["empty fragment", "root", "/old#", "/old"],
+    ["query fragment", "account", "old?tenant=alpha#fragment", "/old?tenant=alpha"],
+    ["fragment only", "root", "#fragment", "/"],
+    ["question inside fragment", "account", "#?", "/"],
+    ["query-only fragment", "account", "?tenant=alpha#fragment", "/?tenant=alpha"],
+    ["dot segments", "root", "/other/../old", "/old"],
+    ["encoded dot segments", "account", "/other/%2e%2e/old", "/old"],
+    ["backslash", "root", "/other\\old", "/other/old"],
+    ["backslash traversal", "account", "/other\\..\\old", "/old"],
+    ["external authority", "root", "//example.com/old#fragment", "/old"],
+    ["backslash authority", "account", "/\\example.com/old", "/old"],
+    ["absolute HTTPS", "root", "https://example.com/old/?x=1#fragment", "/old/?x=1"],
+    ["absolute HTTP", "account", "http://example.com:80/old/", "/old/"],
+    ["raw space", "root", "/old path", "/old%20path"],
+    ["query space", "account", "/old?name=hello world", "/old?name=hello%20world"],
+    ["Unicode", "root", "/café", "/caf%C3%A9"],
+    ["Unicode emoji", "account", "/💬", "/%F0%9F%92%AC"],
+    ["Unicode query", "account", "/old?name=café", "/old?name=caf%C3%A9"],
+    ["tab control", "root", "/old\tpath", "/oldpath"],
+    ["CRLF controls", "account", "/old\r\npath", "/oldpath"],
+    ["NUL control", "account", "/old\u0000path", "/old%00path"],
+    ["encoded hash", "root", "/old%23fragment", "/old%23fragment"],
+    ["encoded slash", "account", "/old%2Fnext", "/old%2Fnext"],
+    ["encoded backslash", "root", "/old%5Cnext", "/old%5Cnext"],
+    ["encoded NUL", "account", "/old%00next", "/old%00next"],
+    ["invalid percent escape", "root", "/old%ZZ", "/old%ZZ"],
+    ["dangling percent escape", "account", "/old%", "/old%"],
+    ["exact empty query", "account", "/old?", "/old?"],
+    ["empty query fragment", "root", "/old?#", "/old"],
+    ["relative trailing slash", "account", "old/", "/old/"],
+    ["canonical trailing slash", "root", "/old/", "/old/"],
+    ["empty root", "root", "", "/feishu/events"],
+    ["whitespace account", "account", "   ", "/feishu/events"],
+  ])(
+    "requires Doctor to canonicalize the configured %s before raw webhook admission",
+    async (_label, scope, configuredPath, acceptedTarget) => {
+      const accountId = `legacy-route-${scope}`;
+      const port = await getFreePort();
+      const encryptKey = "encrypt_key";
+      const config = {
+        channels: {
+          feishu: {
+            ...(scope === "root" ? { webhookPath: configuredPath } : {}),
+            accounts: {
+              [accountId]: {
+                appId: "cli_test",
+                appSecret: "secret_test", // pragma: allowlist secret
+                connectionMode: "webhook" as const,
+                webhookPort: port,
+                ...(scope === "account" ? { webhookPath: configuredPath } : {}),
+                encryptKey,
+                verificationToken: "verify_token",
+              },
+            },
+          },
+        },
+      };
+      const unmigratedAccount = resolveFeishuRuntimeAccount(
+        { cfg: config, accountId },
+        { requireEventSecrets: true },
+      );
+      expect(unmigratedAccount.config.webhookPath).toBe(configuredPath);
+
+      const handler = vi.fn(async () => ({ accepted: true }));
+      const eventDispatcher = new Lark.EventDispatcher({
+        encryptKey,
+        verificationToken: "verify_token",
+      });
+      eventDispatcher.register({ "test.legacy_route_boundary": handler });
+      const statusSink = vi.fn();
+      const abortController = new AbortController();
+      const monitorParams = {
+        account: unmigratedAccount,
+        accountId,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        abortSignal: abortController.signal,
+        eventDispatcher,
+        statusSink,
+      };
+      const needsMigration = configuredPath !== acceptedTarget;
+      if (needsMigration) {
+        await expect(monitorWebhook(monitorParams)).rejects.toThrow("openclaw doctor --fix");
+        expect(httpServers.has(accountId)).toBe(false);
+        expect(handler).not.toHaveBeenCalled();
+        expect(statusSink).not.toHaveBeenCalled();
+      }
+      const migrated = normalizeCompatibilityConfig({ cfg: config });
+      expect(migrated.changes.some((change) => change.includes(".webhookPath"))).toBe(
+        needsMigration,
+      );
+      const account = resolveFeishuRuntimeAccount(
+        { cfg: migrated.config, accountId },
+        { requireEventSecrets: true },
+      );
+      expect(account.config.webhookPath).toBe(acceptedTarget);
+      const monitorPromise = monitorWebhook({ ...monitorParams, account });
+      const rawBody = JSON.stringify({
+        schema: "2.0",
+        header: { event_type: "test.legacy_route_boundary" },
+        event: { marker: configuredPath },
+      });
+      const headers = signFeishuPayload({ encryptKey, rawBody });
+      const acceptedPath = acceptedTarget.split("?", 1)[0];
+      const rejectedTarget = acceptedTarget.includes("?")
+        ? `${acceptedTarget}&wrong=1`
+        : acceptedTarget.endsWith("/") && acceptedTarget.length > 1
+          ? acceptedTarget.slice(0, -1)
+          : `${acceptedTarget}/`;
+      const requests = [
+        { label: "different raw target", target: rejectedTarget, status: 404 },
+        { label: "foreign authority", target: `//attacker${acceptedPath}`, status: 404 },
+        { label: "raw fragment", target: `${acceptedTarget}#fragment`, status: 404 },
+        { label: "normalized configured target", target: acceptedTarget, status: 200 },
+      ];
+
+      try {
+        await waitUntilServerReady(`http://127.0.0.1:${port}${acceptedTarget}`);
+        statusSink.mockClear();
+        const observed = [];
+
+        for (const request of requests) {
+          const initialDispatches = handler.mock.calls.length;
+          const initialActivity = statusSink.mock.calls.length;
+          const rawResponse = await sendRawSignedFeishuRequest({
+            port,
+            target: request.target,
+            rawBody,
+            headers,
+          });
+          observed.push({
+            label: request.label,
+            statusLine: rawResponse.split("\r\n", 1)[0],
+            dispatched: handler.mock.calls.length > initialDispatches,
+            publishedActivity: statusSink.mock.calls.length > initialActivity,
+          });
+        }
+
+        expect(observed).toEqual(
+          requests.map((request) => ({
+            label: request.label,
+            statusLine: `HTTP/1.1 ${request.status} ${request.status === 200 ? "OK" : "Not Found"}`,
+            dispatched: request.status === 200,
+            publishedActivity: request.status === 200,
+          })),
+        );
+      } finally {
+        abortController.abort();
+        await monitorPromise;
+      }
+    },
+  );
+
+  it("matches an explicitly configured webhook query exactly", async () => {
+    const accountId = "signed-configured-query-boundary";
+    const route = "/hook-e2e-configured-query";
+    const configuredPath = `${route}?tenant=alpha&mode=exact`;
+    const port = await getFreePort();
+    const encryptKey = "encrypt_key";
+    const handler = vi.fn(async () => ({ accepted: true }));
+    const eventDispatcher = new Lark.EventDispatcher({
+      encryptKey,
+      verificationToken: "verify_token",
+    });
+    eventDispatcher.register({ "test.query_route_boundary": handler });
+    const statusSink = vi.fn();
+    const abortController = new AbortController();
+    const monitorPromise = monitorWebhook({
+      account: createFeishuWebhookTestAccount(accountId, port, configuredPath),
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher,
+      statusSink,
+    });
+    const rawBody = JSON.stringify({
+      schema: "2.0",
+      header: { event_type: "test.query_route_boundary" },
+      event: { marker: "configured-query-boundary" },
+    });
+    const headers = signFeishuPayload({ encryptKey, rawBody });
+    const requests = [
+      { label: "missing query", target: route, method: "POST", status: 404 },
+      {
+        label: "different query",
+        target: `${route}?tenant=other&mode=exact`,
+        method: "POST",
+        status: 404,
+      },
+      {
+        label: "reordered query",
+        target: `${route}?mode=exact&tenant=alpha`,
+        method: "POST",
+        status: 404,
+      },
+      {
+        label: "additional query",
+        target: `${configuredPath}&extra=value`,
+        method: "POST",
+        status: 404,
+      },
+      { label: "wrong method", target: configuredPath, method: "PUT", status: 405 },
+      { label: "exact configured query", target: configuredPath, method: "POST", status: 200 },
+    ];
+
+    try {
+      await waitUntilServerReady(`http://127.0.0.1:${port}${configuredPath}`);
+      statusSink.mockClear();
+      const observed = [];
+
+      for (const request of requests) {
+        const initialDispatches = handler.mock.calls.length;
+        const initialActivity = statusSink.mock.calls.length;
+        const rawResponse = await sendRawSignedFeishuRequest({
+          port,
+          target: request.target,
+          method: request.method,
+          rawBody,
+          headers,
+        });
+        observed.push({
+          label: request.label,
+          statusLine: rawResponse.split("\r\n", 1)[0],
+          allow: rawResponse.match(/\r\nallow:\s*([^\r\n]+)/i)?.[1] ?? null,
+          dispatched: handler.mock.calls.length > initialDispatches,
+          publishedActivity: statusSink.mock.calls.length > initialActivity,
+        });
+      }
+
+      expect(observed).toEqual(
+        requests.map((request) => ({
+          label: request.label,
+          statusLine: `HTTP/1.1 ${request.status} ${
+            request.status === 200
+              ? "OK"
+              : request.status === 405
+                ? "Method Not Allowed"
+                : "Not Found"
+          }`,
+          allow: request.status === 405 ? "POST" : null,
+          dispatched: request.status === 200,
+          publishedActivity: request.status === 200,
+        })),
+      );
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
   it("marks durably admitted message acks with the delivery-accepted header", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
@@ -412,17 +858,7 @@ describe("Feishu webhook signed-request e2e", () => {
         }),
     );
     const monitorPromise = monitorWebhook({
-      account: {
-        accountId,
-        encryptKey: "encrypt_key",
-        config: {
-          enabled: true,
-          connectionMode: "webhook",
-          webhookHost: "127.0.0.1",
-          webhookPort: port,
-          webhookPath: path,
-        },
-      } as ResolvedFeishuAccount,
+      account: createFeishuWebhookTestAccount(accountId, port, path),
       accountId,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
@@ -475,17 +911,7 @@ describe("Feishu webhook signed-request e2e", () => {
       throw new Error("admission failed");
     });
     const monitorPromise = monitorWebhook({
-      account: {
-        accountId,
-        encryptKey: "encrypt_key",
-        config: {
-          enabled: true,
-          connectionMode: "webhook",
-          webhookHost: "127.0.0.1",
-          webhookPort: port,
-          webhookPath: path,
-        },
-      } as ResolvedFeishuAccount,
+      account: createFeishuWebhookTestAccount(accountId, port, path),
       accountId,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,

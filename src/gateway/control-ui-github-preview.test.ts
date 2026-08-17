@@ -244,6 +244,33 @@ describe("loadControlUiGitHubPreview", () => {
     }
   });
 
+  it("retries stale optional authentication anonymously for public previews", async () => {
+    vi.stubEnv("GH_TOKEN", "stale-github-token");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(githubJson({ message: "Bad credentials" }, 401))
+      .mockResolvedValueOnce(
+        githubJson(
+          previewPayload({
+            user: { login: "octocat" },
+          }),
+        ),
+      );
+
+    const preview = await loadControlUiGitHubPreview(
+      { kind: "pull", number: 70012, owner: "openclaw", repo: "openclaw" },
+      fetchMock,
+    );
+
+    expect(preview.login).toBe("octocat");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toHaveProperty(
+      "Authorization",
+      "Bearer stale-github-token",
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+  });
+
   it("follows GitHub API redirects for renamed public repositories", async () => {
     vi.stubEnv("GH_TOKEN", "github-test-token");
     const fetchMock = vi

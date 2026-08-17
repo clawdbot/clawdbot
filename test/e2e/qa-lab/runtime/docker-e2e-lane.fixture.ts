@@ -31,6 +31,9 @@ const QA_DOCKER_E2E_LANES = {
   "codex-on-demand": {
     script: "scripts/e2e/codex-on-demand-docker.sh",
   },
+  "cli-installer-distribution": {
+    script: "scripts/e2e/cli-installer-distribution-docker.sh",
+  },
   "system-agent-first-run": {
     script: "scripts/e2e/system-agent-first-run-docker.sh",
   },

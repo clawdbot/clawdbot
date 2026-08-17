@@ -1,4 +1,5 @@
 // WebSocket message handler validates frames, dispatches gateway RPCs, manages pairing, and reports responses.
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { RawData } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -14,15 +15,15 @@ import {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import {
-  createDiagnosticTraceContext,
-  runWithDiagnosticTraceContext,
-} from "../../../infra/diagnostic-trace-context.js";
-import {
   releaseNodePairingCleanupClaim,
   type NodePairingCleanupClaim,
   type RequestNodePairingResult,
-} from "../../../infra/node-pairing.js";
-import { rawDataByteLength, rawDataToString } from "../../../infra/ws.js";
+} from "../../../infra/device-pairing-node.js";
+import {
+  createDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
+import { rawDataByteLength } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -44,16 +45,17 @@ import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import { authenticateGatewayConnect } from "./connect-auth.js";
-import { resolvePinnedClientMetadata } from "./connect-device-metadata.js";
 import { authorizeGatewayConnectDevice } from "./connect-device-pairing.js";
 import { attachAuthenticatedGatewayConnect } from "./connect-session.js";
 import { resolveHandshakeBrowserSecurityContext } from "./handshake-auth-helpers.js";
-import type { GatewayConnectPhaseContext } from "./message-handler-types.js";
+import type {
+  GatewayConnectPhaseContext,
+  GatewayWsMessageHandlerParams,
+} from "./message-handler-types.js";
 export type {
   GatewayWsMessageHandlerParams,
   WsOriginCheckMetrics,
 } from "./message-handler-types.js";
-import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS = 1_000;
 const GATEWAY_WORK_ADMISSION_CLOSE_CODE = 1013;
@@ -331,6 +333,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           clientDisplayName: connectParams.client.displayName,
           mode: connectParams.client.mode,
           version: connectParams.client.version,
+          buildId: connectParams.client.buildId,
           platform: connectParams.client.platform,
           deviceFamily: connectParams.client.deviceFamily,
           modelIdentifier: connectParams.client.modelIdentifier,
@@ -402,21 +405,38 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
-  const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
+  const parsePreauthConnectFrame = (data: RawData) => {
     if (isClosed() || rawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
-      return false;
+      return null;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawDataToString(data));
     } catch {
-      return false;
+      return null;
     }
     if (
       !validateRequestFrame(parsed) ||
       parsed.method !== "connect" ||
       !validateConnectParams(parsed.params)
     ) {
+      return null;
+    }
+    return parsed;
+  };
+
+  const isPreparedControlConnect = (data: RawData): boolean => {
+    const parsed = parsePreauthConnectFrame(data);
+    if (!parsed) {
+      return false;
+    }
+    const connectParams = parsed.params as { role?: unknown };
+    return connectParams.role !== "node" && !claimsWorkerConnectionIdentity(parsed.params);
+  };
+
+  const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
+    const parsed = parsePreauthConnectFrame(data);
+    if (!parsed) {
       return false;
     }
 
@@ -457,6 +477,18 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
     const admission = tryBeginGatewayRootWorkAdmission();
     if (!admission) {
+      if (
+        !isGatewayRestartDraining() &&
+        getGatewaySuspendAdmissionPhase() === "prepared" &&
+        isPreparedControlConnect(data)
+      ) {
+        // Refuse-only suspension fences work, not control-plane visibility. Only
+        // operator connects are admitted while prepared, and they can only reach
+        // suspend-control methods after handshake; node and worker connects would
+        // attach presence/registry state, so they stay refused.
+        await handleMessage(data);
+        return;
+      }
       if (await rejectConnectForClosedAdmission(data)) {
         return;
       }
@@ -478,8 +510,3 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     );
   });
 }
-
-export const testing = {
-  resolvePinnedClientMetadata,
-};
-export { testing as __testing };

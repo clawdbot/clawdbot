@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { validateSupportedA2UIJsonl } from "./src/a2ui-jsonl.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui-shared.js";
@@ -41,6 +42,7 @@ function createLazyCanvasTool(params: {
   return {
     label: "Canvas",
     name: "canvas",
+    resultContentSource: "network",
     description:
       "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
     parameters: CanvasToolSchema,
@@ -116,10 +118,7 @@ export default definePluginEntry({
       defaultPlatforms: ["ios", "android", "macos", "windows", "linux", "unknown"],
       foregroundRestrictedOnIos: true,
       handle: async (ctx) => {
-        const params =
-          ctx.params && typeof ctx.params === "object" && !Array.isArray(ctx.params)
-            ? (ctx.params as Record<string, unknown>)
-            : {};
+        const params = asNonArrayRecord(ctx.params);
         // Native nodes also accept JSONL under `push` when messages[] is absent.
         // Validate that fallback here so callers cannot bypass the JSONL policy.
         const usesJsonl =

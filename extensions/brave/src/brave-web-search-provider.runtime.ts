@@ -206,6 +206,7 @@ async function runBraveJsonRequest<T>(
     apiKey: string;
     timeoutSeconds: number;
     diagnostics?: BraveHttpDiagnostics;
+    signal?: AbortSignal;
     configureUrl: (url: URL) => void;
   },
   errorLabel: string,
@@ -228,6 +229,7 @@ async function runBraveJsonRequest<T>(
     {
       url: url.toString(),
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "GET",
         headers: {
@@ -256,6 +258,7 @@ async function runBraveLlmContextSearch(params: {
   apiKey: string;
   timeoutSeconds: number;
   diagnostics?: BraveHttpDiagnostics;
+  signal?: AbortSignal;
   country?: string;
   search_lang?: string;
   freshness?: string;
@@ -279,6 +282,7 @@ async function runBraveLlmContextSearch(params: {
       apiKey: params.apiKey,
       timeoutSeconds: params.timeoutSeconds,
       diagnostics: params.diagnostics,
+      signal: params.signal,
       configureUrl: (url) => {
         setBraveSearchUrlParams(url, params);
       },
@@ -296,6 +300,7 @@ async function runBraveWebSearch(params: {
   apiKey: string;
   timeoutSeconds: number;
   diagnostics?: BraveHttpDiagnostics;
+  signal?: AbortSignal;
   country?: string;
   search_lang?: string;
   ui_lang?: string;
@@ -312,6 +317,7 @@ async function runBraveWebSearch(params: {
       apiKey: params.apiKey,
       timeoutSeconds: params.timeoutSeconds,
       diagnostics: params.diagnostics,
+      signal: params.signal,
       configureUrl: (url) => {
         setBraveSearchUrlParams(url, {
           ...params,
@@ -346,6 +352,7 @@ export async function executeBraveSearch(
   searchConfig?: SearchConfigRecord,
   options?: {
     diagnosticsEnabled?: boolean;
+    signal?: AbortSignal;
   },
 ): Promise<Record<string, unknown>> {
   const apiKey = resolveBraveApiKey(searchConfig);
@@ -485,12 +492,14 @@ export async function executeBraveSearch(
       apiKey,
       timeoutSeconds,
       diagnostics,
+      signal: options?.signal,
       country: country ?? undefined,
       search_lang: normalizedLanguage.search_lang,
       freshness,
       dateAfter,
       dateBefore,
     });
+    options?.signal?.throwIfAborted();
     const payload = {
       query,
       provider: "brave",
@@ -530,6 +539,7 @@ export async function executeBraveSearch(
     apiKey,
     timeoutSeconds,
     diagnostics,
+    signal: options?.signal,
     country: country ?? undefined,
     search_lang: normalizedLanguage.search_lang,
     ui_lang: normalizedLanguage.ui_lang,
@@ -537,6 +547,7 @@ export async function executeBraveSearch(
     dateAfter,
     dateBefore,
   });
+  options?.signal?.throwIfAborted();
   const payload = {
     query,
     provider: "brave",

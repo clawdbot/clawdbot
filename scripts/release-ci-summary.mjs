@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
+import { execGhRead, plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v3";
@@ -98,14 +98,17 @@ export function runReleaseCiGh(args, params = {}) {
   const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
   const stdio = params.stdio ?? ["ignore", "pipe", "pipe"];
-  return execFileSyncImpl(resolvePlainGhBin(), args, {
-    encoding: "utf8",
-    env: plainGhEnv(),
-    killSignal: "SIGKILL",
-    maxBuffer: 64 * 1024 * 1024,
-    stdio,
-    timeout: timeoutMs,
-  });
+  return execGhRead(
+    args,
+    {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio,
+      timeout: timeoutMs,
+    },
+    { execFileSyncImpl },
+  );
 }
 
 function gh(args) {
@@ -131,8 +134,12 @@ export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
 function downloadArtifactZip(artifactId, destination, repository = DEFAULT_REPO) {
   const output = openSync(destination, "w");
   try {
-    runReleaseCiGh(artifactDownloadArgs(artifactId, repository), {
+    execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
+      env: plainGhEnv(),
+      killSignal: "SIGKILL",
+      maxBuffer: 64 * 1024 * 1024,
       stdio: ["ignore", output, "pipe"],
+      timeout: GH_COMMAND_TIMEOUT_MS,
     });
   } finally {
     closeSync(output);
@@ -281,8 +288,34 @@ function findParentJobsAll(parentRunId, repository = DEFAULT_REPO) {
   return jobs;
 }
 
+function parentJobLogArgs(jobId, repository = DEFAULT_REPO, allowEscapeSequences = true) {
+  const args = ["api", `repos/${repository}/actions/jobs/${jobId}/logs`];
+  if (allowEscapeSequences) {
+    args.push("--allow-escape-sequences");
+  }
+  return args;
+}
+
+function isUnknownAllowEscapeSequencesFlag(error) {
+  if (typeof error !== "object" || error === null || !("stderr" in error)) {
+    return false;
+  }
+  const stderr = error.stderr;
+  return (
+    typeof stderr === "string" &&
+    stderr.replace(/\r\n?/gu, "\n").split("\n").includes("unknown flag: --allow-escape-sequences")
+  );
+}
+
 function parentJobLog(jobId, repository = DEFAULT_REPO) {
-  return gh(["api", `repos/${repository}/actions/jobs/${jobId}/logs`]);
+  try {
+    return gh(parentJobLogArgs(jobId, repository));
+  } catch (error) {
+    if (!isUnknownAllowEscapeSequencesFlag(error)) {
+      throw error;
+    }
+    return gh(parentJobLogArgs(jobId, repository, false));
+  }
 }
 
 function normalizeOptionalRunId(value, label) {
@@ -594,6 +627,13 @@ export function selectedChildKeys(parentJobs) {
   );
 }
 
+/**
+ * @template {{ manifestKey: string, name: string }} Child
+ * @param {{ childRunIds: Record<string, string> }} manifest
+ * @param {Child[]} children
+ * @param {Set<string>} selectedKeys
+ * @returns {Array<{ child: Child, runId: string }>}
+ */
 export function manifestChildEntries(manifest, children, selectedKeys) {
   return children.flatMap((child) => {
     const runId = manifest.childRunIds[child.manifestKey];
@@ -1038,6 +1078,9 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   const normalizedRepository = normalizeRepository(repository);
   return {
+    compareCommitLineage(base, head) {
+      return githubRestJson(`compare/${base}...${head}?per_page=1&page=2`, normalizedRepository);
+    },
     compareCommits(base, head) {
       return githubRestJson(`compare/${base}...${head}`, normalizedRepository);
     },
@@ -1142,7 +1185,7 @@ export function validateTrustedProducerIdentity(evidence, client, verifier, trus
     workflowRefProof = shaPinned ? "manifest-v3-sha-pinned-main-ancestry" : "manifest-v3-branch";
   }
 
-  const comparison = client.compareCommits(manifest.workflowSha, verifier.sourceSha);
+  const comparison = client.compareCommitLineage(manifest.workflowSha, verifier.sourceSha);
   if (
     !["ahead", "identical"].includes(String(comparison.status)) ||
     comparison.merge_base_commit?.sha !== manifest.workflowSha
@@ -1291,6 +1334,16 @@ function validateStrictChildRun({ child, client, parentEvidence, parentJobs, rep
   };
 }
 
+/**
+ * @param {{
+ *   manifestPath?: string,
+ *   repository?: string,
+ *   runId: string,
+ *   trustedWorkflowRef?: string,
+ *   verifierSourceContent?: string | Uint8Array,
+ *   verifierSourceSha: string,
+ * }} options
+ */
 export function validateReleaseRunEvidence(
   {
     manifestPath,
@@ -1436,7 +1489,7 @@ export function validateReleaseRunEvidence(
   });
 }
 
-export function parseReleaseCiSummaryArgs(argv) {
+function parseReleaseCiSummaryArgs(argv) {
   const options = {
     intervalMs: 30_000,
     json: false,
@@ -1505,7 +1558,7 @@ function printUsage() {
   );
 }
 
-export function releaseCiWatchFingerprint(parent) {
+function releaseCiWatchFingerprint(parent) {
   return JSON.stringify({
     attempt: parent.attempt,
     conclusion: parent.conclusion ?? "",
@@ -1520,7 +1573,7 @@ export function releaseCiWatchFingerprint(parent) {
   });
 }
 
-export function terminalParentJobFailures(parent) {
+function terminalParentJobFailures(parent) {
   return (parent.jobs ?? [])
     .filter(
       (job) =>
@@ -1545,32 +1598,21 @@ function summarizeReleaseCiRun(options) {
   );
 }
 
-export async function watchReleaseCiRun(options, overrides = {}) {
-  const fetchParent =
-    overrides.fetchParent ??
-    (() =>
-      jsonGh([
-        "run",
-        "view",
-        options.runId,
-        "--repo",
-        options.repository,
-        "--json",
-        "status,conclusion,attempt,jobs",
-      ]));
-  const summarize = overrides.summarize ?? (() => summarizeReleaseCiRun(options));
-  const sleep =
-    overrides.sleep ??
-    ((milliseconds) =>
-      new Promise((complete) => {
-        setTimeout(complete, milliseconds);
-      }));
+async function watchReleaseCiRun(options) {
   let previousFingerprint;
   while (true) {
-    const parent = fetchParent();
+    const parent = jsonGh([
+      "run",
+      "view",
+      options.runId,
+      "--repo",
+      options.repository,
+      "--json",
+      "status,conclusion,attempt,jobs",
+    ]);
     const fingerprint = releaseCiWatchFingerprint(parent);
     if (fingerprint !== previousFingerprint) {
-      summarize();
+      summarizeReleaseCiRun(options);
       previousFingerprint = fingerprint;
     }
     const failedJobs = terminalParentJobFailures(parent);
@@ -1587,7 +1629,9 @@ export async function watchReleaseCiRun(options, overrides = {}) {
       }
       return;
     }
-    await sleep(options.intervalMs);
+    await new Promise((complete) => {
+      setTimeout(complete, options.intervalMs);
+    });
   }
 }
 

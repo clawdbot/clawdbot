@@ -1,5 +1,6 @@
 // Cron rearm tests cover timer rearming while scheduled jobs are already running.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createNoopLogger,
   createCronStoreHarness,
@@ -32,17 +33,6 @@ function createDueRecurringJob(params: {
     delivery: { mode: "none" },
     state: { nextRunAtMs: params.nextRunAtMs },
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
 }
 
 function latestTimeoutHandle(timeoutSpy: ReturnType<typeof vi.spyOn>) {

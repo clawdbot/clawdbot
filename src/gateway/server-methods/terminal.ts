@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -16,14 +17,14 @@ import {
   validateTerminalInputParams,
   validateTerminalOpenParams,
   validateTerminalResizeParams,
-  validateTerminalTextParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
+import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
-import { renderTerminalBufferText } from "../terminal/buffer-text.js";
 import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
 import { createNodeRelayBackend } from "../terminal/node-relay.js";
 import {
@@ -60,19 +61,26 @@ function terminalEnabled(context: GatewayRequestHandlerOptions["context"]): bool
 
 export { TERMINAL_OPEN_DEADLINE_MS } from "../terminal/open-deadline.js";
 
-function respondTerminalOpenTimeout(respond: GatewayRequestHandlerOptions["respond"]): void {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal open timed out"));
+function terminalFailureMessage(message: string, hint?: string): string {
+  return hint ? `${message}; ${hint}` : message;
+}
+
+function respondTerminalOpenTimeout(
+  respond: GatewayRequestHandlerOptions["respond"],
+  hint?: string,
+): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, terminalFailureMessage("terminal open timed out", hint)),
+  );
 }
 
 function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknown {
   if (!payloadJSON) {
     return payload;
   }
-  try {
-    return JSON.parse(payloadJSON) as unknown;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(payloadJSON);
 }
 
 async function stageNodeTerminalUpload(
@@ -107,16 +115,32 @@ async function stageNodeTerminalUpload(
 function respondLaunchBlocked(
   respond: GatewayRequestHandlerOptions["respond"],
   block: Extract<TerminalLaunchResolution, { ok: false }>["block"],
+  hint?: string,
 ): void {
   if (block.kind === "disabled") {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is disabled"));
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, terminalFailureMessage("terminal is disabled", hint)),
+    );
     return;
   }
   if (block.kind === "unknown-agent") {
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent "${block.agentId}"`),
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        terminalFailureMessage(`unknown agent "${block.agentId}"`, hint),
+      ),
+    );
+    return;
+  }
+  if (block.kind === "owner-required") {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, terminalFailureMessage(block.message, hint)),
     );
     return;
   }
@@ -126,46 +150,328 @@ function respondLaunchBlocked(
     undefined,
     errorShape(
       ErrorCodes.INVALID_REQUEST,
-      `terminal unavailable: agent "${block.agentId}" runs in a sandbox (mode "${block.mode}"); in-sandbox terminals are not supported yet`,
+      terminalFailureMessage(
+        `terminal unavailable: agent "${block.agentId}" runs in a sandbox (mode "${block.mode}"); in-sandbox terminals are not supported yet`,
+        hint,
+      ),
     ),
   );
+}
+
+// A start RPC has no emulator dimensions yet. Match the Control UI's existing
+// fallback grid; terminal.resize replaces it once the new tab is mounted.
+export const CATALOG_TERMINAL_INITIAL_SIZE = { cols: 80, rows: 24 } as const;
+
+type TerminalSessionOpenRequest = {
+  agentId?: string;
+  cols: number;
+  rows: number;
+  requiredCwd?: string;
+  resolveCatalogPlan?: (agentId: string) => Promise<SessionCatalogTerminalPlan>;
+  catalogFailureMessage?: string;
+  failureHint?: string;
+};
+
+/** Canonical terminal admission and launch path shared by shell, resume, and start RPCs. */
+export async function openTerminalSession(
+  opts: GatewayRequestHandlerOptions,
+  request: TerminalSessionOpenRequest,
+): Promise<void> {
+  const { respond, context } = opts;
+  const connId = requireConnId(opts);
+  if (!connId) {
+    return;
+  }
+  const manager = context.terminalSessions;
+  if (!manager) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        terminalFailureMessage("terminal is not available", request.failureHint),
+      ),
+    );
+    return;
+  }
+  const launch = context.resolveTerminalLaunchPolicy(request.agentId);
+  if (!launch.ok) {
+    respondLaunchBlocked(respond, launch.block, request.failureHint);
+    return;
+  }
+  const deadline = createTerminalOpenDeadline();
+
+  let catalogPlan: SessionCatalogTerminalPlan | undefined;
+  let title: string | undefined;
+  let createBackend: (() => ReturnType<typeof createNodeRelayBackend>) | undefined;
+  let nodeRelay:
+    | {
+        plan: Extract<SessionCatalogTerminalPlan, { kind: "node" }>;
+        params: Record<string, unknown>;
+      }
+    | undefined;
+  let stageUpload: ((file: TerminalUploadFile) => Promise<TerminalUploadResult>) | undefined;
+  if (request.resolveCatalogPlan) {
+    const resolveCatalogPlan = request.resolveCatalogPlan;
+    try {
+      catalogPlan = await waitForTerminalOpenDeadline(
+        () => resolveCatalogPlan(launch.plan.agentId),
+        deadline,
+      );
+    } catch (error) {
+      if (error instanceof TerminalOpenDeadlineError) {
+        respondTerminalOpenTimeout(respond, request.failureHint);
+        return;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          error instanceof Error
+            ? terminalFailureMessage(error.message, request.failureHint)
+            : terminalFailureMessage(
+                request.catalogFailureMessage ?? "catalog terminal open failed",
+                request.failureHint,
+              ),
+        ),
+      );
+      return;
+    }
+    title = catalogPlan.title;
+    if (catalogPlan.kind === "local") {
+      if (catalogPlan.argv.length === 0) {
+        invalid(
+          respond,
+          terminalFailureMessage("catalog terminal plan has no command", request.failureHint),
+        );
+        return;
+      }
+    } else {
+      const nodeCatalogPlan = catalogPlan;
+      const access = authorizeCatalogTerminalNode(context, nodeCatalogPlan);
+      if (!access.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            terminalFailureMessage(access.message, request.failureHint),
+          ),
+        );
+        return;
+      }
+      let nodeParams: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(catalogPlan.paramsJSON) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("invalid params");
+        }
+        nodeParams = {
+          ...(parsed as Record<string, unknown>),
+          cols: request.cols,
+          rows: request.rows,
+        };
+      } catch {
+        invalid(
+          respond,
+          terminalFailureMessage("catalog terminal plan has invalid params", request.failureHint),
+        );
+        return;
+      }
+      let policyResult: Awaited<ReturnType<typeof applyPluginNodeInvokePolicy>>;
+      try {
+        policyResult = await waitForTerminalOpenDeadline(
+          () =>
+            applyPluginNodeInvokePolicy({
+              context,
+              client: opts.client,
+              nodeSession: access.node,
+              command: nodeCatalogPlan.command,
+              params: nodeParams,
+            }),
+          deadline,
+        );
+      } catch (error) {
+        if (error instanceof TerminalOpenDeadlineError) {
+          respondTerminalOpenTimeout(respond, request.failureHint);
+          return;
+        }
+        throw error;
+      }
+      if (policyResult && !policyResult.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            terminalFailureMessage(policyResult.message, request.failureHint),
+          ),
+        );
+        return;
+      }
+      nodeRelay = { plan: nodeCatalogPlan, params: nodeParams };
+      stageUpload = async (file) =>
+        await stageNodeTerminalUpload(context, nodeCatalogPlan.nodeId, file);
+    }
+  }
+
+  if (context.isConnectionActive?.(connId) === false) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        terminalFailureMessage("terminal connection closed", request.failureHint),
+      ),
+    );
+    return;
+  }
+  if (!terminalEnabled(context)) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        terminalFailureMessage("terminal is disabled", request.failureHint),
+      ),
+    );
+    return;
+  }
+  const refreshedLaunch = context.resolveTerminalLaunchPolicy(request.agentId);
+  if (!refreshedLaunch.ok) {
+    respondLaunchBlocked(respond, refreshedLaunch.block, request.failureHint);
+    return;
+  }
+  if (nodeRelay) {
+    const relay = nodeRelay;
+    const access = authorizeCatalogTerminalNode(context, relay.plan);
+    if (!access.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          terminalFailureMessage(access.message, request.failureHint),
+        ),
+      );
+      return;
+    }
+    createBackend = async () =>
+      await createNodeRelayBackend({
+        registry: context.nodeRegistry,
+        nodeId: relay.plan.nodeId,
+        expectedConnId: access.node.connId,
+        expectedPairingGeneration: access.node.pairingGeneration,
+        command: relay.plan.command,
+        params: relay.params,
+      });
+  }
+  const spawnPlan = resolveTerminalOpenSpawnPlan(refreshedLaunch.plan, catalogPlan);
+  if (request.requiredCwd !== undefined && spawnPlan.cwd !== request.requiredCwd) {
+    invalid(
+      respond,
+      terminalFailureMessage(
+        "cwd is no longer available; recreate or choose the worktree and retry",
+        request.failureHint,
+      ),
+    );
+    return;
+  }
+  const terminalEnv =
+    catalogPlan?.kind === "local"
+      ? mergeProcessEnv([
+          buildTerminalEnv(process.env),
+          catalogPlan.env,
+          // Preserve the PATH that found a login-shell CLI so env-based shebangs
+          // can resolve their interpreter inside the spawned terminal process.
+          catalogPlan.pathEnv ? { PATH: catalogPlan.pathEnv } : undefined,
+        ])
+      : buildTerminalEnv(process.env);
+  let openingTerminal: ReturnType<typeof manager.open> | undefined;
+  let outcome: Awaited<ReturnType<typeof manager.open>>;
+  try {
+    outcome = await waitForTerminalOpenDeadline(() => {
+      openingTerminal = manager.open({
+        owner: { kind: "conn", connId },
+        agentId: spawnPlan.agentId,
+        cwd: spawnPlan.cwd,
+        shell: spawnPlan.shell,
+        args: spawnPlan.args,
+        cols: request.cols,
+        rows: request.rows,
+        env: terminalEnv,
+        signal: deadline.controller.signal,
+        ...(createBackend ? { createBackend } : {}),
+        ...(stageUpload ? { stageUpload } : {}),
+      });
+      return openingTerminal;
+    }, deadline);
+  } catch (error) {
+    if (error instanceof TerminalOpenDeadlineError) {
+      // The backend can register immediately before deadline arbitration.
+      // Close a late success by id so timeout never leaves an unreachable PTY.
+      if (openingTerminal) {
+        void openingTerminal.then(
+          (lateOutcome) => {
+            if (lateOutcome.ok) {
+              manager.close(connId, lateOutcome.sessionId);
+            }
+          },
+          () => undefined,
+        );
+      }
+      respondTerminalOpenTimeout(respond, request.failureHint);
+      return;
+    }
+    throw error;
+  }
+  if (!outcome.ok) {
+    const code = outcome.code === "limit" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE;
+    respond(
+      false,
+      undefined,
+      errorShape(code, terminalFailureMessage(outcome.message, request.failureHint)),
+    );
+    return;
+  }
+  if (context.isConnectionActive?.(connId) === false) {
+    // A browser deadline can close the socket while PTY creation is still
+    // finishing. Release the raced session instead of leaving an orphan.
+    manager.close(connId, outcome.sessionId);
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        terminalFailureMessage("terminal connection closed", request.failureHint),
+      ),
+    );
+    return;
+  }
+  context.logGateway.info(
+    `terminal opened session=${outcome.sessionId} agent=${outcome.agentId} conn=${connId} shell=${outcome.shell}`,
+  );
+  respond(true, {
+    sessionId: outcome.sessionId,
+    agentId: outcome.agentId,
+    shell: outcome.shell,
+    cwd: outcome.cwd,
+    confined: false,
+    ...(title ? { title } : {}),
+  });
 }
 
 /** Handlers for the operator terminal method family. */
 export const terminalHandlers: GatewayRequestHandlers = {
   ...terminalUploadHandlers,
   "terminal.open": async (opts) => {
-    const { params, respond, context } = opts;
+    const { params, respond } = opts;
     if (!assertValidParams(params, validateTerminalOpenParams, "terminal.open", respond)) {
       return;
     }
-    const connId = requireConnId(opts);
-    if (!connId) {
-      return;
-    }
-    const manager = context.terminalSessions;
-    if (!manager) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
-      return;
-    }
     const p = params as TerminalOpenParams;
-    const launch = context.resolveTerminalLaunchPolicy(p.agentId);
-    if (!launch.ok) {
-      respondLaunchBlocked(respond, launch.block);
-      return;
-    }
-    const deadline = createTerminalOpenDeadline();
-
-    let catalogPlan: SessionCatalogTerminalPlan | undefined;
-    let title: string | undefined;
-    let createBackend: (() => ReturnType<typeof createNodeRelayBackend>) | undefined;
-    let nodeRelay:
-      | {
-          plan: Extract<SessionCatalogTerminalPlan, { kind: "node" }>;
-          params: Record<string, unknown>;
-        }
-      | undefined;
-    let stageUpload: ((file: TerminalUploadFile) => Promise<TerminalUploadResult>) | undefined;
+    let resolveCatalogPlan: ((agentId: string) => Promise<SessionCatalogTerminalPlan>) | undefined;
     if (p.catalog) {
       const provider = resolveSessionCatalogProvider(p.catalog.catalogId);
       if (!provider) {
@@ -186,181 +492,20 @@ export const terminalHandlers: GatewayRequestHandlers = {
       }
       const openTerminal = provider.openTerminal;
       const catalog = p.catalog;
-      try {
-        catalogPlan = await waitForTerminalOpenDeadline(
-          () =>
-            openTerminal.call(provider, {
-              hostId: catalog.hostId,
-              threadId: catalog.threadId,
-            }),
-          deadline,
-        );
-      } catch (error) {
-        if (error instanceof TerminalOpenDeadlineError) {
-          respondTerminalOpenTimeout(respond);
-          return;
-        }
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            error instanceof Error ? error.message : "catalog terminal open failed",
-          ),
-        );
-        return;
-      }
-      title = catalogPlan.title;
-      if (catalogPlan.kind === "local") {
-        if (catalogPlan.argv.length === 0) {
-          invalid(respond, "catalog terminal plan has no command");
-          return;
-        }
-      } else {
-        const nodeCatalogPlan = catalogPlan;
-        const access = authorizeCatalogTerminalNode(context, nodeCatalogPlan);
-        if (!access.ok) {
-          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, access.message));
-          return;
-        }
-        let nodeParams: Record<string, unknown>;
-        try {
-          const parsed = JSON.parse(catalogPlan.paramsJSON) as unknown;
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throw new Error("invalid params");
-          }
-          nodeParams = { ...(parsed as Record<string, unknown>), cols: p.cols, rows: p.rows };
-        } catch {
-          invalid(respond, "catalog terminal plan has invalid params");
-          return;
-        }
-        let policyResult: Awaited<ReturnType<typeof applyPluginNodeInvokePolicy>>;
-        try {
-          policyResult = await waitForTerminalOpenDeadline(
-            () =>
-              applyPluginNodeInvokePolicy({
-                context,
-                client: opts.client,
-                nodeSession: access.node,
-                command: nodeCatalogPlan.command,
-                params: nodeParams,
-              }),
-            deadline,
-          );
-        } catch (error) {
-          if (error instanceof TerminalOpenDeadlineError) {
-            respondTerminalOpenTimeout(respond);
-            return;
-          }
-          throw error;
-        }
-        if (policyResult && !policyResult.ok) {
-          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, policyResult.message));
-          return;
-        }
-        nodeRelay = { plan: nodeCatalogPlan, params: nodeParams };
-        stageUpload = async (file) =>
-          await stageNodeTerminalUpload(context, nodeCatalogPlan.nodeId, file);
-      }
-    }
-
-    if (context.isConnectionActive?.(connId) === false) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal connection closed"));
-      return;
-    }
-    if (!terminalEnabled(context)) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is disabled"));
-      return;
-    }
-    const refreshedLaunch = context.resolveTerminalLaunchPolicy(p.agentId);
-    if (!refreshedLaunch.ok) {
-      respondLaunchBlocked(respond, refreshedLaunch.block);
-      return;
-    }
-    if (nodeRelay) {
-      const relay = nodeRelay;
-      const access = authorizeCatalogTerminalNode(context, relay.plan);
-      if (!access.ok) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, access.message));
-        return;
-      }
-      createBackend = async () =>
-        await createNodeRelayBackend({
-          registry: context.nodeRegistry,
-          nodeId: relay.plan.nodeId,
-          expectedConnId: access.node.connId,
-          expectedPairingGeneration: access.node.pairingGeneration,
-          command: relay.plan.command,
-          params: relay.params,
+      resolveCatalogPlan = async (agentId) =>
+        await openTerminal.call(provider, {
+          allowProcessHomeFallback: allowsProcessHomeSessionScan(),
+          agentId,
+          hostId: catalog.hostId,
+          threadId: catalog.threadId,
         });
     }
-    const spawnPlan = resolveTerminalOpenSpawnPlan(refreshedLaunch.plan, catalogPlan);
-    const terminalEnv = buildTerminalEnv(process.env);
-    if (catalogPlan?.kind === "local" && catalogPlan.pathEnv) {
-      // Preserve the PATH that found a login-shell CLI so env-based shebangs
-      // can resolve their interpreter inside the spawned terminal process.
-      terminalEnv.PATH = catalogPlan.pathEnv;
-    }
-    let openingTerminal: ReturnType<typeof manager.open> | undefined;
-    let outcome: Awaited<ReturnType<typeof manager.open>>;
-    try {
-      outcome = await waitForTerminalOpenDeadline(() => {
-        openingTerminal = manager.open({
-          owner: { kind: "conn", connId },
-          agentId: spawnPlan.agentId,
-          cwd: spawnPlan.cwd,
-          shell: spawnPlan.shell,
-          args: spawnPlan.args,
-          cols: p.cols,
-          rows: p.rows,
-          env: terminalEnv,
-          signal: deadline.controller.signal,
-          ...(createBackend ? { createBackend } : {}),
-          ...(stageUpload ? { stageUpload } : {}),
-        });
-        return openingTerminal;
-      }, deadline);
-    } catch (error) {
-      if (error instanceof TerminalOpenDeadlineError) {
-        // The backend can register immediately before deadline arbitration.
-        // Close a late success by id so timeout never leaves an unreachable PTY.
-        if (openingTerminal) {
-          void openingTerminal.then(
-            (lateOutcome) => {
-              if (lateOutcome.ok) {
-                manager.close(connId, lateOutcome.sessionId);
-              }
-            },
-            () => undefined,
-          );
-        }
-        respondTerminalOpenTimeout(respond);
-        return;
-      }
-      throw error;
-    }
-    if (!outcome.ok) {
-      const code = outcome.code === "limit" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE;
-      respond(false, undefined, errorShape(code, outcome.message));
-      return;
-    }
-    if (context.isConnectionActive?.(connId) === false) {
-      // A browser deadline can close the socket while PTY creation is still
-      // finishing. Release the raced session instead of leaving an orphan.
-      manager.close(connId, outcome.sessionId);
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal connection closed"));
-      return;
-    }
-    context.logGateway.info(
-      `terminal opened session=${outcome.sessionId} agent=${outcome.agentId} conn=${connId} shell=${outcome.shell}`,
-    );
-    respond(true, {
-      sessionId: outcome.sessionId,
-      agentId: outcome.agentId,
-      shell: outcome.shell,
-      cwd: outcome.cwd,
-      confined: false,
-      ...(title ? { title } : {}),
+    await openTerminalSession(opts, {
+      ...(p.agentId ? { agentId: p.agentId } : {}),
+      cols: p.cols,
+      rows: p.rows,
+      ...(resolveCatalogPlan ? { resolveCatalogPlan } : {}),
+      catalogFailureMessage: "catalog terminal open failed",
     });
   },
 
@@ -485,31 +630,5 @@ export const terminalHandlers: GatewayRequestHandlers = {
           }))
         : [];
     respond(true, { sessions });
-  },
-
-  "terminal.text": async (opts) => {
-    const { params, respond, context } = opts;
-    if (!assertValidParams(params, validateTerminalTextParams, "terminal.text", respond)) {
-      return;
-    }
-    const connId = requireConnId(opts);
-    if (!connId) {
-      return;
-    }
-    const p = params as { sessionId: string };
-    if (!context.terminalSessions || !terminalEnabled(context)) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
-      return;
-    }
-    const raw = context.terminalSessions.snapshot(p.sessionId);
-    if (raw === undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${p.sessionId}"`),
-      );
-      return;
-    }
-    respond(true, { text: renderTerminalBufferText(raw) });
   },
 };

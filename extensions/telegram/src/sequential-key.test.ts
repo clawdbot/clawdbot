@@ -3,10 +3,11 @@ import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import { buildTelegramQuestionCallbackData } from "./question-callback-data.js";
-import { getTelegramSequentialKey } from "./sequential-key.js";
+import { getTelegramSequentialConstraints, getTelegramSequentialKey } from "./sequential-key.js";
 
-const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
-  chat as Chat;
+const mockChat = (
+  chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum" | "is_direct_messages">>,
+): Chat => chat as Chat;
 const mockMessage = (message: Pick<Message, "chat"> & Partial<Message>): Message =>
   ({
     message_id: 1,
@@ -58,6 +59,19 @@ describe("getTelegramSequentialKey", () => {
     [
       {
         message: mockMessage({
+          chat: mockChat({ id: -100123, type: "supergroup", is_direct_messages: true }),
+          direct_messages_topic: {
+            topic_id: 77,
+            user: { id: 700, is_bot: false, first_name: "Ada" },
+          },
+          message_thread_id: 999,
+        }),
+      },
+      "telegram:-100123:topic:77",
+    ],
+    [
+      {
+        message: mockMessage({
           chat: mockChat({ id: 123, type: "supergroup" }),
           message_thread_id: 9,
           is_topic_message: true,
@@ -83,6 +97,7 @@ describe("getTelegramSequentialKey", () => {
       "telegram:123:topic:1",
     ],
     [{ update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) } }, "telegram:555"],
+    [{ update: { poll_answer: { poll_id: "poll-123" } } }, "telegram:poll:poll-123"],
     [
       {
         channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
@@ -381,6 +396,83 @@ describe("getTelegramSequentialKey", () => {
       "telegram:123",
     ],
   ])("resolves key %#", (input, expected) => {
-    expect(getTelegramSequentialKey(input)).toBe(expected);
+    expect(getTelegramSequentialKey(input)).toEqual(expected);
+  });
+
+  it("keeps malformed message updates on the unknown lane", () => {
+    expect(getTelegramSequentialKey({ message: {} as Message })).toBe("telegram:unknown");
+  });
+});
+
+describe("getTelegramSequentialConstraints", () => {
+  it("bridges a forum message update with its reaction update", () => {
+    const message = mockMessage({
+      chat: mockChat({ id: -1001, type: "supergroup", is_forum: true }),
+      message_id: 77,
+      message_thread_id: 9,
+      is_topic_message: true,
+    });
+    const expected = "telegram:-1001:message:77";
+    const reaction = {
+      update: {
+        message_reaction: {
+          chat: { id: -1001, type: "supergroup", is_forum: true },
+          message_id: 77,
+        },
+      },
+    };
+
+    expect(getTelegramSequentialConstraints({ message })).toEqual([
+      "telegram:-1001:topic:9",
+      expected,
+    ]);
+    expect(getTelegramSequentialConstraints(reaction)).toBe(expected);
+  });
+
+  it("bridges a channel Direct Messages message with its reaction without coupling topics", () => {
+    const message = mockMessage({
+      chat: mockChat({
+        id: -1002,
+        type: "supergroup",
+        is_direct_messages: true,
+      } as Chat),
+      message_id: 77,
+      message_thread_id: 999,
+      direct_messages_topic: { topic_id: 9, user: { id: 1 } as never },
+      is_topic_message: true,
+    });
+    const expected = "telegram:-1002:message:77";
+    const reaction = {
+      update: {
+        message_reaction: {
+          chat: { id: -1002, type: "supergroup", is_direct_messages: true },
+          message_id: 77,
+        },
+      },
+    };
+
+    expect(getTelegramSequentialConstraints({ message })).toEqual([
+      "telegram:-1002:topic:9",
+      expected,
+    ]);
+    expect(getTelegramSequentialConstraints(reaction)).toBe(expected);
+    expect(
+      getTelegramSequentialConstraints({
+        update: {
+          message_reaction: {
+            chat: { id: -1002, type: "supergroup", is_direct_messages: true },
+            message_id: 78,
+          },
+        },
+      }),
+    ).toBe("telegram:-1002:message:78");
+  });
+
+  it("does not add a bridge lane outside forum chats", () => {
+    expect(
+      getTelegramSequentialConstraints({
+        message: mockMessage({ chat: mockChat({ id: 123, type: "private" }) }),
+      }),
+    ).toBe("telegram:123");
   });
 });

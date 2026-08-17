@@ -5,7 +5,7 @@ import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { generateBranchSummary, prepareBranchEntries } from "./branch-summarization.js";
 
-function createModel(contextWindow: number, maxTokens = 8000): Model {
+function createModel(contextWindow: number, maxTokens = 8000): Model & { contextWindow: number } {
   return {
     id: "branch-summary-model",
     name: "Branch Summary Model",
@@ -30,10 +30,13 @@ function createMessageEntry(message: AgentMessage, index: number): SessionTreeEn
   };
 }
 
-function createResponse(model: Model): AssistantMessage {
+function createResponse(
+  model: Model,
+  content: AssistantMessage["content"] = [{ type: "text", text: "Branch summary" }],
+): AssistantMessage {
   return {
     role: "assistant",
-    content: [{ type: "text", text: "Branch summary" }],
+    content,
     api: model.api,
     provider: model.provider,
     model: model.id,
@@ -48,6 +51,13 @@ function createResponse(model: Model): AssistantMessage {
     stopReason: "stop",
     timestamp: 1,
   };
+}
+
+function createResponseStream(model: Model, content?: AssistantMessage["content"]) {
+  const stream = createAssistantMessageEventStream();
+  stream.push({ type: "done", reason: "stop", message: createResponse(model, content) });
+  stream.end();
+  return stream;
 }
 
 function createCapturingStream(model: Model) {
@@ -65,10 +75,7 @@ function createCapturingStream(model: Model) {
         : userMessage.content.map((block) => (block.type === "text" ? block.text : "")).join("");
     systemPrompt = context.systemPrompt ?? "";
     maxOutputTokens = options?.maxTokens;
-    const stream = createAssistantMessageEventStream();
-    stream.push({ type: "done", reason: "stop", message: createResponse(model) });
-    stream.end();
-    return stream;
+    return createResponseStream(model);
   });
   return {
     streamFn,
@@ -86,6 +93,89 @@ function createLongBranchEntries(count: number): SessionTreeEntry[] {
 }
 
 describe("branch summarization", () => {
+  it.each([
+    ["empty", []],
+    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
+    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal reasoning" }]],
+  ])("rejects %s model output before creating a summary", async (_name, content) => {
+    const model = createModel(128_000);
+    const streamFn = vi.fn<StreamFn>(() => createResponseStream(model, content));
+    const entries = [
+      createMessageEntry({ role: "user", content: "summarize this branch", timestamp: 1 }, 0),
+    ];
+
+    const result = await generateBranchSummary(entries, {
+      model,
+      apiKey: "test-key",
+      signal: new AbortController().signal,
+      streamFn,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected invalid branch summary output to fail");
+    }
+    expect(result.error).toMatchObject({
+      name: "BranchSummaryError",
+      code: "summarization_failed",
+      message: "Branch summary failed: model returned no summary text",
+    });
+  });
+
+  it("preserves valid summary whitespace, preamble, and file metadata", async () => {
+    const model = createModel(128_000);
+    const summaryText = "  Branch summary body  \ncontinues ";
+    const streamFn = vi.fn<StreamFn>(() =>
+      createResponseStream(model, [
+        { type: "text", text: "  Branch summary body  " },
+        { type: "text", text: "continues " },
+      ]),
+    );
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "inspect files", timestamp: 1 }, 0),
+      createMessageEntry(
+        createResponse(model, [
+          { type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/read.ts" } },
+          {
+            type: "toolCall",
+            id: "write-1",
+            name: "write",
+            arguments: { path: "src/write.ts" },
+          },
+        ]),
+        1,
+      ),
+    ];
+
+    const result = await generateBranchSummary(entries, {
+      model,
+      apiKey: "test-key",
+      signal: new AbortController().signal,
+      streamFn,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(result.value).toEqual({
+      summary: `The user explored a different conversation branch before returning here.
+Summary of that exploration:
+
+${summaryText}
+
+<read-files>
+src/read.ts
+</read-files>
+
+<modified-files>
+src/write.ts
+</modified-files>`,
+      readFiles: ["src/read.ts"],
+      modifiedFiles: ["src/write.ts"],
+    });
+  });
+
   it("retains failed tool results when preparing a branch", () => {
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "run deployment", timestamp: 1 }, 0),
@@ -106,6 +196,56 @@ describe("branch summarization", () => {
     const preparation = prepareBranchEntries(entries);
 
     expect(preparation.messages.map((message) => message.role)).toEqual(["user", "toolResult"]);
+  });
+
+  it("preserves earlier branch context while excluding private shell output", async () => {
+    const model = createModel(8192);
+    const capture = createCapturingStream(model);
+    const shellMessage: AgentMessage = {
+      role: "bashExecution",
+      command: "private command",
+      output: `private output marker ${"x".repeat(80_000)}`,
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: 2,
+      excludeFromContext: true,
+    };
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "important original request", timestamp: 1 }, 0),
+      createMessageEntry(shellMessage, 1),
+      createMessageEntry({ role: "user", content: "continue branch", timestamp: 3 }, 2),
+    ];
+
+    const preparation = prepareBranchEntries(entries, 100);
+    expect(preparation.messages).toMatchObject([
+      { role: "user", content: "important original request" },
+      { role: "user", content: "continue branch" },
+    ]);
+    expect(preparation.totalTokens).toBeLessThan(100);
+
+    const visibleEntries = entries.map((entry, index) =>
+      index === 1
+        ? createMessageEntry({ ...shellMessage, excludeFromContext: false }, index)
+        : entry,
+    );
+    expect(prepareBranchEntries(visibleEntries, 100).messages).toMatchObject([
+      { role: "user", content: "continue branch" },
+    ]);
+
+    const result = await generateBranchSummary(entries, {
+      model,
+      apiKey: "test-key",
+      signal: new AbortController().signal,
+      streamFn: capture.streamFn,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(capture.readCapture().prompt).toContain("important original request");
+    expect(capture.readCapture().prompt).toContain("continue branch");
+    expect(capture.readCapture().prompt).not.toContain("private command");
+    expect(capture.readCapture().prompt).not.toContain("private output marker");
+    expect(JSON.stringify(entries)).toContain("private output marker");
   });
 
   it("summarizes tool failures without exposing private result details", async () => {

@@ -11,10 +11,10 @@ import {
 import pMap, { pMapSkip } from "p-map";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
-export type { SlackMediaResult } from "./media-types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import { type FetchLike, fetchWithRuntimeDispatcher, saveRemoteMedia } from "./media.runtime.js";
 import { logVerbose } from "./thread.runtime.js";
+export type { SlackMediaResult } from "./media-types.js";
 export {
   resetSlackThreadStarterCacheForTest,
   resolveSlackThreadHistory,
@@ -411,7 +411,12 @@ export async function resolveSlackAttachmentContent(params: {
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}): Promise<{ text: string; media: SlackMediaResult[] } | null> {
+}): Promise<{
+  text: string;
+  media: SlackMediaResult[];
+  files?: SlackFile[];
+  unavailableImageCount: number;
+} | null> {
   const attachments = params.attachments;
   if (!attachments || attachments.length === 0) {
     return null;
@@ -426,6 +431,8 @@ export async function resolveSlackAttachmentContent(params: {
 
   const textBlocks: string[] = [];
   const allMedia: SlackMediaResult[] = [];
+  const allFiles = forwardedAttachments.flatMap((attachment) => attachment.files ?? []);
+  let unavailableImageCount = 0;
   const govSlack = isGovSlackClient(params.client);
 
   for (const att of forwardedAttachments) {
@@ -464,7 +471,7 @@ export async function resolveSlackAttachmentContent(params: {
           placeholder: `[Forwarded image: ${label}]`,
         });
       } catch {
-        // Skip images that fail to download
+        unavailableImageCount += 1;
       }
     }
 
@@ -485,8 +492,18 @@ export async function resolveSlackAttachmentContent(params: {
   }
 
   const combinedText = textBlocks.join("\n\n");
-  if (!combinedText && allMedia.length === 0) {
+  if (
+    !combinedText &&
+    allMedia.length === 0 &&
+    allFiles.length === 0 &&
+    unavailableImageCount === 0
+  ) {
     return null;
   }
-  return { text: combinedText, media: allMedia };
+  return {
+    text: combinedText,
+    media: allMedia,
+    unavailableImageCount,
+    ...(allFiles.length > 0 ? { files: allFiles } : {}),
+  };
 }

@@ -36,7 +36,7 @@ import type {
   NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
-import { readOptionalString, truncateText } from "./native-hook-relay-utils.js";
+import { readOptionalNonEmptyString, truncateRelayText } from "./native-hook-relay-utils.js";
 
 export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
@@ -50,6 +50,8 @@ const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
 const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
 const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
+const MCP_APPROVAL_UNAVAILABLE_REASON =
+  'MCP tool approval timed out (no operator connected). Approve in the Control UI, or set mcp.servers.<id>.codex.defaultToolsApprovalMode:"approve" for trusted servers.';
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 const {
@@ -215,6 +217,12 @@ export async function runNativeHookRelayPermissionRequest(params: {
     if (decision === "deny") {
       return params.adapter.renderPermissionDecisionResponse("deny", "Denied by user");
     }
+    if (decision === "timed-out" && request.toolName.startsWith("mcp__")) {
+      return params.adapter.renderPermissionDecisionResponse(
+        "deny",
+        MCP_APPROVAL_UNAVAILABLE_REASON,
+      );
+    }
   } catch (error) {
     log.warn(
       `native hook permission approval failed; deferring to provider approval path: ${String(error)}`,
@@ -280,9 +288,9 @@ function nativeHookRelayPermissionAllowAlwaysKey(params: {
 }
 
 function permissionRequestFallbackKey(request: NativeHookRelayPermissionApprovalRequest): string {
-  const command = readOptionalString(request.toolInput.command);
+  const command = readOptionalNonEmptyString(request.toolInput.command);
   if (command) {
-    return `${request.toolName}:command:${truncateText(command, 240)}`;
+    return `${request.toolName}:command:${truncateRelayText(command, 240)}`;
   }
   return `${request.toolName}:keys:${permissionRequestToolInputKeyFingerprint(request.toolInput)}`;
 }
@@ -482,11 +490,11 @@ async function requestNativeHookRelayPermissionApproval(
     { timeoutMs: timeoutMs + 10_000 },
     {
       pluginId: `openclaw-native-hook-relay-${request.provider}`,
-      title: truncateText(
+      title: truncateRelayText(
         `${nativeHookRelayProviderDisplayName(request.provider)} permission request`,
         MAX_APPROVAL_TITLE_LENGTH,
       ),
-      description: truncateText(
+      description: truncateRelayText(
         formatPermissionApprovalDescription(request),
         MAX_APPROVAL_DESCRIPTION_LENGTH,
       ),
@@ -520,7 +528,10 @@ async function requestNativeHookRelayPermissionApproval(
     });
     // Bind the verdict to the request that parked this call. A stale or
     // misrouted reply must never release a different tool gate.
-    decision = waitResult?.id === approvalId ? waitResult.decision : undefined;
+    if (!waitResult || waitResult.id !== approvalId) {
+      return "defer";
+    }
+    decision = waitResult.decision;
   }
   if (decision === PluginApprovalResolutions.ALLOW_ONCE) {
     return "allow";
@@ -531,7 +542,7 @@ async function requestNativeHookRelayPermissionApproval(
   if (decision === PluginApprovalResolutions.DENY) {
     return "deny";
   }
-  return "defer";
+  return decision == null ? "timed-out" : "defer";
 }
 
 async function waitForNativeHookRelayApprovalDecision(params: {
@@ -590,9 +601,9 @@ function formatPermissionApprovalDescription(
 }
 
 function formatToolInputPreview(toolInput: Record<string, unknown>): string | undefined {
-  const command = readOptionalString(toolInput.command);
+  const command = readOptionalNonEmptyString(toolInput.command);
   if (command) {
-    return `Command: ${truncateText(sanitizeApprovalText(command), 240)}`;
+    return `Command: ${truncateRelayText(sanitizeApprovalText(command), 240)}`;
   }
   const keys = Object.keys(toolInput).map(sanitizeApprovalText).filter(Boolean).toSorted();
   if (!keys.length) {

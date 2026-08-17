@@ -14,11 +14,11 @@ import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   connectReq,
   getTrackedConnectChallengeNonce,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
-  startGatewayServer,
+  startTestGatewayServer,
   startServer,
   startServerWithClient,
   trackConnectChallengeNonce,
@@ -219,7 +219,8 @@ function resolveGatewayTokenOrEnv(): string {
 }
 
 async function approvePendingPairingIfNeeded() {
-  const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+  const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+  const { listDevicePairing } = await import("../infra/device-pairing.js");
   const list = await listDevicePairing();
   const pending = list.pending.at(0);
   if (!pending?.requestId) {
@@ -380,7 +381,7 @@ export {
   createSignedDevice,
   ensurePairedDeviceTokenForCurrentIdentity,
   expectHelloOkServerVersion,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,
@@ -393,7 +394,7 @@ export {
   restoreGatewayToken,
   rpcReq,
   sendRawConnectReq,
-  startGatewayServer,
+  startTestGatewayServer,
   startRateLimitedTokenServerWithPairedDeviceToken,
   startServer,
   startServerWithClient,

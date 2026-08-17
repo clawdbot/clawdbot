@@ -52,9 +52,8 @@ export function resolveOperatorSessionCreation(
     };
   }
   const profileId = client?.authenticatedUserProfile?.profileId;
-  // Actor only when proven: a profile-less wire connection may be an agent-tool
-  // client on a remote topology, so claiming a human actor would misattribute
-  // agent-caused creations. Absent actor means unknown, never inferred.
+  // Profile linking can canonicalize this id after connection attach, so session
+  // ownership follows the live trusted profile while audit keeps its frozen facts.
   return {
     via: "operator",
     ...(profileId ? { actor: { type: "human" as const, id: profileId } } : {}),

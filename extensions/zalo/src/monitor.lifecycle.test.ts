@@ -12,6 +12,7 @@ import {
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
@@ -98,9 +99,12 @@ describe("monitorZaloProvider lifecycle", () => {
     getUpdatesMock.mockReset();
     getUpdatesMock.mockImplementation(() => new Promise(() => {}));
     setActivePluginRegistry(createEmptyPluginRegistry());
+    // Agent close releases leases through shared state; closing shared state first
+    // can reopen it during teardown and leave Windows handles under the state dir.
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     if (testStateDir) {
-      await fs.rm(testStateDir, { recursive: true, force: true });
+      await fs.rm(testStateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
       testStateDir = undefined;
     }
     if (previousStateDir === undefined) {
@@ -142,6 +146,7 @@ describe("monitorZaloProvider lifecycle", () => {
 
     await vi.waitFor(() =>
       expect(statusSink).toHaveBeenCalledWith({
+        running: true,
         connected: true,
         lifecycle: "ready",
         terminalDisconnect: undefined,
@@ -277,6 +282,7 @@ describe("monitorZaloProvider lifecycle", () => {
     await setWebhookCalled;
     await settleLifecycleWork();
     expect(statusSink).toHaveBeenCalledWith({
+      running: true,
       connected: true,
       lifecycle: "ready",
       terminalDisconnect: undefined,
@@ -357,7 +363,7 @@ describe("monitorZaloProvider lifecycle", () => {
       webhookUrl: "https://example.com/hooks/zalo",
     });
 
-    await expect(run).rejects.toThrow("route replacement denied");
+    await expect(run).rejects.toThrow("route reuse denied");
 
     expect(getWebhookInfoMock).not.toHaveBeenCalled();
     expect(getUpdatesMock).not.toHaveBeenCalled();
@@ -365,7 +371,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(statusSink).toHaveBeenCalledWith({
       connected: false,
       lifecycle: "recovering",
-      lastError: expect.stringContaining("route replacement denied"),
+      lastError: expect.stringContaining("route reuse denied"),
     });
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
     expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");

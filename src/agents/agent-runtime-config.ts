@@ -36,24 +36,32 @@ export async function resolveAgentRuntimeConfig(
     includeChannelTargets,
     channel: channelSecretScope?.channel,
   });
-  let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
-  const sourceConfig = await measureAgentStartup(
-    "config-source",
-    async () => {
-      try {
-        const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-        if (snapshot.valid) {
-          pluginMetadataSnapshot = writeOptions.basePluginMetadataSnapshot;
-          return snapshot.resolved;
-        }
-      } catch {
-        // Fall back to runtime-loaded config when source snapshot is unavailable.
-      }
-      pluginMetadataSnapshot = resolvePluginMetadataSnapshot({ config: loadedRaw });
-      return loadedRaw;
-    },
+  const secretsRuntime = await measureAgentStartup(
+    "secrets-runtime-import",
+    () => import("../secrets/runtime.js"),
     { config: loadedRaw },
   );
+  const activeSecretsRuntimeSnapshot = secretsRuntime.getActiveSecretsRuntimeSnapshot();
+  let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  const sourceConfig = activeSecretsRuntimeSnapshot
+    ? activeSecretsRuntimeSnapshot.sourceConfig
+    : await measureAgentStartup(
+        "config-source",
+        async () => {
+          try {
+            const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+            if (snapshot.valid) {
+              pluginMetadataSnapshot = writeOptions.basePluginMetadataSnapshot;
+              return snapshot.resolved;
+            }
+          } catch {
+            // Fall back to runtime-loaded config when source snapshot is unavailable.
+          }
+          pluginMetadataSnapshot = resolvePluginMetadataSnapshot({ config: loadedRaw });
+          return loadedRaw;
+        },
+        { config: loadedRaw },
+      );
   const cfg = hasRuntimeSecretRefs
     ? await (async () => {
         const runtimeSecretTargets = resolveAgentRuntimeSecretTargets({
@@ -79,14 +87,11 @@ export async function resolveAgentRuntimeConfig(
         ).resolvedConfig;
       })()
     : loadedRaw;
-  const secretsRuntime = await measureAgentStartup(
-    "secrets-runtime-import",
-    () => import("../secrets/runtime.js"),
-    { config: cfg },
-  );
-  if (secretsRuntime.getActiveSecretsRuntimeSnapshot()) {
+  if (activeSecretsRuntimeSnapshot && cfg !== loadedRaw) {
+    // Gateway activation already published loadedRaw with this source config. Republishing the
+    // same object here would advance its lifecycle revision and evict revision-keyed hot caches.
     setRuntimeConfigSnapshot(cfg, sourceConfig);
-  } else {
+  } else if (!activeSecretsRuntimeSnapshot) {
     // Standalone local agent commands have no Gateway-owned snapshot. Materialize
     // auth-profile refs too; resolving only config refs leaves selected credentials unusable.
     const snapshot = await measureAgentStartup(
@@ -96,6 +101,7 @@ export async function resolveAgentRuntimeConfig(
           config: sourceConfig,
           assignmentConfig: cfg,
           includeConfigRefs: false,
+          ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
         }),
       { config: cfg },
     );

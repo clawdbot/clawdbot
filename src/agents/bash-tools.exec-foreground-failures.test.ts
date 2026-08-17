@@ -9,10 +9,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ProcessSupervisor } from "../process/supervisor/index.js";
-import type { SpawnInput } from "../process/supervisor/types.js";
+import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
@@ -54,25 +55,21 @@ function requireFailedDetails(
   return details;
 }
 
-function mockSuccessfulSpawn(stdout = "ok\n") {
+function mockSpawn(exit: Partial<RunExit> = {}) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-    runId: input.runId ?? "call-success",
+    runId: input.runId ?? "call",
     pid: 1234,
     startedAtMs: Date.now(),
-    stdin: {
-      write: vi.fn(),
-      end: vi.fn(),
-      destroy: vi.fn(),
-    },
     wait: vi.fn(async () => ({
       reason: "exit" as const,
       exitCode: 0,
       exitSignal: null,
       durationMs: 1,
-      stdout,
+      stdout: "",
       stderr: "",
       timedOut: false,
       noOutputTimedOut: false,
+      ...exit,
     })),
     cancel: vi.fn(),
   }));
@@ -175,7 +172,7 @@ describe("exec foreground failures", () => {
   });
 
   it("keeps the background fallback warning when gateway exec actually runs inline", async () => {
-    mockSuccessfulSpawn();
+    mockSpawn();
     const tool = createExecTool({
       host: "gateway",
       security: "full",
@@ -202,27 +199,13 @@ describe("exec foreground failures", () => {
       backgroundMs: 10,
       allowBackground: false,
     });
-    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-      runId: input.runId ?? "call-timeout",
-      pid: 1234,
-      startedAtMs: Date.now(),
-      stdin: {
-        write: vi.fn(),
-        end: vi.fn(),
-        destroy: vi.fn(),
-      },
-      wait: vi.fn(async () => ({
-        reason: "overall-timeout" as const,
-        exitCode: null,
-        exitSignal: "SIGKILL" as NodeJS.Signals,
-        durationMs: input.timeoutMs ?? 50,
-        stdout: "",
-        stderr: "",
-        timedOut: true,
-        noOutputTimedOut: false,
-      })),
-      cancel: vi.fn(),
-    }));
+    mockSpawn({
+      reason: "overall-timeout",
+      exitCode: null,
+      exitSignal: "SIGKILL",
+      oomScoreWrapperSelected: true,
+      timedOut: true,
+    });
 
     const result = await tool.execute("call-timeout", {
       command: "echo never-runs",
@@ -237,6 +220,8 @@ describe("exec foreground failures", () => {
     expect(text).toContain("Verify the resulting state before retrying");
     expect(text).toContain("Do not automatically rerun non-idempotent commands");
     expect(text).toContain("known to be safe to retry");
+    expect(text).not.toContain("OOM-score wrapper");
+    expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
     const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
     expect(details.exitSignal).toBe("SIGKILL");
@@ -248,6 +233,112 @@ describe("exec foreground failures", () => {
     expect(details.durationMs).toBeTypeOf("number");
     expect(details.durationMs).toBeGreaterThanOrEqual(0);
   });
+
+  it.each([
+    { name: "child SIGKILL", pty: false, exitSignal: "SIGKILL" as NodeJS.Signals },
+    { name: "PTY signal 9", pty: true, exitSignal: 9 },
+  ])("adds cautious Linux OOM guidance for a wrapped $name", async ({ pty, exitSignal }) => {
+    mockSpawn({
+      reason: "signal",
+      exitCode: pty ? 0 : null,
+      exitSignal,
+      oomScoreWrapperSelected: true,
+    });
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+
+    const result = await tool.execute(`call-oom-${exitSignal}`, {
+      command: "find . -type f",
+      host: "gateway",
+      pty,
+    });
+
+    expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe(pty ? "pty" : "child");
+    const text = requireTextContent(result);
+    for (const fragment of [
+      `Command aborted by signal ${exitSignal}`,
+      "OpenClaw selected its Linux OOM-score wrapper",
+      "attempts to set this child's oom_score_adj to 1000",
+      "SIGKILL alone does not identify whether the Linux OOM killer",
+      "Check cgroup memory events or kernel logs",
+      "If they show memory pressure, narrow the command",
+      "adjust memory, concurrency, or resource limits",
+    ]) {
+      expect(text).toContain(fragment);
+    }
+    expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
+  });
+
+  it("keeps wrapped SIGKILL process outcomes generic for non-foreground consumers", async () => {
+    mockSpawn({
+      reason: "signal",
+      exitCode: null,
+      exitSignal: "SIGKILL",
+      oomScoreWrapperSelected: true,
+    });
+
+    const run = await runExecProcess({
+      command: "sleep 10",
+      workdir: process.cwd(),
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 1_000,
+      pendingMaxOutput: 1_000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+
+    await expect(run.promise).resolves.toMatchObject({
+      status: "failed",
+      reason: "Command aborted by signal SIGKILL",
+      oomScoreWrapperSelected: true,
+    });
+  });
+
+  it.each([
+    {
+      name: "unwrapped SIGKILL",
+      exitSignal: "SIGKILL" as NodeJS.Signals,
+      oomScoreWrapperSelected: false,
+      reason: "signal" as const,
+    },
+    {
+      name: "wrapped non-SIGKILL signal",
+      exitSignal: "SIGTERM" as NodeJS.Signals,
+      oomScoreWrapperSelected: true,
+      reason: "signal" as const,
+    },
+    {
+      name: "wrapped manual cancellation",
+      exitSignal: "SIGKILL" as NodeJS.Signals,
+      oomScoreWrapperSelected: true,
+      reason: "manual-cancel" as const,
+    },
+  ])(
+    "preserves the generic signal message for $name",
+    async ({ exitSignal, oomScoreWrapperSelected, reason }) => {
+      mockSpawn({ reason, exitCode: null, exitSignal, oomScoreWrapperSelected });
+      const tool = createExecTool({
+        security: "full",
+        ask: "off",
+        allowBackground: false,
+      });
+
+      const result = await tool.execute(`call-generic-${reason}-${exitSignal}`, {
+        command: "sleep 10",
+        host: "gateway",
+      });
+
+      const text = requireTextContent(result);
+      expect(text).toContain(`Command aborted by signal ${exitSignal}`);
+      expect(text).not.toContain("OOM-score wrapper");
+      expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
+    },
+  );
 
   it("rejects invalid host values before launching a command", async () => {
     const tool = createExecTool({
@@ -351,7 +442,7 @@ describe("exec foreground failures", () => {
 
   it("defaults omitted sandbox workdirs to the sandbox workspace", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    mockSuccessfulSpawn();
+    mockSpawn();
 
     const tool = createExecTool({
       host: "sandbox",
@@ -388,7 +479,7 @@ describe("exec foreground failures", () => {
   it("lets backend-validated sandbox workdirs reach the backend without host stat fallback", async () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
-    mockSuccessfulSpawn();
+    mockSpawn();
 
     try {
       const result = await tool.execute("call-remote-sandbox-workdir", {
@@ -472,7 +563,7 @@ describe("exec foreground failures", () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     fs.writeFileSync(path.join(workspaceDir, "script.py"), "print($TOKEN)\n");
     const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
-    mockSuccessfulSpawn();
+    mockSpawn();
 
     try {
       const result = await tool.execute("call-remote-only-script", {
@@ -495,7 +586,7 @@ describe("exec foreground failures", () => {
     const srcDir = path.join(workspaceDir, "src");
     fs.mkdirSync(srcDir);
     const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
-    mockSuccessfulSpawn();
+    mockSpawn();
 
     try {
       const result = await tool.execute("call-relative-remote-sandbox-workdir", {

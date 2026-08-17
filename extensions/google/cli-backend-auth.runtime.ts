@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  CliBackendPreparedExecution,
-  CliBackendToolAvailability,
+import {
+  CliBackendAuthProfilePreparationError,
+  type CliBackendPreparedExecution,
+  type CliBackendToolAvailability,
 } from "openclaw/plugin-sdk/cli-backend";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   assertGeminiCliLiteralIsolatedPrompt,
@@ -94,12 +95,9 @@ type GeminiCliPreparedExecution = CliBackendPreparedExecution & {
   isolatedCompletionEnforced?: true;
 };
 
-function normalizeString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function throwUnsupportedGeminiCredential(credential: GeminiAuthProfileCredential): never {
+  // Route compatibility is not credential-health evidence. Keep this local so
+  // a profile that is valid for its owner is not quarantined across providers.
   if (credential.provider === VERCEL_AI_GATEWAY_PROVIDER_ID) {
     throw new Error(
       "Gemini CLI execution cannot use a vercel-ai-gateway auth profile. Use the OpenClaw vercel-ai-gateway provider instead.",
@@ -112,18 +110,20 @@ function throwUnstageableSelectedGeminiProfile(
   ctx: GeminiCliAuthHomeContext,
   credential: GeminiAuthProfileCredential | undefined,
 ): never {
-  const authProfileId = normalizeString(ctx.authProfileId);
+  const authProfileId = normalizeOptionalString(ctx.authProfileId);
   if (!authProfileId) {
     throw new Error("Gemini CLI execution requires a selected auth profile.");
   }
   if (!credential) {
-    throw new Error(
+    throw new CliBackendAuthProfilePreparationError(
       `Gemini CLI auth profile was selected but no credential material was found. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
     );
   }
   if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
     throwUnsupportedGeminiCredential(credential);
   }
+  // A materialized token can be healthy even though Gemini CLI cannot use its
+  // type. Only missing or malformed credential material gets the typed signal.
   throw new Error(
     `Gemini CLI execution requires a Google AI Studio API-key profile or a previously configured valid Gemini CLI OAuth profile. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
   );
@@ -142,15 +142,15 @@ function requireGeminiOAuthCredential(
     throwUnsupportedGeminiCredential(credential);
   }
 
-  const access = normalizeString(credential.access);
-  const refresh = normalizeString(credential.refresh);
+  const access = normalizeOptionalString(credential.access);
+  const refresh = normalizeOptionalString(credential.refresh);
   if (
     !access ||
     !refresh ||
     typeof credential.expires !== "number" ||
     !Number.isFinite(credential.expires)
   ) {
-    throw new Error(
+    throw new CliBackendAuthProfilePreparationError(
       `Gemini CLI OAuth profile is incomplete and cannot be repaired by OpenClaw. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
     );
   }
@@ -162,8 +162,8 @@ function requireGeminiOAuthCredential(
     access,
     refresh,
     expires: credential.expires,
-    idToken: normalizeString(credential.idToken),
-    projectId: normalizeString(credential.projectId),
+    idToken: normalizeOptionalString(credential.idToken),
+    projectId: normalizeOptionalString(credential.projectId),
   };
 }
 
@@ -183,9 +183,11 @@ function requireGeminiApiKeyCredential(
     throwUnsupportedGeminiCredential(credential);
   }
 
-  const key = normalizeString(credential.key);
+  const key = normalizeOptionalString(credential.key);
   if (!key) {
-    throw new Error("Gemini CLI API-key profile is missing usable key material.");
+    throw new CliBackendAuthProfilePreparationError(
+      "Gemini CLI API-key profile is missing usable key material.",
+    );
   }
 
   return {
@@ -200,11 +202,11 @@ function resolveGeminiCliProfileHome(ctx: GeminiCliAuthHomeContext): {
   home: string;
   geminiDir: string;
 } {
-  const agentDir = normalizeString(ctx.agentDir);
+  const agentDir = normalizeOptionalString(ctx.agentDir);
   if (!agentDir) {
     throw new Error("Gemini CLI auth profile execution requires an agent directory.");
   }
-  const authProfileId = normalizeString(ctx.authProfileId);
+  const authProfileId = normalizeOptionalString(ctx.authProfileId);
   if (!authProfileId) {
     throw new Error("Gemini CLI auth profile execution requires a selected auth profile.");
   }
@@ -253,7 +255,7 @@ async function buildGeminiCliSystemSettings(
   if (selectedType) {
     const security = isRecord(settings.security) ? { ...settings.security } : {};
     const auth = isRecord(security.auth) ? { ...security.auth } : {};
-    const enforcedType = normalizeString(
+    const enforcedType = normalizeOptionalString(
       typeof auth.enforcedType === "string" ? auth.enforcedType : undefined,
     );
     if (enforcedType && enforcedType !== selectedType) {
@@ -277,7 +279,7 @@ function applyGeminiCliIsolatedCompletionSettings(
   if (ctx.isolatedCompletionSystemPrompt === undefined) {
     return base;
   }
-  const modelId = normalizeString(ctx.isolatedCompletionModelId);
+  const modelId = normalizeOptionalString(ctx.isolatedCompletionModelId);
   if (!modelId || modelId === "auto" || modelId.startsWith("auto-")) {
     throw isolatedCompletionInputError(
       "Gemini isolated completion requires one concrete model id.",
@@ -456,7 +458,7 @@ async function writeGeminiCliPrivateFile(filePath: string, value: string): Promi
 }
 
 async function stageGeminiCliIsolatedCwd(ctx: GeminiCliAuthHomeContext): Promise<void> {
-  const cwd = normalizeString(ctx.isolatedCompletionCwd);
+  const cwd = normalizeOptionalString(ctx.isolatedCompletionCwd);
   if (!cwd) {
     return;
   }
@@ -524,7 +526,7 @@ async function clearGeminiCliCachedCredentials(geminiDir: string): Promise<void>
 }
 
 function buildGeminiCliProjectEnv(projectId: string | undefined): Record<string, string> {
-  const normalized = normalizeString(projectId);
+  const normalized = normalizeOptionalString(projectId);
   if (!normalized) {
     return {};
   }
@@ -552,7 +554,7 @@ async function prepareGeminiCliOAuthHome(
   }
 
   const profileHome = await prepareGeminiCliProfileHome(ctx, "oauth-personal");
-  const idToken = normalizeString(oauth.idToken);
+  const idToken = normalizeOptionalString(oauth.idToken);
   const oauthCreds: Record<string, string | number> = {
     access_token: oauth.access,
     refresh_token: oauth.refresh,
@@ -703,7 +705,7 @@ export async function prepareGeminiCliExecution(
   if (prepared) {
     return ctx.toolAvailability ? { ...prepared, toolAvailabilityEnforced: true } : prepared;
   }
-  if (normalizeString(ctx.authProfileId)) {
+  if (normalizeOptionalString(ctx.authProfileId)) {
     throwUnstageableSelectedGeminiProfile(ctx, authCredential);
   }
   return ctx.toolAvailability ? await prepareGeminiCliRestrictedSystemSettings(ctx) : null;

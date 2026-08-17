@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
+import { fullDreamingViewAccess } from "./view.test-helpers.ts";
 import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
@@ -13,9 +14,8 @@ type DreamingProps = Parameters<typeof renderDreaming>[0];
 let viewState = createDreamingViewState();
 let restoreTranslations = () => {};
 
-function asTranslationMap(value: string | TranslationMap | undefined): TranslationMap {
-  return value && typeof value === "object" ? value : {};
-}
+const asTranslationMap = (value: string | TranslationMap | undefined): TranslationMap =>
+  value && typeof value === "object" ? value : {};
 
 beforeAll(() => {
   const dreaming = asTranslationMap(en.dreaming);
@@ -89,9 +89,7 @@ afterAll(() => {
   restoreTranslations();
 });
 
-function setDreamSubTab(tab: DreamingViewState["activeSubTab"]) {
-  viewState.activeSubTab = tab;
-}
+const setDreamSubTab = (tab: DreamingViewState["activeSubTab"]) => (viewState.activeSubTab = tab);
 
 function setDreamDiarySubTab(tab: DreamingViewState["activeDiarySubTab"]) {
   viewState.activeDiarySubTab = tab;
@@ -103,6 +101,7 @@ function setDreamAdvancedWaitingSort(sort: DreamingViewState["advancedWaitingSor
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   const props: DreamingProps = {
+    access: fullDreamingViewAccess,
     viewState,
     active: true,
     selectedAgentId: "main",

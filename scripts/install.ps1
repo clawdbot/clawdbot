@@ -882,6 +882,10 @@ function Invoke-OpenClawCommand {
     }
 
     & $commandPath @Arguments
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "openclaw $($Arguments -join ' ') failed with exit code $exitCode."
+    }
 }
 
 function Invoke-InteractiveOpenClawCommand {
@@ -1411,14 +1415,12 @@ function Install-OpenClaw {
     $prevUpdateNotifier = $env:NPM_CONFIG_UPDATE_NOTIFIER
     $prevFund = $env:NPM_CONFIG_FUND
     $prevAudit = $env:NPM_CONFIG_AUDIT
-    $prevNodeLlamaSkipDownload = $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD
     $prevBefore = $env:NPM_CONFIG_BEFORE
     $prevMinReleaseAge = $env:NPM_CONFIG_MIN_RELEASE_AGE
     $env:NPM_CONFIG_LOGLEVEL = "error"
     $env:NPM_CONFIG_UPDATE_NOTIFIER = "false"
     $env:NPM_CONFIG_FUND = "false"
     $env:NPM_CONFIG_AUDIT = "false"
-    $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"
     Remove-Item Env:NPM_CONFIG_BEFORE -ErrorAction SilentlyContinue
     Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE -ErrorAction SilentlyContinue
     try {
@@ -1450,7 +1452,6 @@ function Install-OpenClaw {
         $env:NPM_CONFIG_UPDATE_NOTIFIER = $prevUpdateNotifier
         $env:NPM_CONFIG_FUND = $prevFund
         $env:NPM_CONFIG_AUDIT = $prevAudit
-        $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload
         $env:NPM_CONFIG_BEFORE = $prevBefore
         $env:NPM_CONFIG_MIN_RELEASE_AGE = $prevMinReleaseAge
     }
@@ -1517,7 +1518,6 @@ function Install-OpenClawFromGit {
     $prevPnpmWorkspaceConcurrency = $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY
     $prevPnpmVerifyDepsBeforeRun = $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN
     $prevPnpmSideEffectsCache = $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE
-    $prevNodeLlamaPostinstall = $env:NODE_LLAMA_CPP_POSTINSTALL
     $prevNodeOptions = $env:NODE_OPTIONS
     $pnpmCommand = Get-PnpmCommandPath
     if (-not $pnpmCommand) {
@@ -1528,7 +1528,6 @@ function Install-OpenClawFromGit {
     $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"
     $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
     $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"
-    $env:NODE_LLAMA_CPP_POSTINSTALL = "skip"
     $pushedRepoLocation = $false
     try {
         Push-Location -LiteralPath $RepoDir
@@ -1576,7 +1575,6 @@ function Install-OpenClawFromGit {
         $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency
         $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = $prevPnpmVerifyDepsBeforeRun
         $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = $prevPnpmSideEffectsCache
-        $env:NODE_LLAMA_CPP_POSTINSTALL = $prevNodeLlamaPostinstall
         $env:NODE_OPTIONS = $prevNodeOptions
     }
 
@@ -1608,10 +1606,10 @@ function Run-Doctor {
     Write-Host "[*] Running doctor to migrate settings..." -ForegroundColor Yellow
     try {
         Invoke-OpenClawCommand doctor --non-interactive
+        Write-Host "[OK] Migration complete" -ForegroundColor Green
     } catch {
-        # Ignore errors from doctor
+        Write-Host "[!] Migration failed; continuing. Run: openclaw doctor --non-interactive" -ForegroundColor Yellow
     }
-    Write-Host "[OK] Migration complete" -ForegroundColor Green
 }
 
 function Test-GatewayServiceLoaded {

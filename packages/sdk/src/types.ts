@@ -71,13 +71,26 @@ export type WorkerEnvironmentMetadata = {
   idleMs?: number;
   attachedSessionIds: string[];
   tunnelStatus: WorkerTunnelStatus;
+  error?: string;
 };
+
+export type NodeWorkerBundleStatus =
+  | { status: "installed"; version: string }
+  | { status: "missing" };
 
 export type EnvironmentSummary = {
   id: string;
   type: "local" | "gateway" | "node" | "managed" | "ephemeral" | (string & {});
   label?: string;
   status: "available" | "unavailable" | "starting" | "stopping" | "error";
+  platform?: string;
+  sessionHost?: boolean;
+  workerBundle?: NodeWorkerBundleStatus;
+  lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
+  trust?: "persistent" | "disposable";
   capabilities?: string[];
   worker?: WorkerEnvironmentMetadata;
 };
@@ -87,8 +100,15 @@ export type EnvironmentCreateParams = {
   idempotencyKey: string;
 };
 
+export type WorkerEnvironmentProfileSummary = {
+  id: string;
+  providerId: string;
+  trust?: "persistent" | "disposable";
+};
+
 export type EnvironmentsListResult = {
   environments: EnvironmentSummary[];
+  profiles?: WorkerEnvironmentProfileSummary[];
 };
 
 export type WorkspaceSelection = {
@@ -188,6 +208,8 @@ export type TaskSummary = {
   startedAt?: RunTimestamp;
   endedAt?: RunTimestamp;
   progressSummary?: string;
+  lastActivity?: string;
+  diffStat?: { files: number; added: number; removed: number };
   terminalSummary?: string;
   error?: string;
 };

@@ -1,19 +1,19 @@
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+  activateChatHeaderPanelAction,
+  openChatSidePanelType,
+} from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "chat transcript panel reflow",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
+
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-panel-reflow");
 const chatSessionKey = "agent:main:main";
 
@@ -63,123 +63,106 @@ async function expectMessagesNotToOverlap(page: import("playwright").Page): Prom
     .toEqual([]);
 }
 
-let server: ControlUiE2eServer;
-let browser: Browser;
-
-describeControlUiE2e("chat transcript panel reflow", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("keeps transcript rows separate across background-task, file, and diff panel toggles", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     await mkdir(artifactDir, { recursive: true });
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    try {
-      await installMockGateway(page, {
-        featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
-        historyMessages,
-        methodResponses: {
-          "artifacts.list": { artifacts: [] },
-          "sessions.diff": {
-            additions: 1,
-            baseRef: "main",
-            branch: "feature/reflow",
-            deletions: 0,
-            files: [
-              {
-                additions: 1,
-                deletions: 0,
-                patch: [
-                  "diff --git a/src/app.ts b/src/app.ts",
-                  "--- a/src/app.ts",
-                  "+++ b/src/app.ts",
-                  "@@ -1 +1,2 @@",
-                  " current line",
-                  "+new line",
-                  "",
-                ].join("\n"),
-                path: "src/app.ts",
-                status: "modified",
-              },
-            ],
-            root: "/workspace",
-            sessionKey: "main",
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+          historyMessages,
+          methodResponses: {
+            "artifacts.list": { artifacts: [] },
+            "sessions.diff": {
+              additions: 1,
+              baseRef: "main",
+              branch: "feature/reflow",
+              deletions: 0,
+              files: [
+                {
+                  additions: 1,
+                  deletions: 0,
+                  patch: [
+                    "diff --git a/src/app.ts b/src/app.ts",
+                    "--- a/src/app.ts",
+                    "+++ b/src/app.ts",
+                    "@@ -1 +1,2 @@",
+                    " current line",
+                    "+new line",
+                    "",
+                  ].join("\n"),
+                  path: "src/app.ts",
+                  status: "modified",
+                },
+              ],
+              root: "/workspace",
+              sessionKey: "main",
+            },
+            "sessions.files.list": {
+              browser: { entries: [], path: "" },
+              files: [
+                {
+                  kind: "modified",
+                  missing: false,
+                  name: "AGENTS.md",
+                  path: "/workspace/AGENTS.md",
+                  size: 2048,
+                },
+              ],
+              root: "/workspace",
+              sessionKey: "main",
+            },
+            "tasks.list": {
+              tasks: [
+                {
+                  agentId: "main",
+                  createdAt: Date.now() - 5_000,
+                  id: "task-reflow",
+                  kind: "subagent",
+                  ownerKey: chatSessionKey,
+                  progressSummary: "Checking transcript layout",
+                  runtime: "subagent",
+                  startedAt: Date.now() - 4_000,
+                  status: "running",
+                  taskId: "task-reflow",
+                  title: "Reflow proof",
+                  updatedAt: Date.now(),
+                },
+              ],
+            },
           },
-          "sessions.files.list": {
-            browser: { entries: [], path: "" },
-            files: [
-              {
-                kind: "modified",
-                missing: false,
-                name: "AGENTS.md",
-                path: "/workspace/AGENTS.md",
-                size: 2048,
-              },
-            ],
-            root: "/workspace",
-            sessionKey: "main",
-          },
-          "tasks.list": {
-            tasks: [
-              {
-                agentId: "main",
-                createdAt: Date.now() - 5_000,
-                id: "task-reflow",
-                kind: "subagent",
-                ownerKey: chatSessionKey,
-                progressSummary: "Checking transcript layout",
-                runtime: "subagent",
-                startedAt: Date.now() - 4_000,
-                status: "running",
-                taskId: "task-reflow",
-                title: "Reflow proof",
-                updatedAt: Date.now(),
-              },
-            ],
-          },
-        },
-      });
+        });
 
-      const response = await page.goto(`${server.baseUrl}chat`);
-      expect(response?.status()).toBe(200);
-      await expect.poll(() => page.locator(".chat-group").count()).toBe(historyMessageCount);
-      await page.locator(".chat-thread").evaluate((element) => {
-        element.scrollTop = Math.max(0, element.scrollHeight / 2);
-      });
-      await expectMessagesNotToOverlap(page);
-      await page.screenshot({ path: path.join(artifactDir, "00-closed.png") });
+        const response = await page.goto(`${suite.server.baseUrl}chat`);
+        expect(response?.status()).toBe(200);
+        await expect.poll(() => page.locator(".chat-group").count()).toBe(historyMessageCount);
+        await page.locator(".chat-thread").evaluate((element) => {
+          element.scrollTop = Math.max(0, element.scrollHeight / 2);
+        });
+        await expectMessagesNotToOverlap(page);
+        await page.screenshot({ path: path.join(artifactDir, "00-closed.png") });
 
-      await page.getByRole("button", { name: "Show background tasks" }).click();
-      await page.locator(".chat-tasks-rail").waitFor({ state: "visible" });
-      await expectMessagesNotToOverlap(page);
-      await page.screenshot({ path: path.join(artifactDir, "01-background-tasks.png") });
+        await openChatSidePanelType(page, "Tasks");
+        await page.locator(".chat-tasks-rail").waitFor({ state: "visible" });
+        await expectMessagesNotToOverlap(page);
+        await page.screenshot({ path: path.join(artifactDir, "01-background-tasks.png") });
 
-      await page.getByRole("button", { name: "Show thread files", exact: true }).click();
-      await page.locator(".chat-workspace-rail").waitFor({ state: "visible" });
-      await expectMessagesNotToOverlap(page);
-      await page.screenshot({ path: path.join(artifactDir, "02-thread-files.png") });
+        await openChatSidePanelType(page, "Files");
+        await page.locator(".chat-workspace-rail").waitFor({ state: "visible" });
+        await expectMessagesNotToOverlap(page);
+        await page.screenshot({ path: path.join(artifactDir, "02-thread-files.png") });
 
-      await page.locator(".chat-session-diff-toggle").first().click();
-      await page.locator(".session-diff").waitFor({ state: "visible" });
-      await expectMessagesNotToOverlap(page);
-      await page.screenshot({ path: path.join(artifactDir, "03-thread-changes.png") });
-    } finally {
-      await context.close();
-    }
+        await activateChatHeaderPanelAction(page, "Show session changes");
+        await page.locator(".session-diff").waitFor({ state: "visible" });
+        await expectMessagesNotToOverlap(page);
+        await page.screenshot({ path: path.join(artifactDir, "03-thread-changes.png") });
+      },
+    );
   });
 });

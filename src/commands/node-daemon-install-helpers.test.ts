@@ -42,7 +42,7 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
     });
 
     const plan = await buildNodeInstallPlan({
@@ -54,7 +54,7 @@ describe("buildNodeInstallPlan", () => {
     });
 
     expect(plan.environment).toEqual({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
     });
     expect(plan.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
@@ -79,7 +79,7 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
     });
 
     await buildNodeInstallPlan({
@@ -110,7 +110,7 @@ describe("buildNodeInstallPlan", () => {
     mocks.buildNodeServiceEnvironment.mockReturnValue({
       OPENCLAW_GATEWAY_TOKEN: "node-token",
       OPENCLAW_GATEWAY_PASSWORD: "node-password",
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
     });
 
     const plan = await buildNodeInstallPlan({
@@ -125,6 +125,7 @@ describe("buildNodeInstallPlan", () => {
 
     expect(plan.environment.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
     expect(plan.environment.OPENCLAW_GATEWAY_PASSWORD).toBe("node-password");
+    expect(plan.description).toBe("OpenClaw Node Host");
     expect(plan.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret

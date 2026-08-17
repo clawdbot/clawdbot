@@ -9,6 +9,7 @@ describe("QA scenario module flow", () => {
       args: [{ expr: "scenarioContext" }, { moduleExport: "scenarioImplementation" }],
     });
 
+    expect(qaScenarioModuleFlow.resolveKind(flow)).toBe("module");
     expect(qaScenarioModuleFlow.resolveFlow(flow, "Scenario title")).toMatchObject({
       steps: [
         {
@@ -28,6 +29,17 @@ describe("QA scenario module flow", () => {
         },
       ],
     });
+  });
+
+  it("distinguishes module syntax without relying on its source path", () => {
+    const moduleFlow = qaScenarioModuleFlow.moduleSchema.parse({
+      module: "example-package/scenario.js",
+      call: "runScenario",
+    });
+
+    expect(qaScenarioModuleFlow.resolveKind(moduleFlow)).toBe("module");
+    expect(qaScenarioModuleFlow.resolveKind({ steps: [] })).toBe("steps");
+    expect(qaScenarioModuleFlow.resolveKind(undefined)).toBeUndefined();
   });
 
   it("rejects malformed module export arguments", () => {

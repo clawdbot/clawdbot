@@ -3,8 +3,8 @@ import { resolveAgentConfig, resolveAgentDir } from "../../agents/agent-scope.js
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
-import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveHeartbeatPromptCore } from "../../auto-reply/heartbeat.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { toErrorObject } from "../../infra/errors.js";
 import {
   listHistoryScanCandidates,
@@ -128,7 +128,7 @@ async function runSkillHistoryScanCore(
   params: SkillHistoryScanScope,
 ): Promise<SkillHistoryScanResult> {
   const store = historyScanStore(params.env);
-  const storePath = resolveStorePath(params.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
   });
@@ -222,19 +222,23 @@ async function runSkillHistoryScanCore(
           )
         ).model
       : undefined;
-  const contextTokens = resolvedModel
-    ? Math.min(
-        resolvedModel.contextTokens ?? resolvedModel.contextWindow,
-        resolvedModel.contextWindow,
-      )
-    : undefined;
+  const contextTokens = (() => {
+    if (!resolvedModel) {
+      return undefined;
+    }
+    const contextWindow = resolvedModel.contextWindow;
+    if (contextWindow === undefined) {
+      return resolvedModel.contextTokens;
+    }
+    return Math.min(resolvedModel.contextTokens ?? contextWindow, contextWindow);
+  })();
   const maxTranscriptChars = resolveSkillHistoryScanTranscriptBudget(contextTokens);
   const maxSessionTranscriptChars = Math.min(
     HISTORY_SCAN_MAX_SESSION_CHARS,
     Math.max(1, maxTranscriptChars - HISTORY_SCAN_SESSION_OVERHEAD_CHARS),
   );
   // The configured prompt is only an extra legacy match; the stable marker is authoritative.
-  const heartbeatPrompt = resolveHeartbeatPrompt(
+  const heartbeatPrompt = resolveHeartbeatPromptCore(
     resolveAgentConfig(params.config, params.agentId)?.heartbeat?.prompt ??
       params.config.agents?.defaults?.heartbeat?.prompt,
   );
@@ -373,7 +377,7 @@ async function runSkillHistoryScanCore(
 export function runSkillHistoryScan(
   params: SkillHistoryScanScope,
 ): Promise<SkillHistoryScanResult> {
-  const storePath = resolveStorePath(params.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
   });

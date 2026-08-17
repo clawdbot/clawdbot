@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 /**
  * Usage-state and failure cooldown tests for auth profiles.
  * Covers unusable-window helpers, provider bypasses, WHAM probes, and store
@@ -5,7 +6,6 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
@@ -15,6 +15,7 @@ import {
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
   maybeReprobeWhamBlockedProfiles,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
@@ -1163,6 +1164,21 @@ describe("markAuthProfileFailure — locked update failure", () => {
       }
       consoleWarn.mockRestore();
     }
+  });
+});
+
+describe("markInlineProviderApiKeyFailure", () => {
+  it("does not cool an inline key after a provider timeout", async () => {
+    const store = makeStore(undefined);
+
+    await markInlineProviderApiKeyFailure({
+      store,
+      provider: "anthropic",
+      reason: "timeout",
+    });
+
+    expect(store.usageStats).toBeUndefined();
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
   });
 });
 

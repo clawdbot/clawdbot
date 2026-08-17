@@ -146,11 +146,11 @@ function summaryIncludesIdentifier(summary: string, identifier: string): boolean
 
 /** Extracts likely exact identifiers that summaries should preserve literally. */
 export function extractOpaqueIdentifiers(text: string): string[] {
-  // Host/port candidates start at token boundaries so a long non-identifier
-  // does not retry the greedy branch at every character.
+  // Path and host/port candidates start at token boundaries so prose such as
+  // "typecheck/lint/format" is not mistaken for an absolute path.
   const matches =
     text.match(
-      /([A-Fa-f0-9]{8,}|https?:\/\/\S+|\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5}|\b\d{6,}\b)/g,
+      /([A-Fa-f0-9]{8,}|https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5}|\b\d{6,}\b)/g,
     ) ?? [];
   return uniqueStrings(
     matches
@@ -198,12 +198,13 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
 /** Audits a candidate summary for required sections, pending asks, and identifier preservation. */
 export function auditSummaryQuality(params: {
   summary: string;
+  structuralSummary: string;
   identifiers: string[];
   latestAsk: string | null;
   identifierPolicy?: CompactionSummarizationInstructions["identifierPolicy"];
 }): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
-  const lines = new Set(normalizedSummaryLines(params.summary));
+  const lines = new Set(normalizedSummaryLines(params.structuralSummary));
   for (const section of REQUIRED_SUMMARY_SECTIONS) {
     if (!lines.has(section)) {
       reasons.push(`missing_section:${section}`);

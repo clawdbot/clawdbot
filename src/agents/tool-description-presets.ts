@@ -13,8 +13,21 @@ export const AGENTS_WAIT_TOOL_DISPLAY_SUMMARY = "Wait for collector subagents.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
 export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answer.";
-export const SPAWN_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
+export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
+
+export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
+  return sessionsSpawnAvailable
+    ? 'List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:"subagent")` targets.'
+    : "List configured agent ids with name/model/runtime metadata that can be used as subagent spawn targets.";
+}
+
+export function describeAgentsWaitTool(sessionsSpawnAvailable: boolean): string {
+  const targets = sessionsSpawnAvailable
+    ? "collector subagents started by sessions_spawn collect=true"
+    : "collector subagent runs";
+  return `Wait for ${targets}. Accepts many run ids; returns once any completes (completed results incl. structured output, plus pending ids), or on timeoutSeconds.`;
+}
 
 // Mirrors plugin-sdk SessionToolsVisibility; kept local because importing that
 // module here would close an agents<->plugin-sdk madge cycle. Call sites pass
@@ -73,7 +86,7 @@ export function describeSessionsSendTool(): string {
   return [
     "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
     "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
-    "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`, or `message` with an explicit channel and target.",
+    "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`.",
     "Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available.",
     "watch:true: notice arrives when others later change target session.",
   ].join(" ");

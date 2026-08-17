@@ -31,8 +31,10 @@ import {
   isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
-import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
-import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
+import {
+  buildApprovalPendingMessage,
+  DEFAULT_APPROVAL_TIMEOUT_MS,
+} from "./bash-tools.exec-runtime.js";
 import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import { isExecDeniedResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -99,6 +101,7 @@ type RegisteredExecApprovalRequestContext = {
 /** Destination and context for async exec approval follow-up delivery. */
 type ExecApprovalFollowupTarget = {
   approvalId: string;
+  agentId?: string;
   sessionKey?: string;
   /** Session UUID active when the approval was requested. Lets the followup be
    *  dropped if `/new` or `/reset` rebinds the session key to a new session. */
@@ -359,6 +362,7 @@ export function buildExecApprovalFollowupTarget(
 ): ExecApprovalFollowupTarget {
   return {
     approvalId: params.approvalId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey,
     expectedSessionId: params.expectedSessionId,
     sessionStore: params.sessionStore,
@@ -464,6 +468,7 @@ export async function sendExecApprovalFollowupResult(
         });
   await send({
     approvalId: target.approvalId,
+    ...(target.agentId ? { agentId: target.agentId } : {}),
     sessionKey: target.sessionKey,
     expectedSessionId: target.expectedSessionId,
     sessionStore: target.sessionStore,

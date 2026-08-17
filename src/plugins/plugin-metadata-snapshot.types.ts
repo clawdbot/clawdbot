@@ -79,9 +79,10 @@ export type LoadPluginMetadataSnapshotParams = {
   pluginIds?: readonly string[];
   pluginIdScope?: PluginMetadataSnapshotPluginIdScope;
   preferPersisted?: boolean;
+  allowCurrent?: boolean;
 };
 
 export type ResolvePluginMetadataSnapshotParams = LoadPluginMetadataSnapshotParams & {
-  allowCurrent?: boolean;
   allowWorkspaceScopedCurrent?: boolean;
+  workspacePluginRootPresent?: boolean;
 };

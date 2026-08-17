@@ -6,19 +6,31 @@ import { t } from "../../../i18n/index.ts";
 import type { ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import type { DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
 
-export function renderDiffStatChips(stat: DiffStat) {
-  if (stat.added === 0 && stat.removed === 0) {
+export function renderDiffStatChips(stat: DiffStat & { modified?: number }) {
+  // Tool cards omit `modified`; keep their original template byte-for-byte.
+  if (stat.modified === undefined) {
+    if (stat.added === 0 && stat.removed === 0) {
+      return nothing;
+    }
+    return html`<span class="chat-diffstat">
+      ${stat.added > 0 ? html`<span class="chat-diffstat__add">+${stat.added}</span>` : nothing}
+      ${stat.removed > 0 ? html`<span class="chat-diffstat__del">-${stat.removed}</span>` : nothing}
+    </span>`;
+  }
+  if (stat.added === 0 && stat.removed === 0 && !stat.modified) {
     return nothing;
   }
   return html`<span class="chat-diffstat">
     ${stat.added > 0 ? html`<span class="chat-diffstat__add">+${stat.added}</span>` : nothing}
     ${stat.removed > 0 ? html`<span class="chat-diffstat__del">-${stat.removed}</span>` : nothing}
+    ${stat.modified > 0 ? html`<span class="chat-diffstat__mod">~${stat.modified}</span>` : nothing}
   </span>`;
 }
 
 export function renderDiffBlock(
   lines: readonly DiffLine[],
   outcome: ToolCardOutcome = "succeeded",
+  renderSkip?: (line: DiffLine) => unknown,
 ) {
   const hasLineNumbers = lines.some((line) => line.lineNo !== undefined);
   return html`
@@ -36,7 +48,7 @@ export function renderDiffBlock(
           return html`<div class="chat-diff__row chat-diff__row--skip">
             ${hasLineNumbers ? html`<span class="chat-diff__gutter"></span>` : nothing}
             <span class="chat-diff__sign"></span>
-            <span class="chat-diff__text">${line.text || "⋯"}</span>
+            <span class="chat-diff__text">${(renderSkip?.(line) ?? line.text) || "⋯"}</span>
           </div>`;
         }
         const kindClass =

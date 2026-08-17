@@ -16,6 +16,32 @@ const NODE_RUNTIME_PROBE_SOURCE =
 const PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS = 10_000;
 export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 
+/**
+ * @typedef {{
+ *   version: string | null;
+ *   bunVersion: string | null;
+ *   execPath: string | null;
+ * }} PackageCliNodeRuntime
+ */
+
+/**
+ * @typedef {{
+ *   status?: number | null;
+ *   stdout?: string;
+ *   error?: NodeJS.ErrnoException;
+ * }} PackageCliNodeProbeResult
+ */
+
+/**
+ * @typedef {(command: string, args: string[], options: {
+ *   cwd: string;
+ *   encoding: "utf8";
+ *   env: NodeJS.ProcessEnv;
+ *   timeout: number;
+ *   windowsHide: boolean;
+ * }) => PackageCliNodeProbeResult} PackageCliNodeProbeRun
+ */
+
 function normalizeEnvValue(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -42,7 +68,12 @@ function isNodeVersionAtLeast(version, minimum) {
   return version.patch >= minimum.patch;
 }
 
-/** Checks a Node version against the standalone package engine-range subset. */
+/**
+ * Checks a Node version against the standalone package engine-range subset.
+ * @param {string | null} version
+ * @param {string | null} engine
+ * @returns {boolean}
+ */
 export function nodeVersionSatisfiesPackageEngine(version, engine) {
   const parsedVersion = parseNodeVersion(version);
   const normalizedEngine = normalizeEnvValue(engine);
@@ -74,7 +105,11 @@ export function nodeVersionSatisfiesPackageEngine(version, engine) {
   return satisfied;
 }
 
-/** Reads the Node runtime contract from the package being installed. */
+/**
+ * Reads the Node runtime contract from the package being installed.
+ * @param {URL} [packageJsonUrl]
+ * @returns {string | null}
+ */
 export function readPackageNodeEngine(
   packageJsonUrl = new URL("../package.json", import.meta.url),
 ) {
@@ -144,7 +179,18 @@ function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
   return pathEntries.slice(expectedPrefix.length);
 }
 
-/** Finds the real Node that will launch the installed CLI after Bun removes its lifecycle PATH. */
+/**
+ * Finds the real Node that will launch the installed CLI after Bun removes its lifecycle PATH.
+ *
+ * @param {{
+ *   env?: NodeJS.ProcessEnv;
+ *   pathEnv?: string;
+ *   platform?: NodeJS.Platform;
+ *   cwd?: string;
+ *   run?: PackageCliNodeProbeRun;
+ * }} [options]
+ * @returns {PackageCliNodeRuntime | null}
+ */
 export function probePackageCliNodeRuntime(options = {}) {
   const {
     env = process.env,
@@ -216,7 +262,18 @@ export function probePackageCliNodeRuntime(options = {}) {
   return null;
 }
 
-/** Rejects installation before an unsupported runtime can replace a working release. */
+/**
+ * Rejects installation before an unsupported runtime can replace a working release.
+ * @param {{
+ *   version?: string | null;
+ *   bunVersion?: string | null;
+ *   engine?: string | null;
+ *   execPath?: string | null;
+ *   probeNodeRuntime?: () => PackageCliNodeRuntime | null;
+ * }} [options]
+ * @param {(...data: unknown[]) => void} [reportError]
+ * @returns {boolean}
+ */
 export function enforceSupportedNodeRuntime(
   {
     version = process.versions.node ?? null,
@@ -248,7 +305,15 @@ export function enforceSupportedNodeRuntime(
   return false;
 }
 
-/** Removes the packed sentinel only after the runtime check succeeds. */
+/**
+ * Removes the packed sentinel only after the runtime check succeeds.
+ * @param {{
+ *   markerUrl?: URL;
+ *   remove?: (path: URL, options: { force: boolean }) => void;
+ * }} [options]
+ * @param {(...data: unknown[]) => void} [reportError]
+ * @returns {boolean}
+ */
 export function completePackageInstallGuard(
   {
     markerUrl = new URL(`../${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`, import.meta.url),
@@ -304,6 +369,8 @@ function detectLifecyclePackageManagerFromExecPath(value) {
 
 /**
  * Detects the package manager running the current lifecycle script.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string | null}
  */
 export function detectLifecyclePackageManager(env = process.env) {
   const userAgent = normalizeEnvValue(env.npm_config_user_agent);
@@ -317,14 +384,17 @@ export function detectLifecyclePackageManager(env = process.env) {
 
 /**
  * Builds the warning shown for non-pnpm lifecycle installs.
+ * @param {unknown} packageManager
+ * @returns {string | null}
  */
 export function createPackageManagerWarningMessage(packageManager) {
-  if (!packageManager || packageManager === "pnpm") {
+  const normalizedPackageManager = normalizeEnvValue(packageManager);
+  if (!normalizedPackageManager || normalizedPackageManager === "pnpm") {
     return null;
   }
 
   return [
-    `[openclaw] warning: detected ${packageManager} for install lifecycle.`,
+    `[openclaw] warning: detected ${normalizedPackageManager} for install lifecycle.`,
     "[openclaw] this repo works best with pnpm; npm-compatible installs are slower and much larger here.",
     "[openclaw] prefer: corepack pnpm install",
   ].join("\n");
@@ -332,6 +402,9 @@ export function createPackageManagerWarningMessage(packageManager) {
 
 /**
  * Emits the non-pnpm lifecycle warning when needed.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {(...data: unknown[]) => void} [warn]
+ * @returns {boolean}
  */
 export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
   const message = createPackageManagerWarningMessage(detectLifecyclePackageManager(env));

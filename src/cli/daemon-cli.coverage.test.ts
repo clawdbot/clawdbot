@@ -138,10 +138,13 @@ vi.mock("../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints: () => [],
 }));
 
-vi.mock("../infra/ports.js", () => ({
+vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
   inspectPortUsages: (ports: readonly number[]) => inspectPortUsages(ports),
+}));
+
+vi.mock("../infra/ports-format.js", () => ({
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
 

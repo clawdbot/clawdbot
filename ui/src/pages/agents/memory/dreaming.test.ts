@@ -1,9 +1,10 @@
 // Control UI tests cover dreaming behavior.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
-import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,
@@ -44,7 +45,7 @@ beforeAll(() => {
         dedupeRemovedManyAndKept: "Removed {removed} duplicate dream entries and kept {kept}.",
         dedupeRemovedOne: "Removed {removed} duplicate dream entry.",
         dedupeRemovedMany: "Removed {removed} duplicate dream entries.",
-        repairArchivedThreadCorpus: "archived thread corpus",
+        repairArchivedThreadCorpus: "archived session corpus",
         repairArchivedIngestionState: "archived ingestion state",
         repairArchivedDreamDiary: "archived dream diary",
         repairNoChanges: "Dream cache repair finished with no changes.",
@@ -98,19 +99,6 @@ function createConfig(state: DreamingState): DreamingConfigCapability {
     lookupSchemaPath: vi.fn(async () => null),
     patch: vi.fn(async () => true),
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred promise callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<string, unknown> {
@@ -928,6 +916,7 @@ describe("dreaming controller", () => {
     expect(config.patch).toHaveBeenCalledWith({
       note: "Dreaming settings updated from the Dreaming tab.",
       raw: expect.any(Object),
+      canDispatch: expect.any(Function),
     });
     expect(getConfigPatchRawPayload(config)).toEqual({
       plugins: {
@@ -944,6 +933,25 @@ describe("dreaming controller", () => {
     });
     expect(state.dreamingModeSaving).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("does not patch after the caller lifecycle expires during schema lookup", async () => {
+    const { state } = createState();
+    const config = createConfig(state);
+    const lookup = createDeferred<unknown>();
+    let canDispatch = true;
+    vi.mocked(config.lookupSchemaPath).mockReturnValue(lookup.promise);
+
+    const update = updateDreamingEnabled(state, config, false, () => canDispatch);
+    await vi.waitFor(() => expect(config.lookupSchemaPath).toHaveBeenCalledOnce());
+    canDispatch = false;
+    lookup.resolve({
+      schema: { type: "object", additionalProperties: true },
+      children: [],
+    });
+
+    await expect(update).resolves.toBe(false);
+    expect(config.patch).not.toHaveBeenCalled();
   });
 
   it("falls back to memory-core when selected memory slot is blank", async () => {
@@ -1226,7 +1234,7 @@ describe("dreaming controller", () => {
 
     await loadDreamDiary(state);
 
-    expect(state.dreamDiaryError).toBe("Error: dream diary read failed");
+    expect(state.dreamDiaryError).toBe("dream diary read failed");
     expect(state.dreamDiaryLoading).toBe(false);
   });
 
@@ -1296,6 +1304,19 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
     expect(state.dreamDiaryContent).toBe("backfilled diary");
     expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("does not run a write action with read-only operator access", async () => {
+    const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["doctor.memory.backfillDreamDiary"] },
+    };
+
+    await expect(backfillDreamDiary(state)).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("runs dream diary actions and reloads state for the selected agent", async () => {
@@ -1404,7 +1425,7 @@ describe("dreaming controller", () => {
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
-      text: "Dream cache repair complete: archived thread corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+      text: "Dream cache repair complete: archived session corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
     });
     expect(state.dreamDiaryActionArchivePath).toBe(
       "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",

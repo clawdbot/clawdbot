@@ -7,6 +7,7 @@ import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
@@ -89,6 +90,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
       ${renderSelfLearningError(props.selfLearning)}
       ${renderSkillWorkshopHistoryScan({
         state: props.historyScan,
+        canScan: props.access.canScanHistory,
         onScan: props.onHistoryScan,
       })}
       <div class="sw-view" data-mode=${props.mode}>
@@ -116,7 +118,8 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
 
 function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const busy = props.actionBusy?.key === proposal.key && props.actionBusy.action === "revise";
-  const canSubmit = props.revisionDraft.trim().length > 0 && !props.actionBusy;
+  const canSubmit =
+    props.access.canRevise && props.revisionDraft.trim().length > 0 && !props.actionBusy;
   const verb =
     props.mode === "board" ? t("skillWorkshop.actions.revise") : t("skillWorkshop.actions.tweak");
 
@@ -153,7 +156,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           autofocus
           placeholder=${t("skillWorkshop.revision.placeholder")}
           .value=${props.revisionDraft}
-          ?disabled=${Boolean(props.actionBusy)}
+          ?disabled=${!props.access.canRevise || Boolean(props.actionBusy)}
           @input=${(event: Event) =>
             props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
         ></textarea>
@@ -439,7 +442,7 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
     <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
       <button
         class="sw-btn ${busy === "evaluate" ? "is-busy" : ""}"
-        ?disabled=${disabled}
+        ?disabled=${disabled || !props.access.canEvaluate}
         @click=${() => props.onEvaluate(proposal.key)}
       >
         ${busy === "evaluate"
@@ -448,14 +451,14 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
       </button>
       <button
         class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
-        ?disabled=${disabled}
+        ?disabled=${disabled || !props.access.canApply}
         @click=${() => props.onApply(proposal.key)}
       >
         ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
       </button>
       <button
         class="sw-btn ${busy === "revise" ? "is-busy" : ""}"
-        ?disabled=${disabled}
+        ?disabled=${disabled || !props.access.canRevise}
         @click=${() => props.onRevise(proposal.key)}
       >
         ${busy === "revise"
@@ -464,7 +467,7 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
       </button>
       <button
         class="sw-btn sw-btn--ghost sw-btn--danger ${busy === "reject" ? "is-busy" : ""}"
-        ?disabled=${disabled}
+        ?disabled=${disabled || !props.access.canReject}
         @click=${() => props.onReject(proposal.key)}
       >
         ${busy === "reject"
@@ -592,7 +595,7 @@ function renderToday(
                   class="sw-today__big sw-today__big--evaluate ${busy === "evaluate"
                     ? "is-busy"
                     : ""}"
-                  ?disabled=${disabled}
+                  ?disabled=${disabled || !props.access.canEvaluate}
                   @click=${() => props.onEvaluate(hero.key)}
                 >
                   ${busy === "evaluate"
@@ -602,7 +605,7 @@ function renderToday(
                 </button>
                 <button
                   class="sw-today__big sw-today__big--primary ${busy === "apply" ? "is-busy" : ""}"
-                  ?disabled=${disabled}
+                  ?disabled=${disabled || !props.access.canApply}
                   @click=${() => props.onApply(hero.key)}
                 >
                   ${busy === "apply"
@@ -612,7 +615,7 @@ function renderToday(
                 </button>
                 <button
                   class="sw-today__big sw-today__big--tweak ${busy === "revise" ? "is-busy" : ""}"
-                  ?disabled=${disabled}
+                  ?disabled=${disabled || !props.access.canRevise}
                   @click=${() => props.onRevise(hero.key)}
                 >
                   ${busy === "revise"
@@ -622,7 +625,7 @@ function renderToday(
                 </button>
                 <button
                   class="sw-today__big sw-today__big--skip ${busy === "reject" ? "is-busy" : ""}"
-                  ?disabled=${disabled}
+                  ?disabled=${disabled || !props.access.canReject}
                   @click=${() => props.onReject(hero.key)}
                 >
                   ${busy === "reject"
@@ -758,9 +761,11 @@ function renderEvaluationOutcome(outcome: SkillWorkshopEvaluationOutcome) {
       </div>
       ${result?.summary ? html`<p class="sw-evaluation__summary">${result.summary}</p>` : nothing}
       ${result?.decisionReason
-        ? html`<p class="sw-evaluation__reason">${result.decisionReason}</p>`
+        ? html`<p class="sw-evaluation__reason">${formatUiExternalText(result.decisionReason)}</p>`
         : nothing}
-      ${outcome.error ? html`<p class="sw-evaluation__error">${outcome.error}</p>` : nothing}
+      ${outcome.error
+        ? html`<p class="sw-evaluation__error">${formatUiExternalText(outcome.error)}</p>`
+        : nothing}
       ${result?.findings?.length ? renderEvaluationFindings(result.findings) : nothing}
       ${result?.metrics && Object.keys(result.metrics).length > 0
         ? renderEvaluationMetrics(result.metrics)
@@ -806,7 +811,8 @@ function renderEvaluationFindings(findings: SkillWorkshopEvaluationFinding[]) {
               </span>
               <span>
                 <code class="sw-evaluation__rule">${finding.ruleId}</code>
-                ${finding.message} ${location ? html`<small>${location}</small>` : nothing}
+                ${formatUiExternalText(finding.message)}
+                ${location ? html`<small>${location}</small>` : nothing}
               </span>
             </li>
           `;

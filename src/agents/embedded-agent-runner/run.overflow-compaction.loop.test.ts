@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -7,7 +8,8 @@ import {
 import { dispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 
 const mocks = vi.hoisted(() => ({
-  runAttempt: vi.fn(async () => ({ terminal: { kind: "ok" } })),
+  runAttempt: vi.fn(),
+  settleRequesterAfterSessionSpawns: vi.fn(),
 }));
 
 vi.mock("../delegation-capability.js", () => ({
@@ -30,16 +32,13 @@ vi.mock("./run/attempt-exec-approval-continuation.js", () => ({
   })),
 }));
 
-vi.mock("./run/backend.js", () => ({
-  runEmbeddedAttemptWithBackend: mocks.runAttempt,
+vi.mock("../harness/selection.js", () => ({
+  runAgentHarnessAttempt: mocks.runAttempt,
+  runAgentHarnessSettledTurnFinalization: vi.fn(),
 }));
 
-vi.mock("./run/plugin-harness-prompt-images.js", () => ({
-  preparePluginHarnessPromptImages: vi.fn(async () => ({
-    images: undefined,
-    imageOrder: undefined,
-    media: undefined,
-  })),
+vi.mock("../subagents/registry/subagent-registry.js", () => ({
+  settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 
 vi.mock("./run/skill-workshop-attempt-params.js", () => ({
@@ -56,6 +55,9 @@ function makeDispatchInput(
       runId: "run-1",
       timeoutMs: 30_000,
       config: {},
+      contextEngineLogicalTurnLease: { owner: "logical-turn" },
+      onContextEngineTurnCandidate: vi.fn(),
+      admittedRunContext: createTestAdmittedRunContext("run-1"),
     },
     transcriptOwnership: { kind: "caller-owned", sessionManager },
     runtime: {
@@ -120,7 +122,12 @@ function makeDispatchInput(
 }
 
 describe("embedded run retry dispatch", () => {
-  it("preserves caller-owned session and unsafe replay state on the next attempt", async () => {
+  beforeEach(() => {
+    mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
+    mocks.settleRequesterAfterSessionSpawns.mockReset();
+  });
+
+  it("preserves caller-owned turn facts and unsafe replay state on the next attempt", async () => {
     const sessionManager = { owner: "caller" };
     const replayState = observeReplayMetadata(
       observeReplayMetadata(createEmbeddedRunReplayState(), {
@@ -130,12 +137,63 @@ describe("embedded run retry dispatch", () => {
       { replaySafe: true, hadPotentialSideEffects: false },
     );
 
-    const result = await dispatchEmbeddedRunAttempt(makeDispatchInput(sessionManager, replayState));
+    const input = makeDispatchInput(sessionManager, replayState);
+    const result = await dispatchEmbeddedRunAttempt(input);
 
     expect(result.preparedAttempt.sessionManager).toBe(sessionManager);
     expect(result.preparedAttempt.sessionTarget).toBeUndefined();
+    expect(result.preparedAttempt.contextEngineLogicalTurnLease).toBeUndefined();
+    expect(result.preparedAttempt.onContextEngineTurnCandidate).toBe(
+      input.params.onContextEngineTurnCandidate,
+    );
     expect(replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
     expect(result.preparedAttempt.initialReplayState).toBe(replayState);
     expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);
+    expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
+
+  it("forwards effective and authored context facts without a context engine (#124702)", async () => {
+    const cappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    cappedInput.runtime.contextTokenBudget = 272_000;
+    cappedInput.runtime.authoredContextTokenCap = 32_000;
+    const capped = await dispatchEmbeddedRunAttempt(cappedInput);
+
+    expect(capped.preparedAttempt.contextTokenBudget).toBe(272_000);
+    expect(capped.preparedAttempt.authoredContextTokenCap).toBe(32_000);
+
+    const uncappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    uncappedInput.runtime.contextTokenBudget = 272_000;
+    const uncapped = await dispatchEmbeddedRunAttempt(uncappedInput);
+
+    expect(uncapped.preparedAttempt.contextTokenBudget).toBe(272_000);
+    expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
+  });
+
+  it.each([true, false])(
+    "settles accepted spawns before a late post-compaction abort (yielded: %s)",
+    async (yieldDetected) => {
+      const postCompactionAbortError = new Error("post-compaction loop detected");
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.control.getPostCompactionAbortError = vi.fn(() => postCompactionAbortError);
+      const acceptedSessionSpawns = [
+        { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+      ];
+      mocks.runAttempt.mockResolvedValueOnce({
+        terminal: { kind: "ok" },
+        agentHarnessId: "codex",
+        yieldDetected,
+        acceptedSessionSpawns,
+      });
+
+      await expect(dispatchEmbeddedRunAttempt(input)).rejects.toBe(postCompactionAbortError);
+
+      expect(mocks.settleRequesterAfterSessionSpawns).toHaveBeenCalledWith({
+        requesterAgentId: "main",
+        requesterSessionKey: "agent:main:session-1",
+        requesterTurnRunId: "run-1",
+        requesterYielded: yieldDetected,
+        acceptedSessionSpawns,
+      });
+    },
+  );
 });

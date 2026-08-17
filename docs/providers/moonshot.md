@@ -112,7 +112,7 @@ onboarding.
 
     ```json5
     {
-      env: { MOONSHOT_API_KEY: "sk-..." },
+      env: { vars: { MOONSHOT_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "moonshot/kimi-k3" },
@@ -244,7 +244,7 @@ onboarding.
 
     ```json5
     {
-      env: { KIMI_API_KEY: "sk-..." },
+      env: { vars: { KIMI_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "kimi/kimi-for-coding" },

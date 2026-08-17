@@ -1,9 +1,8 @@
 // Gradium plugin module implements tts behavior.
 import {
   assertOkOrThrowProviderError,
-  assertProviderBinaryResponseContent,
+  readProviderBinaryResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { GRADIUM_API_HOSTNAME, normalizeGradiumBaseUrl } from "./shared.js";
 
@@ -57,22 +56,13 @@ export async function gradiumTTS(params: {
   try {
     await assertOkOrThrowProviderError(response, "Gradium API error");
 
-    try {
-      assertProviderBinaryResponseContent(response, "Gradium API error", "audio");
-    } catch (error) {
-      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
-      // before the rejected response and its dispatcher can be released.
-      void response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
-    const audio = await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes: maxBytesLocal }) =>
-        new Error(`Gradium TTS audio response exceeds ${maxBytesLocal} bytes`),
-    });
-    if (audio.byteLength === 0) {
-      throw new Error("Gradium API error: malformed audio response");
-    }
-    return audio;
+    return Buffer.from(
+      await readProviderBinaryResponse(response, "Gradium API error", "audio", {
+        maxBytes,
+        onOverflow: ({ maxBytes: maxBytesLocal }) =>
+          new Error(`Gradium TTS audio response exceeds ${maxBytesLocal} bytes`),
+      }),
+    );
   } finally {
     await release();
   }

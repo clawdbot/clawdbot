@@ -288,7 +288,7 @@ describe("telegram ingress worker retry policy", () => {
     expect(runtime.calls).toHaveLength(1);
     await flushRuntime();
     expect(runtime.messages).toContainEqual(
-      expect.objectContaining({ type: "poll-error", errorCode: 429 }),
+      expect.objectContaining({ type: "poll-error", errorCode: 429, retryAfterMs: 50 }),
     );
     await vi.advanceTimersByTimeAsync(49);
     expect(runtime.calls).toHaveLength(1);
@@ -303,6 +303,30 @@ describe("telegram ingress worker retry policy", () => {
       expect.objectContaining({ type: "poll-success", count: 0 }),
     );
   });
+
+  it.each([0, -1, Number.MAX_VALUE])(
+    "does not publish an invalid effective flood wait (%s)",
+    async (retryAfterSeconds) => {
+      vi.useFakeTimers();
+      const runtime = createRuntime([
+        jsonResponse(429, {
+          ok: false,
+          error_code: 429,
+          description: "Too Many Requests",
+          parameters: { retry_after: retryAfterSeconds },
+        }),
+        jsonResponse(200, { ok: true, result: [] }),
+      ]);
+
+      await flushRuntime();
+      await runtime.done;
+
+      const floodError = runtime.messages.find((message) => message.type === "poll-error");
+      expect(floodError).toMatchObject({ type: "poll-error", errorCode: 429 });
+      expect(floodError).not.toHaveProperty("retryAfterMs");
+      expect(runtime.calls).toHaveLength(2);
+    },
+  );
 
   it.each([500, 502])("retries getUpdates %s responses with backoff", async (status) => {
     vi.useFakeTimers();

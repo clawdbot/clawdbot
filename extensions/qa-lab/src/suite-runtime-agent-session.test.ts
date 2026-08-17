@@ -6,6 +6,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSession,
@@ -93,52 +94,6 @@ describe("qa suite runtime agent session helpers", () => {
     expect(method).toBe("sessions.create");
     expect(params).toEqual({ label: "Test Session" });
     expect(options?.timeoutMs).toBe(60_000);
-  });
-
-  it("retries transient session store lock timeouts while creating sessions", async () => {
-    const lockTimeoutError = Object.assign(
-      new Error("SessionWriteLockTimeoutError: session file locked"),
-      { code: "OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT" },
-    );
-    gatewayCall
-      .mockRejectedValueOnce(lockTimeoutError)
-      .mockResolvedValueOnce({ key: " session-2 " });
-
-    vi.useFakeTimers();
-    const pending = createSession(env, "Retry Session", "agent:qa:retry");
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await expect(pending).resolves.toBe("session-2");
-    expect(gatewayCall).toHaveBeenCalledTimes(2);
-    expect(gatewayCall).toHaveBeenNthCalledWith(
-      2,
-      "sessions.create",
-      { label: "Retry Session", key: "agent:qa:retry" },
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-    );
-  });
-
-  it("retries transient session store stale locks while creating sessions", async () => {
-    const lockStaleError = Object.assign(
-      new Error("SessionWriteLockStaleError: session file lock stale"),
-      { code: "OPENCLAW_SESSION_WRITE_LOCK_STALE" },
-    );
-    gatewayCall.mockRejectedValueOnce(lockStaleError).mockResolvedValueOnce({ key: " session-3 " });
-
-    vi.useFakeTimers();
-    const pending = createSession(env, "Retry Stale Session", "agent:qa:stale-retry");
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await expect(pending).resolves.toBe("session-3");
-    expect(gatewayCall).toHaveBeenCalledTimes(2);
-    expect(gatewayCall).toHaveBeenNthCalledWith(
-      2,
-      "sessions.create",
-      { label: "Retry Stale Session", key: "agent:qa:stale-retry" },
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-    );
   });
 
   it("reads effective tool ids once and drops blanks", async () => {
@@ -315,6 +270,49 @@ describe("qa suite runtime agent session helpers", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("reports bounded persisted compaction summaries", async () => {
+    const tempRoot = await makeTempDir("qa-session-compaction-summaries-");
+    const sessionId = "compaction-summary";
+    const sessionKey = "agent:qa:compaction-summary";
+    const summaries = Array.from({ length: 18 }, (_, index) => `summary-${index}`);
+    await seedQaSession({ tempRoot, sessionId, sessionKey });
+
+    let parentId: string | null = null;
+    for (const [index, summary] of summaries.entries()) {
+      const id = `compaction-${index}`;
+      await appendSqliteSessionTranscriptEventForTest({
+        agentId: "qa",
+        env: qaSessionEnv(tempRoot),
+        sessionId,
+        sessionKey,
+        event: {
+          type: "compaction",
+          id,
+          parentId,
+          timestamp: new Date(index).toISOString(),
+          summary,
+          firstKeptEntryId: id,
+          tokensBefore: 100,
+        },
+      });
+      parentId = id;
+    }
+    await appendQaTranscriptMessage({
+      tempRoot,
+      sessionId,
+      sessionKey,
+      message: { role: "assistant", content: "done" },
+    });
+
+    const result = await readSessionTranscriptSummary(
+      { gateway: { tempRoot } } as never,
+      sessionKey,
+    );
+
+    expect(result.compactionSummaries).toEqual(summaries.slice(-16));
+    expect(result.finalText).toBe("done");
+  });
+
   it("rejects an empty QA session transcript seed", async () => {
     const tempRoot = await makeTempDir("qa-session-seed-empty-");
 
@@ -363,6 +361,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      compactionSummaries: [],
       completedToolCallCounts: {},
       eventCursor: 2,
       userMessageCount: 0,
@@ -391,6 +390,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      compactionSummaries: [],
       completedToolCallCounts: {},
       eventCursor: 3,
       userMessageCount: 0,
@@ -447,6 +447,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      compactionSummaries: [],
       completedToolCallCounts: {},
       eventCursor: 4,
       userMessageCount: 1,
@@ -734,6 +735,7 @@ describe("qa suite runtime agent session helpers", () => {
       }),
     ).resolves.toEqual({
       assistantToolCallCounts: {},
+      compactionSummaries: [],
       completedToolCallCounts: {},
       eventCursor: 0,
       userMessageCount: 0,

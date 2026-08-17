@@ -109,6 +109,15 @@ describe("worker admission", () => {
   it("rejects expiry, unavailable state, and the previous gateway build", () => {
     nowMs = credential.expiresAtMs;
     expect(admit()).toEqual({ ok: false, reason: "credential-expired" });
+    expect(
+      admitWorkerConnection({
+        store,
+        admission: admission(),
+        expectedBuild: RECEIPT,
+        nowMs,
+        allowExpiredCredential: true,
+      }),
+    ).toMatchObject({ ok: true });
     nowMs = 1_000;
     environment = { ...environment, destroyRequestedAtMs: nowMs };
     expect(admit()).toEqual({ ok: false, reason: "environment-unavailable" });

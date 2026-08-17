@@ -10,7 +10,7 @@ import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -116,13 +116,8 @@ function modelFromProviderStaticCatalog(params: {
     reasoning: model?.reasoning ?? params.model.reasoning ?? false,
     input: normalizeStaticCatalogInput(model?.input ?? params.model.input),
     cost: model?.cost ?? normalizeStaticCatalogCost(params.model.cost),
-    contextWindow:
-      model?.contextWindow ??
-      params.model.contextWindow ??
-      params.providerConfig.contextWindow ??
-      DEFAULT_CONTEXT_TOKENS,
-    contextTokens:
-      model?.contextTokens ?? params.model.contextTokens ?? params.providerConfig.contextTokens,
+    contextWindow: model?.contextWindow ?? params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: model?.contextTokens ?? params.model.contextTokens,
     maxTokens:
       model?.maxTokens ??
       params.model.maxTokens ??
@@ -520,7 +515,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
   const discoveryEntryPluginIds = new Set(
     (
       metadataSnapshot?.manifestRegistry?.plugins ??
-      loadPluginManifestRegistry({
+      loadPluginManifestRegistryCore({
         config: params.cfg,
         workspaceDir: params.workspaceDir,
         env,
@@ -708,7 +703,9 @@ export function createBundledProviderStaticCatalogContextResolver(
       return undefined;
     }
     return {
-      ...(model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
+      ...(typeof model.contextWindow === "number" && model.contextWindow > 0
+        ? { contextWindow: model.contextWindow }
+        : {}),
       ...(typeof model.contextTokens === "number" && model.contextTokens > 0
         ? { contextTokens: model.contextTokens }
         : {}),

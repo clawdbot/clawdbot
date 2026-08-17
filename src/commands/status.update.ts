@@ -3,13 +3,31 @@
 
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import {
+  normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
+  type UpdateChannel,
+} from "../infra/update-channels.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
   type UpdateCheckResult,
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
+
+/** Chooses a registry tag only after the status check has identified the install. */
+export function resolveStatusRegistryUpdateChannel(params: {
+  configChannel?: UpdateChannel | null;
+  installKind: UpdateCheckResult["installKind"];
+  git?: UpdateCheckResult["git"];
+}): UpdateChannel {
+  return resolveEffectiveUpdateChannel({
+    configChannel: params.configChannel,
+    currentVersion: VERSION,
+    installKind: params.installKind,
+    git: params.git,
+  }).channel;
+}
 
 /** Runs the update check using the configured update channel and current install root. */
 export async function getUpdateCheckResult(params: {
@@ -29,10 +47,12 @@ export async function getUpdateCheckResult(params: {
     timeoutMs: params.timeoutMs,
     fetchGit: params.fetchGit,
     includeRegistry: params.includeRegistry,
-    registryChannel: resolveRegistryUpdateChannel({
-      configChannel,
-      currentVersion: VERSION,
-    }),
+    resolveRegistryChannel: ({ installKind, git }) =>
+      resolveStatusRegistryUpdateChannel({
+        configChannel,
+        installKind,
+        git,
+      }),
   });
 }
 
@@ -170,9 +190,6 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     }
     if (update.deps.status === "missing") {
       parts.push("deps missing");
-    }
-    if (update.deps.status === "stale") {
-      parts.push("deps stale");
     }
   }
   return `Update: ${parts.join(" · ")}`;

@@ -28,6 +28,19 @@ describe("formatPluginLine", () => {
     expect(output).toContain("explicitly enabled: no");
   });
 
+  it("labels portable bundle records as Agent Plugins", () => {
+    const output = formatPluginLine(
+      createPluginRecord({
+        id: "portable",
+        format: "bundle",
+        bundleFormat: "agent",
+      }),
+      true,
+    );
+
+    expect(output).toContain("bundle format: agent (Agent Plugins)");
+  });
+
   it("sanitizes activation reasons in verbose output", () => {
     const output = formatPluginLine(
       createPluginRecord({

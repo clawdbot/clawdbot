@@ -25,7 +25,7 @@ describe("Control UI managed media under a UI base path", () => {
     await server?.close();
   });
 
-  it("keeps origin-root managed-media APIs outside the UI base path", async () => {
+  it("loads managed-media APIs beneath the configured UI base path", async () => {
     const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
     const browser = await chromium.launch({ executablePath });
     const context = await browser.newContext({
@@ -34,16 +34,17 @@ describe("Control UI managed media under a UI base path", () => {
       viewport: { width: 1280, height: 800 },
     });
     const page = await context.newPage();
-    const mediaPath =
+    const sourcePath =
       "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full";
+    const previewPath = `/rosita${sourcePath.replace(/\/full$/u, "/thumbnail")}`;
     const imageBytes = await readFile(
       path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"),
     );
     const requests: Array<{ contentType: string; path: string }> = [];
 
-    await page.route("**/api/chat/media/outgoing/**", async (route) => {
+    await page.route("**/rosita/api/chat/media/outgoing/**", async (route) => {
       const requestPath = new URL(route.request().url()).pathname;
-      if (requestPath === mediaPath) {
+      if (requestPath === previewPath) {
         requests.push({ contentType: "image/png", path: requestPath });
         await route.fulfill({ body: imageBytes, contentType: "image/png", status: 200 });
         return;
@@ -63,7 +64,7 @@ describe("Control UI managed media under a UI base path", () => {
           role: "assistant",
           content: [
             { type: "text", text: "Managed attachment proof" },
-            { type: "image", url: mediaPath, alt: "Managed proof image" },
+            { type: "image", url: sourcePath, alt: "Managed proof image" },
           ],
           timestamp: 1,
         },
@@ -76,9 +77,7 @@ describe("Control UI managed media under a UI base path", () => {
     });
 
     try {
-      // The Vite harness mounts at `/`; bootstrap models the reverse proxy
-      // prefix that Gateway strips before serving the Control UI.
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${server.baseUrl}rosita/chat`);
       await gateway.waitForRequest("chat.startup");
       const image = page.getByAltText("Managed proof image");
       await image.waitFor({ state: "attached", timeout: 10_000 });
@@ -90,7 +89,7 @@ describe("Control UI managed media under a UI base path", () => {
       const naturalWidth = await image.evaluate((node) =>
         node instanceof HTMLImageElement ? node.naturalWidth : 0,
       );
-      expect(requests).toEqual([{ contentType: "image/png", path: mediaPath }]);
+      expect(requests).toEqual([{ contentType: "image/png", path: previewPath }]);
       expect(naturalWidth).toBeGreaterThan(0);
       expect(await page.getByText("Managed attachment proof", { exact: true }).count()).toBe(1);
       expect(await page.getByText("Distinct second reply", { exact: true }).count()).toBe(1);

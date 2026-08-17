@@ -224,19 +224,25 @@ export class CustodianPage extends OpenClawLightDomElement {
           ? "custodian--setup-required"
           : ""}"
       >
-        <header class="custodian__header custodian__column">
-          <div class="custodian__identity">
-            <div class="custodian__mark" aria-hidden="true">
-              <openclaw-mascot
-                .mood=${this.store.sending ? "thinking" : "idle"}
-                .size=${38}
-              ></openclaw-mascot>
-            </div>
-            <div>
-              <h1>${t("custodian.title")}</h1>
-              <p>${t(this.onboarding ? "custodian.subtitle" : "custodian.subtitleCaretaker")}</p>
-            </div>
-          </div>
+        <header
+          class="custodian__header custodian__column ${this.onboarding
+            ? "custodian__header--minimal"
+            : ""}"
+        >
+          ${this.onboarding
+            ? nothing
+            : html`<div class="custodian__identity">
+                <div class="custodian__mark" aria-hidden="true">
+                  <openclaw-mascot
+                    .mood=${this.store.sending ? "thinking" : "idle"}
+                    .size=${38}
+                  ></openclaw-mascot>
+                </div>
+                <div>
+                  <h1>${t("custodian.title")}</h1>
+                  <p>${t("custodian.subtitleCaretaker")}</p>
+                </div>
+              </div>`}
           <div class="custodian__header-actions">
             ${this.historyAvailable
               ? html`<button

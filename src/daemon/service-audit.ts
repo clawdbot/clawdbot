@@ -5,15 +5,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeStringEntries,
-  sortUniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
-import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
-import { VERSION } from "../version.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -21,13 +16,11 @@ import {
   isVersionManagedNodePath,
   resolveSystemNodePath,
 } from "./runtime-paths.js";
-import { getMinimalServicePathPartsFromEnv } from "./service-env.js";
-import { SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
+import { getMinimalServicePathPartsFromEnv, SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
 import {
   collectInlineManagedServiceEnvKeys,
-  hasInlineEnvironmentSource,
+  collectInlineServiceEnvKeys,
   isEnvironmentFileOnlySource,
-  readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
@@ -66,7 +59,6 @@ export const SERVICE_AUDIT_CODES = {
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
   gatewayTokenDrift: "gateway-token-drift",
-  gatewayServiceVersionMismatch: "gateway-service-version-mismatch",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
   systemdAfterNetworkOnline: "systemd-after-network-online",
@@ -390,47 +382,11 @@ function auditManagedServiceEnvironment(
   });
 }
 
-function normalizeServiceEnvKey(key: string): string | null {
-  return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
-}
-
-const SERVICE_PROXY_ENV_KEY_SET = new Set(
-  SERVICE_PROXY_ENV_KEYS.flatMap((key) => {
-    const normalized = normalizeServiceEnvKey(key);
-    return normalized ? [normalized] : [];
-  }),
-);
-
-function collectInlineProxyEnvKeys(command: GatewayServiceCommand): string[] {
-  if (!command?.environment) {
-    return [];
-  }
-  const inlineKeys: string[] = [];
-  for (const [rawKey, value] of Object.entries(command.environment)) {
-    if (typeof value !== "string" || !value.trim()) {
-      continue;
-    }
-    const normalized = normalizeServiceEnvKey(rawKey);
-    if (!normalized || !SERVICE_PROXY_ENV_KEY_SET.has(normalized)) {
-      continue;
-    }
-    if (
-      !hasInlineEnvironmentSource(
-        readEnvironmentValueSource(command.environmentValueSources, normalized),
-      )
-    ) {
-      continue;
-    }
-    inlineKeys.push(normalized);
-  }
-  return sortUniqueStrings(inlineKeys);
-}
-
 function auditProxyServiceEnvironment(
   command: GatewayServiceCommand,
   issues: ServiceConfigIssue[],
 ) {
-  const inlineKeys = collectInlineProxyEnvKeys(command);
+  const inlineKeys = collectInlineServiceEnvKeys(command, SERVICE_PROXY_ENV_KEYS);
   if (inlineKeys.length === 0) {
     return;
   }
@@ -618,20 +574,6 @@ export function checkTokenDrift(params: {
   return null;
 }
 
-function auditGatewayServiceVersion(command: GatewayServiceCommand, issues: ServiceConfigIssue[]) {
-  const serviceVersion = command?.environment?.OPENCLAW_SERVICE_VERSION?.trim();
-  if (!serviceVersion || serviceVersion === VERSION) {
-    return;
-  }
-
-  issues.push({
-    code: SERVICE_AUDIT_CODES.gatewayServiceVersionMismatch,
-    message: `Gateway service was installed by OpenClaw ${serviceVersion}; current CLI is ${VERSION}.`,
-    detail: command?.sourcePath,
-    level: "recommended",
-  });
-}
-
 export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
@@ -653,7 +595,6 @@ export async function auditGatewayServiceConfig(params: {
   auditManagedServiceEnvironment(params.command, issues, params.expectedManagedServiceEnvKeys);
   auditProxyServiceEnvironment(params.command, issues);
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
-  auditGatewayServiceVersion(params.command, issues);
   auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
 

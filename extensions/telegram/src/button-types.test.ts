@@ -647,6 +647,25 @@ describe("buildTelegramPresentationButtons", () => {
     ).toBeUndefined();
   });
 
+  it("records Web App gating separately from callback overflow", () => {
+    const dropped: Array<{ reason: string; callbackDataBytes?: number }> = [];
+    buildTelegramPresentationButtons(
+      {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "App", action: { type: "web-app", url: "https://example.com/app" } },
+            ],
+          },
+        ],
+      },
+      { onDroppedControl: (control) => dropped.push(control) },
+    );
+
+    expect(dropped).toEqual([{ label: "App", reason: "web_app_unavailable" }]);
+  });
+
   it("skips hosted widget actions without a Telegram web app URL", () => {
     expect(
       buildTelegramPresentationButtons({

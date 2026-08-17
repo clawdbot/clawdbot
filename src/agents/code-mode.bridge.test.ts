@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
@@ -133,6 +134,55 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
+  it("supports a guest timer between an action and its observation", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const input = pluginTool("fake_terminal_input", "Send terminal input");
+    const read = pluginTool("fake_terminal_read", "Read terminal output");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, input, read],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-timer-observation",
+        {
+          code: `
+            const cancelled = setTimeout(() => { throw new Error("cancelled timer fired"); }, 30_000);
+            await tools.callValue("fake_terminal_input", { data: "status\\n" });
+            clearTimeout(cancelled);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            return await tools.callValue("fake_terminal_read", {});
+          `,
+        },
+      ),
+    );
+
+    expect(details, JSON.stringify(details)).toMatchObject({
+      status: "completed",
+      value: { name: "fake_terminal_read" },
+    });
+    expect(input.execute).toHaveBeenCalledOnce();
+    expect(read.execute).toHaveBeenCalledOnce();
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it("keeps the actual winner when the later-started nested tool settles first", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     let firstAborted = false;
@@ -217,29 +267,24 @@ describe("Code Mode bridge settlement and cancellation", () => {
       const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
       let auditCompleted = false;
       let auditAborted = false;
+      const auditStarted = createDeferred();
+      const auditRelease = createDeferred();
       const audit = pluginToolWithExecute(
         "fake_early_audit",
         "Early detached audit",
         async (_toolCallId, _input, signal) => {
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(resolve, 250);
-            signal?.addEventListener(
-              "abort",
-              () => {
-                clearTimeout(timer);
-                auditAborted = true;
-                reject(new Error("aborted"));
-              },
-              { once: true },
-            );
-          });
+          auditStarted.resolve();
+          signal?.addEventListener("abort", () => (auditAborted = true), { once: true });
+          await auditRelease.promise;
           auditCompleted = true;
           return jsonResult({ recorded: true });
         },
       );
-      const fast = pluginToolWithExecute("fake_awaited_fast", "Awaited fast helper", async () =>
-        jsonResult({ winner: "fast" }),
-      );
+      const fast = pluginToolWithExecute("fake_awaited_fast", "Awaited fast helper", async () => {
+        await auditStarted.promise;
+        setImmediate(() => auditRelease.resolve());
+        return jsonResult({ winner: "fast" });
+      });
       applyCodeModeCatalog({
         tools: [...codeModeTools, audit, fast],
         config,
@@ -516,6 +561,62 @@ describe("Code Mode bridge settlement and cancellation", () => {
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
     });
+  });
+
+  it("returns an actionable bounded result when a nested tool result exceeds the output budget", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, maxOutputBytes: 1_024 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const oversizedSearch = pluginToolWithExecute(
+      "fake_oversized_search",
+      "Oversized search result",
+      async () =>
+        jsonResult({
+          matches: [
+            { path: "src/first.ts", line: 1, text: "first useful match" },
+            { path: "src/large.ts", line: 2, text: "🦞".repeat(2_048) },
+          ],
+        }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, oversizedSearch],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-oversized-search",
+        {
+          code: 'return await tools.callValue("fake_oversized_search", {});',
+        },
+      ),
+    );
+
+    expect(details.status).toBe("completed");
+    expect(oversizedSearch.execute).toHaveBeenCalledOnce();
+    expect(details.value).toMatchObject({
+      truncated: true,
+      omittedBytes: expect.any(Number),
+      guidance: expect.stringContaining("rerun with narrower args"),
+      prefix: expect.stringContaining("first useful match"),
+    });
+    const outputBytes = Buffer.byteLength(JSON.stringify(details.output), "utf8");
+    const valueBytes = Buffer.byteLength(JSON.stringify(details.value), "utf8");
+    expect(outputBytes + valueBytes).toBeLessThanOrEqual(1_024);
   });
 
   it("fails fast without parking a suspended run when the exec call is aborted", async () => {

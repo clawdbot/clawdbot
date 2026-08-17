@@ -8,9 +8,10 @@ title: "Session Dashboards"
 
 Every thread in the Control UI has two faces: the conversation you know, and a
 **dashboard** — a grid of live widgets your agent builds for you. A thread with
-no widgets is just chat. The moment a widget is pinned, a **Chat | Dashboard**
-toggle appears in the header, and the dashboard becomes the main surface with
-your chat docked beside it.
+no widgets is just chat. The moment a widget is pinned, a **Chat | Split |
+Dashboard** switch appears in the header: Chat is the conversation alone, Split
+shows the dashboard with your chat docked beside it, and Dashboard gives the
+board the whole surface.
 
 There is nothing to set up and no separate app to configure: dashboards are a
 core feature, owned by the thread, stored with the agent, and they survive
@@ -20,7 +21,9 @@ core feature, owned by the thread, stored with the agent, and they survive
 
 Open `/dashboards` to see every thread whose preferred face is Dashboard, with
 the most recently updated thread first. Open any row to go directly to that
-thread's `/dashboard/<agent>/<sessionRef>` URL.
+thread's `/dashboard/<agent>/<sessionRef>` URL. An open Dashboards page updates
+as threads are renamed, archived, deleted, or switched between Chat and
+Dashboard, including after a Gateway reconnect.
 
 The Chat or Dashboard face preference is stored server-side per thread. It
 therefore follows you when you connect to the same gateway from another device.
@@ -59,9 +62,10 @@ never needs the agent.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its own chat-dock
   position.
-- **Docked chat.** On the dashboard face, your conversation docks to the
-  left, right, or bottom, resizes like the sidebar, and can be hidden
-  entirely — the agent still hears you when you bring it back.
+- **Docked chat.** In Split, your conversation docks to the left, right, or
+  bottom — pick the side from the small arrow on the header switch — and
+  resizes like the sidebar. Choose Dashboard to hide the chat entirely; the
+  agent still hears you when you bring it back.
 - **Agent parity.** Everything you can do, the agent can do with its
   `dashboard` tool: add, update, move, resize, and remove widgets, manage
   tabs, switch the visible tab, and move or hide the chat dock. Ask "put the

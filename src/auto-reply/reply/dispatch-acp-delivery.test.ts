@@ -77,7 +77,7 @@ const channelPluginMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
+vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
@@ -242,10 +242,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     const notice = { text: "Model Fallback: openai/gpt-5.5", isFallbackNotice: true };
     await coordinator.deliver("final", notice);
-    await coordinator.settleVisibleText();
 
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
+    expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
   });
 
   it("tracks successful final delivery separately from routed counters", async () => {

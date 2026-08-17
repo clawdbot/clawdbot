@@ -4,7 +4,9 @@ import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-pr
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
-import { classifyPortListener, inspectPortUsage, type PortUsage } from "../../infra/ports.js";
+import { classifyPortListener } from "../../infra/ports-format.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 import {
   hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
@@ -36,7 +38,7 @@ export type {
   GatewayRestartSnapshot,
   GatewayRestartWaitOutcome,
 } from "./restart-health.types.js";
-export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
+export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;

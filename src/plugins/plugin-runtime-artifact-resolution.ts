@@ -1,21 +1,13 @@
 /** Resolves the exact root and entry selected by the plugin runtime loader. */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "./runtime.js";
 
 type PluginRuntimeArtifactEntryKind = "runtime" | "setup";
-
-// Pin one physical path per plugin id and logical entry within one installed registry.
-function safeRealpathOrResolve(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
-}
 
 export function clearPluginRuntimeArtifactResolutionMemo(): void {
   getActivePluginRegistry()?.pluginRuntimeArtifacts.clear();
@@ -100,7 +92,7 @@ function resolvePackageLocalDistRuntimeArtifact(params: {
   )) {
     const artifactSource = path.join(artifactRoot, artifactRelativePath);
     if (fs.existsSync(artifactSource)) {
-      return safeRealpathOrResolve(artifactSource);
+      return resolveRealpathOrAbsolute(artifactSource);
     }
   }
   return null;
@@ -113,8 +105,8 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
   preferBuiltPluginArtifacts: boolean;
   packageManifest?: OpenClawPackageManifest;
 }): { source: string; rootDir: string } {
-  const rootDir = safeRealpathOrResolve(params.rootDir);
-  const source = safeRealpathOrResolve(params.source);
+  const rootDir = resolveRealpathOrAbsolute(params.rootDir);
+  const source = resolveRealpathOrAbsolute(params.source);
   if (!params.preferBuiltPluginArtifacts) {
     return { source, rootDir };
   }
@@ -125,10 +117,13 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     }
     return { source, rootDir };
   }
-  if (params.packageManifest?.build?.bundledDist === false) {
-    return { source, rootDir };
-  }
-  const packageLocalArtifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+  // Source-external plugins can leave package-local npm build output behind.
+  // Keep source authoritative over that output, but allow the lifecycle-owned root
+  // build to provide the fresh JavaScript artifact used by source checkouts.
+  const packageLocalArtifactSource =
+    params.packageManifest?.build?.bundledDist === false
+      ? null
+      : resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
   if (packageLocalArtifactSource) {
     return { source: packageLocalArtifactSource, rootDir };
   }
@@ -145,6 +140,8 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     return { source, rootDir };
   }
   const artifactRelativePath = rewriteBundledRuntimeArtifactRelativePath(relativeSource);
+  // The runtime overlay is a staging fallback. Final canonicalization maps it
+  // to the matching root build when both exist, so one build owns execution.
   for (const artifactRootName of ["dist-runtime", "dist"] as const) {
     const artifactRoot = path.join(
       packageRoot,
@@ -155,8 +152,8 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     const artifactSource = path.join(artifactRoot, artifactRelativePath);
     if (fs.existsSync(artifactSource)) {
       return {
-        source: safeRealpathOrResolve(artifactSource),
-        rootDir: safeRealpathOrResolve(artifactRoot),
+        source: resolveRealpathOrAbsolute(artifactSource),
+        rootDir: resolveRealpathOrAbsolute(artifactRoot),
       };
     }
   }
@@ -174,8 +171,8 @@ export function resolvePluginRuntimeArtifact(params: {
   packageManifest?: OpenClawPackageManifest;
   registry?: PluginRegistry;
 }): { source: string; rootDir: string } {
-  const rootDir = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.rootDir));
-  const source = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.source));
+  const rootDir = resolveCanonicalDistRuntimeSource(resolveRealpathOrAbsolute(params.rootDir));
+  const source = resolveCanonicalDistRuntimeSource(resolveRealpathOrAbsolute(params.source));
   const memoKey = JSON.stringify([params.pluginId, rootDir, params.entryKind]);
   const targetRegistry = params.registry ?? requireActivePluginRegistry();
   const cached = targetRegistry.pluginRuntimeArtifacts.get(memoKey);

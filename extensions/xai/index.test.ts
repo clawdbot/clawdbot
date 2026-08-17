@@ -1,8 +1,8 @@
 // Xai tests cover index plugin behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  createCapturedPluginRegistration,
   registerProviderPlugin,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -206,6 +206,7 @@ describe("xai provider plugin", () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
+          { id: "grok-4.6", object: "model" },
           { id: "grok-4.5", object: "model" },
           { id: "grok-4.20-0309-reasoning", object: "model" },
           { id: "grok-4.20-0309-non-reasoning", object: "model" },
@@ -222,6 +223,7 @@ describe("xai provider plugin", () => {
     });
 
     expect(provider.apiKey).toBe("xai-key");
+    expect(provider.models.map((model) => model.id)).toContain("grok-4.6");
     expect(provider.models.map((model) => model.id)).toContain("grok-4.5");
     expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-reasoning");
     expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-non-reasoning");
@@ -524,6 +526,42 @@ describe("xai provider plugin", () => {
     expect(realtimeVoiceProvider.capabilities?.transports).toEqual(["gateway-relay"]);
   });
 
+  it("forwards exact caller cancellation through the registered lazy X search factory", async () => {
+    const factory = registerXaiBilledToolFactories().x_search;
+    const tool = factory({
+      config: createXaiBilledToolConfig("x_search", true),
+      activeModel: { provider: "xai" },
+      hasAuthForProvider: (providerId) => providerId === "xai",
+      resolveApiKeyForProvider: async (providerId) =>
+        providerId === "xai" ? "xai-lazy-cancel-key" : undefined,
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Expected one registered lazy X search tool");
+    }
+    expect(tool.resultContentSource).toBe("network");
+    const controller = new AbortController();
+    const reason = new Error("operator cancelled lazy X search");
+    let transportSignal: AbortSignal | undefined;
+    const mockFetch = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          transportSignal = init?.signal ?? undefined;
+          transportSignal?.addEventListener("abort", () => reject(reason), {
+            once: true,
+          });
+          queueMicrotask(() => controller.abort(reason));
+        }),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+
+    await expect(
+      tool.execute("lazy-xai-cancel", { query: "registered lazy cancellation" }, controller.signal),
+    ).rejects.toBe(reason);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(transportSignal?.reason).toBe(reason);
+  });
+
   describe.each(["code_execution", "x_search"] as const)("%s exposure", (toolName) => {
     it.each([
       {
@@ -766,6 +804,12 @@ describe("xai provider plugin", () => {
     expect(
       provider.isModernModelRef?.({
         provider: "xai",
+        modelId: "grok-4.6",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "xai",
         modelId: "grok-4.3",
       } as never),
     ).toBe(true);
@@ -817,5 +861,29 @@ describe("xai provider plugin", () => {
     expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
     expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
     expect(normalizedCompat?.unsupportedToolSchemaKeywords).toEqual(["minContains", "maxContains"]);
+  });
+
+  it("preserves Grok 4.6 xhigh reasoning through OAuth auto", async () => {
+    mockXaiRuntimeOAuth();
+    stubXaiFetch((url) =>
+      url.endsWith("/settings")
+        ? Response.json({ default_model: "grok-4.6" })
+        : Response.json({
+            data: [{ id: "grok-4.6", api_backend: "responses" }],
+          }),
+    );
+    const { provider, result } = await runXaiCatalog();
+    const auto = result.models.find((model) => model.id === "auto");
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "auto",
+      model: { ...auto, provider: "xai" },
+    } as never);
+
+    expect(normalized?.id).toBe("grok-4.6");
+    expect(normalized?.thinkingLevelMap?.xhigh).toBe("xhigh");
+    expect(normalized?.compat).toMatchObject({
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
   });
 });

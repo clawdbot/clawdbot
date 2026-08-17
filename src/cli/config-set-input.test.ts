@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseBatchSource } from "./config-set-input.js";
+import {
+  hasProviderBuilderOptions,
+  parseBatchSource,
+  type ConfigSetOptions,
+} from "./config-set-input.js";
 
 function withBatchFile<T>(prefix: string, contents: string, run: (batchPath: string) => T): T {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -17,6 +21,16 @@ function withBatchFile<T>(prefix: string, contents: string, run: (batchPath: str
 }
 
 describe("config set input parsing", () => {
+  it("does not treat retired provider bypass fields as builder options", () => {
+    const retired = {
+      providerAllowInsecurePath: true,
+      providerAllowSymlinkCommand: true,
+    } as ConfigSetOptions;
+
+    expect(hasProviderBuilderOptions(retired)).toBe(false);
+    expect(hasProviderBuilderOptions({ providerTrustedDir: ["/usr/local/bin"] })).toBe(true);
+  });
+
   it("returns null when no batch options are provided", () => {
     expect(parseBatchSource({})).toBeNull();
   });
@@ -107,6 +121,17 @@ describe("config set input parsing", () => {
         batchFile: "/nonexistent/path/batch.json5",
       }),
     ).toThrow("--batch-file not found: /nonexistent/path/batch.json5");
+  });
+
+  it("rejects a directory passed as --batch-file", () => {
+    const batchPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-set-directory-"));
+    try {
+      expect(() => parseBatchSource({ batchFile: batchPath })).toThrow(
+        `--batch-file must be a regular file: ${batchPath}. Choose a JSON5 input file and try again.`,
+      );
+    } finally {
+      fs.rmSync(batchPath, { recursive: true, force: true });
+    }
   });
 
   it("rejects malformed --batch-file payloads", () => {

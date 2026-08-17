@@ -1,4 +1,5 @@
 /** Pure, non-resolving credential availability checks shared by status and route selection. */
+import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isSecretRef,
@@ -19,10 +20,6 @@ import { hasUsableOAuthCredential, resolveTokenExpiryState } from "./credential-
 import type { AuthProfileCredential } from "./types.js";
 
 type ReadOnlyCredentialAvailability = boolean | undefined;
-
-function hasSecret(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 export function hasMalformedSecretInputSyntax(value: unknown): boolean {
   if (typeof value !== "string") {
@@ -45,12 +42,11 @@ export function resolveSecretRefReadOnlyAvailability(
     return false;
   }
   const source = cfg.secrets?.providers?.[value.provider];
-  if (
-    (!source &&
-      (value.source !== "env" ||
-        value.provider !== resolveDefaultSecretProviderAlias(cfg, "env"))) ||
-    (source && source.source !== value.source)
-  ) {
+  const isImplicitProvider =
+    (value.source === "env" && value.provider === resolveDefaultSecretProviderAlias(cfg, "env")) ||
+    (value.source === "store" &&
+      value.provider === resolveDefaultSecretProviderAlias(cfg, "store"));
+  if ((!source && !isImplicitProvider) || (source && source.source !== value.source)) {
     return false;
   }
   if (value.source === "env") {

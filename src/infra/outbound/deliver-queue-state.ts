@@ -85,21 +85,23 @@ export async function persistQueuedPreSendState(params: {
     }
     return "marked";
   } catch (markErr: unknown) {
-    // A fenced producer must never discard a lease it no longer owns: doing so
-    // could erase the replacement owner and send the same intent twice.
-    if (params.queuePolicy === "required" || params.producerClaimId) {
+    if (params.queuePolicy === "required") {
       throw markErr;
     }
     log.warn(
       `failed to mark queued delivery ${params.queueId} as platform-send-attempt-started; removing replay intent before best-effort send: ${formatErrorMessage(markErr)}`,
     );
-    // If the pre-send marker is unavailable, remove the intent before crossing
-    // the platform boundary. An ack failure aborts the send, leaving safe retry state.
-    if (params.retainSpoolArtifacts) {
-      await ackDelivery(params.queueId, params.stateDir, { retainSpoolArtifacts: true });
-    } else {
-      await ackDelivery(params.queueId, params.stateDir);
-    }
+    // Remove only the exact owner before crossing the platform boundary. A lost
+    // claim or failed ack aborts the send instead of erasing a replacement owner.
+    const options = {
+      ...(params.retainSpoolArtifacts ? { retainSpoolArtifacts: true } : {}),
+      ...(params.producerClaimId ? { expectedPlatformSendAttemptId: params.producerClaimId } : {}),
+    };
+    await ackDelivery(
+      params.queueId,
+      params.stateDir,
+      Object.keys(options).length > 0 ? options : undefined,
+    );
     return "acked";
   }
 }
