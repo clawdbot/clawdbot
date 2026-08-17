@@ -6,12 +6,18 @@ import {
   listMSTeamsAccountIds,
   resolveMSTeamsAccount,
   resolveMSTeamsAccountConfig,
+  resolveMSTeamsRuntimeAccount,
 } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsPlugin } from "./channel.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
 
 const probeMSTeamsMock = vi.hoisted(() => vi.fn());
+const monitorMSTeamsProviderMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./index.js", () => ({
+  monitorMSTeamsProvider: monitorMSTeamsProviderMock,
+}));
 
 vi.mock("./channel.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./channel.runtime.js")>();
@@ -38,6 +44,7 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
 describe("msteamsPlugin", () => {
   afterEach(() => {
     probeMSTeamsMock.mockReset();
+    monitorMSTeamsProviderMock.mockReset();
   });
 
   it("distinguishes users from channel and group conversations", () => {
@@ -378,7 +385,61 @@ describe("msteams account config", () => {
         configured: true,
         enabled: true,
       });
+      expect(resolveMSTeamsRuntimeAccount({ cfg, accountId })).toMatchObject({
+        accountId: "support-bot",
+        credentials: {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          tenantId: "tenant-id",
+        },
+      });
     }
+  });
+
+  it("starts display-style account ids under their canonical runtime identity", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            "Support Bot": {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const setStatus = vi.fn();
+    monitorMSTeamsProviderMock.mockResolvedValueOnce({
+      app: null,
+      shutdown: async () => {},
+    });
+
+    await msteamsPlugin.gateway?.startAccount?.({
+      cfg,
+      accountId: "Support Bot",
+      account: resolveMSTeamsAccount({ cfg, accountId: "Support Bot" }),
+      runtime: {} as never,
+      abortSignal: new AbortController().signal,
+      getStatus: () => ({ accountId: "Support Bot" }),
+      setStatus,
+    });
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "support-bot", port: 3979 }),
+    );
+    expect(monitorMSTeamsProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "support-bot",
+        msteamsCfg: expect.objectContaining({
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3979 },
+        }),
+      }),
+    );
   });
 
   it("keeps legacy root credentials as the implicit default account", () => {

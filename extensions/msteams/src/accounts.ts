@@ -153,7 +153,7 @@ export function resolveMSTeamsRuntimeAccount(params: {
   accountId?: string | null;
   msteamsCfg?: MSTeamsConfig;
 }) {
-  const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
+  const accountId = normalizeAccountId(params.accountId ?? DEFAULT_ACCOUNT_ID);
   const config = params.msteamsCfg ?? resolveMSTeamsAccountConfig(params.cfg, accountId);
   const credentials = resolveMSTeamsCredentials(config, {
     allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,

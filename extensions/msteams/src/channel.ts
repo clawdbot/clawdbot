@@ -1039,16 +1039,17 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             cfg: ctx.cfg,
             accountId: ctx.accountId,
           });
+          const accountId = account.accountId;
           const port = account.config.webhook?.port ?? 3978;
           const statusSink = createAccountStatusSink({
-            accountId: ctx.accountId,
+            accountId,
             setStatus: ctx.setStatus,
           });
           statusSink({ port });
-          ctx.log?.info(`starting provider account ${ctx.accountId} (port ${port})`);
+          ctx.log?.info(`starting provider account ${accountId} (port ${port})`);
           return monitorMSTeamsProvider({
             cfg: ctx.cfg,
-            accountId: ctx.accountId,
+            accountId,
             msteamsCfg: account.config,
             runtime: ctx.runtime,
             abortSignal: ctx.abortSignal,
