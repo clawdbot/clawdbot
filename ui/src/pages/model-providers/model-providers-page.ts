@@ -75,6 +75,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
+  private connectionEpoch: object = {};
   // Null Task runs supersede stale work without counting as a real load.
   private loadClient: GatewayBrowserClient | null = null;
   private routeDataObserved = false;
@@ -110,6 +111,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.loadClient !== null,
     reload: () => void this.refresh({ force: false }),
+    onIncompleteUsageExhausted: () => (this.providerUsageStalled = true),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -212,7 +214,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.providerUsageStalled =
       this.refreshPolicy.setLastLoadedAtMs(data.updatedAt, {
         incomplete: providerUsageIncomplete,
-        connection: this.gateway.epoch,
+        connection: this.connectionEpoch,
       }) === "exhausted";
   }
 
@@ -227,6 +229,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.data = null;
       this.dataClient = null;
     }
+    this.connectionEpoch = {};
     this.providerUsageStalled = false;
     this.refreshPolicy.resetPayload();
     this.busy = {};

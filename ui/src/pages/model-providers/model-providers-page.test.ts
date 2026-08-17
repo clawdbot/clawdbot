@@ -57,6 +57,7 @@ function createHarness(initialScopeId: string) {
     return () => releaseAuthStatus?.();
   };
   let usageStatus: unknown = { updatedAt: 1, providers: [] };
+  let usageStatusRejects = false;
   const request = vi.fn(async (method: string): Promise<unknown> => {
     switch (method) {
       case "models.authStatus": {
@@ -78,6 +79,9 @@ function createHarness(initialScopeId: string) {
       case "config.get":
         return { config: {}, hash: "hash" };
       case "usage.status":
+        if (usageStatusRejects) {
+          throw new Error("usage.status unavailable");
+        }
         return usageStatus;
       case "sessions.usage":
         return { aggregates: { byProvider: [] } };
@@ -176,6 +180,9 @@ function createHarness(initialScopeId: string) {
     snapshot,
     setUsageStatus: (value: unknown) => {
       usageStatus = value;
+    },
+    failUsageStatus: () => {
+      usageStatusRejects = true;
     },
   };
 }
@@ -278,6 +285,46 @@ describe("ModelProvidersPage usage convergence", () => {
     expect(
       harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
     ).toBeGreaterThan(callsBeforeManual + 1);
+  });
+
+  it("keeps the stalled explanation when usage.status starts rejecting", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("main");
+    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await page.updateComplete;
+    expect(page.textContent ?? "").toContain("did not finish loading");
+
+    // loadModelProvidersData turns a rejected usage.status into providerUsage:
+    // null. Read as a completed load that would reset the budget and erase the
+    // notice, leaving broken usage looking exactly like absent usage.
+    harness.failUsageStatus();
+    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await page.updateComplete;
+
+    expect(page.textContent ?? "").toContain("did not finish loading");
+  });
+
+  it("does not warn about a stall while disconnected", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("main");
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+
+    // Disconnected route data carries providerUsage: null for the ordinary
+    // "nothing loaded yet" reason. Treating that as unresolved would count down
+    // the budget and warn about a stall that never happened.
+    page.routeData = { data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId: "main" };
+    page.requestUpdate();
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(60_000);
+    await page.updateComplete;
+
+    expect(page.textContent ?? "").not.toContain("did not finish loading");
   });
 
   it("replaces a pending pre-disconnect load before it can publish", async () => {
