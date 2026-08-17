@@ -10,6 +10,7 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { evaluateSystemRunPolicy } from "../node-host/exec-policy.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -29,6 +30,14 @@ function resolveShellCommand(command: string): { shell: string; args: string[] }
   }
   // Fixed trusted transport — never inherit $SHELL for unattended precheck.
   return { shell: "/bin/sh", args: ["-c", command] };
+}
+
+
+/** Canonical host-exec env for allowlist analysis + spawn (no raw process.env). */
+function resolvePrecheckExecEnv(
+  baseEnv?: Record<string, string | undefined>,
+): Record<string, string> {
+  return sanitizeHostExecEnv({ baseEnv: baseEnv ?? process.env });
 }
 
 /** Stable skip / error reason codes for run logs and operators. */
@@ -250,7 +259,7 @@ export async function authorizeCronJobPrecheckCommand(params: {
       safeBinProfiles: safeBinPolicy.safeBinProfiles,
       trustedSafeBinDirs: safeBinPolicy.trustedSafeBinDirs,
       cwd: params.cwd,
-      env: params.env ?? process.env,
+      env: params.env ?? resolvePrecheckExecEnv(),
       platform: process.platform,
     });
     const isWindows = process.platform === "win32";
@@ -358,7 +367,7 @@ export async function authorizeCronJobPrecheckCommand(params: {
     safeBinProfiles: safeBinPolicy.safeBinProfiles,
     trustedSafeBinDirs: safeBinPolicy.trustedSafeBinDirs,
     cwd: params.cwd,
-    env: params.env ?? process.env,
+    env: params.env ?? resolvePrecheckExecEnv(),
     platform: process.platform,
   });
 
@@ -466,7 +475,7 @@ export async function runCronJobPrecheck(
     // (shell + background descendants), matching system-run lifecycle.
     const child = spawnFn(shell, shellArgs, {
       cwd,
-      env: process.env,
+      env: resolvePrecheckExecEnv(),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
@@ -642,11 +651,12 @@ export function normalizeCronJobPrecheck(value: unknown): CronJobPrecheck | unde
     if (
       typeof rec.timeoutMs !== "number" ||
       !Number.isFinite(rec.timeoutMs) ||
+      !Number.isInteger(rec.timeoutMs) ||
       rec.timeoutMs <= 0
     ) {
-      throw new Error("precheck.timeoutMs must be a positive finite number when set");
+      throw new Error("precheck.timeoutMs must be a positive integer when set");
     }
-    timeoutMs = Math.min(Math.floor(rec.timeoutMs), MAX_TIMEOUT_MS);
+    timeoutMs = Math.min(rec.timeoutMs, MAX_TIMEOUT_MS);
   }
   let contract: CronJobPrecheck["contract"] | undefined;
   if (rec.contract !== undefined && rec.contract !== null) {

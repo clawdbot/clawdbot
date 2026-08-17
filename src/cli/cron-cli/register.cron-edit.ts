@@ -304,11 +304,11 @@ export function registerCronEditCommand(cron: Command) {
             patch.precheck = null;
           } else if (precheckCommand || hasPrecheckAncillary) {
             const parsePositiveTimeoutMs = (raw: string): number => {
-              const timeoutMs = Number(raw);
-              if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+              const timeoutMs = parseStrictPositiveInteger(raw);
+              if (timeoutMs === undefined) {
                 throw new Error("Invalid --precheck-timeout-ms (must be a positive integer).");
               }
-              return Math.floor(timeoutMs);
+              return timeoutMs;
             };
             // Ancillary-only edits must merge onto an existing gate (ClawSweeper P2).
             const existingPrecheck =

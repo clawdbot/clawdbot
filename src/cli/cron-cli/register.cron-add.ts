@@ -438,17 +438,15 @@ export function registerCronAddCommand(cron: Command) {
                   }
                   return {};
                 }
-                const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
-                if (timeoutRaw !== undefined && (!Number.isFinite(timeoutMs) || (timeoutMs ?? 0) <= 0)) {
+                const timeoutMs = parseStrictPositiveInteger(opts.precheckTimeoutMs);
+                if (timeoutRaw !== undefined && timeoutMs === undefined) {
                   throw new Error("Invalid --precheck-timeout-ms (must be a positive integer).");
                 }
                 return {
                   precheck: {
                     kind: "exec" as const,
                     command: precheckCommand,
-                    ...(timeoutMs !== undefined && Number.isFinite(timeoutMs)
-                      ? { timeoutMs: Math.floor(timeoutMs) }
-                      : {}),
+                    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
                     ...(precheckCwd ? { cwd: precheckCwd } : {}),
                   },
                 };
