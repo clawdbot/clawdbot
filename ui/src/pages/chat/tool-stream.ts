@@ -948,17 +948,6 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
   return true;
 }
 
-function removeGuardianDecisionWarning(
-  notices: readonly ChatGuardianNotice[],
-  runId: string,
-  message: string,
-): ChatGuardianNotice[] {
-  const index = notices.findIndex(
-    (notice) => notice.runId === runId && notice.kind === "warning" && notice.message === message,
-  );
-  return index === -1 ? [...notices] : notices.filter((_notice, candidate) => candidate !== index);
-}
-
 function handleToolReviewEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
   if (payload.stream !== "tool" || payload.data?.phase !== "review") {
     return false;
@@ -977,11 +966,19 @@ function handleToolReviewEvent(host: ToolStreamHost, payload: AgentEventPayload)
   entry.message = buildToolStreamMessage(entry);
   const guardianWarningMessage = toTrimmedString(payload.data.guardianWarningMessage);
   if (guardianWarningMessage) {
-    host.guardianNotices = removeGuardianDecisionWarning(
-      host.guardianNotices ?? [],
-      payload.runId,
-      guardianWarningMessage,
+    const guardianNotices = host.guardianNotices ?? [];
+    const matchingWarningIndices = guardianNotices.flatMap((notice, index) =>
+      notice.runId === payload.runId &&
+      notice.kind === "warning" &&
+      notice.message === guardianWarningMessage
+        ? [index]
+        : [],
     );
+    if (matchingWarningIndices.length === 1) {
+      host.guardianNotices = guardianNotices.filter(
+        (_notice, index) => index !== matchingWarningIndices[0],
+      );
+    }
   }
   scheduleToolStreamSync(host, true);
   return true;
