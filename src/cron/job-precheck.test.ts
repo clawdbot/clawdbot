@@ -103,6 +103,30 @@ describe("normalizeCronJobPrecheck", () => {
       command: "exit 2",
     });
   });
+
+  it("rejects present-but-invalid timeoutMs instead of coercing defaults", () => {
+    expect(() => normalizeCronJobPrecheck({ command: "echo hi", timeoutMs: 0 })).toThrow(
+      /timeoutMs must be a positive finite number/,
+    );
+    expect(() => normalizeCronJobPrecheck({ command: "echo hi", timeoutMs: -5 })).toThrow(
+      /timeoutMs must be a positive finite number/,
+    );
+    expect(() =>
+      normalizeCronJobPrecheck({ command: "echo hi", timeoutMs: "fast" as unknown as number }),
+    ).toThrow(/timeoutMs must be a positive finite number/);
+  });
+
+  it("rejects malformed exit-code lists instead of dropping bad entries", () => {
+    expect(() =>
+      normalizeCronJobPrecheck({
+        command: "echo hi",
+        workExitCodes: [0, "x" as unknown as number],
+      }),
+    ).toThrow(/workExitCodes must contain only finite numbers/);
+    expect(() => normalizeCronJobPrecheck({ command: "echo hi", noWorkExitCodes: [] })).toThrow(
+      /noWorkExitCodes must be a non-empty array/,
+    );
+  });
 });
 
 const AUTH_FULL = {

@@ -631,24 +631,58 @@ export function normalizeCronJobPrecheck(value: unknown): CronJobPrecheck | unde
   if (!kind) {
     return undefined;
   }
-  const timeoutMs =
-    typeof rec.timeoutMs === "number" && Number.isFinite(rec.timeoutMs) && rec.timeoutMs > 0
-      ? Math.min(Math.floor(rec.timeoutMs), MAX_TIMEOUT_MS)
-      : undefined;
-  const contract =
-    rec.contract === "exit-code" || rec.contract === "stdout-prefix" || rec.contract === "dual"
-      ? rec.contract
-      : undefined;
-  const onError = rec.onError === "fail" || rec.onError === "skip" ? rec.onError : undefined;
-  const toIntList = (v: unknown): number[] | undefined => {
-    if (!Array.isArray(v)) {
+  // Fail closed: present-but-invalid optional fields must throw so row decode
+  // quarantines the job instead of silently coercing to defaults.
+  let timeoutMs: number | undefined;
+  if (rec.timeoutMs !== undefined && rec.timeoutMs !== null) {
+    if (
+      typeof rec.timeoutMs !== "number" ||
+      !Number.isFinite(rec.timeoutMs) ||
+      rec.timeoutMs <= 0
+    ) {
+      throw new Error("precheck.timeoutMs must be a positive finite number when set");
+    }
+    timeoutMs = Math.min(Math.floor(rec.timeoutMs), MAX_TIMEOUT_MS);
+  }
+  let contract: CronJobPrecheck["contract"] | undefined;
+  if (rec.contract !== undefined && rec.contract !== null) {
+    if (
+      rec.contract !== "exit-code" &&
+      rec.contract !== "stdout-prefix" &&
+      rec.contract !== "dual"
+    ) {
+      throw new Error('precheck.contract must be "exit-code", "stdout-prefix", or "dual" when set');
+    }
+    contract = rec.contract;
+  }
+  let onError: CronJobPrecheck["onError"] | undefined;
+  if (rec.onError !== undefined && rec.onError !== null) {
+    if (rec.onError !== "fail" && rec.onError !== "skip") {
+      throw new Error('precheck.onError must be "fail" or "skip" when set');
+    }
+    onError = rec.onError;
+  }
+  const toIntList = (v: unknown, field: string): number[] | undefined => {
+    if (v === undefined || v === null) {
       return undefined;
     }
-    const nums = v.filter((x): x is number => typeof x === "number" && Number.isFinite(x));
-    return nums.length ? nums.map((n) => Math.trunc(n)) : undefined;
+    if (!Array.isArray(v)) {
+      throw new Error(`precheck.${field} must be an array of finite numbers when set`);
+    }
+    if (v.length === 0) {
+      throw new Error(`precheck.${field} must be a non-empty array when set`);
+    }
+    const nums: number[] = [];
+    for (const x of v) {
+      if (typeof x !== "number" || !Number.isFinite(x)) {
+        throw new Error(`precheck.${field} must contain only finite numbers`);
+      }
+      nums.push(Math.trunc(x));
+    }
+    return nums;
   };
-  const workExitCodes = toIntList(rec.workExitCodes);
-  const noWorkExitCodes = toIntList(rec.noWorkExitCodes);
+  const workExitCodes = toIntList(rec.workExitCodes, "workExitCodes");
+  const noWorkExitCodes = toIntList(rec.noWorkExitCodes, "noWorkExitCodes");
   if (workExitCodes && noWorkExitCodes) {
     const noWork = new Set(noWorkExitCodes);
     const overlap = workExitCodes.filter((code) => noWork.has(code));
