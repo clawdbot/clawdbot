@@ -36,6 +36,22 @@ class SessionFiltersTest {
   }
 
   @Test
+  fun sessionChoicesIncludeStalePinnedSessions() {
+    val now = 1_700_000_000_000L
+    val stale = now - 26 * 60 * 60 * 1000L
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "main", updatedAtMs = stale),
+        ChatSessionEntry(key = "pinned-old", updatedAtMs = stale, pinned = true),
+        ChatSessionEntry(key = "old-unpinned", updatedAtMs = stale),
+      )
+
+    val result = resolveSessionChoices("main", sessions, mainSessionKey = "main", nowMs = now).map { it.key }
+
+    assertEquals(listOf("main", "pinned-old"), result)
+  }
+
+  @Test
   fun compactChoicesKeepMainAndCurrentWhileCappingRecentSessions() {
     val now = 1_700_000_000_000L
     val sessions =
