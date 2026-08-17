@@ -731,6 +731,30 @@ describe("qa mock openai server", () => {
     expect(outputItems(finalBody).some((item) => item.type === "function_call")).toBe(false);
   });
 
+  it("returns a distinct final after the ambiguous Teams message-tool send", async () => {
+    const server = await startMockServer();
+    const prompt = "qa msteams ambiguous gateway timeout. exact marker: `QA-MSTEAMS-AMBIGUOUS-504`";
+
+    const initialBody = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const toolCall = outputToolCall(initialBody, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: "QA-MSTEAMS-AMBIGUOUS-504",
+    });
+
+    const finalBody = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        makeToolOutputWithCallId(outputToolCallId(toolCall, "call_msteams_timeout"), "failed"),
+      ],
+    });
+    expect(outputText(finalBody)).toBe("QA-MSTEAMS-AMBIGUOUS-FINAL");
+  });
+
   it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
     const server = await startMockServer();
 

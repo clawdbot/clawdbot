@@ -1,0 +1,73 @@
+title: Microsoft Teams ambiguous Gateway timeout
+
+scenario:
+  id: msteams-ambiguous-gateway-timeout
+  surface: channels
+  coverage:
+    primary:
+      - channels.outbound-message
+    secondary:
+      - channels.automatic-final-reply
+  objective: Verify an accepted Microsoft Teams activity is not replayed when its non-idempotent Connector POST returns an ambiguous 504 response.
+  gatewayConfigPatch:
+    tools:
+      alsoAllow:
+        - message
+    agents:
+      entries:
+        qa:
+          tools:
+            alsoAllow:
+              - message
+  successCriteria:
+    - The real Microsoft Teams plugin sends through the loopback Bot Framework Connector.
+    - The Connector records the accepted activity before returning HTTP 504.
+    - The plugin performs exactly one POST for the marker instead of replaying the ambiguous send.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/msteams/src/messenger.ts
+    - extensions/msteams/src/qa/bot-framework-server.ts
+  execution:
+    kind: flow
+    channel: msteams
+    suiteIsolation: isolated
+    isolationReason: Injects an accepted-then-504 Connector response for one outbound marker.
+    summary: Run a real Gateway and Microsoft Teams plugin against the loopback Bot Framework Connector while the mock provider produces one exact final reply.
+    config:
+      expectedMarker: QA-MSTEAMS-AMBIGUOUS-504
+      finalMarker: QA-MSTEAMS-AMBIGUOUS-FINAL
+
+flow:
+  steps:
+    - name: does not replay an ambiguous Connector response
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - sendInbound:
+            conversation: { id: ambiguous-timeout, kind: direct }
+            senderId: driver
+            senderName: Teams QA Driver
+            text:
+              expr: '`qa msteams ambiguous gateway timeout. exact marker: \`${config.expectedMarker}\``'
+        - waitForOutbound:
+            conversation: { id: ambiguous-timeout, kind: direct }
+            textIncludes: { ref: config.expectedMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - waitForOutbound:
+            conversation: { id: ambiguous-timeout, kind: direct }
+            textIncludes: { ref: config.finalMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - set: matchingOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === 'ambiguous-timeout' && String(message.text ?? '').includes(config.expectedMarker))"
+        - assert:
+            expr: matchingOutbound.length === 1
+            message:
+              expr: "`expected one ambiguous Teams POST, saw ${matchingOutbound.length}; transcript=${formatTransportTranscript(state, { conversationId: 'ambiguous-timeout' })}`"
+      detailsExpr: "`accepted ambiguous Teams POST count=${matchingOutbound.length}`"
