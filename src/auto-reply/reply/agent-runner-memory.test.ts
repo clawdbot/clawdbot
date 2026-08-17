@@ -431,7 +431,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
-  it("runs a memory flush turn, rotates after compaction, and persists metadata", async () => {
+  it("runs exactly one auto-reply memory flush turn, rotates, and persists metadata", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
@@ -487,6 +487,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.outcome).toBe("completed");
     expect(result.sessionEntry?.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionId).toBe("session-rotated");
+    expect(runEmbeddedAgentEntryMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(requireModelFallbackCall().userLockedAuthProfileId).toBe("anthropic:work");
     const flushCall = requireEmbeddedAgentCall();
