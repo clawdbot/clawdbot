@@ -44,7 +44,7 @@ export function isMemoryEmbeddingOperationError(
 }
 
 /** Whether `err` short-circuited a known billing cooldown rather than failing anew. */
-export function isMemorySyncCooldownSkip(err: unknown): boolean {
+function isMemorySyncCooldownSkip(err: unknown): boolean {
   return isMemoryEmbeddingOperationError(err) && err.skippedDueToCooldown === true;
 }
 
@@ -59,7 +59,7 @@ export function logMemorySyncOutcome(
   log: { warn: (message: string) => void; debug: (message: string) => void },
   label: string,
   err: unknown,
-  message: string = String(err),
+  message = String(err),
 ): void {
   if (isMemorySyncCooldownSkip(err)) {
     log.debug(`memory sync skipped (${label}): ${message}`);
