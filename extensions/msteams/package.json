@@ -22,7 +22,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.8.1-beta.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -70,7 +70,7 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.8.1-beta.2"
     },
     "build": {
       "openclawVersion": "2026.8.1",

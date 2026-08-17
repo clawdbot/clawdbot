@@ -42,8 +42,9 @@ import {
   resolveMSTeamsAutoThreadId,
 } from "./action-threading.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
-import { collectMSTeamsSecurityWarnings, type ResolvedMSTeamsAccount } from "./channel-config.js";
+import type { ResolvedMSTeamsAccount } from "./channel-config.js";
 import { describeMSTeamsMessageTool } from "./channel-message-tool.js";
+import { createMSTeamsSecurityWarningCollector } from "./channel-security.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
 import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
@@ -80,12 +81,9 @@ const MSTEAMS_GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
   "renameGroup",
 ]);
 
-const collectMSTeamsSecurityFindings = createConditionalWarningCollector.findings({
-  collectWarnings: collectMSTeamsSecurityWarnings,
-  checkId: "channels.msteams.groups.open",
-  severity: "critical",
-  title: "MS Teams security warning",
-});
+const collectMSTeamsSecurityFindings = createMSTeamsSecurityWarningCollector(
+  createConditionalWarningCollector.findings,
+);
 
 const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),

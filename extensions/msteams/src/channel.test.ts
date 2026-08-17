@@ -9,6 +9,7 @@ import {
   resolveMSTeamsRuntimeAccount,
 } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
+import { createMSTeamsSecurityWarningCollector } from "./channel-security.js";
 import { msteamsPlugin } from "./channel.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
 
@@ -224,6 +225,16 @@ describe("msteamsPlugin", () => {
         account: msteamsPlugin.config.resolveAccount(cfg, "default"),
       }),
     ).toEqual([]);
+
+    const legacyWarnings = createMSTeamsSecurityWarningCollector(undefined)({
+      cfg,
+      accountId: "support",
+    });
+    expect(legacyWarnings).toEqual([
+      expect.stringMatching(
+        /MS Teams\[support\].*channels\.msteams\.accounts\.support\.groupPolicy.*channels\.msteams\.accounts\.support\.groupAllowFrom/,
+      ),
+    ]);
   });
 
   it("does not advertise message tools for disabled or unconfigured named accounts", () => {
