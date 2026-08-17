@@ -250,15 +250,6 @@ export function registerSlackMessageEvents(params: {
       // Subtype handlers do not enter the regular message pipeline. Observe any explicit
       // type here so edits and deletes share the same authoritative conversation cache.
       ctx.rememberSlackChannelType(message.channel, message.channel_type, eventScope);
-      if (
-        eventScope &&
-        message.subtype &&
-        message.subtype !== "file_share" &&
-        message.subtype !== "bot_message"
-      ) {
-        logVerbose(`slack: drop enterprise message subtype=${message.subtype}`);
-        return;
-      }
       const assistantChangedInbound = resolveAssistantMessageChangedInbound({
         event: message,
         ctx,

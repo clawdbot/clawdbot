@@ -432,16 +432,59 @@ describe("registerSlackMessageEvents", () => {
     expect(inboundLogLines()).toEqual([]);
   });
 
-  it("drops unsupported enterprise message subtypes before system events or dispatch", async () => {
-    const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
-    await handler({
+  it.each([
+    {
+      name: "message_changed",
       event: makeChangedEvent({ channel: "C123", user: "U123" }),
+      expectedText: "Slack message edited in direct.",
+      expectedContextKey: "slack:message:changed:C123:123.456:Ev-enterprise-subtype",
+    },
+    {
+      name: "message_deleted",
+      event: makeDeletedEvent({ channel: "C123", user: "U123" }),
+      expectedText: "Slack message deleted in direct.",
+      expectedContextKey: "slack:message:deleted:C123:123.456:Ev-enterprise-subtype",
+    },
+  ])(
+    "routes enterprise $name through the authorized system-event path",
+    async ({ event, expectedText, expectedContextKey }) => {
+      const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+      await handler({
+        event,
+        body: { api_app_id: "A_TEST", event_id: "Ev-enterprise-subtype" },
+        context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
+        client: {},
+      });
+
+      expect(handleSlackMessage).not.toHaveBeenCalled();
+      expect(messageQueueMock).toHaveBeenCalledOnce();
+      expect(messageQueueMock).toHaveBeenCalledWith(expectedText, {
+        contextKey: expectedContextKey,
+        sessionKey: "agent:main:main",
+      });
+    },
+  );
+
+  it("passes enterprise thread_broadcast through listener-scoped dispatch", async () => {
+    const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+    const event = makeThreadBroadcastEvent({ channel: "C123", user: "U123" });
+    const client = {};
+    await handler({
+      event,
       body: { api_app_id: "A_TEST" },
       context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
-      client: {},
+      client,
     });
 
-    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      event,
+      expect.objectContaining({
+        source: "message",
+        awaitDispatch: true,
+        eventScope: expect.objectContaining({ teamId: "T111", client }),
+      }),
+    );
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
