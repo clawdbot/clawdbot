@@ -106,4 +106,18 @@ describe("renderChatWorkingIndicator", () => {
   it("keeps approval waits on the default claw even for surprising keys", () => {
     expect(surpriseClassesFor(findRenderKey(true), true)).toEqual([]);
   });
+
+  it("keeps long-wait whimsy available alongside a truthful startup phase", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatWorkingIndicator(
+        { kind: "reading-indicator", key: "run:startup", startedAt: 1 },
+        { startupPhase: "starting_model" },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Waiting for a response…");
+    expect(container.querySelector("openclaw-working-phrase")).not.toBeNull();
+  });
 });

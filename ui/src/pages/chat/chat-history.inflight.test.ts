@@ -183,6 +183,20 @@ describe("chat history in-flight assistant recovery", () => {
     expect(state.chatStreamStartedAt).toBe(123_456);
   });
 
+  it("restores the active startup phase after navigation misses its live event", async () => {
+    const history = activeHistory("run-reconnected");
+    Object.assign(history.inFlightRun!, { phase: "starting_model" });
+    const state = createState(history);
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunStartup).toEqual({
+      state: "status",
+      runId: "run-reconnected",
+      phase: "starting_model",
+    });
+  });
+
   it("adopts an active snapshot while binding its durable session identity", async () => {
     const history = activeHistory("run-reconnected");
     history.sessionId = "current-session";

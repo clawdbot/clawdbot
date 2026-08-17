@@ -134,19 +134,26 @@ suite.define(() => {
     // reading is exactly the fastForward below, not inflated by real time.
     await pauseVirtualClock(currentPage);
     await currentPage.getByRole("button", { name: "Send message" }).click();
-    await gateway.waitForRequest("chat.send");
+    const send = await gateway.waitForRequest("chat.send");
+    const runId = String((send.params as { idempotencyKey?: unknown }).idempotencyKey);
     await currentPage.locator(".chat-working-indicator").waitFor();
+    await currentPage.getByText("Working…", { exact: true }).waitFor();
+    await gateway.emitGatewayEvent("chat", {
+      runId,
+      sessionKey: "main",
+      state: "status",
+      phase: "starting_model",
+    });
 
     await currentPage.clock.fastForward(177_000);
 
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
-    const workingLabel = currentPage.locator(".chat-working-indicator__status > .sr-only");
-    expect(await workingLabel.textContent()).toBe("Working…");
-    expect(
-      await currentPage.locator(".chat-working-indicator__status > span:not(.sr-only)").count(),
-    ).toBe(0);
+    await currentPage.getByText("Waiting for a response…", { exact: true }).waitFor();
+    await expect
+      .poll(() => currentPage.locator("openclaw-working-phrase").textContent())
+      .toMatch(/·\s\S+…/);
   });
 
   it("clears shared session activity when chat final arrives first", async () => {

@@ -102,7 +102,16 @@ suite.define(() => {
       await chatModuleBlocked;
       await route.continue();
     });
+    const createdSessions = createdSessionListResult(SESSION_KEY);
+    for (const session of createdSessions.sessions) {
+      Object.assign(session, {
+        activeRunIds: [RUN_ID],
+        hasActiveRun: true,
+        status: "running",
+      });
+    }
     const gateway = await installMockGateway(page, {
+      inFlightRun: { runId: RUN_ID, text: "", phase: "starting_model" },
       methodResponses: {
         "sessions.create": {
           key: SESSION_KEY,
@@ -110,7 +119,12 @@ suite.define(() => {
           runId: RUN_ID,
           runStarted: true,
         },
-        "sessions.list": createdSessionListResult(SESSION_KEY),
+        "sessions.list": createdSessions,
+      },
+      sessionInfo: {
+        activeRunIds: [RUN_ID],
+        hasActiveRun: true,
+        key: SESSION_KEY,
       },
     });
     try {
@@ -198,6 +212,10 @@ suite.define(() => {
       await gateway.resolveDeferred("chat.startup");
       await waitForCommittedChatRoute(page);
       await page.locator("openclaw-chat-page").waitFor();
+      await captureProof(page, "03-chat-route-ready.png");
+      await expect
+        .poll(() => page.locator(".chat-working-indicator__status").textContent())
+        .toContain("Waiting for a response…");
       await expect
         .poll(() =>
           page.evaluate(
@@ -206,7 +224,6 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await captureProof(page, "03-chat-route-ready.png");
     } finally {
       releaseChatModule();
       await context.close();

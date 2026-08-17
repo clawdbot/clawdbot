@@ -1049,6 +1049,7 @@ export function createAgentEventHandler({
       return;
     }
     const now = Date.now();
+    delete run.startupPhase;
     run.rawBuffer = mergedRawText;
     run.bufferUpdatedAt = now;
     const waitedMs = now - (run.deltaSentAt ?? 0);
@@ -1508,11 +1509,13 @@ export function createAgentEventHandler({
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same
       // payload identity as live delivery or tool results cannot reconcile.
+      delete chatRunState.getOrCreate(clientRunId).startupPhase;
       chatRunState.recordProgressEvent(clientRunId, agentPayload);
     }
     if (evt.stream === "run_status") {
       const phase = readChatRunStartupPhase(evt.data?.phase);
       if (phase && chatLink && isControlUiVisible && sessionKey && !isAborted) {
+        chatRunState.getOrCreate(clientRunId).startupPhase = phase;
         const payload = {
           runId: clientRunId,
           sessionKey,

@@ -83,10 +83,14 @@ export function isCurrentSessionSubmittedProgress(
 // working spark and the composer's sr-only announcement. A fresh terminal
 // toast masks stale abortable rows so neither surface flashes back to working.
 export function isChatRunWorking(
-  props: Pick<ChatComposerProps, "canAbort" | "onAbort" | "runStatus" | "queue" | "sessionKey">,
+  props: Pick<
+    ChatComposerProps,
+    "canAbort" | "onAbort" | "queue" | "runStatus" | "sessionKey" | "startupStatus"
+  >,
 ): boolean {
   const canAbort = Boolean(props.canAbort && props.onAbort);
   return (
+    Boolean(props.startupStatus) ||
     (canAbort && !hasTerminalRunStatus(props.runStatus)) ||
     props.queue.some((item) =>
       isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),

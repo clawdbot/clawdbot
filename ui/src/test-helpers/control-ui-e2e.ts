@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
+import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import type { ModelCatalogEntry } from "../api/types.ts";
@@ -286,6 +287,7 @@ export type ControlUiMockGatewayScenario = {
     runId: string;
     text?: string;
     startedAt?: number;
+    phase?: ChatRunStartupPhase;
     events?: unknown[];
     plan?: unknown;
   } | null;

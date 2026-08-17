@@ -281,6 +281,7 @@ export type ChatHistoryResult = {
     runId: string;
     text?: string;
     startedAt?: number;
+    phase?: ChatRunStartupPhase;
     events?: Array<{
       runId: string;
       seq: number;
@@ -1729,7 +1730,15 @@ async function loadChatHistoryUncached(
       const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
       state.chatStream = tail;
       state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
-      state.chatRunStartup = { state: "activity", runId: inFlightRunId };
+      // A live status or activity transition observed while history was pending
+      // outranks the older snapshot; route adoption has no such local fact.
+      const retainedStartup =
+        state.chatRunStartup?.runId === inFlightRunId ? state.chatRunStartup : null;
+      state.chatRunStartup =
+        retainedStartup ??
+        (res.inFlightRun.phase
+          ? { state: "status", runId: inFlightRunId, phase: res.inFlightRun.phase }
+          : { state: "activity", runId: inFlightRunId });
       // Disconnect cleanup intentionally removes transient activity rows while
       // retaining the owned run. Replay fills that gap; per-identity sequence
       // fences keep a delayed snapshot from replacing newer live progress.

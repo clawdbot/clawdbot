@@ -4,7 +4,7 @@ import "./working-phrase.ts";
 
 // Mirrors WORKING_PHRASE_SHOW_AFTER_MS / WORKING_PHRASE_ROTATE_EVERY_MS in
 // working-phrase.ts (knip forbids test-only exports).
-const WORKING_PHRASE_SHOW_AFTER_MS = 30_000;
+const WORKING_PHRASE_SHOW_AFTER_MS = 8_000;
 const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 
 type WorkingPhraseElement = HTMLElement & {

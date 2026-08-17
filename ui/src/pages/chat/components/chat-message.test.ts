@@ -1578,12 +1578,10 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
-    expect(container.querySelector(".chat-working-indicator__status > .sr-only")?.textContent).toBe(
+    expect(container.querySelector(".chat-working-indicator__status > .sr-only")).toBeNull();
+    expect(container.querySelector(".chat-working-indicator__status > span")?.textContent).toBe(
       "Working…",
     );
-    expect(
-      container.querySelectorAll(".chat-working-indicator__status > span:not(.sr-only)"),
-    ).toHaveLength(0);
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
@@ -1780,7 +1778,7 @@ describe("grouped chat rendering", () => {
     expect(first).toEqual(decision ? [decision] : []);
   });
 
-  it("keeps the synthetic progress word screen-reader-only across runs", () => {
+  it("keeps the working label visible while the whimsical phrase stays decorative", () => {
     const statusFor = (startedAt: number) => {
       const container = document.createElement("div");
       render(
@@ -1797,7 +1795,7 @@ describe("grouped chat rendering", () => {
       };
     };
 
-    const expected = { hidden: "Working…", visibleLabels: 0, decorativePhrases: 1 };
+    const expected = { hidden: undefined, visibleLabels: 1, decorativePhrases: 1 };
     expect(statusFor(1_000)).toEqual(expected);
     expect(statusFor(1_500)).toEqual(expected);
     expect(statusFor(8_000)).toEqual(expected);

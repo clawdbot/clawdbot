@@ -1,3 +1,4 @@
+import type { ChatRunStartupPhase } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 // Gateway chat run state registries.
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
@@ -105,6 +106,8 @@ type ChatRunRecord = {
   bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
+  /** Latest pre-output phase; real assistant/tool activity clears it before replay. */
+  startupPhase?: ChatRunStartupPhase;
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
@@ -267,6 +270,7 @@ export function createChatRunState(): ChatRunState {
     delete record.bufferProjection;
     delete record.planSnapshot;
     delete record.progressSnapshot;
+    delete record.startupPhase;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
     delete record.deltaLastBroadcastLen;

@@ -897,6 +897,13 @@ describe("gateway server chat", () => {
             progressText: "Autoreview is running",
           },
         });
+        handler({
+          runId: "provider-run",
+          seq: 7,
+          stream: "run_status",
+          ts: 1_007,
+          data: { phase: "starting_model" },
+        });
 
         const responses: Array<{ ok: boolean; payload?: unknown }> = [];
         await callDirectChat(method, {
@@ -914,6 +921,7 @@ describe("gateway server chat", () => {
           runId: "run-active",
           text: "",
           startedAt: 1_000,
+          phase: "starting_model",
           events: [
             {
               runId: "run-active",

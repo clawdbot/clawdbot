@@ -130,6 +130,15 @@ export function renderChatWorkingIndicator(
   // Streaming tokens are the real liveness signal; the whimsical phrase only
   // covers the stretch before any usage data exists.
   const hasTokens = options.outputTokens !== null && options.outputTokens !== undefined;
+  const workingPhrase = hasTokens
+    ? nothing
+    : html`
+        <openclaw-working-phrase
+          aria-hidden="true"
+          .startMs=${part.startedAt}
+          .seed=${part.key}
+        ></openclaw-working-phrase>
+      `;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   return html`
@@ -160,23 +169,15 @@ export function renderChatWorkingIndicator(
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}
                 ></openclaw-elapsed-time>
-                ${renderLiveOutputTokens(options.outputTokens)}
+                ${renderLiveOutputTokens(options.outputTokens)} ${workingPhrase}
               `
             : html`
-                <span class=${continuation ? "" : "sr-only"}>${t("common.working")}</span>
+                <span>${t("common.working")}</span>
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}
                 ></openclaw-elapsed-time>
-                ${hasTokens
-                  ? renderLiveOutputTokens(options.outputTokens)
-                  : html`
-                      <openclaw-working-phrase
-                        aria-hidden="true"
-                        .startMs=${part.startedAt}
-                        .seed=${part.key}
-                      ></openclaw-working-phrase>
-                    `}
+                ${renderLiveOutputTokens(options.outputTokens)} ${workingPhrase}
               `}
       </span>
     </div>

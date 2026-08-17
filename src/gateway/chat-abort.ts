@@ -6,6 +6,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import type { ChatRunStartupPhase } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
@@ -105,6 +106,7 @@ type InFlightRunSnapshot = {
   runId: string;
   text: string;
   startedAt?: number;
+  phase?: ChatRunStartupPhase;
   plan?: ChatRunPlanSnapshot;
   events?: AgentEventPayload[];
 };
@@ -419,10 +421,12 @@ export function resolveInFlightRunSnapshot(params: {
   );
   const plan = run?.planSnapshot;
   const events = run?.progressSnapshot?.events;
+  const phase = run?.startupPhase;
   return {
     runId: best.runId,
     text: projected.suppress ? "" : projected.text,
     startedAt: best.startedAtMs,
+    ...(phase ? { phase } : {}),
     ...(plan ? { plan } : {}),
     ...(events?.length ? { events } : {}),
   };
@@ -467,6 +471,13 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
         break;
       }
       events.shift();
+    }
+  }
+
+  if (params.snapshot.phase !== undefined) {
+    const candidate = { ...bounded, phase: params.snapshot.phase };
+    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
+      bounded = candidate;
     }
   }
 

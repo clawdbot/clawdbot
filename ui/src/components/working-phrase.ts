@@ -1,7 +1,7 @@
 // Whimsical long-wait status word ("Clawing…") for the chat working row.
 // Silent for the first stretch of a run, then rotates through crab-themed
 // gerunds so long quiet runs feel alive without claiming progress data the
-// UI does not have. Decorative only — the row keeps its sr-only "Working…".
+// UI does not have. Decorative only — the row keeps its visible "Working…".
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
@@ -33,7 +33,7 @@ const PHRASE_KEYS = [
 
 /** Quiet grace period before the first phrase appears. Mirrored as literals
  * in working-phrase.test.ts (knip forbids test-only exports). */
-const WORKING_PHRASE_SHOW_AFTER_MS = 30_000;
+const WORKING_PHRASE_SHOW_AFTER_MS = 8_000;
 /** How long each phrase holds before rotating to the next. */
 const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 
