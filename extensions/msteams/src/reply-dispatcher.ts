@@ -167,10 +167,11 @@ export function createMSTeamsReplyDispatcher(params: {
     },
   });
 
-  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams");
+  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams", params.accountId);
   const tableMode = core.channel.text.resolveMarkdownTableMode({
     cfg: params.cfg,
     channel: "msteams",
+    accountId: params.accountId,
   });
   // Teams native streams are provider-visible before outbound modifiers run. Keep them off
   // whenever a hook can rewrite or cancel so the original payload cannot escape the final gate.

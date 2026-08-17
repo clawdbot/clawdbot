@@ -7,6 +7,7 @@ import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 export const channelConversationId = "19:general@thread.tacv2";
 
 type MessageHandlerDepsOptions = {
+  accountId?: string;
   enqueueSystemEvent?: ReturnType<typeof vi.fn>;
   readAllowFromStore?: ReturnType<typeof vi.fn>;
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
@@ -26,6 +27,7 @@ export function createMessageHandlerDeps(
   cfg: OpenClawConfig,
   options: MessageHandlerDepsOptions = {},
 ) {
+  const accountId = options.accountId ?? "default";
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
   const readAllowFromStore = options.readAllowFromStore ?? vi.fn(async () => []);
   const upsertPairingRequest = options.upsertPairingRequest ?? vi.fn(async () => null);
@@ -36,7 +38,7 @@ export function createMessageHandlerDeps(
     vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
       sessionKey: `agent:main:msteams:${peer.kind}:${peer.id}`,
       agentId: "main",
-      accountId: "default",
+      accountId,
       mainSessionKey: "agent:main:main",
       lastRoutePolicy: "session" as const,
       matchedBy: "default" as const,
@@ -71,7 +73,7 @@ export function createMessageHandlerDeps(
   const deps: MSTeamsMessageHandlerDeps = {
     cfg,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
-    accountId: "default",
+    accountId,
     appId: "test-app",
     app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {

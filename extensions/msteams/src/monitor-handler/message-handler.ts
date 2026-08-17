@@ -56,6 +56,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "msteams",
+    accountId,
   });
   const historyLimit = Math.max(
     0,

@@ -5,6 +5,8 @@ import type { ReplyPayload } from "../runtime-api.js";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
+const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
+const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "code"));
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
@@ -102,6 +104,8 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveChunkModeMock.mockReset().mockReturnValue("length");
+    resolveMarkdownTableModeMock.mockReset().mockReturnValue("code");
     sendMSTeamsMessagesMock.mockReset().mockResolvedValue([]);
     renderReplyPayloadsToMessagesMock.mockReset().mockReturnValue([]);
     getGlobalHookRunnerMock.mockReturnValue(undefined);
@@ -124,8 +128,8 @@ describe("createMSTeamsReplyDispatcher", () => {
       },
       channel: {
         text: {
-          resolveChunkMode: vi.fn(() => "length"),
-          resolveMarkdownTableMode: vi.fn(() => "code"),
+          resolveChunkMode: resolveChunkModeMock,
+          resolveMarkdownTableMode: resolveMarkdownTableModeMock,
         },
         reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
       },
@@ -262,6 +266,32 @@ describe("createMSTeamsReplyDispatcher", () => {
       hasHooks: vi.fn((hookName: string) => registered.has(hookName)),
     });
   }
+
+  it("resolves reply presentation settings for the selected named account", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          chunkMode: "length",
+          markdown: { tables: "code" },
+          accounts: {
+            support: {
+              chunkMode: "newline",
+              markdown: { tables: "bullets" },
+            },
+          },
+        },
+      },
+    };
+
+    createDispatcher("personal", {}, { cfg, accountId: "support" });
+
+    expect(resolveChunkModeMock).toHaveBeenCalledWith(cfg, "msteams", "support");
+    expect(resolveMarkdownTableModeMock).toHaveBeenCalledWith({
+      cfg,
+      channel: "msteams",
+      accountId: "support",
+    });
+  });
 
   it("sends an informative status update once work expands in personal chats", async () => {
     vi.useFakeTimers();

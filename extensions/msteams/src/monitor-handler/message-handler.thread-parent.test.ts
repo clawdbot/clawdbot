@@ -196,6 +196,50 @@ describe("msteams thread parent context injection", () => {
     expect(findParentSystemEventCall(enqueueSystemEvent)).toBeUndefined();
   });
 
+  it("uses named-account context visibility instead of the root policy", async () => {
+    fetchChannelMessageMock.mockResolvedValue({
+      id: threadRootId,
+      from: { user: { displayName: "Mallory", id: "mallory-aad" } },
+      body: { content: "Named-account private context", contentType: "text" },
+    });
+    const { deps, enqueueSystemEvent } = createMessageHandlerDeps(
+      {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["alice-aad"],
+            contextVisibility: "all",
+            accounts: {
+              support: {
+                contextVisibility: "allowlist",
+              },
+            },
+            teams: {
+              "team-1": {
+                channels: {
+                  [channelConversationId]: { requireMention: false },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      { accountId: "support" },
+    );
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await handler({
+      activity: buildChannelActivity({
+        id: "msg-reply-named-account",
+        replyToId: threadRootId,
+        from: { id: "alice-id", aadObjectId: "alice-aad", name: "Alice" },
+      }),
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(findParentSystemEventCall(enqueueSystemEvent)).toBeUndefined();
+  });
+
   it("handles Graph failure gracefully without throwing or emitting a parent event", async () => {
     fetchChannelMessageMock.mockRejectedValueOnce(new Error("graph down"));
     const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
