@@ -18,7 +18,6 @@ const refreshPreparedModelRuntimeSnapshotsMock = vi.fn(
 );
 
 vi.mock("../agents/agent-scope.js", () => ({
-  listAgentIds: () => ["default"],
   resolveDefaultAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "default",
@@ -116,27 +115,6 @@ describe("gateway startup primary model warmup", () => {
       allowGatewaySubagentBinding: true,
       gatewayLifecycle: true,
       catalogMode: "static",
-    });
-  });
-
-  it("prepares wildcard catalogs in the lifecycle owner", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          modelPolicy: { allow: ["openai/*"] },
-        },
-      },
-    } as OpenClawConfig;
-
-    await prewarmConfiguredPrimaryModel({
-      cfg,
-      log: { warn: vi.fn() },
-    });
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
-      allowGatewaySubagentBinding: true,
-      gatewayLifecycle: true,
-      catalogMode: "live",
     });
   });
 

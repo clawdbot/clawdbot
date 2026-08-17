@@ -22,7 +22,6 @@ import type { GatewayReloadPlan } from "./config-reload.js";
 import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
-import { resolveGatewayModelRuntimeCatalogModeOptions } from "./server-model-catalog-mode.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import {
   restartGatewayChannels,
@@ -579,7 +578,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     try {
       const pluginMetadataSnapshot = params.getPluginMetadataSnapshot?.();
       await refreshPreparedModelRuntimeSnapshots(nextConfig, {
-        ...resolveGatewayModelRuntimeCatalogModeOptions(nextConfig),
+        catalogMode: "static",
         allowGatewaySubagentBinding: true,
         ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
       });

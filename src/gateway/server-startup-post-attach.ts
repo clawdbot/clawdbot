@@ -35,7 +35,6 @@ import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
-import { resolveGatewayModelRuntimeCatalogModeOptions } from "./server-model-catalog-mode.js";
 import type { GatewayResidentRegistry } from "./server-resident-registry.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
@@ -511,7 +510,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
     await import("../agents/prepared-model-runtime.js");
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
-    ...resolveGatewayModelRuntimeCatalogModeOptions(params.cfg),
+    catalogMode: "static",
     allowGatewaySubagentBinding: true,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
@@ -651,9 +650,8 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.model-auth", () =>
     hydrateConfiguredExternalCliAuth({ cfg: params.cfg, log: params.log }),
   );
-  // Agent RPC remains available when transports are disabled. Publish configured facts before
-  // accepting work; wildcard policies additionally prepare their complete catalogs here so browse
-  // requests do not need to rediscover providers in the request path.
+  // Agent RPC remains available when transports are disabled. Publish configured/static facts before
+  // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
   await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
     publishStartupModelRuntime(
       {
