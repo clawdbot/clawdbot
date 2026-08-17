@@ -2211,6 +2211,29 @@ describe("update-cli", () => {
     );
   });
 
+  it("honors a committed post-core result when stopping the child delivers a signal", async () => {
+    // The poll owns the settle: it stops the child only after claiming the result. Stopping
+    // delivers SIGTERM, so an unclaimed exit handler would reject an update the child already
+    // committed and then roll its plugin index back.
+    const { root } = setupUpdatedRootRefresh();
+    readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === root ? "0.0.1" : "2026.5.28",
+    );
+    spawn.mockImplementationOnce((_command: string, _args: string[], options: unknown) => {
+      const child = new EventEmitter() as EventEmitter & { kill: () => void };
+      const resultPath = (options as { env: Record<string, string> }).env[
+        "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH"
+      ];
+      fsSync.writeFileSync(resultPath, JSON.stringify({ status: "ok" }), "utf8");
+      child.kill = () => {
+        child.emit("exit", null, "SIGTERM");
+      };
+      return child;
+    });
+
+    await expect(updateCommand({ yes: true, restart: false })).resolves.not.toThrow();
+  });
+
   it("keeps a child-committed plugin index when the post-core handoff is signaled", async () => {
     const { root } = setupUpdatedRootRefresh();
     readPackageVersion.mockImplementation(async (pkgRoot: string) =>

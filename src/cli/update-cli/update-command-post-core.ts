@@ -607,8 +607,11 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
             if (!pluginUpdate) {
               return;
             }
-            stopPostCoreUpdateChild(child);
+            // Claim the settle before stopping: the stop delivers a signal, and the exit
+            // handler below rejects on any signal it still owns. Stopping first would fail
+            // an update this child already committed and roll its plugin index back.
             finish({ kind: "plugin-update", pluginUpdate });
+            stopPostCoreUpdateChild(child);
           })
           .catch(() => undefined);
       }, POST_CORE_UPDATE_RESULT_POLL_MS);
