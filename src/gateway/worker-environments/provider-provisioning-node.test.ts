@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { admitWorkerConnection } from "./admission.js";
+import { hashWorkerCredential } from "./credential.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -48,15 +49,32 @@ describe("node worker provider provisioning", () => {
       credential: support.CREDENTIAL,
       bundleHash: support.BUNDLE_HASH,
     });
-    await workerService.attachSession({
+    const attachedCredential = await workerService.attachSession({
       environmentId: result.environmentId,
       ownerEpoch: result.ownerEpoch,
       sessionId: REQUEST.sessionId,
     });
-    const attached = support.testState.store.get(result.environmentId)!;
+    await support.waitForFast(() => {
+      expect({
+        environment: support.testState.store.get(result.environmentId),
+        credential: support.testState.store.getCredential(result.environmentId),
+      }).toMatchObject({
+        environment: {
+          state: "attached",
+          ownerEpoch: attachedCredential.ownerEpoch,
+          attachedSessionIds: [REQUEST.sessionId],
+        },
+        credential: {
+          credentialHash: hashWorkerCredential(attachedCredential.credential),
+          bundleHash: workerBuild.bundleHash,
+          sessionId: REQUEST.sessionId,
+          ownerEpoch: attachedCredential.ownerEpoch,
+        },
+      });
+    });
     seedActivePlacement(placements, {
       environmentId: result.environmentId,
-      ownerEpoch: attached.ownerEpoch,
+      ownerEpoch: attachedCredential.ownerEpoch,
     });
     const turnClaim = placements.claimTurn({
       sessionId: REQUEST.sessionId,
@@ -67,14 +85,14 @@ describe("node worker provider provisioning", () => {
       owner: {
         kind: "worker",
         environmentId: result.environmentId,
-        ownerEpoch: attached.ownerEpoch,
+        ownerEpoch: attachedCredential.ownerEpoch,
       },
     });
     const turnCredential = await workerService.acquireTurnCredential(turnClaim);
     const admission = {
       environmentId: result.environmentId,
       credential: turnCredential.credential,
-      ownerEpoch: attached.ownerEpoch,
+      ownerEpoch: attachedCredential.ownerEpoch,
       rpcSetVersion: 1,
       sessionId: REQUEST.sessionId,
       runId: turnClaim.runId,
