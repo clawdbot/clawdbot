@@ -18,6 +18,9 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+const DIFFERENT_TLS_FINGERPRINT = "cd".repeat(32);
+
 function waitForFast<T>(
   callback: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},
@@ -803,14 +806,14 @@ describe("GatewayClient close handling", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
       url: "wss://127.0.0.1:18789",
-      tlsFingerprint: "expected",
+      tlsFingerprint: TLS_FINGERPRINT,
       onClose,
       onConnectError,
     });
 
     client.start();
     const ws = getLatestWs();
-    ws.setPeerFingerprint("different");
+    ws.setPeerFingerprint(DIFFERENT_TLS_FINGERPRINT);
     ws.emitOpen();
 
     expect(onConnectError).toHaveBeenCalledWith(
