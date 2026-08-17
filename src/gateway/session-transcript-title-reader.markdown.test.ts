@@ -53,7 +53,7 @@ describe("session transcript Markdown title previews", () => {
         {
           role: "assistant",
           content:
-            "# Done\n\nLanded [PR #124879](https://github.com/openclaw/openclaw/pull/124879) with **green** CI.",
+            "# Done\n\nLanded [PR #124879](https://github.com/openclaw/openclaw/pull/124879) with **green** CI. Use foo_bar_baz from ~/.openclaw.",
         },
       ]);
       const fields =
@@ -63,7 +63,8 @@ describe("session transcript Markdown title previews", () => {
 
       expect(fields).toEqual({
         firstUserMessage: "Keep **title Markdown** unchanged",
-        lastMessagePreview: "Done Landed PR #124879 with green CI.",
+        lastMessagePreview:
+          "Done Landed PR #124879 with green CI. Use foo_bar_baz from ~/.openclaw.",
       });
     },
   );

@@ -14,7 +14,9 @@ export function flattenMarkdownToPlainText(text: string): string {
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, "")
-    .replace(/[*_~]+/g, "")
+    .replace(/(\*{1,2})(?=\S)([\s\S]*?\S)\1/g, "$2")
+    .replace(/(^|[^\p{L}\p{N}])(_{1,2})(?=\S)([\s\S]*?\S)\2(?![\p{L}\p{N}])/gu, "$1$3")
+    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }

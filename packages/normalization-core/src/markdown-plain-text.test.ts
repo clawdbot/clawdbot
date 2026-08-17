@@ -17,6 +17,11 @@ describe("flattenMarkdownToPlainText", () => {
       "Heading bullet plus star numbered quote",
     ],
     ["emphasis", "**bold** _italic_ ~~struck~~", "bold italic struck"],
+    [
+      "literal underscores and tildes",
+      "Use foo_bar_baz from ~/.openclaw",
+      "Use foo_bar_baz from ~/.openclaw",
+    ],
     ["multiline whitespace", "First\n\n  second\t third", "First second third"],
     ["plain text", "Already plain text.", "Already plain text."],
   ])("flattens %s", (_label, input, expected) => {
