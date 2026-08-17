@@ -319,6 +319,7 @@ async function readHostSystemProfiles(params: {
         timeoutMs: params.timeoutMs,
         signal: params.signal,
       }),
+      unavailableReason: undefined,
     };
   } catch {
     params.signal?.throwIfAborted();
