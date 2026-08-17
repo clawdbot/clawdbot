@@ -11,6 +11,10 @@ import {
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
 import {
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-utility-runtime";
+import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserSnapshot,
   getRuntimeConfig,
@@ -23,6 +27,8 @@ import {
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { neutralizeMediaDirectives } from "./browser/vision.js";
 import { formatErrorMessage } from "./infra/errors.js";
+
+const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKER = "\n[truncated — filter with level/targetId]";
 
 export type BrowserProxyRequest = ((opts: {
   method: string;
@@ -44,12 +50,20 @@ export function wrapBrowserExternalJson(params: {
   payload: unknown;
   includeWarning?: boolean;
 }): { wrappedText: string; safeDetails: Record<string, unknown> } {
-  const extractedText = JSON.stringify(
-    params.payload,
-    (_key: string, value: unknown) =>
-      typeof value === "string" ? neutralizeMediaDirectives(value) : value,
-    2,
-  );
+  const serialized =
+    JSON.stringify(
+      params.payload,
+      (_key: string, value: unknown) =>
+        typeof value === "string" ? neutralizeMediaDirectives(value) : value,
+      2,
+    ) ?? "null";
+  const extractedText =
+    serialized.length > DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS
+      ? `${truncateUtf16Safe(
+          serialized,
+          DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS - BROWSER_EXTERNAL_JSON_TRUNCATION_MARKER.length,
+        )}${BROWSER_EXTERNAL_JSON_TRUNCATION_MARKER}`
+      : serialized;
   // Browser tabs, snapshots, and console output are page-controlled data. Keep
   // text wrapped even when details carry the structured fields for callers.
   const wrappedText = wrapExternalContent(extractedText, {

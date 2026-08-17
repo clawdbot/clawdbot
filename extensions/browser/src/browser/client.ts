@@ -394,9 +394,9 @@ export async function browserCloseTab(
   baseUrl: string | undefined,
   targetId: string,
   opts?: BrowserClientProfileOptions,
-): Promise<void> {
+): Promise<{ ok: true; targetId?: string }> {
   const path = `/tabs/${encodeURIComponent(targetId)}`;
-  await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
+  return await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
 }
 
 /** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */

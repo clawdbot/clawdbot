@@ -497,13 +497,12 @@ export async function executeActAction(params: {
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
       const tabs = proxyRequest
-        ? ((
-            (await proxyRequest({
-              method: "GET",
-              path: "/tabs",
-              profile,
-            })) as { tabs?: unknown[] }
-          ).tabs ?? [])
+        ? await proxyRequest({ method: "GET", path: "/tabs", profile })
+            .then((result) => (result as { tabs?: unknown[] }).tabs ?? [])
+            .catch(() => {
+              params.signal?.throwIfAborted();
+              return [];
+            })
         : await browserToolActionDeps
             .browserTabs(baseUrl, { profile, signal: params.signal })
             .catch(() => {

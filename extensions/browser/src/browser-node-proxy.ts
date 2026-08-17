@@ -5,6 +5,7 @@ import {
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BROWSER_PROXY_COMMAND,
   BROWSER_PROXY_UPLOAD_COMMAND,
@@ -70,6 +71,7 @@ function unwrapBrowserProxyPayload(
 
 async function callBrowserProxy(params: {
   nodeId: string;
+  nodeLabel?: string;
   declaredCommands: readonly string[];
   pendingDeclaredCommands: readonly string[];
   allowAutomaticHostFallback: boolean;
@@ -149,7 +151,10 @@ async function callBrowserProxy(params: {
     throw new BrowserServiceError(body.error, "reason" in body ? body : undefined, status);
   }
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
-    throw new Error("browser proxy failed");
+    const selectedNode = truncateUtf16Safe(params.nodeLabel?.trim() || params.nodeId, 256);
+    throw new Error(
+      `Browser proxy returned an invalid response from node ${JSON.stringify(selectedNode)}. Retry with action=status target="host" to check Gateway host browser control.`,
+    );
   }
   return parsed;
 }
@@ -196,6 +201,7 @@ export function createBrowserNodeProxyRequest(params: {
     try {
       const proxy = await callBrowserProxy({
         nodeId: params.nodeTarget.nodeId,
+        nodeLabel: params.nodeTarget.label,
         declaredCommands: params.nodeTarget.commands ?? [],
         pendingDeclaredCommands: params.nodeTarget.pendingDeclaredCommands ?? [],
         allowAutomaticHostFallback: params.allowAutomaticHostFallback,
