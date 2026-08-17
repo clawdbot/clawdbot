@@ -106,12 +106,15 @@ type WorkspaceIcon = {
 type WorkspaceIconResolution = WorkspaceIcon | null;
 
 type SessionWorkspaceIconSnapshot = {
-  prepared: Promise<WorkspaceIconResolution>;
   resolution?: WorkspaceIconResolution;
+  waiters: Set<SessionWorkspaceIconWaiter>;
 };
 
-/** Observes the session snapshot chosen for one admitted HTTP request. */
-type SessionWorkspaceIconWaiter = (snapshot: SessionWorkspaceIconSnapshot) => void;
+/** Tracks the immutable snapshot chosen for one admitted HTTP request. */
+type SessionWorkspaceIconWaiter = {
+  settle: (resolution: WorkspaceIconResolution) => void;
+  snapshot?: SessionWorkspaceIconSnapshot;
+};
 
 let workspaceIconCache = new Map<string, Promise<WorkspaceIconResolution>>();
 let sessionWorkspaceIconCache = new Map<string, SessionWorkspaceIconSnapshot>();
@@ -119,8 +122,26 @@ const sessionWorkspaceIconWaiters = new Map<string, Set<SessionWorkspaceIconWait
 
 export function clearWorkspaceIconCacheForTest(): void {
   workspaceIconCache = new Map();
+  for (const snapshot of sessionWorkspaceIconCache.values()) {
+    snapshot.waiters.clear();
+  }
   sessionWorkspaceIconCache = new Map();
   sessionWorkspaceIconWaiters.clear();
+}
+
+function bindSessionWorkspaceIconWaiter(
+  waiter: SessionWorkspaceIconWaiter,
+  snapshot: SessionWorkspaceIconSnapshot,
+): void {
+  if (waiter.snapshot) {
+    return;
+  }
+  if (snapshot.resolution !== undefined) {
+    waiter.settle(snapshot.resolution);
+    return;
+  }
+  waiter.snapshot = snapshot;
+  snapshot.waiters.add(waiter);
 }
 
 /**
@@ -238,20 +259,22 @@ function publishSessionWorkspaceIcon(
   sessionKey: string,
   prepared: Promise<WorkspaceIconResolution>,
 ): void {
-  const snapshot: SessionWorkspaceIconSnapshot = { prepared };
+  const snapshot: SessionWorkspaceIconSnapshot = { waiters: new Set() };
   sessionWorkspaceIconCache.delete(sessionKey);
   sessionWorkspaceIconCache.set(sessionKey, snapshot);
   pruneMapToMaxSize(sessionWorkspaceIconCache, SESSION_WORKSPACE_ICON_CACHE_MAX_ENTRIES);
-  void prepared.then((icon) => {
-    // A newer startup or bounded-cache eviction owns this key now.
-    if (sessionWorkspaceIconCache.get(sessionKey) !== snapshot) {
-      return;
-    }
-    snapshot.resolution = icon;
-  });
   for (const waiter of sessionWorkspaceIconWaiters.get(sessionKey) ?? []) {
-    waiter(snapshot);
+    bindSessionWorkspaceIconWaiter(waiter, snapshot);
   }
+  void prepared.then((icon) => {
+    snapshot.resolution = icon;
+    // One completion observer fans out only to requests that still own an
+    // admission slot. Snapshot-bound waiters survive cache eviction, while
+    // timed-out and disconnected responses detach immediately.
+    for (const waiter of [...snapshot.waiters]) {
+      waiter.settle(icon);
+    }
+  });
 }
 
 /**
@@ -298,6 +321,7 @@ function awaitSessionWorkspaceIcon(
     // Every exit runs through here, so the timer, the disconnect listener, and
     // the admission slot this request holds are always released together.
     let settled = false;
+    let waiter: SessionWorkspaceIconWaiter;
     const settle = (resolution: WorkspaceIconResolution | undefined) => {
       if (settled) {
         return;
@@ -305,7 +329,8 @@ function awaitSessionWorkspaceIcon(
       settled = true;
       clearTimeout(deadline);
       res.off("close", abandon);
-      waiters.delete(observe);
+      waiters.delete(waiter);
+      waiter.snapshot?.waiters.delete(waiter);
       // Only drop the bucket this waiter belongs to; a later request may have
       // installed a fresh one for the same session key.
       if (waiters.size === 0 && sessionWorkspaceIconWaiters.get(sessionKey) === waiters) {
@@ -313,20 +338,9 @@ function awaitSessionWorkspaceIcon(
       }
       resolve(resolution);
     };
-    let observed = false;
-    const observe: SessionWorkspaceIconWaiter = (snapshot) => {
-      if (observed) {
-        return;
-      }
-      observed = true;
-      if (snapshot.resolution !== undefined) {
-        settle(snapshot.resolution);
-        return;
-      }
-      void snapshot.prepared.then(settle);
-    };
+    waiter = { settle };
     const abandon = () => settle(undefined);
-    waiters.add(observe);
+    waiters.add(waiter);
     res.once("close", abandon);
     const deadline = setTimeout(abandon, SESSION_WORKSPACE_ICON_PUBLISH_WAIT_MS);
     // A decorative icon request must never hold the Gateway process open.
@@ -334,8 +348,10 @@ function awaitSessionWorkspaceIcon(
     // Registration and this second read share one synchronous turn, so a
     // publish cannot land between them without either path observing it.
     const cached = readPreparedSessionWorkspaceIcon(sessionKey);
-    if (cached) {
-      observe(cached);
+    if (cached?.resolution !== undefined) {
+      settle(cached.resolution);
+    } else if (cached) {
+      bindSessionWorkspaceIconWaiter(waiter, cached);
     }
   });
 }
@@ -459,11 +475,10 @@ export async function handleWorkspaceIconHttpRequest(
       // Uncacheable, so the folder fallback cannot freeze into the answer.
       res.statusCode = 503;
       res.setHeader("cache-control", "no-store");
-      // Only a published pending snapshot authorizes automatic revalidation.
-      // Never-opened and evicted sessions remain terminal misses for this view.
-      if (latest) {
-        res.setHeader("retry-after", "1");
-      }
+      // Saturation, transport ordering, eviction, and slow preparation are all
+      // transient from the browser's perspective. The shared UI loader owns a
+      // bounded retry budget, so every 503 advertises the same recovery path.
+      res.setHeader("retry-after", "1");
       res.end("workspace icon snapshot is not ready");
       return true;
     }

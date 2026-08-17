@@ -4,11 +4,15 @@ type AvatarRouteEntry = {
   controller: AbortController;
   releaseTimer: ReturnType<typeof setTimeout> | undefined;
   retryTimer: ReturnType<typeof setTimeout> | undefined;
+  retryAttempts: number;
+  retryEligibleAt: number | undefined;
 };
 
 /** Bound protected avatar fetches so a stalled Gateway route cannot pin UI state forever. */
 const AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const AUTHENTICATED_AVATAR_MAX_RETRY_AFTER_MS = 30_000;
+const AUTHENTICATED_AVATAR_MAX_RETRIES = 3;
+const AUTHENTICATED_AVATAR_RETRY_COOLDOWN_MS = 30_000;
 const sharedAvatarRoutes = new Map<string, AvatarRouteEntry>();
 
 function retryAfterMs(response: Response): number | undefined {
@@ -119,18 +123,24 @@ async function fetchAvatarRoute(
     if (notFound && cacheNotFound) {
       return;
     }
-    if (retryDelayMs !== undefined && entry.consumers.size > 0) {
-      // Retry only while the exact shared entry still has an active view. The
-      // Gateway emits Retry-After only while its authoritative snapshot is
-      // pending, so completion removes the hint and ends this loop naturally.
-      entry.retryTimer = setTimeout(() => {
-        entry.retryTimer = undefined;
-        if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size === 0) {
-          return;
-        }
-        entry.controller = new AbortController();
-        void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);
-      }, retryDelayMs);
+    if (retryDelayMs !== undefined) {
+      if (entry.consumers.size > 0 && entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
+        entry.retryAttempts += 1;
+        // The budget belongs to this persistent shared entry. Keeping an
+        // exhausted miss prevents Lit rerenders from minting a new poll loop.
+        entry.retryTimer = setTimeout(() => {
+          entry.retryTimer = undefined;
+          if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size === 0) {
+            return;
+          }
+          entry.controller = new AbortController();
+          void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);
+        }, retryDelayMs);
+      } else if (entry.consumers.size > 0) {
+        // Keep the exhausted entry through a cooldown so render churn cannot
+        // remint the budget. A later render may start a fresh bounded window.
+        entry.retryEligibleAt = Date.now() + AUTHENTICATED_AVATAR_RETRY_COOLDOWN_MS;
+      }
       return;
     }
     // Avatar misses stay retryable because a later identity publication may make the route valid.
@@ -192,8 +202,20 @@ export class AuthenticatedAvatarRouteLoader {
         controller: new AbortController(),
         releaseTimer: undefined,
         retryTimer: undefined,
+        retryAttempts: 0,
+        retryEligibleAt: undefined,
       };
       sharedAvatarRoutes.set(key, entry);
+      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);
+    } else if (
+      entry.blobUrl === null &&
+      entry.retryTimer === undefined &&
+      entry.retryEligibleAt !== undefined &&
+      Date.now() >= entry.retryEligibleAt
+    ) {
+      entry.retryAttempts = 0;
+      entry.retryEligibleAt = undefined;
+      entry.controller = new AbortController();
       void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);
     }
     if (entry.releaseTimer !== undefined) {

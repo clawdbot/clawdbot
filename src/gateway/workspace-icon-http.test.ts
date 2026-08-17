@@ -400,11 +400,11 @@ describe("handleWorkspaceIconHttpRequest", () => {
     await expect(admitted.status).resolves.toBe(200);
   });
 
-  it("does not advertise retries when no chat startup owns the session", async () => {
+  it("advertises a bounded retry when no chat startup owns the session", async () => {
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(503);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("retry-after")).toBeNull();
+    expect(response.headers.get("retry-after")).toBe("1");
     expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
   });
 
@@ -557,6 +557,39 @@ describe("handleWorkspaceIconHttpRequest", () => {
     // Eviction is terminal until a new chat.startup republishes the session,
     // so the evicted key answers only once the publish deadline passes.
     expect((await fetch(iconRoute("agent:main:filler-0"))).status).toBe(503);
+  });
+
+  it("completes an admitted pending request after its cache entry is evicted", async () => {
+    const root = await makeWorkspace({ "favicon.ico": ICO_BYTES });
+    mocks.resolveLocalSessionWorkspaceRoot.mockImplementation((params: { sessionKey: string }) =>
+      params.sessionKey === "agent:main:pending-eviction" ? root : undefined,
+    );
+    let releaseRead = () => {};
+    iconReadControl.gate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const preparation = prepareSessionWorkspaceIcon({
+      sessionKey: "agent:main:pending-eviction",
+    });
+    const responsePromise = fetch(iconRoute("agent:main:pending-eviction"));
+
+    try {
+      await settleRequests();
+      for (let index = 0; index < 128; index += 1) {
+        await prepareSessionWorkspaceIcon({ sessionKey: `agent:main:evictor-${index}` });
+      }
+      releaseRead();
+      iconReadControl.gate = null;
+      await preparation;
+
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
+    } finally {
+      releaseRead();
+      iconReadControl.gate = null;
+      await preparation;
+    }
   });
 
   const malformed = ["/__openclaw__/workspace-icon/", "/__openclaw__/workspace-icon/a/b"];

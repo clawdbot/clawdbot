@@ -27,6 +27,30 @@ it("cancels an advertised retry when the last consumer releases the route", asyn
   expect(fetchMock).toHaveBeenCalledOnce();
 });
 
+it("backs off after one retry window before a later render can recover", async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 503,
+    headers: new Headers({ "retry-after": "1" }),
+  } as Response);
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const loader = new AuthenticatedAvatarRouteLoader(vi.fn());
+
+  expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(fetchMock).toHaveBeenCalledTimes(4);
+
+  expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
+  expect(fetchMock).toHaveBeenCalledTimes(4);
+
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
+  await Promise.resolve();
+  expect(fetchMock).toHaveBeenCalledTimes(5);
+  loader.reset();
+});
+
 it("shares pending fetches and revokes the resolved blob on reset", async () => {
   const createObjectURL = vi.fn(() => "blob:assistant-avatar");
   const revokeObjectURL = vi.fn();
