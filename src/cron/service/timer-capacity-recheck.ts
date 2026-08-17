@@ -18,10 +18,10 @@ export function createCronCapacityRecheckTracker(requestRecheck: () => Promise<v
   };
 
   return {
-    initializeActivations(count: number) {
+    initializeActivations(count: number, allowRecheckWhenEmpty = false) {
       pendingActivations = count;
       if (count === 0) {
-        resolveActivationGateOnce(false);
+        resolveActivationGateOnce(allowRecheckWhenEmpty);
       }
     },
     settleActivation(allowRecheck: boolean) {

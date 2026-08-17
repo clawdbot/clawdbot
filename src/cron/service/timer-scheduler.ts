@@ -169,6 +169,7 @@ async function onAdmittedTimer(state: CronServiceState) {
   const capacityRechecks = createCronCapacityRecheckTracker(() =>
     requestImmediateCronRecheck(state),
   );
+  let allowEmptyCapacityRecheck = false;
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -210,9 +211,10 @@ async function onAdmittedTimer(state: CronServiceState) {
         setCronRunCapacityListener(
           state,
           admittedDue.length > 0
-            ? capacityRechecks.request
+            ? () => capacityRechecks.request()
             : () => void requestImmediateCronRecheck(state),
         );
+        allowEmptyCapacityRecheck = admittedDue.length > 0;
       }
       if (admittedDue.length === 0) {
         return [];
@@ -256,7 +258,7 @@ async function onAdmittedTimer(state: CronServiceState) {
     }
 
     const concurrency = Math.min(resolveRunConcurrency(), Math.max(1, dueJobs.length));
-    capacityRechecks.initializeActivations(dueJobs.length);
+    capacityRechecks.initializeActivations(dueJobs.length, allowEmptyCapacityRecheck);
     const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state);
     const claimedIndexes = new Set<number>();
     let reservationReleaseError: unknown;

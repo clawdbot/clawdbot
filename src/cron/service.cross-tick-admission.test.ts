@@ -7,11 +7,19 @@ import {
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { stop } from "./service/ops-lifecycle.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
-import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.js";
+import { cronStoreKey } from "./store/key.js";
+import {
+  claimCronRunReceiptInDatabase,
+  finishCronRunReceipt,
+  inspectActiveCronRunReceipt,
+  prepareCronRunReceiptClaim,
+  type CronRunReceiptHandle,
+} from "./store/run-receipt-store.js";
 import type { CronJob } from "./types.js";
 
 const fixtures = setupCronRegressionFixtures({
@@ -41,9 +49,9 @@ describe("cron service cross-tick bounded admission", () => {
     let now = t0;
     let active = 0;
     let peakActive = 0;
-    const aStarted = createDeferred<void>();
+    const aStarted = createDeferred();
     const releaseA = createDeferred<{ status: "ok"; summary: string }>();
-    const bStarted = createDeferred<void>();
+    const bStarted = createDeferred();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
       active += 1;
       peakActive = Math.max(peakActive, active);
@@ -120,10 +128,10 @@ describe("cron service cross-tick bounded admission", () => {
     let now = t0;
     let active = 0;
     let peakActive = 0;
-    const bothStarted = createDeferred<void>();
+    const bothStarted = createDeferred();
     const releaseA = createDeferred<{ status: "ok"; summary: string }>();
     const releaseB = createDeferred<{ status: "ok"; summary: string }>();
-    const cStarted = createDeferred<void>();
+    const cStarted = createDeferred();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
       active += 1;
       peakActive = Math.max(peakActive, active);
@@ -237,8 +245,8 @@ describe("cron service cross-tick bounded admission", () => {
 
     let active = 0;
     let peakActive = 0;
-    const firstTwoStarted = createDeferred<void>();
-    const cStarted = createDeferred<void>();
+    const firstTwoStarted = createDeferred();
+    const cStarted = createDeferred();
     const releaseA = createDeferred<{ status: "ok"; summary: string }>();
     const releaseB = createDeferred<{ status: "ok"; summary: string }>();
     const releaseC = createDeferred<{ status: "ok"; summary: string }>();
@@ -303,6 +311,96 @@ describe("cron service cross-tick bounded admission", () => {
     stop(state);
   });
 
+  it("rechecks a partial batch immediately when its only reservation conflicts", async () => {
+    const store = fixtures.makeStorePath();
+    const t0 = Date.parse("2026-02-06T10:07:30.000Z");
+    const conflicted = createDueIsolatedJob({
+      id: "partial-conflict",
+      nowMs: t0,
+      nextRunAtMs: t0,
+    });
+    const pending = createDueIsolatedJob({
+      id: "partial-after-conflict",
+      nowMs: t0,
+      nextRunAtMs: t0,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [conflicted, pending] });
+
+    const foreignStartedAtMs = t0 + 1;
+    const preparedForeignReceipt = prepareCronRunReceiptClaim({
+      storePath: store.storePath,
+      job: conflicted,
+      agentId: conflicted.agentId ?? "main",
+      startedAtMs: foreignStartedAtMs,
+    });
+    let foreignReceipt: CronRunReceiptHandle | undefined;
+    let nowCalls = 0;
+    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
+      expect(job.id).toBe(pending.id);
+      return { status: "ok" as const, summary: "pending done" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => {
+        nowCalls += 1;
+        // The third scheduler time read occurs after due-job collection and
+        // immediately before receipt reservation. Simulate a sibling winning
+        // the durable owner race at that boundary.
+        if (nowCalls === 3) {
+          foreignReceipt = runOpenClawStateWriteTransaction(({ db }) => {
+            const receipt = claimCronRunReceiptInDatabase({
+              database: db,
+              prepared: preparedForeignReceipt,
+              resolveAgentId: (job) => job.agentId ?? "main",
+            });
+            db.prepare(
+              `UPDATE cron_jobs
+                  SET running_at_ms = ?,
+                      state_json = json_set(state_json, '$.runningAtMs', ?),
+                      updated_at = updated_at + 1
+                WHERE store_key = ? AND job_id = ?`,
+            ).run(
+              foreignStartedAtMs,
+              foreignStartedAtMs,
+              cronStoreKey(store.storePath),
+              conflicted.id,
+            );
+            return receipt;
+          });
+        }
+        return t0;
+      },
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
+
+    try {
+      await onTimer(state);
+
+      expect(foreignReceipt).toBeDefined();
+      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+      expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
+      expect(state.runAdmission.capacityListener).toBeNull();
+      expect(state.activeTimerTicks).toBe(0);
+      expect(
+        (await loadCronStore(store.storePath)).jobs.find((job) => job.id === pending.id)?.state,
+      ).toMatchObject({ lastRunStatus: "ok" });
+    } finally {
+      if (foreignReceipt) {
+        finishCronRunReceipt({
+          handle: foreignReceipt,
+          status: "interrupted",
+          finishedAtMs: t0 + 2,
+        });
+      }
+      stop(state);
+    }
+  });
+
   it("keeps the next future wake armed while an earlier receipt-backed batch runs", async () => {
     vi.useFakeTimers();
     const store = fixtures.makeStorePath();
@@ -323,9 +421,9 @@ describe("cron service cross-tick bounded admission", () => {
 
     let active = 0;
     let peakActive = 0;
-    const aStarted = createDeferred<void>();
+    const aStarted = createDeferred();
     const releaseA = createDeferred<{ status: "ok"; summary: string }>();
-    const bStarted = createDeferred<void>();
+    const bStarted = createDeferred();
     const releaseB = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
       active += 1;
