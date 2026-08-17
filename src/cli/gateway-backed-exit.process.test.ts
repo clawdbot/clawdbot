@@ -380,6 +380,7 @@ async function runIsolatedGatewayCli(params: {
           NODE_ENV: undefined,
           NODE_OPTIONS: undefined,
           OPENCLAW_CONFIG_PATH: params.configPath,
+          OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_GATEWAY_PASSWORD: undefined,
           OPENCLAW_GATEWAY_TOKEN: undefined,
@@ -387,6 +388,10 @@ async function runIsolatedGatewayCli(params: {
           OPENCLAW_HOME: params.root,
           OPENCLAW_NO_RESPAWN: "1",
           OPENCLAW_STATE_DIR: params.stateDir,
+          DISCORD_BOT_TOKEN: undefined,
+          TWILIO_ACCOUNT_SID: undefined,
+          TWILIO_AUTH_TOKEN: undefined,
+          TWILIO_FROM_NUMBER: undefined,
           VITEST: undefined,
           ...params.env,
         },
@@ -869,6 +874,64 @@ describe("gateway-backed CLI process exit", () => {
       },
     });
   }, 30_000);
+
+  it("renders missing device-list credentials as expected guidance, not a crash", async () => {
+    const root = tempDirs.make("openclaw-devices-credentials-human-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const port = await getFreePort();
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ gateway: { mode: "local", port } })}\n`,
+      "utf8",
+    );
+
+    const result = await runIsolatedGatewayCli({
+      args: ["devices", "list"],
+      root,
+      stateDir,
+      configPath,
+    });
+
+    expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
+    expect(result.stderr).toContain(
+      "gateway device.pair.list requires credentials before opening a websocket",
+    );
+    expect(result.stderr).toContain(
+      "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+    );
+    expect(result.stderr).toContain(`Config: ${configPath}`);
+    expect(result.stderr).not.toContain("The CLI command failed");
+    expect(result.stderr).not.toContain("Could not start the CLI");
+    expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+    expect(result.stderr).not.toContain("Stack:");
+    expect(result.stderr).not.toContain("openclaw doctor");
+  }, 30_000);
+
+  it.each([
+    { label: "channels config-only status", args: ["channels", "status"] },
+    { label: "gateway reachability status", args: ["gateway", "status"] },
+  ])(
+    "returns success after delivering $label",
+    async ({ args }) => {
+      const root = tempDirs.make("openclaw-degraded-status-");
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const port = await getFreePort();
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port } })}\n`,
+        "utf8",
+      );
+
+      const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
+
+      expect(result.code, result.stderr).toBe(0);
+    },
+    30_000,
+  );
 
   it("preserves pre-hello rate-limit details through the real health entry point", async () => {
     const root = tempDirs.make("openclaw-gateway-rate-limit-json-");

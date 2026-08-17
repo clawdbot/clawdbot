@@ -20,6 +20,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
+import { rethrowExpectedCliError } from "../failure-output.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
@@ -138,6 +139,9 @@ async function runGatewayCommand(
   try {
     await action();
   } catch (err) {
+    if (!opts?.json) {
+      rethrowExpectedCliError(err);
+    }
     if (opts?.json) {
       const {
         formatGatewayAuthErrorJson,

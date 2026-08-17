@@ -40,8 +40,41 @@ export class ExpectedCliError extends Error {
   }
 }
 
-export function isExpectedCliError(error: unknown): error is ExpectedCliError {
-  return error instanceof ExpectedCliError;
+function isGatewayCredentialsCliError(
+  error: unknown,
+): error is Error & { method: string; configPath: string } {
+  // Keep the root failure renderer lean; importing gateway/call would pull the
+  // transport and config stack into every CLI startup path.
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.name === "GatewayCredentialsRequiredError" &&
+    "method" in error &&
+    typeof error.method === "string" &&
+    "configPath" in error &&
+    typeof error.configPath === "string"
+  );
+}
+
+export function isExpectedCliError(error: unknown): error is Error {
+  return error instanceof ExpectedCliError || isGatewayCredentialsCliError(error);
+}
+
+export function rethrowExpectedCliError(error: unknown): void {
+  if (isExpectedCliError(error)) {
+    throw error;
+  }
+}
+
+function resolveExpectedCliOutput(error: Error) {
+  return error instanceof ExpectedCliError
+    ? error
+    : {
+        humanOutput: error.message,
+        humanOutputWritten: false,
+        machineOutput: error.message,
+      };
 }
 
 /** Canonical machine-readable failure envelope for CLI-owned errors. */
@@ -50,7 +83,7 @@ export function formatCliJsonFailure(
   options: CliFailureDebugOptions = {},
 ): CliJsonFailure {
   const message = isExpectedCliError(error)
-    ? formatErrorMessage(error.machineOutput.trimEnd())
+    ? formatErrorMessage(resolveExpectedCliOutput(error).machineOutput.trimEnd())
     : formatCliOperatorError(error, options);
   return {
     ok: false,
@@ -101,7 +134,8 @@ function pushPrefixed(out: string[], value: string): void {
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
   if (isExpectedCliError(options.error)) {
-    return options.error.humanOutputWritten ? [] : options.error.humanOutput.trimEnd().split("\n");
+    const output = resolveExpectedCliOutput(options.error);
+    return output.humanOutputWritten ? [] : output.humanOutput.trimEnd().split("\n");
   }
 
   // Default output stays terse; causes and stack traces require explicit debug intent.

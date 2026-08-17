@@ -23,6 +23,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parsePositiveAuditCursor } from "../audit/audit-cursor.js";
+import { isExpectedCliError } from "../cli/failure-output.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -200,6 +201,9 @@ function validateAuditFilterCombination(options: AuditListCommandOptions): void 
 }
 
 function formatAuditGatewayError(error: unknown): Error {
+  if (isExpectedCliError(error)) {
+    return error;
+  }
   const message = formatErrorMessage(error);
   const operatorMessage =
     message === "invalid audit.activity.list range or cursor"
