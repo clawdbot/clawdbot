@@ -5,8 +5,9 @@ import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
+import { loadExecApprovalsReadOnly } from "../../infra/exec-approvals.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
-import { readRestartSentinel } from "../../infra/restart-sentinel.js";
+import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
@@ -58,7 +59,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
     snap: ConfigFileSnapshot | null;
     remoteUrlMissing: boolean;
     secretDiagnostics: StatusScanOverviewResult["secretDiagnostics"];
-    sentinel: Awaited<ReturnType<typeof readRestartSentinel>> | null;
+    sentinel: Awaited<ReturnType<typeof readRestartSentinelReadOnly>> | null;
     lastErr: string | null;
     port: number;
     portUsage: Awaited<ReturnType<typeof inspectPortUsage>> | null;
@@ -111,7 +112,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
 
   params.progress.setLabel("Checking local state…");
   // These probes are intentionally best-effort so status-all can still print a partial report.
-  const sentinel = await readRestartSentinel().catch(() => null);
+  const sentinel = await readRestartSentinelReadOnly().catch(() => null);
   const lastErr = await readLastGatewayErrorLine(process.env).catch(() => null);
   const port = resolveGatewayPort(overview.cfg);
   const bindHost = await resolveGatewayBindHost(
@@ -135,6 +136,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
             // Skill eligibility depends on whether the default agent may request node exec.
             const nodeSkills = resolveNodeExecEligibility({
               cfg: overview.cfg,
+              execApprovals: loadExecApprovalsReadOnly(),
               agentId: controlPlaneWorkspace.agentId,
             });
             return buildWorkspaceSkillStatus(defaultWorkspace, {

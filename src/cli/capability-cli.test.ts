@@ -1670,7 +1670,7 @@ describe("capability cli", () => {
       runCapability("image", "describe", "--file", "photo.jpg", "--json"),
     ).rejects.toThrow("exit 1");
     expect(runtimeErrorMessages()).toEqual([
-      `Error: No description returned for image: ${path.resolve("photo.jpg")}`,
+      `No description returned for image: ${path.resolve("photo.jpg")}`,
     ]);
   });
 
@@ -1877,7 +1877,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --output-format must be one of png, jpeg, or webp",
+      "--output-format must be one of png, jpeg, or webp",
     );
 
     mocks.runtime.error.mockClear();
@@ -1893,7 +1893,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --openai-background must be one of transparent, opaque, or auto",
+      "--openai-background must be one of transparent, opaque, or auto",
     );
 
     mocks.runtime.error.mockClear();
@@ -1909,7 +1909,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --background must be one of transparent, opaque, or auto",
+      "--background must be one of transparent, opaque, or auto",
     );
 
     mocks.runtime.error.mockClear();
@@ -1925,7 +1925,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --quality must be one of low, medium, high, or auto",
+      "--quality must be one of low, medium, high, or auto",
     );
 
     mocks.runtime.error.mockClear();
@@ -1941,7 +1941,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --openai-moderation must be one of low or auto",
+      "--openai-moderation must be one of low or auto",
     );
   });
 
@@ -2662,7 +2662,7 @@ describe("capability cli", () => {
       runCapability("audio", "transcribe", "--file", "memo.m4a", "--json"),
     ).rejects.toThrow("exit 1");
     expect(runtimeErrorMessages()).toEqual([
-      `Error: No transcript returned for audio: ${path.resolve("memo.m4a")}`,
+      `No transcript returned for audio: ${path.resolve("memo.m4a")}`,
     ]);
   });
 
@@ -2691,7 +2691,7 @@ describe("capability cli", () => {
     await expect(
       runCapability("audio", "transcribe", "--file", "memo.m4a", "--json"),
     ).rejects.toThrow("exit 1");
-    expect(runtimeErrorMessages()).toEqual(["Error: Audio transcription response missing text"]);
+    expect(runtimeErrorMessages()).toEqual(["Audio transcription response missing text"]);
   });
 
   it("forwards transcription prompt and language hints", async () => {

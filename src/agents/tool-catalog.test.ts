@@ -71,7 +71,7 @@ describe("tool-catalog", () => {
       "update_plan",
       "ask_user",
       "skill_workshop",
-      "image",
+      "view_image",
       "image_generate",
       "music_generate",
       "video_generate",

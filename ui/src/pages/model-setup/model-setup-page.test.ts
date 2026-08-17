@@ -172,6 +172,22 @@ describe("ModelSetupPage catalog icons", () => {
     expect(page.innerHTML).not.toContain(recommendedIconUrl);
   });
 
+  it("redacts secrets in displayed detection failures", async () => {
+    const { context, client, request, runtimeConfig } = createContext();
+    request.mockRejectedValue(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
+    const { page } = await mountPage(context, {
+      state: { phase: "ready", result: detection },
+      client,
+      firstRun: false,
+    });
+
+    await (page as unknown as { detect: () => Promise<unknown> }).detect();
+
+    expect(page.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
+    expect(page.textContent).not.toContain("sk-1234567890abcdef");
+    runtimeConfig.dispose();
+  });
+
   it("loads unknown wire icons through the authenticated same-origin catalog proxy", async () => {
     const NativeUrl = URL;
     const createObjectURL = vi.fn(() => "blob:acme-icon");

@@ -205,8 +205,9 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   let service: OpenClawPluginService | null = null;
   const loadService = async () => {
     if (!service) {
-      const { createBrowserPluginService } = await loadBrowserRegistrationRuntimeModule();
-      service = createBrowserPluginService();
+      const { createBrowserPluginService, stopBrowserControlService } =
+        await loadBrowserRegistrationRuntimeModule();
+      service = createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
     }
     return service;
   };
@@ -221,7 +222,11 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
     },
     stop: async (ctx) => {
       if (!service) {
-        const { stopBrowserControlService } = await import("./src/control-service.js");
+        const loadedRuntime = loadBrowserRegistrationRuntimeModule.peek();
+        if (!loadedRuntime) {
+          return;
+        }
+        const { stopBrowserControlService } = await loadedRuntime;
         await stopBrowserControlService();
         return;
       }

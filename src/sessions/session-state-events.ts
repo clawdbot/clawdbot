@@ -908,6 +908,7 @@ export function registerMainSessionGroupWatch(
     agentId: string;
     entry?: SessionEntry;
     dmScope: DmScope;
+    mainKey?: string;
   },
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): boolean {
@@ -916,7 +917,11 @@ export function registerMainSessionGroupWatch(
   }
   const watcherSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
+    mainKey: params.mainKey,
   });
+  if (params.sessionKey === watcherSessionKey) {
+    return false;
+  }
   const now = options.now ?? Date.now();
   try {
     const { db: readDb } = openOpenClawStateDatabase(options);

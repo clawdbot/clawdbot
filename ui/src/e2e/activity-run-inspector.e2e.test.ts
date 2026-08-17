@@ -428,8 +428,11 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       expect(finalContentPosition.elementTop).toBeGreaterThanOrEqual(
         finalContentPosition.ancestorTop,
       );
+      // Bound is 2, not 1: the scroll poll above tolerates a <=1px remainder
+      // (scrollHeight/clientHeight are integer-rounded) and the rects here are
+      // fractional, so sub-pixel rendering can add up to another pixel.
       expect(finalContentPosition.elementBottom).toBeLessThanOrEqual(
-        finalContentPosition.ancestorBottom + 1,
+        finalContentPosition.ancestorBottom + 2,
       );
       await screenshot(page, "14-bounded-run-inspector.png");
 

@@ -2,7 +2,10 @@
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
 import type { TrustedSessionCreation } from "../../gateway/server-methods/session-creation-provenance.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  TrustedAgentToolCaller,
+} from "../../gateway/server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
@@ -27,7 +30,9 @@ type AgentToolGatewayRequest = Pick<
   | "signal"
   | "scopes"
   | "timeoutMs"
->;
+> & {
+  agentToolCaller?: TrustedAgentToolCaller;
+};
 
 export type AgentToolGatewayRequestCaller = <T = Record<string, unknown>>(
   request: AgentToolGatewayRequest,
@@ -53,7 +58,8 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
 ): Promise<T> => {
   if (!hasInProcessGatewayContext()) {
     const { callGateway } = await import("../../gateway/call.js");
-    return await callGateway<T>(request);
+    const { agentToolCaller: _agentToolCaller, ...wireRequest } = request;
+    return await callGateway<T>(wireRequest);
   }
   const scopes =
     request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(request.method, request.params);
@@ -63,6 +69,7 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
       : (request.timeoutMs ?? DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS);
   const dispatchOptions = {
     forceSyntheticClient: true,
+    ...(request.agentToolCaller ? { agentToolCaller: request.agentToolCaller } : {}),
     syntheticScopes: scopes,
     ...(request.expectFinal !== undefined ? { expectFinal: request.expectFinal } : {}),
     ...(request.onAccepted ? { onAccepted: request.onAccepted } : {}),

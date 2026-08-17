@@ -14,7 +14,11 @@ import {
 } from "./app-server/sandbox-guard.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import { isSameCodexAppServerThreadOwner } from "./app-server/thread-ownership.js";
-import { canMutateCodexHost } from "./command-authorization.js";
+import {
+  canMutateCodexHost,
+  CODEX_FULL_PERMISSIONS_AUTH_ERROR,
+  hasCodexAdminScope,
+} from "./command-authorization.js";
 import { formatCodexDisplayText, formatComputerUseStatus } from "./command-formatters.js";
 import {
   formatComputerUsePersistentIdentityMigration,
@@ -405,18 +409,27 @@ export async function setConversationPermissions(
     return "Usage: /codex permissions [default|yolo|status]";
   }
   const target = await resolveControlTarget(ctx);
-  if (!target) {
-    return "Cannot set Codex permissions because this command did not include a stable binding identity.";
+  if (!target || !ctx.sessionId || !ctx.sessionKey) {
+    return "Cannot set Codex permissions because this command did not include a complete session identity.";
   }
   const value = args[0];
   const parsed = parseCodexPermissionsModeArg(value);
   if (value && !parsed && value.trim().toLowerCase() !== "status") {
     return "Usage: /codex permissions [default|yolo|status]";
   }
+  // Match sessions.create/sessions.patch: full access requires operator.admin,
+  // even when the command sender is an owner.
+  if (parsed === "yolo" && !hasCodexAdminScope(ctx)) {
+    return CODEX_FULL_PERMISSIONS_AUTH_ERROR;
+  }
   return await deps.setCodexConversationPermissions({
-    identity: target.identity,
-    bindingStore: deps.bindingStore,
     mode: parsed,
+    config: ctx.config,
+    session: {
+      agentId: target.agentId,
+      sessionId: ctx.sessionId,
+      sessionKey: ctx.sessionKey,
+    },
   });
 }
 

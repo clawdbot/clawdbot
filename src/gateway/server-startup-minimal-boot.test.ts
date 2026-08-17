@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 
@@ -17,7 +17,7 @@ const BOOT_BUDGET_MS = 90_000;
 
 afterEach(() => {
   resetConfigRuntimeState();
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
 });
 
 describe("gateway minimal boot smoke", () => {

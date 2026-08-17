@@ -1324,6 +1324,7 @@ describe("exec approvals", () => {
 
   it("shows full chained gateway commands in approval-pending message", async () => {
     const calls: string[] = [];
+    const command = `${JSON.stringify(process.execPath)} --version && ${JSON.stringify(process.execPath)} --version`;
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "exec.approval.request") {
@@ -1343,10 +1344,10 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-chain-gateway", {
-      command: "npm view diver --json | jq .name && brew outdated",
+      command,
     });
 
-    expectPendingCommandText(result, "npm view diver --json | jq .name && brew outdated");
+    expectPendingCommandText(result, command);
     expect(calls).toContain("exec.approval.request");
   });
 
@@ -1491,6 +1492,7 @@ describe("exec approvals", () => {
 
   it("shows full chained node commands in approval-pending message", async () => {
     const calls: string[] = [];
+    const command = `${JSON.stringify(process.execPath)} --version && ${JSON.stringify(process.execPath)} --version`;
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "node.invoke") {
@@ -1510,10 +1512,10 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-chain-node", {
-      command: "npm view diver --json | jq .name && brew outdated",
+      command,
     });
 
-    expectPendingCommandText(result, "npm view diver --json | jq .name && brew outdated");
+    expectPendingCommandText(result, command);
     expect(calls).toContain("exec.approval.request");
   });
 

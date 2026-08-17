@@ -61,7 +61,7 @@ export function resolveSidebarSessionSubtitle(params: {
     !running && !params.hasDisplay ? session.lastMessagePreview?.trim() || undefined : undefined;
   const subtitle = running
     ? (attention ?? agentStatus ?? observer ?? narration ?? workSubtitle)
-    : (attention ?? agentStatus ?? finalReply ?? observer ?? workSubtitle);
+    : (attention ?? agentStatus ?? observer ?? finalReply ?? workSubtitle);
   return { subtitle, narration };
 }
 

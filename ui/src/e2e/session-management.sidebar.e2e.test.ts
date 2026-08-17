@@ -19,7 +19,6 @@ import {
   sessionsListResponse,
   trimmedTextContents,
   uiProofArtifactDir,
-  waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -565,7 +564,7 @@ suite.define(() => {
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
       await gateway.deferNext("sessions.subscribe");
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", { includeLastMessage: true });
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect
@@ -584,8 +583,12 @@ suite.define(() => {
 
       await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
-        .toBeGreaterThan(initialListCount);
+        .poll(async () =>
+          (await gateway.getRequests("sessions.list"))
+            .slice(initialListCount)
+            .some((request) => requireRecord(request.params).includeLastMessage === true),
+        )
+        .toBe(true);
       await gateway.resolveDeferred(
         "sessions.list",
         sessionsListResponse([
@@ -753,6 +756,13 @@ suite.define(() => {
         )
         .toEqual(["Already pinned", "Pin me"]);
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+
+      const pinnedCandidate = page.locator(
+        '[data-sidebar-entry="session:agent:main:candidate"] .sidebar-recent-session',
+      );
+      await pinnedCandidate.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Unpin session" }).waitFor();
+      expect(await page.getByRole("menuitem", { name: "Reset pinned items" }).count()).toBe(0);
       await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
     } finally {
       await context.close();
@@ -992,55 +1002,6 @@ suite.define(() => {
       await expect.poll(() => actionPointerEvents(menu)).toBe("auto");
       await menu.click();
       await page.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
-    } finally {
-      await context.close();
-    }
-  });
-  it("deletes a sidebar session through the in-app confirm", async () => {
-    const key = "agent:main:research";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    // Playwright auto-dismisses native dialogs, which is exactly how a
-    // bridge-less WebView behaves. Deleting must not depend on one.
-    const nativeDialogs: string[] = [];
-    page.on("dialog", (dialog) => {
-      nativeDialogs.push(dialog.message());
-      void dialog.dismiss();
-    });
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.delete": { ok: true, deleted: true },
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
-        ]),
-      },
-      sessionKey: "agent:main:main",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
-      await page
-        .locator("openclaw-session-menu")
-        .getByRole("menuitem", { name: "Delete…" })
-        .click();
-
-      const confirmModal = await waitForConfirmModal(page);
-      await captureUiProof(page, "sidebar-delete-session-confirm.png");
-      await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
-
-      await expect(gateway.waitForRequest("sessions.delete")).resolves.toMatchObject({
-        params: { deleteTranscript: true, key },
-      });
-      expect(nativeDialogs).toEqual([]);
     } finally {
       await context.close();
     }

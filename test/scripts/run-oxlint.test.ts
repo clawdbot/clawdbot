@@ -267,20 +267,6 @@ describe("run-oxlint", () => {
     );
   });
 
-  it("holds one parent heavy-check lock for sharded lint runs", () => {
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
-    const skipLockIndex = shardedLintRunner.indexOf('env.OPENCLAW_OXLINT_SKIP_LOCK === "1"');
-    const lockIndex = shardedLintRunner.indexOf("acquireLocalHeavyCheckLockSync({");
-    const childSkipIndex = shardedLintRunner.indexOf('OPENCLAW_OXLINT_SKIP_LOCK: "1"');
-
-    expect(shardedLintRunner).toContain("resolveLocalHeavyCheckEnv");
-    expect(shardedLintRunner).toContain("shouldAcquireLocalHeavyCheckLockForOxlint");
-    expect(skipLockIndex).toBeGreaterThan(-1);
-    expect(lockIndex).toBeGreaterThan(-1);
-    expect(lockIndex).toBeGreaterThan(skipLockIndex);
-    expect(childSkipIndex).toBeGreaterThan(lockIndex);
-  });
-
   it("serializes broad oxlint shards on constrained local hosts", () => {
     expect(shouldSerializeShards({})).toBe(true);
   });
@@ -624,16 +610,12 @@ describe("run-oxlint", () => {
       encoding: "utf8",
       env: {
         ...process.env,
-        OPENCLAW_HEAVY_CHECK_LOCK_SCOPE: "worktree",
         OPENCLAW_LOCAL_CHECK: "1",
       },
     });
 
     expect(result.status).toBe(1);
     expect(result.stderr).not.toContain("[oxlint:");
-    expect(existsSync(join(tempDir, ".artifacts/openclaw-local-checks/heavy-check.lock"))).toBe(
-      false,
-    );
   });
 
   it("falls back to the full extension shard when Windows extension dirs are unavailable", () => {

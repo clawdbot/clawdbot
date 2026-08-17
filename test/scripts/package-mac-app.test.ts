@@ -172,7 +172,7 @@ function getPeekabooSourceCommitHelperBlock(): string {
   return script.slice(start, end);
 }
 
-function runPeekabooSourceCommitHarness(packageResolved: string) {
+function runPeekabooSourceCommitHarness(packageResolved: string, expectedRevision?: string) {
   const root = tempDirs.make("openclaw-package-peekaboo-source-");
   const resolvedFile = path.join(root, "apps", "macos", "Package.resolved");
   mkdirSync(path.dirname(resolvedFile), { recursive: true });
@@ -181,6 +181,7 @@ function runPeekabooSourceCommitHarness(packageResolved: string) {
   return runHelper(`
     set -euo pipefail
     ROOT_DIR=${JSON.stringify(root)}
+    ${expectedRevision ? `export OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT=${JSON.stringify(expectedRevision)}` : "unset OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT"}
     ${getPeekabooSourceCommitHelperBlock()}
     resolve_peekaboo_source_commit
   `);
@@ -262,6 +263,167 @@ function getSwiftPackageResolutionBlock(): string {
   return script.slice(start, end);
 }
 
+function getCompiledPeekabooHelperBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("compiled_peekaboo_commit() {");
+  const end = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()", start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return script.slice(start, end);
+}
+
+function runRealCompiledPeekabooHarness(
+  mutation:
+    | "assume-unchanged"
+    | "corrupt-object"
+    | "dirty-gitlink"
+    | "export-subst"
+    | "gitlink-sibling"
+    | "ignored"
+    | "nested-gitlink"
+    | "none"
+    | "replacement-ref"
+    | "untracked",
+  expectedOverride?: string,
+) {
+  const root = tempDirs.make(`openclaw-compiled-peekaboo-real-${mutation}-`);
+  const buildPath = path.join(root, "build");
+  const checkout = path.join(buildPath, "checkouts", "Peekaboo");
+  const sourcePath = path.join(checkout, "Core", "Sources", "Fixture.swift");
+  mkdirSync(path.dirname(sourcePath), { recursive: true });
+  writeFileSync(path.join(checkout, "Package.swift"), "// swift-tools-version: 6.2\n", "utf8");
+  writeFileSync(sourcePath, 'let fixture = "$Format:%H$"\n', "utf8");
+  writeFileSync(path.join(checkout, ".gitattributes"), "Core/Sources/Fixture.swift export-subst\n");
+  for (const args of [
+    ["init", "-q"],
+    ["config", "user.name", "Fixture"],
+    ["config", "user.email", "fixture@example.invalid"],
+    ["add", "."],
+    ["commit", "-qm", "fixture"],
+  ]) {
+    const result = spawnSync("git", args, { cwd: checkout, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+  }
+  let head = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: checkout,
+    encoding: "utf8",
+  }).stdout.trim();
+
+  if (
+    mutation === "dirty-gitlink" ||
+    mutation === "gitlink-sibling" ||
+    mutation === "nested-gitlink"
+  ) {
+    const gitlinkPath = mutation === "gitlink-sibling" ? "Vendor" : "Dependencies/Vendor";
+    const gitlinkCheckout = path.join(checkout, gitlinkPath);
+    mkdirSync(gitlinkCheckout, { recursive: true });
+    writeFileSync(path.join(gitlinkCheckout, "README.md"), "initialized submodule\n");
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.name", "Fixture"],
+      ["config", "user.email", "fixture@example.invalid"],
+      ["add", "."],
+      ["commit", "-qm", "submodule fixture"],
+    ]) {
+      const result = spawnSync("git", args, { cwd: gitlinkCheckout, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    const gitlinkHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: gitlinkCheckout,
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      path.join(checkout, ".gitmodules"),
+      `[submodule "fixture"]\n\tpath = ${gitlinkPath}\n\turl = https://example.invalid/vendor.git\n`,
+      "utf8",
+    );
+    const stagedModules = spawnSync("git", ["add", ".gitmodules"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(stagedModules.status, stagedModules.stderr).toBe(0);
+    const added = spawnSync(
+      "git",
+      ["update-index", "--add", "--cacheinfo", `160000,${gitlinkHead},${gitlinkPath}`],
+      { cwd: checkout, encoding: "utf8" },
+    );
+    expect(added.status, added.stderr).toBe(0);
+    const committed = spawnSync("git", ["commit", "-qm", "gitlink"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(committed.status, committed.stderr).toBe(0);
+    head = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: checkout,
+      encoding: "utf8",
+    }).stdout.trim();
+  }
+
+  if (mutation === "assume-unchanged") {
+    const hidden = spawnSync(
+      "git",
+      ["update-index", "--assume-unchanged", path.relative(checkout, sourcePath)],
+      {
+        cwd: checkout,
+        encoding: "utf8",
+      },
+    );
+    expect(hidden.status, hidden.stderr).toBe(0);
+    writeFileSync(sourcePath, "let fixture = 2\n", "utf8");
+  } else if (mutation === "corrupt-object") {
+    const treeId = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: checkout,
+      encoding: "utf8",
+    }).stdout.trim();
+    const objectPath = path.join(checkout, ".git", "objects", treeId.slice(0, 2), treeId.slice(2));
+    chmodSync(objectPath, 0o644);
+    writeFileSync(objectPath, "corrupt object\n");
+  } else if (mutation === "dirty-gitlink") {
+    writeFileSync(path.join(checkout, "Dependencies", "Vendor", "README.md"), "dirty submodule\n");
+  } else if (mutation === "export-subst") {
+    writeFileSync(sourcePath, `let fixture = "${head}"\n`, "utf8");
+  } else if (mutation === "gitlink-sibling") {
+    const sibling = path.join(checkout, "Core", "Vendor", "Injected.swift");
+    mkdirSync(path.dirname(sibling), { recursive: true });
+    writeFileSync(sibling, "let injected = true\n", "utf8");
+  } else if (mutation === "ignored") {
+    writeFileSync(path.join(checkout, ".git", "info", "exclude"), "Hidden.swift\n", "utf8");
+    writeFileSync(path.join(checkout, "Hidden.swift"), "let hidden = true\n", "utf8");
+  } else if (mutation === "untracked") {
+    writeFileSync(path.join(checkout, "Untracked.swift"), "let untracked = true\n", "utf8");
+  } else if (mutation === "replacement-ref") {
+    const approvedHead = head;
+    writeFileSync(sourcePath, 'let fixture = "replacement"\n', "utf8");
+    const committed = spawnSync("git", ["commit", "-qam", "replacement"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(committed.status, committed.stderr).toBe(0);
+    const replacementHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: checkout,
+      encoding: "utf8",
+    }).stdout.trim();
+    const replaced = spawnSync("git", ["replace", approvedHead, replacementHead], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(replaced.status, replaced.stderr).toBe(0);
+    const detached = spawnSync("git", ["checkout", "-q", "--detach", approvedHead], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(detached.status, detached.stderr).toBe(0);
+    writeFileSync(sourcePath, 'let fixture = "replacement"\n', "utf8");
+    head = approvedHead;
+  }
+
+  return runHelper(`
+    set -euo pipefail
+    ${getCompiledPeekabooHelperBlock()}
+    compiled_peekaboo_commit ${JSON.stringify(buildPath)} ${JSON.stringify(expectedOverride ?? head)}
+  `);
+}
+
 function getStopPackagedAppBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("running_packaged_app_pids()");
@@ -298,7 +460,7 @@ function getSwiftPMResourceBundleBlock(): string {
 function getSwiftPMResourcePatchBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()");
-  const end = script.indexOf("PNPM_CMD=()");
+  const end = script.indexOf("cleanup_package_build() {", start);
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -692,13 +854,34 @@ describe("package-mac-app plist stamping", () => {
   });
 
   it("resolves the exact pinned Peekaboo source revision from Package.resolved", () => {
-    const expectedRevision = "a2fb16764a7d1c53bf696127c287ba32703f614f";
     const packageResolved = readFileSync("apps/macos/Package.resolved", "utf8");
+    const parsed = JSON.parse(packageResolved) as {
+      pins: Array<{ identity: string; state: { revision?: string } }>;
+    };
+    const expectedRevision = parsed.pins.find((pin) => pin.identity === "peekaboo")?.state.revision;
     const result = runPeekabooSourceCommitHarness(packageResolved);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(expectedRevision);
     expect(result.stderr).toBe("");
+  });
+
+  it("requires the locked Peekaboo pin to match the requested elevation release source", () => {
+    const requestedRevision = "b".repeat(40);
+    const packageResolved = readFileSync("apps/macos/Package.resolved", "utf8");
+    const parsed = JSON.parse(packageResolved) as {
+      pins: Array<{ identity: string; state: { revision?: string } }>;
+    };
+    const pinnedRevision = parsed.pins.find((pin) => pin.identity === "peekaboo")?.state.revision;
+    expect(pinnedRevision).toMatch(/^[0-9a-f]{40}$/);
+
+    const matching = runPeekabooSourceCommitHarness(packageResolved, pinnedRevision!);
+    expect(matching.status, matching.stderr).toBe(0);
+    expect(matching.stdout).toBe(pinnedRevision);
+
+    const mismatched = runPeekabooSourceCommitHarness(packageResolved, requestedRevision);
+    expect(mismatched.status).toBe(1);
+    expect(mismatched.stderr).toContain("does not match requested release source");
   });
 
   it.each([
@@ -1334,16 +1517,74 @@ describe("package-mac-app plist stamping", () => {
     const script = readFileSync(scriptPath, "utf8");
     const resolveCall =
       'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve';
-    const buildCall =
-      'run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
+    const buildCall = 'swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
 
-    expect(script).toContain('resolved_file="$ROOT_DIR/apps/macos/Package.resolved"');
+    expect(script).toContain(
+      'resolved_file="${SWIFT_PACKAGE_ROOT:-$ROOT_DIR/apps/macos}/Package.resolved"',
+    );
+    expect(script).toContain(
+      'SWIFT_PACKAGE_LOCK_BASELINE="$SWIFT_PACKAGE_CONTAINER/Package.resolved.committed"',
+    );
+    expect(script).toContain('chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"');
+    expect(script).toContain("identity in result");
     expect(script).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
     expect(script).toContain('cp "$resolved_snapshot" "$resolved_file"');
     expect(script).toContain("ERROR: Swift package resolution changed Package.resolved");
     expect(script).toContain(resolveCall);
     expect(script).toContain(buildCall);
+    expect(
+      script.indexOf(
+        "prepare_swift_package_root",
+        script.indexOf('for arch in "${BUILD_ARCHS[@]}"; do'),
+      ),
+    ).toBeLessThan(script.indexOf(resolveCall));
+    expect(script.indexOf("cleanup_swift_package_root", script.indexOf(buildCall))).toBeGreaterThan(
+      script.indexOf(buildCall),
+    );
+    const buildIndex = script.indexOf(buildCall);
+    expect(script.lastIndexOf("verify_snapshot_swift_lock", buildIndex)).toBeGreaterThan(
+      script.indexOf(resolveCall),
+    );
+    expect(script.indexOf("verify_snapshot_swift_lock", buildIndex)).toBeGreaterThan(buildIndex);
+    expect(script).not.toContain("swift build --disable-automatic-resolution");
     expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(buildCall));
+  });
+
+  it("stamps only the clean Peekaboo source that SwiftPM actually compiled", () => {
+    const verifier = getCompiledPeekabooHelperBlock();
+    expect(verifier).toContain('"core.commitGraph=false"');
+    expect(verifier).toContain('"--no-replace-objects"');
+    expect(verifier).toContain('"fsck", "--full", "--strict"');
+    expect(verifier).toContain('"cat-file", object_type');
+    expect(readFileSync(scriptPath, "utf8")).toContain("hdiutil attach -quiet -readonly -nobrowse");
+    expect(readFileSync(scriptPath, "utf8")).toContain(
+      'swift package --scratch-path "$build_path" edit Peekaboo --path "$PEEKABOO_SNAPSHOT_MOUNT"',
+    );
+    const mismatched = runRealCompiledPeekabooHarness("none", "e".repeat(40));
+    expect(mismatched.status).toBe(1);
+    expect(mismatched.stderr).toContain("does not match locked source");
+
+    const cleanCheckout = runRealCompiledPeekabooHarness("none");
+    expect(cleanCheckout.status, cleanCheckout.stderr).toBe(0);
+    const nestedGitlink = runRealCompiledPeekabooHarness("nested-gitlink");
+    expect(nestedGitlink.status, nestedGitlink.stderr).toBe(0);
+
+    for (const mutation of [
+      "assume-unchanged",
+      "corrupt-object",
+      "dirty-gitlink",
+      "export-subst",
+      "gitlink-sibling",
+      "ignored",
+      "replacement-ref",
+      "untracked",
+    ] as const) {
+      const dirty = runRealCompiledPeekabooHarness(mutation);
+      expect(dirty.status).toBe(1);
+      expect(dirty.stderr).toContain(
+        "Compiled Peekaboo checkout does not exactly match its committed source",
+      );
+    }
   });
 
   it("restores and rejects a Swift package resolution that changes the lockfile", () => {

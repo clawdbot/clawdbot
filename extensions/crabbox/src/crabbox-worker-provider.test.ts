@@ -56,23 +56,24 @@ function lifecycleLease(leaseId = LEASE_ID, profile: WorkerProfile = PROFILE) {
   return { leaseId, profile };
 }
 
-function providerWithRawRunner(runCommand: CrabboxCommandRunner) {
+function providerWithRawRunner(runCommand: CrabboxCommandRunner, warn?: (message: string) => void) {
   return createCrabboxWorkerProvider({
     runCommand,
     openclawRoot: OPENCLAW_ROOT,
     pathEnv: "",
     isExecutable: (candidate) => candidate === SIBLING_BINARY,
     sleep: async () => {},
+    ...(warn ? { warn } : {}),
   });
 }
 
-function providerWithRunner(runCommand: CrabboxCommandRunner) {
+function providerWithRunner(runCommand: CrabboxCommandRunner, warn?: (message: string) => void) {
   return providerWithRawRunner(async (argv, options) => {
     if (argv[1] === "config" && argv[2] === "show") {
       return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
     }
     return runCommand(argv, options);
-  });
+  }, warn);
 }
 
 function hasLoneSurrogate(value: string): boolean {
@@ -94,6 +95,34 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("Crabbox worker provider", () => {
+  it("advertises named machine classes and preserves a configured literal default", () => {
+    const provider = createCrabboxWorkerProvider();
+
+    expect(provider.listMachineOptions?.(PROFILE)).toEqual([
+      {
+        id: "standard",
+        label: "Standard",
+        description: "Cheap smoke checks and small repos",
+        default: true,
+      },
+      { id: "fast", label: "Fast", description: "General maintainer testing" },
+      { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
+      { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+    ]);
+    expect(provider.listMachineOptions?.({ ...PROFILE, class: "c7a.24xlarge" })).toEqual([
+      { id: "standard", label: "Standard", description: "Cheap smoke checks and small repos" },
+      { id: "fast", label: "Fast", description: "General maintainer testing" },
+      { id: "large", label: "Large", description: "Broad test shards or heavy builds" },
+      { id: "beast", label: "Beast", description: "High-core changed-test runs" },
+      {
+        id: "c7a.24xlarge",
+        label: "c7a.24xlarge",
+        description: "Configured instance type",
+        default: true,
+      },
+    ]);
+  });
+
   it("returns a pinned endpoint when inspect exposes provisioned host-key material", async () => {
     let warmed = false;
     const provider = providerWithRunner(async (argv) => {
@@ -1013,6 +1042,37 @@ describe("Crabbox worker provider", () => {
     ]);
   });
 
+  it("overrides the configured class for one provision operation", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return argv[1] === "warmup"
+        ? commandResult()
+        : commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+    });
+
+    await provider.provision(PROFILE, OPERATION_ID, { machineClass: "c7a.24xlarge" });
+
+    const warmup = calls.find((argv) => argv[1] === "warmup");
+    expect(warmup?.slice(warmup.indexOf("--class"), warmup.indexOf("--class") + 2)).toEqual([
+      "--class",
+      "c7a.24xlarge",
+    ]);
+  });
+
+  it.each([" ", "x".repeat(129)])(
+    "rejects an invalid per-operation machine class before allocation",
+    async (machineClass) => {
+      const runCommand = vi.fn(async () => commandResult());
+      const provider = providerWithRunner(runCommand);
+
+      await expect(
+        provider.provision(PROFILE, OPERATION_ID, { machineClass }),
+      ).rejects.toMatchObject({ code: "invalid_profile" });
+      expect(runCommand).not.toHaveBeenCalled();
+    },
+  );
+
   it("replays a committed timed-out warmup through a fresh provider instance", async () => {
     const calls: string[][] = [];
     const live = new Set<string>();
@@ -1422,6 +1482,175 @@ describe("Crabbox worker provider", () => {
       [binary, "inspect", "--provider", "coder", "--network", "public", "--id", LEASE_ID, "--json"],
       [binary, "stop", "--provider", "coder", "--id", LEASE_ID],
     ]);
+  });
+
+  it.each([
+    { idleTimeout: "1s", idleTimeoutMs: 1_000, intervalMs: 500 },
+    { idleTimeout: "2s", idleTimeoutMs: 2_000, intervalMs: 1_000 },
+    { idleTimeout: "5s", idleTimeoutMs: 5_000, intervalMs: 2_500 },
+    { idleTimeout: "12s", idleTimeoutMs: 12_000, intervalMs: 5_000 },
+    { idleTimeout: "30s", idleTimeoutMs: 30_000, intervalMs: 10_000 },
+    { idleTimeout: "6m", idleTimeoutMs: 360_000, intervalMs: 60_000 },
+  ])(
+    "heartbeats an active lease every $intervalMs ms for idleTimeout=$idleTimeout",
+    async ({ idleTimeout, idleTimeoutMs, intervalMs }) => {
+      vi.useFakeTimers();
+      const calls: string[][] = [];
+      const profile = { ...PROFILE, idleTimeout };
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        return argv[1] === "inspect"
+          ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+          : commandResult();
+      });
+      const heartbeatCalls = () => calls.filter((argv) => argv[1] === "heartbeat");
+
+      try {
+        await expect(provider.provision(profile, OPERATION_ID)).resolves.toMatchObject({
+          leaseId: LEASE_ID,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(heartbeatCalls()).toEqual([
+          [
+            SIBLING_BINARY,
+            "heartbeat",
+            "--provider",
+            "aws",
+            "--id",
+            LEASE_ID,
+            "--idle-timeout",
+            idleTimeout,
+            "--json",
+          ],
+        ]);
+
+        await vi.advanceTimersByTimeAsync(intervalMs - 1);
+        expect(heartbeatCalls()).toHaveLength(1);
+        expect(intervalMs).toBeLessThan(idleTimeoutMs);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(heartbeatCalls()).toHaveLength(2);
+      } finally {
+        await provider.destroy(lifecycleLease(LEASE_ID, profile));
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("aborts heartbeat before provider teardown and never reschedules it", async () => {
+    vi.useFakeTimers();
+    const calls: string[][] = [];
+    let finishStop!: () => void;
+    const stopPending = new Promise<void>((resolve) => {
+      finishStop = resolve;
+    });
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push(argv);
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson() });
+      }
+      if (argv[1] === "heartbeat") {
+        return await new Promise<SpawnResult>((resolve) => {
+          options.signal?.addEventListener(
+            "abort",
+            () => resolve(commandResult({ code: null, termination: "signal" })),
+            { once: true },
+          );
+        });
+      }
+      if (argv[1] === "stop") {
+        await stopPending;
+      }
+      return commandResult();
+    });
+    const lease = lifecycleLease();
+
+    try {
+      await provider.inspect(lease);
+      void vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() =>
+        expect(calls.filter((argv) => argv[1] === "heartbeat")).toHaveLength(1),
+      );
+
+      const destroy = provider.destroy(lease);
+      await vi.waitFor(() => expect(calls.some((argv) => argv[1] === "stop")).toBe(true));
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(calls.filter((argv) => argv[1] === "heartbeat")).toHaveLength(1);
+      finishStop();
+      await destroy;
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(calls.filter((argv) => argv[1] === "heartbeat")).toHaveLength(1);
+    } finally {
+      finishStop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("warns once and disables heartbeat when the Crabbox command is unavailable", async () => {
+    vi.useFakeTimers();
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+    const provider = providerWithRunner(
+      async (argv) => {
+        calls.push(argv);
+        if (argv[1] === "inspect") {
+          return commandResult({ stdout: inspectJson() });
+        }
+        if (argv[1] === "heartbeat") {
+          return commandResult({ code: 2, stderr: "unexpected argument heartbeat" });
+        }
+        return commandResult();
+      },
+      (message) => warnings.push(message),
+    );
+    const lease = lifecycleLease();
+
+    try {
+      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+      await vi.advanceTimersByTimeAsync(0);
+      await provider.inspect(lease);
+      await vi.advanceTimersByTimeAsync(180_000);
+
+      expect(calls.filter((argv) => argv[1] === "heartbeat")).toHaveLength(1);
+      expect(warnings).toEqual([
+        `Crabbox heartbeat is unavailable for worker lease ${LEASE_ID}; upgrade Crabbox to a release that includes \`crabbox heartbeat\` (added after v0.43.0); cloud worker machines may be reaped after 60m of coordinator-idle time`,
+      ]);
+    } finally {
+      await provider.destroy(lease);
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps heartbeat transport failures out of lifecycle operations and retries", async () => {
+    vi.useFakeTimers();
+    let heartbeatAttempts = 0;
+    const warnings: string[] = [];
+    const provider = providerWithRunner(
+      async (argv) => {
+        if (argv[1] === "inspect") {
+          return commandResult({ stdout: inspectJson() });
+        }
+        if (argv[1] === "heartbeat" && heartbeatAttempts++ === 0) {
+          throw new Error("transport unavailable");
+        }
+        return commandResult();
+      },
+      (message) => warnings.push(message),
+    );
+    const lease = lifecycleLease();
+
+    try {
+      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(heartbeatAttempts).toBe(1);
+      expect(warnings).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(heartbeatAttempts).toBe(2);
+      expect(warnings).toHaveLength(1);
+    } finally {
+      await provider.destroy(lease);
+      vi.useRealTimers();
+    }
   });
 
   it("resolves its lease-bound identity marker through current inspect output", async () => {

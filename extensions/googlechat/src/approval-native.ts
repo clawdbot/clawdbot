@@ -1,6 +1,9 @@
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type {
+  ChannelApprovalKind,
+  ChannelApprovalNativeRuntimeAdapter,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -150,7 +153,7 @@ function resolveSessionGoogleChatOriginTarget(sessionTarget: {
 export function shouldHandleGoogleChatNativeApprovalRequest(params: {
   cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
   accountId?: string | null;
-  approvalKind?: "exec" | "plugin";
+  approvalKind?: ChannelApprovalKind;
   request: ApprovalRequest;
 }): boolean {
   return (

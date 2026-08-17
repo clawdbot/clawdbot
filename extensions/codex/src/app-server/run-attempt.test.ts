@@ -103,8 +103,6 @@ import {
   createCodexTestBindingStore,
   resetCodexTestBindingStore,
   type CodexAppServerBindingIdentity,
-} from "./session-binding.test-helpers.js";
-import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
@@ -4159,11 +4157,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
   });
 
-  it("promotes implicit Codex yolo approval policy when OpenClaw tool policy exists", async () => {
+  it("keeps effective default Codex yolo when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
-    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const { sessionFile, workspaceDir } = createRunPaths();
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -4172,17 +4169,12 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    const turnRequest = harness.requests.find((request) => request.method === "turn/start");
+    const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(startParams?.approvalPolicy).toBe("never");
     expect(startParams?.sandbox).toBe("danger-full-access");
-    expect(info).toHaveBeenCalledWith(
-      "codex app-server approval policy promoted for OpenClaw tool policy",
-      {
-        from: "never",
-        to: "untrusted",
-        beforeToolCallHook: true,
-        trustedToolPolicies: [],
-      },
-    );
+    expect(turnParams?.approvalPolicy).toBe("never");
+    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });
   it("keeps explicit Codex yolo mode unpromoted when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
@@ -4202,14 +4194,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
-  it("applies stored session permissions to resumed harness turns", async () => {
+  it("applies the session permission mode and root to resumed harness turns", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
+    const nestedCwd = path.join(workspaceDir, "packages", "app");
+    await fs.mkdir(nestedCwd, { recursive: true });
+    await writeExistingBinding(sessionFile, workspaceDir);
     const harness = createResumeHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const params = createParams(sessionFile, workspaceDir);
+    params.cwd = nestedCwd;
+    params.permissionMode = "full";
+    params.sessionRoot = workspaceDir;
+    const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "guardian" } },
     });
     await harness.waitForMethod("turn/start");
@@ -4219,8 +4214,12 @@ describe("runCodexAppServerAttempt", () => {
       ?.params as Record<string, unknown> | undefined;
     const turnParams = harness.requests.find((request) => request.method === "turn/start")
       ?.params as Record<string, unknown> | undefined;
+    expect(resumeParams?.cwd).toBe(nestedCwd);
+    expect(resumeParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
     expect(resumeParams?.approvalPolicy).toBe("never");
     expect(resumeParams?.sandbox).toBe("danger-full-access");
+    expect(turnParams?.cwd).toBe(nestedCwd);
+    expect(turnParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
     expect(turnParams?.approvalPolicy).toBe("never");
     expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });
@@ -4242,7 +4241,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
-  it("ignores invalid Codex app-server env overrides when promoting tool policy approval", async () => {
+  it("ignores invalid Codex app-server env overrides without weakening default yolo", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
@@ -4256,7 +4255,7 @@ describe("runCodexAppServerAttempt", () => {
     await run;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    expect(startParams?.approvalPolicy).toBe("never");
   });
   it("preserves a healthy binding when invalid image cleanup hits a transient thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -5344,6 +5343,101 @@ describe("runCodexAppServerAttempt", () => {
         value: '{"sender":{"id":"profile-grace","name":"Grace"}}',
       },
     ]);
+  });
+  it("keeps context usage fresh across two turns of one Codex thread", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const turnIds = ["turn-1", "turn-2"] as const;
+    let nextTurnIndex = 0;
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        const turnId = turnIds[nextTurnIndex++];
+        if (!turnId) {
+          throw new Error("unexpected extra turn/start");
+        }
+        return turnStartResult(turnId);
+      }
+      return {};
+    });
+
+    const runTurn = async (index: number) => {
+      const turnId = turnIds[index]!;
+      const expectedTurnStarts = index + 1;
+      const run = runCodexAppServerAttempt(
+        createParams(sessionFile, workspaceDir, {
+          prompt: `turn ${index + 1}`,
+          runId: `run-${index + 1}`,
+        }),
+      );
+      await vi.waitFor(
+        () =>
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(expectedTurnStarts),
+        fastWait,
+      );
+      const inputTokens = 15_000 + index * 1_000;
+      const outputTokens = 100;
+      if (index === 0) {
+        await harness.notify({
+          method: "rawResponse/completed",
+          params: {
+            threadId: "thread-1",
+            turnId,
+            responseId: "response-1",
+            usage: {
+              totalTokens: inputTokens + outputTokens,
+              inputTokens,
+              cachedInputTokens: 0,
+              outputTokens,
+              reasoningOutputTokens: 0,
+            },
+          },
+        });
+      }
+      await harness.notify({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          tokenUsage: {
+            last: {
+              totalTokens: inputTokens + outputTokens,
+              inputTokens,
+              cachedInputTokens: 0,
+              cacheWriteInputTokens: 0,
+              outputTokens,
+              reasoningOutputTokens: 0,
+            },
+          },
+        },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId });
+      return run;
+    };
+
+    const first = await runTurn(0);
+    const second = await runTurn(1);
+
+    expect(first.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 15_000,
+      totalTokens: 15_100,
+    });
+    expect(second.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 16_000,
+      totalTokens: 16_100,
+    });
+    expect(
+      harness.requests
+        .filter((request) =>
+          ["thread/start", "thread/resume", "turn/start"].includes(request.method),
+        )
+        .map((request) => request.method),
+    ).toEqual(["thread/start", "turn/start", "turn/start"]);
   });
   it("starts a fresh Codex thread before resume when the native rollout reaches the fallback fuse", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();

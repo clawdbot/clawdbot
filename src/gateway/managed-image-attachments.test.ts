@@ -27,6 +27,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   attachManagedImageRecordToMessage,
   insertManagedImageRecord,
+  listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
@@ -381,12 +382,6 @@ async function requestManagedImage(params: {
     });
   }
 }
-
-describe("resolveManagedImageAttachmentLimits", () => {
-  it("keeps the existing public limit shape", () => {
-    expect(resolveManagedImageAttachmentLimits()).toEqual(DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS);
-  });
-});
 
 describe("handleManagedOutgoingImageHttpRequest", () => {
   let stateDir: string;
@@ -912,6 +907,34 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a managed audio filename stable in artifact downloads", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir, {
+      filename: "meeting-note.mp3",
+      contentType: "audio/mpeg",
+      body: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+    });
+    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "sessions.sqlite"),
+      entry: { sessionId: "sess-1" },
+    });
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        role: "assistant",
+        content: [{ type: "audio", url: canonicalPath, openUrl: canonicalPath }],
+        __openclaw: { id: "msg-1" },
+      },
+    ]);
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+
+    expect(download?.title).toBe("meeting-note.mp3");
+  });
+
   it("serves a bounded thumbnail through the full-image artifact ticket", async () => {
     const source = createSolidPngBuffer(640, 320, { r: 24, g: 64, b: 128 });
     const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
@@ -1368,6 +1391,28 @@ describe("createManagedOutgoingImageBlocks", () => {
       mimeType: "audio/x-caf",
       playback: "transcode",
     });
+  });
+
+  it("does not publish a record when playback inspection fails", async () => {
+    const sourcePath = path.join(stateDir, "workspace", "voice.mp3");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    resolvePlaybackModeForSourceMock.mockRejectedValueOnce(
+      new Error("synthetic playback inspection failure"),
+    );
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [sourcePath],
+      stateDir,
+      localRoots: [path.dirname(sourcePath)],
+      allowLocalNonImage: true,
+      continueOnPrepareError: true,
+    });
+
+    expect(blocks).toEqual([]);
+    expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
+    await expectPathMissing(path.join(stateDir, "media", "outgoing", "originals"));
   });
 
   it.each(["audio", "video"] as const)("caps managed %s data URLs by media kind", async (kind) => {

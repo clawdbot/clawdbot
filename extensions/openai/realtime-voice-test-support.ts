@@ -105,6 +105,7 @@ type InternalRealtimeVoiceProviderApi = {
   resolveBrowserSessionCapabilities: (ctx: {
     cfg?: object;
     providerConfig: Record<string, unknown>;
+    agentId?: string;
     model?: string;
   }) => {
     handlesAgentConsult?: boolean;

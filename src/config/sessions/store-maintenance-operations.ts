@@ -112,6 +112,7 @@ async function applyWarnOnlyMaintenance(params: {
       pruneAfterMs: params.maintenance.pruneAfterMs,
       maxEntries: params.maintenance.maxEntries,
       preserveKeys: params.preserveSessionKeys,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
     });
     if (warning) {
       params.operation.log.warn(
@@ -214,6 +215,7 @@ async function applyEnforcedMaintenance(params: {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
         preserveKeys: params.preserveSessionKeys,
+        preserveRecentMs: params.maintenance.preserveRecentMs,
       })
     : 0;
   const pruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
@@ -221,6 +223,7 @@ async function applyEnforcedMaintenance(params: {
       rememberRemovedSessionFile(removedSessionFiles, entry);
     },
     preserveKeys: params.preserveSessionKeys,
+    preserveRecentMs: params.maintenance.preserveRecentMs,
   });
   const countAfterPrune = Object.keys(params.operation.store).length;
   const shouldRunCapMaintenance =
@@ -235,6 +238,7 @@ async function applyEnforcedMaintenance(params: {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
         preserveKeys: params.preserveSessionKeys,
+        preserveRecentMs: params.maintenance.preserveRecentMs,
       })
     : 0;
   const referencedSessionIds = collectReferencedSessionIds(params.operation.store);

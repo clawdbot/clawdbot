@@ -540,8 +540,9 @@ describe("loadGatewayStartupPluginRuntime", () => {
 describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
   function registry(providerIds: string[], options: { embeddingProviderIds?: string[] } = {}) {
     return {
-      memoryEmbeddingProviders: providerIds.map((id) => ({ provider: { id } })),
-      embeddingProviders: (options.embeddingProviderIds ?? []).map((id) => ({ provider: { id } })),
+      embeddingProviders: [...providerIds, ...(options.embeddingProviderIds ?? [])].map((id) => ({
+        provider: { id },
+      })),
     } as never;
   }
 

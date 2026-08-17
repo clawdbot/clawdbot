@@ -112,7 +112,7 @@ function makeRetryTestContext(): QaSuiteResolvedRunContext {
     alternateModel: "openai/gpt-5.6-luna",
     fastMode: true,
     enabledPluginIds: [],
-    gatewayConfigPatch: undefined,
+    gatewayConfigPatches: [],
     gatewayRuntimeOptions: undefined,
     concurrency: 1,
     progressEnabled: false,

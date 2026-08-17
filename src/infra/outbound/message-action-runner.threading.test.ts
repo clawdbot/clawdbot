@@ -8,7 +8,6 @@ import {
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
 
-const ensureOutboundSessionEntry = vi.fn(async () => undefined);
 const resolveOutboundSessionRoute = vi.fn();
 
 function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
@@ -46,7 +45,6 @@ const defaultForumToolContext = {
 
 describe("message action threading helpers", () => {
   beforeEach(() => {
-    ensureOutboundSessionEntry.mockClear();
     resolveOutboundSessionRoute.mockReset();
   });
 
@@ -92,13 +90,11 @@ describe("message action threading helpers", () => {
       agentId: "main",
       resolveAutoThreadId: ({ toolContext }) => toolContext?.currentThreadTs,
       resolveOutboundSessionRoute,
-      ensureOutboundSessionEntry,
     });
 
     expect(result.outboundRoute?.sessionKey).toBe(testCase.expectedSessionKey);
     expect(actionParams["__sessionKey"]).toBe(testCase.expectedSessionKey);
     expect(actionParams["__agentId"]).toBe("main");
-    expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
   });
 
   it("prepares the outbound route with a canonicalized reply root", async () => {
@@ -123,7 +119,6 @@ describe("message action threading helpers", () => {
         threadId: threadId ?? null,
       }),
       resolveOutboundSessionRoute,
-      ensureOutboundSessionEntry,
     });
 
     expect(resolveOutboundSessionRoute).toHaveBeenCalledOnce();

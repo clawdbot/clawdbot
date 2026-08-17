@@ -1,9 +1,12 @@
 // Covers memory embedding provider runtime hooks from plugins.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearEmbeddingProviders, registerEmbeddingProvider } from "./embedding-providers.js";
 import {
-  clearMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
+  clearEmbeddingProviders,
+  registerEmbeddingProvider,
+  type EmbeddingProviderAdapter,
+} from "./embedding-providers.js";
+import {
+  adaptMemoryEmbeddingProviderAdapter,
   type MemoryEmbeddingProviderAdapter,
 } from "./memory-embedding-providers.js";
 
@@ -23,7 +26,7 @@ vi.mock("./capability-provider-runtime.js", () => ({
 
 let runtimeModule: typeof import("./memory-embedding-provider-runtime.js");
 
-function createCapabilityAdapter(id: string): MemoryEmbeddingProviderAdapter {
+function createCapabilityAdapter(id: string): EmbeddingProviderAdapter {
   return {
     id,
     create: async () => ({ provider: null }),
@@ -32,7 +35,6 @@ function createCapabilityAdapter(id: string): MemoryEmbeddingProviderAdapter {
 
 beforeEach(async () => {
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
   mocks.resolvePluginCapabilityProviders.mockReset();
   mocks.resolvePluginCapabilityProviders.mockReturnValue([]);
   mocks.resolvePluginCapabilityProvider.mockReset();
@@ -42,18 +44,18 @@ beforeEach(async () => {
 
 afterEach(() => {
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
 });
 
 describe("memory embedding provider runtime resolution", () => {
   it("merges registered and declared capability fallback adapters", () => {
-    registerMemoryEmbeddingProvider({
+    registerEmbeddingProvider({
       id: "registered",
       create: async () => ({ provider: null }),
     });
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("capability")]);
 
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
       "registered",
       "capability",
     ]);
@@ -66,12 +68,13 @@ describe("memory embedding provider runtime resolution", () => {
     mocks.resolvePluginCapabilityProvider.mockReturnValue(createCapabilityAdapter("ollama"));
 
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
       "ollama",
     ]);
     expect(runtimeModule.getMemoryEmbeddingProvider("ollama")?.id).toBe("ollama");
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "memoryEmbeddingProviders",
+      key: "embeddingProviders",
       providerId: "ollama",
       cfg: undefined,
     });
@@ -94,16 +97,16 @@ describe("memory embedding provider runtime resolution", () => {
       providerId === "ollama" ? ollamaAdapter : undefined,
     );
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-5080", config as never)).toBe(
-      ollamaAdapter,
+    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-5080", config as never)?.id).toBe(
+      ollamaAdapter.id,
     );
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "memoryEmbeddingProviders",
+      key: "embeddingProviders",
       providerId: "ollama-5080",
       cfg: config,
     });
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "memoryEmbeddingProviders",
+      key: "embeddingProviders",
       providerId: "ollama",
       cfg: config,
     });
@@ -111,7 +114,7 @@ describe("memory embedding provider runtime resolution", () => {
 
   it("uses registered adapters through a configured provider api", () => {
     const ollamaAdapter = createCapabilityAdapter("ollama");
-    registerMemoryEmbeddingProvider(ollamaAdapter);
+    registerEmbeddingProvider(ollamaAdapter);
     const config = {
       models: {
         providers: {
@@ -124,10 +127,12 @@ describe("memory embedding provider runtime resolution", () => {
       },
     } as never;
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", config)).toBe(ollamaAdapter);
+    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", config)?.id).toBe(
+      ollamaAdapter.id,
+    );
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledTimes(1);
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "memoryEmbeddingProviders",
+      key: "embeddingProviders",
       providerId: "ollama-gpu1",
       cfg: config,
     });
@@ -137,20 +142,21 @@ describe("memory embedding provider runtime resolution", () => {
     const registered = {
       id: "openai",
       create: async () => ({ provider: null }),
-    } satisfies MemoryEmbeddingProviderAdapter;
-    registerMemoryEmbeddingProvider({
+    } satisfies EmbeddingProviderAdapter;
+    registerEmbeddingProvider({
       ...registered,
     });
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("openai")]);
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("openai")).toStrictEqual(registered);
+    expect(runtimeModule.getMemoryEmbeddingProvider("openai")?.id).toBe(registered.id);
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
       "openai",
     ]);
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
   });
 
-  it("adapts generic providers once without adding them to memory auto-selection", async () => {
+  it("adapts generic providers for memory queries, batches, and identity", async () => {
     const close = vi.fn();
     const embed = vi.fn(async () => [1, 2]);
     const embedBatch = vi.fn(async (inputs: unknown[]) => inputs.map(() => [3, 4]));
@@ -184,7 +190,9 @@ describe("memory embedding provider runtime resolution", () => {
       defaultModel: "generic-default",
       transport: "local",
     });
-    expect(runtimeModule.listMemoryEmbeddingProviders()).toEqual([]);
+    expect(runtimeModule.listMemoryEmbeddingProviders().map((entry) => entry.id)).toContain(
+      "generic",
+    );
     const options = { config: {}, model: "generic-model", outputDimensionality: 7 };
     expect(adapter?.resolveIndexIdentity?.(options)).toEqual({
       model: "generic-model",
@@ -208,11 +216,48 @@ describe("memory embedding provider runtime resolution", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it("keeps memory-specific adapters authoritative during dual registration", () => {
-    const memoryAdapter = createCapabilityAdapter("dual");
-    registerMemoryEmbeddingProvider(memoryAdapter);
-    registerEmbeddingProvider({ id: "dual", create: async () => ({ provider: null }) });
+  it("preserves memory policy and batching after generic registration", async () => {
+    const embedQuery = vi.fn(async () => [1, 2]);
+    const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [3, 4]));
+    const acquireLocalService = vi.fn();
+    const create = vi.fn(async (options: unknown) => {
+      expect(options).toMatchObject({ acquireLocalService });
+      return {
+        provider: {
+          id: "migrated-memory",
+          model: "migrated-model",
+          embedQuery,
+          embedBatch,
+        },
+        runtime: {
+          id: "migrated-memory",
+          sourceWideBatchEmbed: true,
+        },
+      };
+    });
+    const memoryAdapter = {
+      id: "migrated-memory",
+      autoSelectPriority: 20,
+      allowExplicitWhenConfiguredAuto: true,
+      create,
+    } satisfies MemoryEmbeddingProviderAdapter;
+    registerEmbeddingProvider(adaptMemoryEmbeddingProviderAdapter(memoryAdapter));
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("dual")).toBe(memoryAdapter);
+    const adapter = runtimeModule.getMemoryEmbeddingProvider("migrated-memory");
+    expect(adapter).toMatchObject({
+      id: "migrated-memory",
+      autoSelectPriority: 20,
+      allowExplicitWhenConfiguredAuto: true,
+    });
+    const result = await adapter?.create({
+      config: {},
+      model: "migrated-model",
+      acquireLocalService,
+    } as never);
+    await expect(result?.provider?.embedQuery("query")).resolves.toEqual([1, 2]);
+    await expect(result?.provider?.embedBatch(["document"])).resolves.toEqual([[3, 4]]);
+    expect(result?.runtime?.sourceWideBatchEmbed).toBe(true);
+    expect(embedQuery).toHaveBeenCalledWith("query", { inputType: "query" });
+    expect(embedBatch).toHaveBeenCalledWith(["document"], { inputType: "document" });
   });
 });

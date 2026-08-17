@@ -8,7 +8,7 @@ const live = process.env.OPENCLAW_LIVE_TEST === "1" && apiKey.length > 0;
 const describeLive = live ? describe : describe.skip;
 const timeoutMs = 120_000;
 
-const model: Model<"anthropic-messages"> = {
+const model = {
   id: "claude-haiku-4-5",
   name: "Claude Haiku 4.5",
   api: "anthropic-messages",
@@ -19,7 +19,7 @@ const model: Model<"anthropic-messages"> = {
   cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
   contextWindow: 200_000,
   maxTokens: 8_192,
-};
+} satisfies Model<"anthropic-messages">;
 
 describeLive("Anthropic provider live", () => {
   it(

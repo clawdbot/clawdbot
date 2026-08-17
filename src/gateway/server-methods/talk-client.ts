@@ -209,6 +209,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         provider: resolution.provider,
         providerConfig: resolution.providerConfig,
         cfg: runtimeConfig,
+        agentId: requestedAgentId,
         model: launchOptions.model,
         surface: "browser-session",
       });

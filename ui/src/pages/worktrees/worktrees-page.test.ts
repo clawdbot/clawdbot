@@ -343,11 +343,11 @@ describe("WorktreesPage lifecycle", () => {
     expect(secondRequest).not.toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
   });
 
-  it("offers force removal when the gateway reports a snapshot failure", async () => {
+  it("surfaces the snapshot failure after a forced removal", async () => {
     const request = vi.fn((method: string, params?: Record<string, unknown>) => {
       if (method === "worktrees.remove") {
         return params?.force
-          ? Promise.resolve({ removed: true })
+          ? Promise.resolve({ removed: true, snapshotError: "nested gitlink" })
           : Promise.resolve({ removed: false, snapshotError: "nested gitlink" });
       }
       return Promise.resolve({ worktrees: [] });
@@ -371,7 +371,9 @@ describe("WorktreesPage lifecycle", () => {
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
     expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1", force: true });
     expect(showConfirmDialog).toHaveBeenCalledTimes(2);
-    expect(page.error).toBeNull();
+    expect(page.error).toBe("nested gitlink");
+    await page.updateComplete;
+    expect(page.querySelector(".callout.danger")?.textContent).toContain("nested gitlink");
   });
 
   it("discards a restore error across a same-client reconnect", async () => {
@@ -417,7 +419,7 @@ describe("WorktreesPage lifecycle", () => {
         return Promise.resolve({ worktrees: [record] });
       }
       if (method === "worktrees.restore") {
-        return Promise.reject(new Error("restore failed"));
+        return Promise.reject(new Error("restore failed: OPENAI_API_KEY=sk-1234567890abcdef"));
       }
       return Promise.resolve({});
     });
@@ -432,7 +434,7 @@ describe("WorktreesPage lifecycle", () => {
     await page.restore(record);
 
     expect(listRequests).toBe(2);
-    expect(page.error).toBe("Error: restore failed");
+    expect(page.error).toBe("restore failed: OPENAI_API_KEY=sk-123...cdef");
     expect(page.busyId).toBeNull();
   });
 
@@ -462,7 +464,7 @@ describe("WorktreesPage lifecycle", () => {
     await page.restore(record);
 
     expect(listRequests).toBe(2);
-    expect(page.error).toBe("Error: list failed");
+    expect(page.error).toBe("list failed");
     expect(page.busyId).toBeNull();
   });
 
@@ -485,11 +487,11 @@ describe("WorktreesPage lifecycle", () => {
       gatewayWithClient({ request } as unknown as GatewayBrowserClient),
     );
     document.body.append(page);
-    await waitForFast(() => expect(page.error).toBe("Error: stale list failure"));
+    await waitForFast(() => expect(page.error).toBe("stale list failure"));
 
     await page.restore(worktree());
 
-    expect(page.error).toBe("Error: restore failed");
+    expect(page.error).toBe("restore failed");
   });
 
   it("clears pending create state across a same-client reconnect", async () => {
