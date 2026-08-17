@@ -2535,7 +2535,13 @@ openclaw-chat-session-rail {
 }
 
 .code-block-json-tree li {
+  position: static;
   white-space: nowrap;
+}
+
+.code-block-json-tree li::before,
+.code-block-json-tree li::marker {
+  content: none;
 }
 
 .code-block-json-node {
