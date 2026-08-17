@@ -23,6 +23,7 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
 
   @property({ attribute: false }) widget?: BoardWidget;
   @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) active = true;
 
   private store?: SessionProgressCardStore;
   private targetSessionKey = "";
@@ -43,16 +44,25 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (this.store?.hasError(this.targetSessionKey)) {
+    const loadError = this.store?.getError(this.targetSessionKey);
+    if (loadError) {
       return html`<div
         class="board-widget__plugin-loading"
         data-test-id="session-progress-error"
         role="alert"
       >
-        <span>${t("sessionProgressCard.widgetUnavailable")}</span>
-        <button class="btn btn--sm" type="button" @click=${this.retryLoad}>
-          ${t("common.retry")}
-        </button>
+        <span
+          >${t(
+            loadError === "access-denied"
+              ? "sessionProgressCard.widgetAccessDenied"
+              : "sessionProgressCard.widgetUnavailable",
+          )}</span
+        >
+        ${loadError === "unavailable"
+          ? html`<button class="btn btn--sm" type="button" @click=${this.retryLoad}>
+              ${t("common.retry")}
+            </button>`
+          : null}
       </div>`;
     }
     const card = this.store?.get(this.targetSessionKey);
@@ -71,7 +81,10 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
 
   private syncStore(): void {
     const targetSessionKey = readSessionKeyProp(this.widget) ?? this.sessionKey.trim();
-    const store = this.context ? sessionProgressCardsForGateway(this.context.gateway) : undefined;
+    const store =
+      this.active && this.context
+        ? sessionProgressCardsForGateway(this.context.gateway)
+        : undefined;
     if (store === this.store && targetSessionKey === this.targetSessionKey) {
       return;
     }
@@ -106,10 +119,12 @@ if (!customElements.get("openclaw-session-progress-widget")) {
 export const renderSessionProgressWidget: PluginBoardWidgetRenderer = ({
   widget,
   sessionKey,
+  active,
 }) => html`
   <openclaw-session-progress-widget
     .widget=${widget}
     .sessionKey=${sessionKey}
+    .active=${active}
   ></openclaw-session-progress-widget>
 `;
 

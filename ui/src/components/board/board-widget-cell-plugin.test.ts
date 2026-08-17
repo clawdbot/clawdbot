@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -186,9 +187,16 @@ describe("plugin board widget cells", () => {
       cell.widget = widget;
       cell.rect = { name: widget.name, x: 0, y: index * 4, w: 6, h: 4 };
       cell.sessionKey = dashboardSessionKey;
+      cell.active = index !== 0;
       cell.callbacks = callbacks();
       provider.append(cell);
       document.body.append(provider);
+
+      if (index === 0) {
+        await cell.updateComplete;
+        expect(request).not.toHaveBeenCalled();
+        cell.active = true;
+      }
 
       await vi.waitFor(
         () =>
@@ -206,7 +214,15 @@ describe("plugin board widget cells", () => {
   it("surfaces a failed session progress read and retries it", async () => {
     const sessionKey = "agent:main:protected";
     let attempts = 0;
-    const request = vi.fn(async () => {
+    const deniedSessionKey = "agent:main:private";
+    const request = vi.fn(async (_method: string, params: { sessionKey: string }) => {
+      if (params.sessionKey === deniedSessionKey) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "session is private for this connection",
+          details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+        });
+      }
       attempts += 1;
       if (attempts === 1) {
         throw new Error("session not shared");
@@ -274,6 +290,17 @@ describe("plugin board widget cells", () => {
       CHUNK_LOAD_WAIT,
     );
     expect(request).toHaveBeenCalledTimes(2);
+
+    cell.widget = { ...widget, props: { sessionKey: deniedSessionKey } };
+    await vi.waitFor(
+      () =>
+        expect(
+          cell.querySelector('[data-test-id="session-progress-error"]')?.textContent,
+        ).toContain("Select a session you can access or change sharing for this session."),
+      CHUNK_LOAD_WAIT,
+    );
+    expect(cell.querySelector('[data-test-id="session-progress-error"] button')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it("passes activity to a retained Workboard plugin element", async () => {

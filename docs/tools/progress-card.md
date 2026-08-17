@@ -94,4 +94,4 @@ Use the `dashboard` tool to keep the live card on the current session's dashboar
 }
 ```
 
-Omit `props.sessionKey` to follow the dashboard's session. To show another session's card, add `"props": { "sessionKey": "agent:main:release" }`.
+Omit `props.sessionKey` to follow the dashboard's session. To show another session's card, add `"props": { "sessionKey": "agent:main:release" }`. The current connection must participate in that session; otherwise select an accessible session or change its sharing.

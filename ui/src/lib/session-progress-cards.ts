@@ -4,6 +4,7 @@ import type {
   ProgressCardStep,
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 
@@ -16,12 +17,14 @@ type CachedProgressCard = {
   revision: number | null;
 };
 
+type SessionProgressCardLoadError = "access-denied" | "unavailable";
+
 export type SessionProgressCardStore = {
   watch: (owner: object, sessionKeys: readonly string[]) => void;
   unwatch: (owner: object) => void;
   load: (sessionKey: string) => Promise<ProgressCard | null>;
   get: (sessionKey: string) => ProgressCard | null | undefined;
-  hasError: (sessionKey: string) => boolean;
+  getError: (sessionKey: string) => SessionProgressCardLoadError | undefined;
   subscribe: (listener: () => void) => () => void;
 };
 
@@ -88,7 +91,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
 function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
   const watchedByOwner = new Map<object, Set<string>>();
   const cache = new Map<string, CachedProgressCard>();
-  const errors = new Set<string>();
+  const errors = new Map<string, SessionProgressCardLoadError>();
   const loads = new Map<string, Promise<ProgressCard | null>>();
   const loadGenerations = new Map<string, number>();
   const listeners = new Set<() => void>();
@@ -166,7 +169,11 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
           (loadGenerations.get(sessionKey) ?? 0) === generation &&
           gateway.snapshot.client === clientAtRequest
         ) {
-          errors.add(sessionKey);
+          const accessDenied =
+            error instanceof GatewayRequestError &&
+            isRecord(error.details) &&
+            error.details.code === "SESSION_PARTICIPATION_REQUIRED";
+          errors.set(sessionKey, accessDenied ? "access-denied" : "unavailable");
           notify();
         }
         throw error;
@@ -283,7 +290,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     unwatch: (owner) => watch(owner, []),
     load,
     get: (sessionKey) => cache.get(sessionKey)?.card,
-    hasError: (sessionKey) => errors.has(sessionKey),
+    getError: (sessionKey) => errors.get(sessionKey),
     subscribe: (listener) => {
       listeners.add(listener);
       attach();

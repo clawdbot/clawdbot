@@ -174,6 +174,7 @@ export const en: TranslationMap = {
     widgetLoading: "Loading session progress…",
     widgetEmpty: "No progress card yet",
     widgetUnavailable: "Session progress is unavailable.",
+    widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
     stepLabel: "{step}, {status}",
     status: {
