@@ -209,6 +209,33 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("passes a per-dispatch machine class to placement", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockRejectedValue(new Error("machine dispatch reached"));
+    await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: "test", machineClass: "large" },
+    );
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "test", machineClass: "large" }),
+      expect.any(Function),
+    );
+  });
+
   it("rejects an archived session before dispatch", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({

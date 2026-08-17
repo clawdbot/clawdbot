@@ -44,6 +44,7 @@ function resolveWorkerSessionTarget(params: {
   agentId?: string;
   profileId?: string;
   deviceId?: string;
+  machineClass?: string;
   context: GatewayRequestContext;
   respond: RespondFn;
 }) {
@@ -57,6 +58,7 @@ function resolveWorkerSessionTarget(params: {
     cfg,
     profileId: params.profileId,
     deviceId: params.deviceId,
+    machineClass: params.machineClass,
   });
   if (!destination.ok) {
     respondInvalidWorkerSession(params.respond, destination.error);
@@ -151,6 +153,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       agentId: params.agentId,
       profileId: params.profileId,
       deviceId: params.deviceId,
+      machineClass: params.machineClass,
       context,
       respond,
     });

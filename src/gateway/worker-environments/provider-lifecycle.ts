@@ -18,7 +18,11 @@ import { STALE_WORKER_BUILD_REASON, verifyWorkerAdmissionHandshake } from "./adm
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
-import { requireWorkerLease, requireWorkerLeaseStatus } from "./service-validation.js";
+import {
+  normalizeWorkerMachineOptions,
+  requireWorkerLease,
+  requireWorkerLeaseStatus,
+} from "./service-validation.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -144,6 +148,17 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     throw serviceError("provider_not_found", `Worker provider is unavailable: ${providerId}`);
   };
 
+  const listMachineOptions = (profileId: string) => {
+    const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
+    if (!profile) {
+      return undefined;
+    }
+    const provider = options.resolveProvider(profile.provider);
+    return normalizeWorkerMachineOptions(
+      provider?.listMachineOptions?.(requireWorkerProfile(profile.settings ?? {})),
+    );
+  };
+
   const installFor = (record: WorkerEnvironmentRecord): WorkerInstallationArtifact["install"] => {
     const install = record.profileSnapshot.install;
     if (install === undefined || install === "bundle") {
@@ -252,7 +267,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       lease = requireWorkerLease(
         await callProvider(
           record.environmentId,
-          () => provider.provision(profile, record.provisionOperationId),
+          () =>
+            provider.provision(
+              profile,
+              record.provisionOperationId,
+              typeof record.profileSnapshot.machineClass === "string"
+                ? { machineClass: record.profileSnapshot.machineClass }
+                : undefined,
+            ),
           providerTimeoutMs,
         ),
       );
@@ -571,11 +593,15 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const createWithProfile = async (
     profileId: string,
     idempotencyKey: string,
-    inherited?: {
-      providerId: string;
-      profileSnapshot: WorkerProfile;
-    },
+    createOptions: {
+      inherited?: {
+        providerId: string;
+        profileSnapshot: WorkerProfile;
+      };
+      machineClass?: string;
+    } = {},
   ) => {
+    const { inherited, machineClass } = createOptions;
     let stopping = options.isStopping();
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
@@ -596,7 +622,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           existing.profileId !== normalizedProfileId ||
           (inherited !== undefined &&
             (existing.providerId !== inherited.providerId ||
-              !isDeepStrictEqual(existing.profileSnapshot, inherited.profileSnapshot)))
+              !isDeepStrictEqual(existing.profileSnapshot, {
+                ...inherited.profileSnapshot,
+                ...(machineClass === undefined ? {} : { machineClass }),
+              }))) ||
+          (inherited === undefined && existing.profileSnapshot.machineClass !== machineClass)
         ) {
           throw serviceError("invalid_profile", "Idempotency key belongs to another profile");
         }
@@ -621,7 +651,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         if (resolvedProviderId !== providerId) {
           throw serviceError("invalid_profile", "Inherited worker provider identity changed");
         }
-        profileSnapshot = requireWorkerProfile(inherited.profileSnapshot);
+        profileSnapshot = requireWorkerProfile({
+          ...inherited.profileSnapshot,
+          ...(machineClass === undefined ? {} : { machineClass }),
+        });
       } else {
         const profiles = options.getConfig().cloudWorkers?.profiles;
         if (!profiles || !Object.hasOwn(profiles, normalizedProfileId)) {
@@ -637,6 +670,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         profileSnapshot = requireWorkerProfile({
           install: profile.install ?? "bundle",
           settings,
+          ...(machineClass === undefined ? {} : { machineClass }),
         });
       }
       const intent = store.createIntent({
@@ -692,6 +726,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     createWithProfile,
     destroy,
     identityResolverFor,
+    listMachineOptions,
     providerFor,
     reconcileRecord,
   };
