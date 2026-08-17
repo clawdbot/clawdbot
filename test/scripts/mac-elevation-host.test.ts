@@ -30,6 +30,11 @@ function sha256(contents: string | Buffer): string {
   return createHash("sha256").update(contents).digest("hex");
 }
 
+function fileIdentity(filePath: string): string {
+  const stats = lstatSync(filePath);
+  return `${stats.dev}:${stats.ino}`;
+}
+
 function receiptDigestArgs(receiptPath: string): string[] {
   return ["--receipt-sha256", sha256(readFileSync(receiptPath))];
 }
@@ -373,6 +378,91 @@ function createCanonicalNodeMigrationHarness(nodeId = "fixture-node") {
     "utf8",
   );
   return { ...harness, envPath, label, plistPath };
+}
+
+function runCanonicalNodeSidecarVerifier(
+  harness: ReturnType<typeof createCanonicalNodeMigrationHarness>,
+  envSha: string,
+  wrapperSha: string,
+  paths?: { envPath?: string; wrapperPath?: string },
+) {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("canonical_node_wrapper_is_canonical() {");
+  const end = script.indexOf("background_app_records() {", start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  const envPath = paths?.envPath ?? harness.envPath;
+  const wrapperPath = paths?.wrapperPath ?? `${harness.envPath.slice(0, -4)}-env-wrapper.sh`;
+  return spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      [
+        "set -euo pipefail",
+        `MIGRATION_KIND=canonical-node`,
+        `MIGRATION_NODE_ENV_PATH=${JSON.stringify(envPath)}`,
+        `MIGRATION_NODE_ENV_SHA=${JSON.stringify(envSha)}`,
+        `MIGRATION_NODE_ENV_IDENTITY=''`,
+        `MIGRATION_NODE_WRAPPER_PATH=${JSON.stringify(wrapperPath)}`,
+        `MIGRATION_NODE_WRAPPER_SHA=${JSON.stringify(wrapperSha)}`,
+        `MIGRATION_NODE_WRAPPER_IDENTITY=''`,
+        `STATE_DIR=${JSON.stringify(harness.stateDir)}`,
+        `CONFIG_PATH=${JSON.stringify(harness.configPath)}`,
+        script.slice(start, end),
+        "verify_canonical_node_sidecars",
+      ].join("\n"),
+    ],
+    { encoding: "utf8", env: harness.env },
+  );
+}
+
+function runMigrationReceiptBindingVerifier(
+  harness: ReturnType<typeof createCanonicalNodeMigrationHarness>,
+  kind: "app-launch-agent" | "canonical-node",
+  paths?: {
+    envIdentity?: string;
+    envPath?: string;
+    wrapperIdentity?: string;
+    wrapperPath?: string;
+  },
+) {
+  const envPath = paths?.envPath ?? harness.envPath;
+  const wrapperPath = paths?.wrapperPath ?? `${harness.envPath.slice(0, -4)}-env-wrapper.sh`;
+  const envSha = kind === "canonical-node" ? sha256(readFileSync(envPath)) : "";
+  const wrapperSha = kind === "canonical-node" ? sha256(readFileSync(wrapperPath)) : "";
+  const envIdentity =
+    kind === "canonical-node" ? (paths?.envIdentity ?? fileIdentity(envPath)) : "";
+  const wrapperIdentity =
+    kind === "canonical-node" ? (paths?.wrapperIdentity ?? fileIdentity(wrapperPath)) : "";
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("canonical_node_wrapper_is_canonical() {");
+  const end = script.indexOf("background_app_records() {", start);
+  return spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      [
+        "set -euo pipefail",
+        'plist_file_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1"; }',
+        'path_matches_identity() { [[ "$(stat -f \'%d:%i\' -- "$1")" == "$2" ]]; }',
+        `MIGRATION_KIND=${kind}`,
+        `MIGRATION_NODE_ENV_PATH=${JSON.stringify(kind === "canonical-node" ? envPath : "")}`,
+        `MIGRATION_NODE_ENV_SHA=${JSON.stringify(envSha)}`,
+        `MIGRATION_NODE_ENV_IDENTITY=${JSON.stringify(envIdentity)}`,
+        `MIGRATION_NODE_WRAPPER_PATH=${JSON.stringify(kind === "canonical-node" ? wrapperPath : "")}`,
+        `MIGRATION_NODE_WRAPPER_SHA=${JSON.stringify(wrapperSha)}`,
+        `MIGRATION_NODE_WRAPPER_IDENTITY=${JSON.stringify(wrapperIdentity)}`,
+        `ROLLBACK_MIGRATION_LABEL=${JSON.stringify(harness.label)}`,
+        `ROLLBACK_MIGRATION_PLIST=${JSON.stringify(harness.plistPath)}`,
+        `APP_PATH=${JSON.stringify(harness.appPath)}`,
+        `STATE_DIR=${JSON.stringify(harness.stateDir)}`,
+        `CONFIG_PATH=${JSON.stringify(harness.configPath)}`,
+        script.slice(start, end),
+        'migration_receipt_matches_backup_plist "$ROLLBACK_MIGRATION_PLIST"',
+      ].join("\n"),
+    ],
+    { encoding: "utf8", env: harness.env },
+  );
 }
 
 function addRunningAppFixture(harness: ReturnType<typeof createMigrationPlanHarness>) {
@@ -1170,6 +1260,78 @@ describe("mac elevation host command contract", () => {
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("openclaw CLI is required for gateway node attestation");
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "revalidates canonical node environment and wrapper sidecars",
+    () => {
+      const harness = createCanonicalNodeMigrationHarness();
+      const wrapperPath = `${harness.envPath.slice(0, -4)}-env-wrapper.sh`;
+      const envContents = readFileSync(harness.envPath, "utf8");
+      const wrapperContents = readFileSync(wrapperPath, "utf8");
+      const envSha = sha256(envContents);
+      const wrapperSha = sha256(wrapperContents);
+
+      const clean = runCanonicalNodeSidecarVerifier(harness, envSha, wrapperSha);
+      expect(clean.status, clean.stderr).toBe(0);
+
+      writeFileSync(harness.envPath, `${envContents}\n`, "utf8");
+      const changedEnv = runCanonicalNodeSidecarVerifier(harness, envSha, wrapperSha);
+      expect(changedEnv.status).toBe(1);
+      writeFileSync(harness.envPath, envContents, "utf8");
+
+      writeFileSync(wrapperPath, `${wrapperContents}\n`, "utf8");
+      const changedWrapper = runCanonicalNodeSidecarVerifier(harness, envSha, wrapperSha);
+      expect(changedWrapper.status).toBe(1);
+
+      const customWrapper = "#!/bin/sh\nexec /usr/bin/false\n";
+      writeFileSync(wrapperPath, customWrapper, "utf8");
+      const recapturedCustomWrapper = runCanonicalNodeSidecarVerifier(
+        harness,
+        envSha,
+        sha256(customWrapper),
+      );
+      expect(recapturedCustomWrapper.status).toBe(1);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "binds canonical node receipt metadata to its authenticated migration plist",
+    () => {
+      const harness = createCanonicalNodeMigrationHarness();
+      const clean = runMigrationReceiptBindingVerifier(harness, "canonical-node");
+      expect(clean.status, clean.stderr).toBe(0);
+
+      const downgraded = runMigrationReceiptBindingVerifier(harness, "app-launch-agent");
+      expect(downgraded.status).toBe(1);
+
+      const alternateEnv = path.join(harness.stateDir, "service-env", "alternate.env");
+      const alternateWrapper = `${alternateEnv.slice(0, -4)}-env-wrapper.sh`;
+      writeFileSync(alternateEnv, readFileSync(harness.envPath));
+      chmodSync(alternateEnv, 0o600);
+      writeFileSync(
+        alternateWrapper,
+        readFileSync(`${harness.envPath.slice(0, -4)}-env-wrapper.sh`),
+      );
+      chmodSync(alternateWrapper, 0o700);
+      const substituted = runMigrationReceiptBindingVerifier(harness, "canonical-node", {
+        envPath: alternateEnv,
+        wrapperPath: alternateWrapper,
+      });
+      expect(substituted.status).toBe(1);
+
+      const originalEnv = readFileSync(harness.envPath);
+      const originalIdentity = fileIdentity(harness.envPath);
+      const replacementEnv = `${harness.envPath}.replacement`;
+      writeFileSync(replacementEnv, originalEnv);
+      chmodSync(replacementEnv, 0o600);
+      renameSync(replacementEnv, harness.envPath);
+      expect(fileIdentity(harness.envPath)).not.toBe(originalIdentity);
+      const replacedIdentity = runMigrationReceiptBindingVerifier(harness, "canonical-node", {
+        envIdentity: originalIdentity,
+      });
+      expect(replacedIdentity.status).toBe(1);
     },
   );
 

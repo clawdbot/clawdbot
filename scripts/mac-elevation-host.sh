@@ -25,6 +25,12 @@ MIGRATE_LAUNCH_AGENT=""
 MIGRATION_LABEL=""
 MIGRATION_KIND=""
 MIGRATION_NODE_ID=""
+MIGRATION_NODE_ENV_PATH=""
+MIGRATION_NODE_ENV_SHA=""
+MIGRATION_NODE_ENV_IDENTITY=""
+MIGRATION_NODE_WRAPPER_PATH=""
+MIGRATION_NODE_WRAPPER_SHA=""
+MIGRATION_NODE_WRAPPER_IDENTITY=""
 MIGRATION_PLIST_SHA=""
 MIGRATION_CUSTODY_PATH=""
 MIGRATION_CUSTODY_IDENTITY=""
@@ -985,14 +991,22 @@ resolve_migration_inputs() {
       fail 'canonical node environment wrapper is missing, symlinked, or not executable'
     [[ "$(stat -f '%Lp' "$node_wrapper")" == '700' && "$(stat -f '%u' "$node_wrapper")" == "$(id -u)" ]] ||
       fail 'canonical node environment wrapper must be current-user owned with mode 0700'
-    local expected_wrapper=$'#!/bin/sh\nset -eu\nenv_file="$1"\nshift\nif [ -f "$env_file" ]; then\n  . "$env_file"\nfi\nexec "$@"'
-    [[ "$(<"$node_wrapper")" == "$expected_wrapper" ]] || fail 'canonical node environment wrapper has custom behavior'
+    canonical_node_wrapper_is_canonical "$node_wrapper" ||
+      fail 'canonical node environment wrapper has custom behavior'
     node_paths="$(read_generated_node_paths "$node_env")"
     inline_state="$(jq -r '.stateDir' <<<"$node_paths")"
     inline_config="$(jq -r '.configPath' <<<"$node_paths")"
     case "$inline_state" in /*) ;; *) fail 'canonical node OPENCLAW_STATE_DIR must be absolute' ;; esac
     [[ "$node_env" == "${inline_state}/service-env/${MIGRATION_LABEL}.env" ]] ||
       fail 'canonical node environment file is outside its state-owned service-env directory'
+    MIGRATION_NODE_ENV_PATH="$node_env"
+    MIGRATION_NODE_ENV_SHA="$(shasum -a 256 "$node_env" | awk '{print $1}')"
+    MIGRATION_NODE_ENV_IDENTITY="$(path_identity "$node_env")" ||
+      fail 'canonical node environment identity could not be inspected'
+    MIGRATION_NODE_WRAPPER_PATH="$node_wrapper"
+    MIGRATION_NODE_WRAPPER_SHA="$(shasum -a 256 "$node_wrapper" | awk '{print $1}')"
+    MIGRATION_NODE_WRAPPER_IDENTITY="$(path_identity "$node_wrapper")" ||
+      fail 'canonical node wrapper identity could not be inspected'
     resolve_reusable_openclaw_cli
   fi
   if [[ "$STATE_DIR_EXPLICIT" == "1" && "$STATE_DIR" != "$inline_state" ]]; then
@@ -1013,6 +1027,12 @@ resolve_migration_inputs() {
     absent) MIGRATION_WAS_LOADED=0 ;;
     *) fail 'launchd ownership state could not be inspected' ;;
   esac
+}
+
+canonical_node_wrapper_is_canonical() {
+  local wrapper_path="$1"
+  local expected_wrapper=$'#!/bin/sh\nset -eu\nenv_file="$1"\nshift\nif [ -f "$env_file" ]; then\n  . "$env_file"\nfi\nexec "$@"'
+  [[ "$(<"$wrapper_path")" == "$expected_wrapper" ]]
 }
 
 read_generated_node_paths() {
@@ -1062,6 +1082,72 @@ if not selected.get("OPENCLAW_STATE_DIR") or not selected.get("OPENCLAW_CONFIG_P
     raise SystemExit("ERROR: canonical node environment lacks state/config paths")
 print(json.dumps({"stateDir": selected["OPENCLAW_STATE_DIR"], "configPath": selected["OPENCLAW_CONFIG_PATH"]}))
 PY
+}
+
+verify_canonical_node_sidecars() {
+  [[ "$MIGRATION_KIND" == "canonical-node" ]] || return 0
+  [[ "$MIGRATION_NODE_WRAPPER_PATH" == "${MIGRATION_NODE_ENV_PATH%.env}-env-wrapper.sh" ]] || return 1
+  [[ -f "$MIGRATION_NODE_ENV_PATH" && ! -L "$MIGRATION_NODE_ENV_PATH" &&
+    "$(stat -f '%Lp' "$MIGRATION_NODE_ENV_PATH")" == '600' &&
+    "$(stat -f '%u' "$MIGRATION_NODE_ENV_PATH")" == "$(id -u)" ]] || return 1
+  [[ -f "$MIGRATION_NODE_WRAPPER_PATH" && ! -L "$MIGRATION_NODE_WRAPPER_PATH" &&
+    -x "$MIGRATION_NODE_WRAPPER_PATH" &&
+    "$(stat -f '%Lp' "$MIGRATION_NODE_WRAPPER_PATH")" == '700' &&
+    "$(stat -f '%u' "$MIGRATION_NODE_WRAPPER_PATH")" == "$(id -u)" ]] || return 1
+  [[ "$MIGRATION_NODE_ENV_SHA" =~ ^[0-9a-f]{64}$ &&
+    "$(shasum -a 256 "$MIGRATION_NODE_ENV_PATH" | awk '{print $1}')" == "$MIGRATION_NODE_ENV_SHA" ]] ||
+    return 1
+  [[ "$MIGRATION_NODE_WRAPPER_SHA" =~ ^[0-9a-f]{64}$ &&
+    "$(shasum -a 256 "$MIGRATION_NODE_WRAPPER_PATH" | awk '{print $1}')" == "$MIGRATION_NODE_WRAPPER_SHA" ]] ||
+    return 1
+  if [[ -n "$MIGRATION_NODE_ENV_IDENTITY" ]]; then
+    path_matches_identity "$MIGRATION_NODE_ENV_PATH" "$MIGRATION_NODE_ENV_IDENTITY" || return 1
+  fi
+  if [[ -n "$MIGRATION_NODE_WRAPPER_IDENTITY" ]]; then
+    path_matches_identity "$MIGRATION_NODE_WRAPPER_PATH" "$MIGRATION_NODE_WRAPPER_IDENTITY" || return 1
+  fi
+  canonical_node_wrapper_is_canonical "$MIGRATION_NODE_WRAPPER_PATH" || return 1
+  local node_paths
+  node_paths="$(read_generated_node_paths "$MIGRATION_NODE_ENV_PATH")" || return 1
+  [[ "$(jq -r '.stateDir' <<<"$node_paths")" == "$STATE_DIR" &&
+    "$(jq -r '.configPath' <<<"$node_paths")" == "$CONFIG_PATH" ]]
+}
+
+migration_receipt_matches_backup_plist() {
+  local plist_path="$1" args app_binary plist_label node_env node_wrapper
+  plist_label="$(plist_file_value "$plist_path" Label)" || return 1
+  [[ "$plist_label" == "$ROLLBACK_MIGRATION_LABEL" ]] || return 1
+  args="$(plutil -extract ProgramArguments json -o - "$plist_path" 2>/dev/null)" || return 1
+  jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' <<<"$args" >/dev/null 2>&1 ||
+    return 1
+  app_binary="$APP_PATH/Contents/MacOS/OpenClaw"
+  if jq -e --arg appBinary "$app_binary" '
+      .[0] == $appBinary and
+      (.[1:] | index("--background-only") != null) and
+      (.[1:] | all(. == "--background-only" or . == "--attach-only" or . == "--no-launchd"))
+    ' <<<"$args" >/dev/null 2>&1
+  then
+    [[ "$MIGRATION_KIND" == "app-launch-agent" &&
+      -z "$MIGRATION_NODE_ENV_PATH" && -z "$MIGRATION_NODE_ENV_SHA" &&
+      -z "$MIGRATION_NODE_WRAPPER_PATH" && -z "$MIGRATION_NODE_WRAPPER_SHA" ]]
+    return
+  fi
+  [[ "$MIGRATION_KIND" == "canonical-node" && "$plist_label" == "ai.openclaw.node" ]] || return 1
+  jq -e '
+    def validTail:
+      length == 0 or
+      ((.[0] == "--tls" or .[0] == "--no-tls" or .[0] == "--share-installed-apps" or .[0] == "--no-share-installed-apps") and (.[1:] | validTail)) or
+      ((.[0] == "--tls-fingerprint" or .[0] == "--context-path" or .[0] == "--node-id" or .[0] == "--display-name") and length >= 2 and (.[2:] | validTail));
+    length >= 11 and .[0] == "/bin/sh" and
+    (.[3] | startswith("/")) and (.[4] | startswith("/")) and
+    .[5] == "node" and .[6] == "run" and .[7] == "--host" and (.[8] | length > 0) and
+    .[9] == "--port" and (.[10] | test("^[0-9]+$")) and (.[11:] | validTail)
+  ' <<<"$args" >/dev/null 2>&1 || return 1
+  node_wrapper="$(jq -r '.[1]' <<<"$args")"
+  node_env="$(jq -r '.[2]' <<<"$args")"
+  [[ "$node_env" == "$MIGRATION_NODE_ENV_PATH" &&
+    "$node_wrapper" == "$MIGRATION_NODE_WRAPPER_PATH" ]] || return 1
+  verify_canonical_node_sidecars
 }
 
 background_app_records() {
@@ -1461,11 +1547,18 @@ write_receipt() {
     --arg migrationSource "$ROLLBACK_MIGRATION_SOURCE" \
     --arg migrationBackup "$ROLLBACK_MIGRATION_PLIST" \
     --arg migrationBackupSha256 "$ROLLBACK_MIGRATION_PLIST_SHA" \
+    --arg migrationKind "$MIGRATION_KIND" \
     --arg migrationLabel "$ROLLBACK_MIGRATION_LABEL" \
+    --arg migrationNodeEnvPath "$MIGRATION_NODE_ENV_PATH" \
+    --arg migrationNodeEnvSha256 "$MIGRATION_NODE_ENV_SHA" \
+    --arg migrationNodeEnvIdentity "$MIGRATION_NODE_ENV_IDENTITY" \
+    --arg migrationNodeWrapperPath "$MIGRATION_NODE_WRAPPER_PATH" \
+    --arg migrationNodeWrapperSha256 "$MIGRATION_NODE_WRAPPER_SHA" \
+    --arg migrationNodeWrapperIdentity "$MIGRATION_NODE_WRAPPER_IDENTITY" \
     --argjson migrationWasLoaded "$ROLLBACK_MIGRATION_WAS_LOADED" \
     --argjson adoptedAppWasRunning "$ROLLBACK_ADOPTED_APP_WAS_RUNNING" \
     --argjson adoptedAppAttachOnly "$ROLLBACK_ADOPTED_APP_ATTACH_ONLY" \
-    '{schemaVersion:$schemaVersion,kind:$kind,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,archiveSha256:$archiveSha256,artifactReceiptSha256:$artifactReceiptSha256,installerSha256:$installerSha256,cdhashes:{arm64:$arm64CDHash,x86_64:$x8664CDHash},nodeId:$nodeId,nodeProfile:$nodeProfile,appPath:$appPath,stateDir:$stateDir,configPath:$configPath,backupPath:$backupPath,backupCDHashes:{arm64:$backupArm64CDHash,x86_64:$backupX8664CDHash},plistPath:$plistPath,previousPlist:$previousPlist,previousPlistSha256:$previousPlistSha256,previousPlistWasLoaded:($previousPlistWasLoaded == 1),previousReceipt:$previousReceipt,previousReceiptSha256:$previousReceiptSha256,migration:(if $migrationSource == "" then null else {sourcePlist:$migrationSource,backupPlist:$migrationBackup,backupSha256:$migrationBackupSha256,label:$migrationLabel,wasLoaded:($migrationWasLoaded == 1)} end),adoptedApp:{wasRunning:($adoptedAppWasRunning == 1),attachOnly:($adoptedAppAttachOnly == 1)}}' >"$tmp"
+    '{schemaVersion:$schemaVersion,kind:$kind,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,archiveSha256:$archiveSha256,artifactReceiptSha256:$artifactReceiptSha256,installerSha256:$installerSha256,cdhashes:{arm64:$arm64CDHash,x86_64:$x8664CDHash},nodeId:$nodeId,nodeProfile:$nodeProfile,appPath:$appPath,stateDir:$stateDir,configPath:$configPath,backupPath:$backupPath,backupCDHashes:{arm64:$backupArm64CDHash,x86_64:$backupX8664CDHash},plistPath:$plistPath,previousPlist:$previousPlist,previousPlistSha256:$previousPlistSha256,previousPlistWasLoaded:($previousPlistWasLoaded == 1),previousReceipt:$previousReceipt,previousReceiptSha256:$previousReceiptSha256,migration:(if $migrationSource == "" then null else {kind:$migrationKind,sourcePlist:$migrationSource,backupPlist:$migrationBackup,backupSha256:$migrationBackupSha256,label:$migrationLabel,wasLoaded:($migrationWasLoaded == 1),nodeEnvPath:$migrationNodeEnvPath,nodeEnvSha256:$migrationNodeEnvSha256,nodeEnvIdentity:$migrationNodeEnvIdentity,nodeWrapperPath:$migrationNodeWrapperPath,nodeWrapperSha256:$migrationNodeWrapperSha256,nodeWrapperIdentity:$migrationNodeWrapperIdentity} end),adoptedApp:{wasRunning:($adoptedAppWasRunning == 1),attachOnly:($adoptedAppAttachOnly == 1)}}' >"$tmp"
   chmod 600 "$tmp"
   mv "$tmp" "$RECEIPT_PATH"
 }
@@ -1492,6 +1585,9 @@ verify_install_receipt() {
   ' "$RECEIPT_PATH" >/dev/null 2>&1
   then
     INSTALL_RECEIPT_SCHEMA="legacy"
+  # Schema 3 first ships with the exact migration-sidecar binding below. Earlier
+  # five-key migration objects existed only on this unmerged branch and cannot
+  # safely authorize recovery, so they are intentionally not compatibility input.
   elif jq -e '
     type == "object" and
     keys == ["adoptedApp","appPath","archiveSha256","artifactReceiptSha256","backupCDHashes","backupPath","cdhashes","configPath","installerSha256","kind","migration","nodeId","nodeProfile","peekabooCommit","plistPath","previousPlist","previousPlistSha256","previousPlistWasLoaded","previousReceipt","previousReceiptSha256","schemaVersion","sourceCommit","stateDir"] and
@@ -1516,7 +1612,23 @@ verify_install_receipt() {
     (.stateDir | type == "string" and startswith("/")) and
     (.configPath | type == "string" and startswith("/")) and
     (.previousPlistWasLoaded | type == "boolean") and
-    (.migration == null or (.migration | type == "object" and (.backupSha256 | type == "string") and (.wasLoaded | type == "boolean"))) and
+    (.migration == null or (
+      .migration | type == "object" and
+      keys == ["backupPlist","backupSha256","kind","label","nodeEnvIdentity","nodeEnvPath","nodeEnvSha256","nodeWrapperIdentity","nodeWrapperPath","nodeWrapperSha256","sourcePlist","wasLoaded"] and
+      (.kind == "app-launch-agent" or .kind == "canonical-node") and
+      (.backupSha256 | type == "string") and
+      (.wasLoaded | type == "boolean") and
+      (
+        (.kind == "app-launch-agent" and .nodeEnvPath == "" and .nodeEnvSha256 == "" and .nodeEnvIdentity == "" and .nodeWrapperPath == "" and .nodeWrapperSha256 == "" and .nodeWrapperIdentity == "") or
+        (.kind == "canonical-node" and
+          (.nodeEnvPath | type == "string" and startswith("/")) and
+          (.nodeEnvSha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+          (.nodeEnvIdentity | type == "string" and test("^[0-9]+:[0-9]+$")) and
+          (.nodeWrapperPath | type == "string" and startswith("/")) and
+          (.nodeWrapperSha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+          (.nodeWrapperIdentity | type == "string" and test("^[0-9]+:[0-9]+$")))
+      )
+    )) and
     (.adoptedApp | type == "object" and (.wasRunning | type == "boolean") and (.attachOnly | type == "boolean"))
   ' "$RECEIPT_PATH" >/dev/null 2>&1
   then
@@ -1757,6 +1869,8 @@ install_host() {
       absent) [[ "$MIGRATION_WAS_LOADED" == '0' ]] || fail 'migration LaunchAgent stopped after planning; rerun migration-plan' ;;
       *) fail 'migration launchd state became unreadable after planning' ;;
     esac
+    verify_canonical_node_sidecars ||
+      fail 'canonical node sidecars changed after migration planning; rerun migration-plan'
   fi
   ROLLBACK_FAILED_SOURCE="$source_commit"
   if [[ -n "$MIGRATE_LAUNCH_AGENT" ]]; then
@@ -1813,6 +1927,8 @@ install_host() {
     current_migration_state="$(job_loaded_state "$launch_domain/$MIGRATION_LABEL")"
     [[ "$current_migration_state" == "absent" ]] ||
       fail 'migration LaunchAgent reloaded during owner shutdown'
+    verify_canonical_node_sidecars ||
+      fail 'canonical node sidecars changed during owner shutdown'
   fi
   CUTOVER_APP_MUTATED=1
   if [[ -n "$ROLLBACK_APP_PATH" ]]; then
@@ -2018,6 +2134,9 @@ recover_install() {
         "$ROLLBACK_MIGRATION_SOURCE" \
         "$RECOVERY_RESTORED_MIGRATION_IDENTITY"
     then
+      recovery_failed=1
+    fi
+    if [[ "$recovery_failed" == "0" ]] && ! verify_canonical_node_sidecars; then
       recovery_failed=1
     fi
     restored_state="$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")"
@@ -2274,8 +2393,15 @@ recover_host() {
   ROLLBACK_MIGRATION_SOURCE="$(jq -r '.migration.sourcePlist // empty' "$RECEIPT_PATH")"
   ROLLBACK_MIGRATION_PLIST="$(jq -r '.migration.backupPlist // empty' "$RECEIPT_PATH")"
   ROLLBACK_MIGRATION_PLIST_SHA="$(jq -r '.migration.backupSha256 // empty' "$RECEIPT_PATH")"
+  MIGRATION_KIND="$(jq -r '.migration.kind // empty' "$RECEIPT_PATH")"
   ROLLBACK_MIGRATION_LABEL="$(jq -r '.migration.label // empty' "$RECEIPT_PATH")"
   ROLLBACK_MIGRATION_WAS_LOADED="$(jq -r 'if .migration.wasLoaded then 1 else 0 end' "$RECEIPT_PATH")"
+  MIGRATION_NODE_ENV_PATH="$(jq -r '.migration.nodeEnvPath // empty' "$RECEIPT_PATH")"
+  MIGRATION_NODE_ENV_SHA="$(jq -r '.migration.nodeEnvSha256 // empty' "$RECEIPT_PATH")"
+  MIGRATION_NODE_ENV_IDENTITY="$(jq -r '.migration.nodeEnvIdentity // empty' "$RECEIPT_PATH")"
+  MIGRATION_NODE_WRAPPER_PATH="$(jq -r '.migration.nodeWrapperPath // empty' "$RECEIPT_PATH")"
+  MIGRATION_NODE_WRAPPER_SHA="$(jq -r '.migration.nodeWrapperSha256 // empty' "$RECEIPT_PATH")"
+  MIGRATION_NODE_WRAPPER_IDENTITY="$(jq -r '.migration.nodeWrapperIdentity // empty' "$RECEIPT_PATH")"
   ROLLBACK_ADOPTED_APP_WAS_RUNNING="$(jq -r 'if .adoptedApp.wasRunning then 1 else 0 end' "$RECEIPT_PATH")"
   ROLLBACK_ADOPTED_APP_ATTACH_ONLY="$(jq -r 'if .adoptedApp.attachOnly then 1 else 0 end' "$RECEIPT_PATH")"
   current_receipt_sha="$(shasum -a 256 "$RECEIPT_PATH" | awk '{print $1}')"
@@ -2431,6 +2557,8 @@ recover_host() {
       fail 'receipt migration plist backup digest is invalid'
     backup_file_matches "$ROLLBACK_MIGRATION_PLIST" "$ROLLBACK_MIGRATION_PLIST_SHA" ||
       fail 'receipt migration plist backup failed digest validation'
+    migration_receipt_matches_backup_plist "$ROLLBACK_MIGRATION_PLIST" ||
+      fail 'receipt migration metadata no longer matches its authenticated LaunchAgent generation'
     if [[ -e "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE" ]]; then
       if [[ ! -f "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE" ]] ||
         ! path_matches_identity \

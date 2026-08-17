@@ -460,7 +460,7 @@ function getSwiftPMResourceBundleBlock(): string {
 function getSwiftPMResourcePatchBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()");
-  const end = script.indexOf("PNPM_CMD=()");
+  const end = script.indexOf("cleanup_package_build() {", start);
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -1517,15 +1517,36 @@ describe("package-mac-app plist stamping", () => {
     const script = readFileSync(scriptPath, "utf8");
     const resolveCall =
       'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve';
-    const buildCall =
-      'run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
+    const buildCall = 'swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
 
-    expect(script).toContain('resolved_file="$ROOT_DIR/apps/macos/Package.resolved"');
+    expect(script).toContain(
+      'resolved_file="${SWIFT_PACKAGE_ROOT:-$ROOT_DIR/apps/macos}/Package.resolved"',
+    );
+    expect(script).toContain(
+      'SWIFT_PACKAGE_LOCK_BASELINE="$SWIFT_PACKAGE_CONTAINER/Package.resolved.committed"',
+    );
+    expect(script).toContain('chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"');
+    expect(script).toContain("identity in result");
     expect(script).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
     expect(script).toContain('cp "$resolved_snapshot" "$resolved_file"');
     expect(script).toContain("ERROR: Swift package resolution changed Package.resolved");
     expect(script).toContain(resolveCall);
     expect(script).toContain(buildCall);
+    expect(
+      script.indexOf(
+        "prepare_swift_package_root",
+        script.indexOf('for arch in "${BUILD_ARCHS[@]}"; do'),
+      ),
+    ).toBeLessThan(script.indexOf(resolveCall));
+    expect(script.indexOf("cleanup_swift_package_root", script.indexOf(buildCall))).toBeGreaterThan(
+      script.indexOf(buildCall),
+    );
+    const buildIndex = script.indexOf(buildCall);
+    expect(script.lastIndexOf("verify_snapshot_swift_lock", buildIndex)).toBeGreaterThan(
+      script.indexOf(resolveCall),
+    );
+    expect(script.indexOf("verify_snapshot_swift_lock", buildIndex)).toBeGreaterThan(buildIndex);
+    expect(script).not.toContain("swift build --disable-automatic-resolution");
     expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(buildCall));
   });
 
@@ -1535,6 +1556,10 @@ describe("package-mac-app plist stamping", () => {
     expect(verifier).toContain('"--no-replace-objects"');
     expect(verifier).toContain('"fsck", "--full", "--strict"');
     expect(verifier).toContain('"cat-file", object_type');
+    expect(readFileSync(scriptPath, "utf8")).toContain("hdiutil attach -quiet -readonly -nobrowse");
+    expect(readFileSync(scriptPath, "utf8")).toContain(
+      'swift package --scratch-path "$build_path" edit Peekaboo --path "$PEEKABOO_SNAPSHOT_MOUNT"',
+    );
     const mismatched = runRealCompiledPeekabooHarness("none", "e".repeat(40));
     expect(mismatched.status).toBe(1);
     expect(mismatched.stderr).toContain("does not match locked source");

@@ -170,7 +170,7 @@ sparkle_framework_for_arch() {
 }
 
 run_with_locked_swift_packages() {
-  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  local resolved_file="${SWIFT_PACKAGE_ROOT:-$ROOT_DIR/apps/macos}/Package.resolved"
   local resolved_snapshot
   local command_status=0
 
@@ -192,8 +192,11 @@ run_with_locked_swift_packages() {
 }
 
 compiled_peekaboo_commit() {
-  local build_path="$1" expected="$2"
-  local checkout="$build_path/checkouts/Peekaboo"
+  local checkout_or_build_path="$1" expected="$2"
+  local checkout="$checkout_or_build_path"
+  if [[ ! -d "$checkout/.git" && ! -f "$checkout/.git" ]]; then
+    checkout="$checkout_or_build_path/checkouts/Peekaboo"
+  fi
   [[ -d "$checkout/.git" || -f "$checkout/.git" ]] || {
     echo "ERROR: Resolved Peekaboo checkout not found at $checkout" >&2
     return 1
@@ -345,6 +348,124 @@ PY
   printf '%s' "$commit"
 }
 
+PEEKABOO_SNAPSHOT_ROOT=""
+PEEKABOO_SNAPSHOT_IMAGE=""
+PEEKABOO_SNAPSHOT_MOUNT=""
+PEEKABOO_EDIT_BUILD_PATHS=()
+SWIFT_PACKAGE_CONTAINER=""
+SWIFT_PACKAGE_ROOT=""
+SWIFT_PACKAGE_LOCK_BASELINE=""
+
+prepare_swift_package_root() {
+  SWIFT_PACKAGE_CONTAINER="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-macos-package.XXXXXX")"
+  SWIFT_PACKAGE_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos"
+  SWIFT_PACKAGE_LOCK_BASELINE="$SWIFT_PACKAGE_CONTAINER/Package.resolved.committed"
+  mkdir -p "$SWIFT_PACKAGE_ROOT"
+  cp "$ROOT_DIR/apps/macos/Package.swift" "$SWIFT_PACKAGE_ROOT/Package.swift"
+  cp "$ROOT_DIR/apps/macos/Package.resolved" "$SWIFT_PACKAGE_LOCK_BASELINE"
+  cp "$SWIFT_PACKAGE_LOCK_BASELINE" "$SWIFT_PACKAGE_ROOT/Package.resolved"
+  chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"
+  ln -s "$ROOT_DIR/apps/macos/Sources" "$SWIFT_PACKAGE_ROOT/Sources"
+  ln -s "$ROOT_DIR/apps/macos/Tests" "$SWIFT_PACKAGE_ROOT/Tests"
+  ln -s "$ROOT_DIR/apps/shared" "$SWIFT_PACKAGE_CONTAINER/apps/shared"
+  ln -s "$ROOT_DIR/apps/swabble" "$SWIFT_PACKAGE_CONTAINER/apps/swabble"
+}
+
+clear_peekaboo_edit() {
+  local build_path="$1"
+  swift package --scratch-path "$build_path" unedit --force Peekaboo >/dev/null 2>&1 || true
+}
+
+edit_peekaboo_from_snapshot() {
+  local build_path="$1"
+  swift package --scratch-path "$build_path" edit Peekaboo --path "$PEEKABOO_SNAPSHOT_MOUNT"
+  PEEKABOO_EDIT_BUILD_PATHS+=("$build_path")
+}
+
+verify_snapshot_swift_lock() {
+  /usr/bin/python3 - \
+    "$SWIFT_PACKAGE_LOCK_BASELINE" \
+    "$SWIFT_PACKAGE_ROOT/Package.resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+committed_path, snapshot_path = map(Path, sys.argv[1:])
+committed = json.loads(committed_path.read_text())
+snapshot = json.loads(snapshot_path.read_text())
+
+def pins(document):
+    values = document.get("pins")
+    if not isinstance(values, list):
+        raise SystemExit(1)
+    result = {}
+    for pin in values:
+        if not isinstance(pin, dict):
+            raise SystemExit(1)
+        identity = pin.get("identity")
+        if not isinstance(identity, str) or not identity or identity in result:
+            raise SystemExit(1)
+        result[identity] = pin
+    return result
+
+if committed.get("version") != snapshot.get("version"):
+    raise SystemExit(1)
+
+committed_pins = pins(committed)
+snapshot_pins = pins(snapshot)
+if "peekaboo" not in committed_pins or "peekaboo" in snapshot_pins:
+    raise SystemExit(1)
+del committed_pins["peekaboo"]
+if committed_pins != snapshot_pins:
+    raise SystemExit(1)
+PY
+}
+
+cleanup_peekaboo_snapshot() {
+  local build_path
+  for build_path in "${PEEKABOO_EDIT_BUILD_PATHS[@]:-}"; do
+    [[ -n "$build_path" ]] || continue
+    clear_peekaboo_edit "$build_path"
+  done
+  PEEKABOO_EDIT_BUILD_PATHS=()
+  if [[ -n "$PEEKABOO_SNAPSHOT_MOUNT" && -d "$PEEKABOO_SNAPSHOT_MOUNT" ]]; then
+    hdiutil detach -quiet "$PEEKABOO_SNAPSHOT_MOUNT" >/dev/null 2>&1 || true
+  fi
+  [[ -z "$PEEKABOO_SNAPSHOT_ROOT" || ! -d "$PEEKABOO_SNAPSHOT_ROOT" ]] ||
+    rm -rf "$PEEKABOO_SNAPSHOT_ROOT"
+  PEEKABOO_SNAPSHOT_ROOT=""
+  PEEKABOO_SNAPSHOT_IMAGE=""
+  PEEKABOO_SNAPSHOT_MOUNT=""
+}
+
+cleanup_swift_package_root() {
+  [[ -z "$SWIFT_PACKAGE_CONTAINER" || ! -d "$SWIFT_PACKAGE_CONTAINER" ]] ||
+    rm -rf "$SWIFT_PACKAGE_CONTAINER"
+  SWIFT_PACKAGE_CONTAINER=""
+  SWIFT_PACKAGE_ROOT=""
+  SWIFT_PACKAGE_LOCK_BASELINE=""
+}
+
+create_verified_peekaboo_snapshot() {
+  local build_path="$1" expected="$2" source_checkout source_commit snapshot_commit
+  source_checkout="$build_path/checkouts/Peekaboo"
+  source_commit="$(compiled_peekaboo_commit "$source_checkout" "$expected")" || return 1
+  cleanup_peekaboo_snapshot
+  PEEKABOO_SNAPSHOT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-peekaboo-snapshot.XXXXXX")"
+  PEEKABOO_SNAPSHOT_IMAGE="$PEEKABOO_SNAPSHOT_ROOT/Peekaboo.dmg"
+  PEEKABOO_SNAPSHOT_MOUNT="$PEEKABOO_SNAPSHOT_ROOT/mount"
+  mkdir "$PEEKABOO_SNAPSHOT_MOUNT"
+  hdiutil create -quiet -fs APFS -format UDRO \
+    -srcfolder "$source_checkout" \
+    -volname OpenClawPeekabooSnapshot \
+    "$PEEKABOO_SNAPSHOT_IMAGE"
+  hdiutil attach -quiet -readonly -nobrowse \
+    -mountpoint "$PEEKABOO_SNAPSHOT_MOUNT" \
+    "$PEEKABOO_SNAPSHOT_IMAGE"
+  snapshot_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$expected")" || return 1
+  [[ "$snapshot_commit" == "$source_commit" ]] || return 1
+}
+
 PATCHED_SWIFTPM_RESOURCE_SOURCES=()
 
 restore_swiftpm_resource_sources() {
@@ -467,7 +588,13 @@ swift_math_legacy_font.write_text(legacy_text)
 PY
 }
 
-trap restore_swiftpm_resource_sources EXIT
+cleanup_package_build() {
+  restore_swiftpm_resource_sources
+  cleanup_peekaboo_snapshot
+  cleanup_swift_package_root
+}
+
+trap cleanup_package_build EXIT
 
 PNPM_CMD=()
 
@@ -599,23 +726,37 @@ else
   echo "🖥  Skipping Control UI build (SKIP_UI_BUILD=1)"
 fi
 
-cd "$ROOT_DIR/apps/macos"
-
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
+  prepare_swift_package_root
+  cd "$SWIFT_PACKAGE_ROOT"
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  clear_peekaboo_edit "$BUILD_PATH"
   echo "📦 Resolving Swift packages [$arch]"
   run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve
+  if [[ -z "$PEEKABOO_SNAPSHOT_MOUNT" ]]; then
+    echo "🔒 Freezing authenticated Peekaboo sources in a read-only snapshot"
+    create_verified_peekaboo_snapshot "$BUILD_PATH" "$PEEKABOO_LOCKED_SOURCE_COMMIT"
+  fi
+  edit_peekaboo_from_snapshot "$BUILD_PATH"
+  swift package --scratch-path "$BUILD_PATH" resolve
+  verify_snapshot_swift_lock
   patch_swiftpm_resource_lookups "$BUILD_PATH"
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
-  run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
-  arch_peekaboo_commit="$(compiled_peekaboo_commit "$BUILD_PATH" "$PEEKABOO_LOCKED_SOURCE_COMMIT")"
+  verify_snapshot_swift_lock
+  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  verify_snapshot_swift_lock
+  arch_peekaboo_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$PEEKABOO_LOCKED_SOURCE_COMMIT")"
   if [[ -n "$COMPILED_PEEKABOO_SOURCE_COMMIT" && "$COMPILED_PEEKABOO_SOURCE_COMMIT" != "$arch_peekaboo_commit" ]]; then
     echo "ERROR: Peekaboo checkout differs across requested architectures" >&2
     exit 1
   fi
   COMPILED_PEEKABOO_SOURCE_COMMIT="$arch_peekaboo_commit"
   restore_swiftpm_resource_sources
+  clear_peekaboo_edit "$BUILD_PATH"
+  PEEKABOO_EDIT_BUILD_PATHS=()
+  cd "$ROOT_DIR/apps/macos"
+  cleanup_swift_package_root
   if [[ "$SKIP_MLX_TTS" == "1" ]]; then
     echo "🔇 Skipping $MLX_TTS_HELPER_PRODUCT (OPENCLAW_SKIP_MLX_TTS=1) — app will lack the local MLX voice helper [$arch]"
   else
