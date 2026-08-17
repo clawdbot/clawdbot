@@ -296,6 +296,7 @@ export function renderGroupedMessage(
     fileLinks: true,
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
+    documentId: messageKey,
   };
 
   // Detect pure-JSON messages and render as collapsible block

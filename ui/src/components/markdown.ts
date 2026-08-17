@@ -40,10 +40,36 @@ const allowedTags = [
   "i",
   "input",
   "li",
+  "math",
+  "menclose",
+  "mfrac",
+  "mglyph",
+  "mi",
+  "mlabeledtr",
+  "mn",
+  "mo",
+  "mover",
+  "mpadded",
+  "mphantom",
+  "mroot",
+  "mrow",
+  "mspace",
+  "msqrt",
+  "mstyle",
+  "msub",
+  "msubsup",
+  "msup",
+  "mtable",
+  "mtd",
+  "mtext",
+  "mtr",
+  "munder",
+  "munderover",
   "ol",
   "p",
   "pre",
   "s",
+  "section",
   "span",
   "strong",
   "summary",
@@ -62,6 +88,7 @@ const allowedAttrs = [
   "class",
   "disabled",
   "href",
+  "id",
   "open",
   "rel",
   "target",
@@ -78,6 +105,39 @@ const allowedAttrs = [
   "data-session-key",
   "type",
   "aria-label",
+  "accent",
+  "accentunder",
+  "columnalign",
+  "columnlines",
+  "columnspacing",
+  "depth",
+  "display",
+  "displaystyle",
+  "encoding",
+  "fence",
+  "height",
+  "largeop",
+  "linebreak",
+  "linethickness",
+  "lspace",
+  "mathbackground",
+  "mathcolor",
+  "mathsize",
+  "mathvariant",
+  "maxsize",
+  "minsize",
+  "movablelimits",
+  "notation",
+  "rowspacing",
+  "rowlines",
+  "rspace",
+  "scriptlevel",
+  "separator",
+  "stretchy",
+  "symmetric",
+  "voffset",
+  "width",
+  "xmlns",
   "role",
 ];
 const sanitizeOptions = {
@@ -450,6 +510,10 @@ function installHooks() {
       return;
     }
 
+    if (href.startsWith("#")) {
+      return;
+    }
+
     if (isHostLocalMarkdownFileHref(href)) {
       node.removeAttribute("href");
       return;
@@ -556,7 +620,7 @@ export function toSanitizedMarkdownHtml(
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
   const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderOptions.docId ?? ""}\0${renderInput}`;
   if (cacheable) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {

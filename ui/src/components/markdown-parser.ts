@@ -1,4 +1,6 @@
+import { katex } from "@mdit/plugin-katex";
 import MarkdownIt from "markdown-it";
+import markdownItFootnote from "markdown-it-footnote";
 import markdownItTaskLists from "markdown-it-task-lists";
 import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
@@ -132,8 +134,26 @@ export function createMarkdownParser(): MarkdownIt {
   // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
   // markdown-it uses <s> tags; we added "s" to the sanitizer allowlist.
   markdownParser.enable("strikethrough");
+  markdownParser.use(markdownItFootnote);
+  markdownParser.use(katex, {
+    output: "mathml",
+    trust: false,
+    maxSize: 10,
+    maxExpand: 1_000,
+    strict: "ignore",
+    logger: () => "ignore",
+  });
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
   installMarkdownDetails(markdownParser);
+
+  markdownParser.renderer.rules.footnote_caption = (tokens, index) =>
+    String(Number(tokens[index]?.meta?.id ?? 0) + 1);
+  markdownParser.renderer.rules.footnote_anchor = (tokens, index, options, env, self) => {
+    const id = self.rules.footnote_anchor_name?.(tokens, index, options, env, self) ?? "";
+    const subId = Number(tokens[index]?.meta?.subId ?? 0);
+    const referenceId = subId > 0 ? `${id}:${subId}` : id;
+    return ` <a href="#fnref${referenceId}" class="footnote-backref" aria-label="${escapeMarkdownHtml(t("common.back"))}">↩︎</a>`;
+  };
 
   // Disable fuzzy link detection to prevent bare filenames like "README.md"
   // from being auto-linked as "http://README.md". URLs with explicit protocol

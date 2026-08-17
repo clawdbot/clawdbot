@@ -461,6 +461,76 @@ PY
   });
 
   describe("GFM features", () => {
+    it("moves footnotes to navigable endnotes with local backlinks", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("Claim[^source].\n\n[^source]: Supporting **detail**.", {
+          documentId: "message-1",
+        }),
+      );
+      const reference = fragment.querySelector<HTMLAnchorElement>(".footnote-ref a");
+      const note = fragment.querySelector<HTMLElement>(".footnote-item");
+      const backlink = fragment.querySelector<HTMLAnchorElement>(".footnote-backref");
+
+      expect(reference?.textContent).toBe("1");
+      expect(reference?.getAttribute("href")).toBe(`#${note?.id}`);
+      expect(backlink?.getAttribute("href")).toBe(`#${reference?.id}`);
+      expect(backlink?.getAttribute("aria-label")).toBe("Back");
+      expect(note?.textContent).toContain("Supporting detail.");
+      expect(fragment.textContent).not.toContain("[^source]");
+    });
+
+    it("namespaces equal footnotes from different transcript messages", () => {
+      const markdown = "Claim[^note].\n\n[^note]: Detail.";
+      const first = htmlFragment(toSanitizedMarkdownHtml(markdown, { documentId: "message-1" }));
+      const second = htmlFragment(toSanitizedMarkdownHtml(markdown, { documentId: "message-2" }));
+
+      expect(first.querySelector(".footnote-ref a")?.id).not.toBe(
+        second.querySelector(".footnote-ref a")?.id,
+      );
+    });
+
+    it("renders inline and display math as sanitized MathML", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("Energy is $E = mc^2$.\n\n$$\\int_0^1 x^2 \\, dx$$"),
+      );
+      const inlineMath = fragment.querySelector("p:not(.katex-block) math");
+      const displayMath = fragment.querySelector(".katex-block math");
+
+      expect(inlineMath?.getAttribute("display")).toBeNull();
+      expect(inlineMath?.querySelector("msup")).not.toBeNull();
+      expect(displayMath?.getAttribute("display")).toBe("block");
+      expect(displayMath?.querySelector("munderover, msubsup")).not.toBeNull();
+      expect(fragment.querySelector("annotation")?.getAttribute("encoding")).toBe(
+        "application/x-tex",
+      );
+    });
+
+    it("keeps currency and Mermaid fences out of math rendering", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("The total is $50.\n\n```mermaid\ngraph TD; A-->B\n```"),
+      );
+
+      expect(fragment.querySelector("math")).toBeNull();
+      expect(fragment.querySelector("code.language-mermaid")?.textContent).toContain("graph TD");
+      expect(fragment.textContent).toContain("$50");
+    });
+
+    it("keeps invalid math readable as escaped source", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("Before $\\notacommand{x}$ after"));
+
+      expect(fragment.querySelector("math")).toBeNull();
+      expect(fragment.querySelector(".katex-error")?.textContent).toBe("\\notacommand{x}");
+      expect(fragment.querySelector(".katex-error script")).toBeNull();
+    });
+
+    it("keeps raw HTML escaped beside generated math", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("$x^2$ <img src=x onerror=alert(1)>"));
+
+      expect(fragment.querySelector("math")).not.toBeNull();
+      expect(fragment.querySelector("img")).toBeNull();
+      expect(fragment.textContent).toContain("<img src=x onerror=alert(1)>");
+    });
+
     it("renders strikethrough", () => {
       const html = toSanitizedMarkdownHtml("This is ~~deleted~~ text");
       expect(html).toBe("<p>This is <s>deleted</s> text</p>\n");

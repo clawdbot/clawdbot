@@ -86,15 +86,15 @@
   outline-offset: 2px;
 }
 
-.chat-text :where(p, ul, ol, pre, blockquote, table, details) {
+.chat-text :where(p, ul, ol, pre, blockquote, table, details, .katex-block, .footnotes) {
   margin: 0;
 }
 
 /* Keep every adjacent top-level Markdown block on the same rhythm, including
    special blocks that otherwise read as part of the preceding block. */
 .chat-text
-  :where(p, ul, ol, pre, blockquote, table, details)
-  + :where(p, ul, ol, pre, blockquote, table, details) {
+  :where(p, ul, ol, pre, blockquote, table, details, .katex-block, .footnotes)
+  + :where(p, ul, ol, pre, blockquote, table, details, .katex-block, .footnotes) {
   margin-top: 0.75em;
 }
 
@@ -278,6 +278,71 @@
 
 .chat-text :where(a:hover) {
   color: var(--link-hover);
+}
+
+.chat-text :where(.footnote-ref) {
+  margin-inline-start: 0.08em;
+  font-size: 0.72em;
+  line-height: 0;
+  vertical-align: super;
+}
+
+.chat-text :where(.footnote-ref a) {
+  text-decoration: none;
+}
+
+.chat-text :where(.footnotes) {
+  margin-top: 1.25em;
+  padding-top: 0.75em;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.chat-text :where(.footnotes-sep) {
+  display: none;
+}
+
+.chat-text :where(.footnotes-list) {
+  margin: 0;
+  padding-inline-start: var(--chat-markdown-indent);
+}
+
+.chat-text :where(.footnote-item p) {
+  display: inline;
+}
+
+.chat-text :where(.footnote-backref) {
+  display: inline-block;
+  margin-inline-start: 0.25em;
+  text-decoration: none;
+}
+
+.chat-text :where(.katex) {
+  display: inline-block;
+  max-width: 100%;
+  color: var(--text);
+  font-family: "STIX Two Math", "Cambria Math", math;
+  line-height: 1.2;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: -0.12em;
+}
+
+.chat-text :where(.katex-block) {
+  margin-block: 1em;
+  text-align: center;
+}
+
+.chat-text :where(.katex-block .katex) {
+  display: block;
+  width: 100%;
+  padding-block: 0.2em;
+}
+
+.chat-text :where(.katex-error) {
+  color: inherit;
+  font-family: var(--mono);
 }
 
 /* GitHub links carry the brand mark so a bare URL and a "[#3434]" shorthand read

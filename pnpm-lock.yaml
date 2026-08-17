@@ -2371,6 +2371,9 @@ importers:
       '@lit/task':
         specifier: 1.0.3
         version: 1.0.3
+      '@mdit/plugin-katex':
+        specifier: 0.22.0
+        version: 0.22.0(markdown-it@14.3.0)
       '@modelcontextprotocol/ext-apps':
         specifier: 1.7.5
         version: 1.7.5(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(zod@4.4.3)
@@ -2440,6 +2443,9 @@ importers:
       markdown-it:
         specifier: 14.3.0
         version: 14.3.0
+      markdown-it-footnote:
+        specifier: 4.0.0
+        version: 4.0.0
       markdown-it-task-lists:
         specifier: 2.1.1
         version: 2.1.1
@@ -3939,6 +3945,33 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
+
+  '@mdit/helper@0.22.0':
+    resolution: {integrity: sha512-2iJYa2PW59VhZgUYZKB88eYsq7Rn20gZbpe+Pnz3bRH/8goMA1YfbRM6oMhKSMX5C8IaK66IGutRJkHrRHhJEA==}
+    engines: {node: '>= 18'}
+    peerDependencies:
+      markdown-it: ^14.1.0
+    peerDependenciesMeta:
+      markdown-it:
+        optional: true
+
+  '@mdit/plugin-katex@0.22.0':
+    resolution: {integrity: sha512-T6D45Vvd9vtQel3Ii6Lb61bFMjCPa1Pr1wW7H81b3Yeg9PnnCfPiG7msN/nK+9cI5TL9xbRgIiFtzldCUue0Bw==}
+    engines: {node: '>= 18'}
+    peerDependencies:
+      markdown-it: ^14.1.0
+    peerDependenciesMeta:
+      markdown-it:
+        optional: true
+
+  '@mdit/plugin-tex@0.22.0':
+    resolution: {integrity: sha512-YcjHf2O4jH0PNMYc4IaOHy1AXU+Prj3nGWAAZ4sHOblW5++1EvfBOAQZVeq5fwIHgFVlCwBi9BBktSFxwr/htg==}
+    engines: {node: '>= 18'}
+    peerDependencies:
+      markdown-it: ^14.1.0
+    peerDependenciesMeta:
+      markdown-it:
+        optional: true
 
   '@noble/hashes@2.0.1':
     resolution: {integrity: sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw==}
@@ -5994,6 +6027,10 @@ packages:
 
   commander@15.0.0:
     resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
+
+  commander@8.3.0:
+    resolution: {integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==}
+    engines: {node: '>= 12'}
     engines: {node: '>=22.12.0'}
 
   composed-offset-position@0.0.6:
@@ -7271,6 +7308,13 @@ packages:
 
   markdown-it-task-lists@2.1.1:
     resolution: {integrity: sha512-TxFAc76Jnhb2OUu+n3yz9RMu4CwGfaT788br6HhEDlvWfdeJcLUsxk1Hgw2yJio0OXsxv7pyIPmvECY7bMbluA==}
+
+  markdown-it-footnote@4.0.0:
+    resolution: {integrity: sha512-WYJ7urf+khJYl3DqofQpYfEYkZKbmXmwxQV8c8mO/hGIhgZ1wOe7R4HLFNwqx7TjILbnC98fuyeSsin19JdFcQ==}
+
+  katex@0.16.22:
+    resolution: {integrity: sha512-XCHRdUw4lf3SKBaJe4EvgqIuWwkPSo9XoeO8GjQW94Bp7TWv9hNhzZjZ+OH9yf1UmLygb7DIT5GSFQiyt16zYg==}
+    hasBin: true
 
   markdown-it@14.3.0:
     resolution: {integrity: sha512-RCEsPjR+sr0x+AuYp601tKTkgFG4YEPLCzHST3cQ/fhlJkqAkz1L2/Qbp1j9qw5SBwQHFBoW8+hoN5xssOF0Tw==}
@@ -14189,6 +14233,24 @@ snapshots:
 
   markdown-extensions@2.0.0: {}
 
+  '@mdit/helper@0.22.0(markdown-it@14.3.0)':
+    dependencies:
+      '@types/markdown-it': 14.1.2
+      markdown-it: 14.3.0
+
+  '@mdit/plugin-katex@0.22.0(markdown-it@14.3.0)':
+    dependencies:
+      '@mdit/helper': 0.22.0(markdown-it@14.3.0)
+      '@mdit/plugin-tex': 0.22.0(markdown-it@14.3.0)
+      '@types/markdown-it': 14.1.2
+      katex: 0.16.22
+      markdown-it: 14.3.0
+
+  '@mdit/plugin-tex@0.22.0(markdown-it@14.3.0)':
+    dependencies:
+      '@types/markdown-it': 14.1.2
+      markdown-it: 14.3.0
+
   markdown-it-cjk-friendly@2.0.2(@types/markdown-it@14.1.2)(markdown-it@14.3.0):
     dependencies:
       get-east-asian-width: 1.6.0
@@ -14198,6 +14260,12 @@ snapshots:
 
   markdown-it-task-lists@2.1.1: {}
 
+  markdown-it-footnote@4.0.0: {}
+
+  katex@0.16.22:
+    dependencies:
+      commander: 8.3.0
+
   markdown-it@14.3.0:
     dependencies:
       argparse: 2.0.1
@@ -14206,6 +14274,8 @@ snapshots:
       mdurl: 2.1.0
       punycode.js: 2.3.1
       uc.micro: 2.1.0
+
+  commander@8.3.0: {}
 
   markdown-table@3.0.4: {}
 
