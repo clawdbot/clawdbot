@@ -482,8 +482,17 @@ export function resolveGatewayScopedTools(params: {
             notifyOnExitEmptySuccess: execConfig?.notifyOnExitEmptySuccess,
           },
           {
-            description:
-              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.",
+            description: (() => {
+              const hasFileWriteTool = toolsWithMediatedCoding.some(
+                (tool) =>
+                  tool.name === "write" || tool.name === "edit" || tool.name === "apply_patch",
+              );
+              const baseDescription =
+                "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.";
+              return hasFileWriteTool
+                ? `${baseDescription} File writes: prefer dedicated file-writing tools over shell heredocs or bash -c for multi-line content.`
+                : baseDescription;
+            })(),
             displaySummary: "Run commands on a connected node",
             parameters: nodeExecSchema,
           },

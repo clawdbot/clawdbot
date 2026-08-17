@@ -1004,6 +1004,11 @@ export function buildAgentSystemPrompt(params: {
 
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const visibleTools = new Set(normalizedTools);
+  const hasFileWriteTool =
+    canonicalToolNames.length === 0 ||
+    availableTools.has("write") ||
+    availableTools.has("edit") ||
+    availableTools.has("apply_patch");
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const subagentStatusTools = ["subagents", "sessions_list"].filter((name) =>
     availableTools.has(name),
@@ -1310,6 +1315,11 @@ export function buildAgentSystemPrompt(params: {
           "Routine low-risk: call silently.",
           "Narrate only complex, sensitive/destructive, or requested steps.",
           "First-class tool exists: use it; never ask user for equivalent CLI/slash.",
+          ...(hasFileWriteTool
+            ? [
+                "File writes: prefer dedicated file-writing tools over shell heredocs or bash -c; unquoted heredocs corrupt \\n in multi-line content.",
+              ]
+            : []),
           "/approve is user command; never execute via shell/tool.",
           "allow-once = one command. Another elevated command needs fresh /approve.",
           "Approval preview: exact full command/script, including chains/multiline. Keep preview separate from /approve; never use script as approval id/slug.",
@@ -1424,7 +1434,10 @@ export function buildAgentSystemPrompt(params: {
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",
       "",
-      ...buildAssistantOutputDirectivesSection({ isMinimal, sourceMessageToolOnly }),
+      ...buildAssistantOutputDirectivesSection({
+        isMinimal,
+        sourceMessageToolOnly,
+      }),
     ];
 
     if (reasoningHint) {
@@ -1511,7 +1524,10 @@ export function buildAgentSystemPrompt(params: {
     }),
     // Capability-gated reply guidance stays below the cache boundary so channel changes
     // cannot alter the byte-identical stable prefix shared across sessions.
-    ...buildCollapsibleDetailsSection({ isMinimal, collapsibleDetailsSupported }),
+    ...buildCollapsibleDetailsSection({
+      isMinimal,
+      collapsibleDetailsSupported,
+    }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );
 
