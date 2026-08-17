@@ -112,7 +112,53 @@
   height: 16px;
 }
 
+.chat-tool-row--file {
+  position: relative;
+}
+
+.chat-tool-row__toggle {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: transparent;
+  cursor: var(--cursor-action);
+}
+
+.chat-tool-row--file > :not(.chat-tool-row__toggle) {
+  position: relative;
+  pointer-events: none;
+}
+
+.chat-tool-row--file .chat-tool-row__file-link {
+  pointer-events: auto;
+}
+
+.chat-tool-row__file-link {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 500 calc(var(--control-ui-text-sm) - 1px) var(--mono);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+  white-space: nowrap;
+  cursor: var(--cursor-action);
+}
+
+.chat-tool-row__file-link:hover,
+.chat-tool-row__file-link:focus-visible {
+  text-decoration-color: currentColor;
+}
+
 .chat-inline-disclosure[aria-expanded="true"] .chat-tool-row__chevron {
+  transform: rotate(90deg);
+}
+
+.chat-tool-row--file:has(.chat-tool-row__toggle[aria-expanded="true"])
+  .chat-tool-row__chevron {
   transform: rotate(90deg);
 }
 
@@ -574,6 +620,16 @@
   transition: opacity 120ms ease;
 }
 
+.chat-tool-card__header > .chat-tool-card__actions {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.chat-tool-card__header:hover > .chat-tool-card__actions,
+.chat-tool-card__header:focus-within > .chat-tool-card__actions {
+  opacity: 1;
+}
+
 .chat-tool-card--flush:has(> .chat-tool-card__actions) .chat-tool-term__cmd {
   padding-right: 42px;
 }
@@ -584,7 +640,8 @@
 }
 
 @media (pointer: coarse) {
-  .chat-tool-card--flush > .chat-tool-card__actions {
+  .chat-tool-card--flush > .chat-tool-card__actions,
+  .chat-tool-card__header > .chat-tool-card__actions {
     opacity: 1;
   }
 }
@@ -1028,16 +1085,14 @@
   padding-bottom: 8px;
 }
 
-.chat-work-group__gutter {
-  flex: 0 0 36px;
-}
-
-.chat-thread--direct .chat-work-group__gutter {
-  display: none;
-}
-
 .chat-work-group .chat-activity-group__label {
   color: var(--muted);
+}
+
+.chat-work-group__separator {
+  width: 100%;
+  height: 1px;
+  background: var(--border);
 }
 
 /* Reading indicator = working claw: the brand pincer claws in place where the

@@ -63,6 +63,7 @@ import {
   renderRawOutputToggle,
   renderToolCard,
   renderToolPreview,
+  isRunningToolCard,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
@@ -325,7 +326,9 @@ export function renderGroupedMessage(
   }
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
+  const toolMessageExpanded =
+    toolCards.some((card) => isRunningToolCard(card, opts.runActive)) ||
+    (opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false);
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const singleToolDisplay = singleToolCard

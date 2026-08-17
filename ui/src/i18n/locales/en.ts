@@ -5762,6 +5762,8 @@ export const en: TranslationMap = {
       attemptedChanges: "Attempted changes",
       failed: "failed",
       running: "Running",
+      completed: "Completed",
+      exitCode: "Exit code {code}",
       noOutputFailed: "No output — tool failed.",
       noOutputSucceeded: "No output — tool completed successfully.",
       noResult: "No result available.",

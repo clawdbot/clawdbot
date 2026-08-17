@@ -250,7 +250,8 @@ export function renderActivityGroup(
     : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
-  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
+  const activityExpanded =
+    Boolean(runningCard) || (opts.isToolMessageExpanded?.(activityDisclosureId) ?? false);
   return html`
     <div
       class="chat-group tool chat-group--activity chat-group--with-footer"

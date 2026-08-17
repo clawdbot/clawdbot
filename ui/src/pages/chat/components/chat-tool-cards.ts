@@ -435,6 +435,43 @@ function renderProgressCardReceipt(card: ToolCard, outcome: ToolCardOutcome) {
   </div>`;
 }
 
+function renderFileToolRowContent(
+  card: ToolCard,
+  view: ToolCallView,
+  outcome: ToolCardOutcome,
+  workspaceFilePath: string | null,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+) {
+  const verb = resolveToolRowVerb(view, outcome);
+  if (!verb || !view.target) {
+    return renderToolRowContent(card, view, outcome);
+  }
+  const stat =
+    outcome === "succeeded"
+      ? view.stat
+      : outcome === "running"
+        ? card.liveDiffStat
+        : undefined;
+  const filename = compactToolTarget(view.target, view.kind);
+  return html`
+    <span class="chat-tool-row__verb">${verb}</span>
+    ${workspaceFilePath && onOpenWorkspaceFile
+      ? html`<button
+          class="chat-tool-row__file-link"
+          type="button"
+          title=${t("chat.toolCards.openFile")}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            onOpenWorkspaceFile({ path: workspaceFilePath });
+          }}
+        >
+          ${filename}
+        </button>`
+      : html`<span class="chat-tool-row__target">${filename}</span>`}
+    ${stat ? renderDiffStatChips(stat) : nothing}
+  `;
+}
+
 // ── Command syntax highlighting ──
 
 type CommandToken = { text: string; cls: "name" | "flag" | "str" | "num" | "op" | "plain" | "ws" };
@@ -616,9 +653,28 @@ function renderToolWorkspaceFilePath(
     : html`<div class="chat-tool-card__detail">${label}</div>`;
 }
 
-function renderTerminalBlock(command: string, output: string | undefined, isError: boolean) {
+function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
+  const label =
+    outcome === "failed"
+      ? exitCode === undefined
+        ? t("chat.toolCards.failed")
+        : t("chat.toolCards.exitCode", { code: String(exitCode) })
+      : outcome === "running"
+        ? t("chat.toolCards.running")
+        : outcome === "succeeded"
+          ? t("chat.toolCards.completed")
+          : null;
+  return label ? html`<div class="chat-tool-card__outcome">${label}</div>` : nothing;
+}
+
+function renderTerminalBlock(
+  command: string,
+  output: string | undefined,
+  outcome: ToolCardOutcome,
+  exitCode?: number,
+) {
   return html`
-    <div class="chat-tool-term ${isError ? "chat-tool-term--error" : ""}">
+    <div class="chat-tool-term">
       <div class="chat-tool-term__cmd">
         <span class="chat-tool-term__prompt">$</span
         ><code>${renderHighlightedCommand(command)}</code>
@@ -626,9 +682,7 @@ function renderTerminalBlock(command: string, output: string | undefined, isErro
       ${output?.trim()
         ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
         : nothing}
-      ${isError
-        ? html`<div class="chat-tool-card__outcome">${t("chat.toolCards.failed")}</div>`
-        : nothing}
+      ${renderToolOutcome(outcome, exitCode)}
     </div>
   `;
 }
@@ -713,20 +767,51 @@ export function renderToolCard(
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const isError = outcome === "failed";
   const isRunning = outcome === "running";
+  const expanded = opts.expanded || isRunning;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
+  const workspaceFilePath =
+    view.kind === "edit" || view.kind === "write" ? resolveToolWorkspaceFilePath(card, view) : null;
+  const isFileMutation = Boolean(workspaceFilePath && (view.kind === "edit" || view.kind === "write"));
 
   return html`
     <div
-      class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${opts.expanded
+      class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded
         ? "is-open"
         : ""}"
     >
-      <button
+      ${isFileMutation
+        ? html`<div
+            class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${isRunning
+              ? "chat-tool-row--running"
+              : ""}"
+            @pointerenter=${syncToolDisclosureOverflow}
+            @focusin=${syncToolDisclosureOverflow}
+          >
+            <button
+              class="chat-tool-row__toggle"
+              type="button"
+              aria-expanded=${String(expanded)}
+              aria-label=${resolveToolRowText(card, opts.runActive)}
+              @click=${() => opts.onToggleExpanded(card.id)}
+            ></button>
+            <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
+            <span class="chat-tool-disclosure__content"
+              >${renderFileToolRowContent(
+                card,
+                view,
+                outcome,
+                workspaceFilePath,
+                opts.onOpenWorkspaceFile,
+              )}</span
+            >
+            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+          </div>`
+        : html`<button
         class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
           ? "chat-tool-row--running"
           : ""}"
         type="button"
-        aria-expanded=${String(opts.expanded)}
+        aria-expanded=${String(expanded)}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
         @click=${(event: MouseEvent) => {
@@ -740,8 +825,8 @@ export function renderToolCard(
           >${renderToolRowContent(card, view, outcome)}</span
         >
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
-      </button>
-      ${opts.expanded
+      </button>`}
+      ${expanded
         ? html`
             <div class="chat-tool-msg-body">
               ${renderExpandedToolCardContent(
@@ -853,7 +938,8 @@ export function renderExpandedToolCardContent(
         ${renderTerminalBlock(
           view.command,
           card.outputText,
-          isError,
+          outcome,
+          card.exitCode,
         )}
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
       </div>
@@ -874,6 +960,7 @@ export function renderExpandedToolCardContent(
           <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
         ${renderDiffBlock(view.diff, outcome)}
+        ${renderToolOutcome(outcome, card.exitCode)}
         ${isError && hasOutput
           ? renderToolDataBlock({ label: t("chat.toolCards.toolError"), text: card.outputText! })
           : hasOutput
@@ -927,6 +1014,7 @@ export function renderExpandedToolCardContent(
               text: t("chat.toolCards.noOutputFailed"),
             })
           : nothing}
+      ${renderToolOutcome(outcome, card.exitCode)}
     </div>
   `;
 }
