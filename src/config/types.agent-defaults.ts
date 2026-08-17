@@ -2,6 +2,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
+  AgentDefaultModelConfig,
   AgentModelConfig,
   AgentToolModelConfig,
   AgentRuntimePolicyConfig,
@@ -127,7 +128,7 @@ export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  model?: AgentModelConfig;
+  model?: AgentDefaultModelConfig;
   /** Optional lower-cost model for short internal tasks such as generated session titles. */
   utilityModel?: string;
   /**

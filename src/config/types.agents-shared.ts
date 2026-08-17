@@ -24,7 +24,18 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
-      /** Opt-in route circuit breaker for this fallback chain. */
+    };
+
+/**
+ * `agents.defaults.model` additionally carries the route circuit breaker
+ * switch. The circuit is process-global, so it is only honored there.
+ */
+export type AgentDefaultModelConfig =
+  | string
+  | {
+      primary?: string;
+      fallbacks?: string[];
+      /** Opt-in route circuit breaker for the fallback chain. */
       circuitBreaker?: ModelCircuitBreakerConfig;
     };
 

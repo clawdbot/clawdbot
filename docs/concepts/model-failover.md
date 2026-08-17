@@ -282,6 +282,8 @@ The route circuit breaker is off by default. It changes which configured routes 
 
 With it disabled, the per-run cooldown and skip behavior described above is unchanged.
 
+The circuit is process-global (keyed by agent directory, provider, and model), so the switch is accepted only on `agents.defaults.model`. Setting it on a per-agent, subagent, or tool model chain is a config error rather than a silent no-op.
+
 Once enabled, OpenClaw tracks repeated transient failures for each agent, provider, and model route. Five `rate_limit`, `overloaded`, `server_error`, `timeout`, or `empty_response` failures within 10 minutes open the route circuit. While it is open, new turns skip that route only when another fallback candidate can actually reach a provider: a candidate that would be rejected before transport — by the session auth skip-cache, an exhausted provider cooldown, an unverified agent-harness preflight, or a TLS exclusion — does not count. When every remaining candidate is blocked, the open route is attempted anyway as a recovery probe, so a turn never fails with zero provider attempts because of the circuit.
 
 The first open period lasts 2 minutes. After it expires, one turn reserves a recovery probe while concurrent turns continue to fallback. A successful probe closes the circuit; another eligible failure doubles the open period up to 15 minutes. Recovery probes carry the route state generation they observed, so when last-route probes overlap a superseded completion cannot overwrite a newer result. The state is process-local, bounded, and cleared by a Gateway restart.
