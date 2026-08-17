@@ -466,6 +466,7 @@ async function executeMemoryReadResult(params: {
           startLine: actualFrom,
           endLine,
           score: 0.5,
+          snippet: result.text,
         }],
       }).catch(() => {
         // Recall tracking is best-effort and must never block memory reads.
