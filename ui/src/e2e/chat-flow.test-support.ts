@@ -229,3 +229,35 @@ export async function sidebarSessionOrder(page: Page): Promise<string[]> {
         .filter((key) => key.startsWith("agent:main:session-")),
     );
 }
+
+/** Asserts both texts appear exactly once and upper renders above lower in the thread. */
+export async function expectChatBubbleAbove(page: Page, upperText: string, lowerText: string) {
+  const thread = page.locator(".chat-thread-inner");
+  await expect
+    .poll(() =>
+      thread.evaluate(
+        (element, texts) => {
+          const bubbles = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble"));
+          const matches = texts.map((text) =>
+            bubbles.filter((bubble) => bubble.textContent?.includes(text)),
+          );
+          const counts = matches.map((matchingBubbles) => matchingBubbles.length);
+          const upperBubble = matches[0]?.[0];
+          const lowerBubble = matches[1]?.[0];
+          if (counts.some((count) => count !== 1) || !upperBubble || !lowerBubble) {
+            return { counts, lowerTop: null, ordered: false, upperTop: null };
+          }
+          const upperTop = upperBubble.getBoundingClientRect().top;
+          const lowerTop = lowerBubble.getBoundingClientRect().top;
+          return { counts, lowerTop, ordered: upperTop < lowerTop, upperTop };
+        },
+        [upperText, lowerText],
+      ),
+    )
+    .toEqual({
+      counts: [1, 1],
+      lowerTop: expect.any(Number),
+      ordered: true,
+      upperTop: expect.any(Number),
+    });
+}
