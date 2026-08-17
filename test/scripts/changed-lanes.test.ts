@@ -933,8 +933,16 @@ describe("scripts/changed-lanes", () => {
 
       expect(result.lanes.scripts).toBe(true);
       expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:scripts");
+      expect(plan.commands.map((command) => command.args[0])).toContain("check:script-erasability");
     },
   );
+
+  it("routes script erasability guard changes back through the guard", () => {
+    const result = detectChangedLanes(["scripts/check-script-erasability.mjs"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.commands.map((command) => command.args[0])).toContain("check:script-erasability");
+  });
 
   it("keeps the scripts lane when another change selects the full lane", () => {
     const result = detectChangedLanes(["package.json", "scripts/example.mts"]);

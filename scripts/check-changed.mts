@@ -763,6 +763,10 @@ export function createChangedCheckPlan(
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
+  if (runAll || lanes.scripts || result.paths.includes("scripts/check-script-erasability.mjs")) {
+    add("script TypeScript erasability", ["check:script-erasability"]);
+  }
+
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
       "release-metadata:check",

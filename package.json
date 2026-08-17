@@ -1538,6 +1538,7 @@
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
     "check:runtime-sidecar-loaders": "node --import tsx scripts/check-runtime-sidecar-loaders.mts",
+    "check:script-erasability": "node --disable-warning=ExperimentalWarning scripts/check-script-erasability.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import tsx scripts/check-wrapper-shadowing.mts",
