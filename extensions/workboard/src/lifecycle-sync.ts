@@ -42,6 +42,10 @@ type WorkboardLifecycleSessionSnapshot = {
   complete: boolean;
 };
 
+type WorkboardLifecycleSessionReadOptions = {
+  includeUnknown: boolean;
+};
+
 type WorkboardLifecycleMatchHandler = (input: {
   cards: readonly WorkboardCard[];
   sessionKey?: string;
@@ -284,9 +288,20 @@ function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined
 
 export async function readWorkboardLifecycleSessions(
   gateway: Pick<OpenClawPluginApi["runtime"]["gateway"], "isAvailable" | "request">,
+  options: WorkboardLifecycleSessionReadOptions = { includeUnknown: false },
 ): Promise<WorkboardLifecycleSessionSnapshot> {
   if (!(await gateway.isAvailable())) {
     return { sessions: [], complete: false };
+  }
+  let includeUnknown = false;
+  if (options.includeUnknown) {
+    const agentsPayload = await gateway.request("agents.list", {}, { scopes: ["operator.read"] });
+    if (!isRecord(agentsPayload) || typeof agentsPayload.selectionRequired !== "boolean") {
+      throw new Error("agents.list returned an invalid ownership snapshot");
+    }
+    // The unknown key is a legacy ownerless sentinel. Preserve an existing
+    // captured link only while the Gateway proves that its owner is unambiguous.
+    includeUnknown = !agentsPayload.selectionRequired;
   }
   const payload = await gateway.request(
     "sessions.list",
@@ -294,7 +309,7 @@ export async function readWorkboardLifecycleSessions(
       limit: WORKBOARD_SESSION_SWEEP_LIMIT,
       configuredAgentsOnly: true,
       includeGlobal: false,
-      includeUnknown: false,
+      includeUnknown,
     },
     { scopes: ["operator.read"] },
   );
@@ -314,7 +329,9 @@ export async function readWorkboardLifecycleSessions(
 
 export function createWorkboardLifecycleService(params: {
   store: WorkboardStore;
-  readSessions: () => Promise<WorkboardLifecycleSessionSnapshot>;
+  readSessions: (
+    options: WorkboardLifecycleSessionReadOptions,
+  ) => Promise<WorkboardLifecycleSessionSnapshot>;
   now?: () => number;
 }): OpenClawPluginService {
   let generation = 0;
@@ -332,7 +349,11 @@ export function createWorkboardLifecycleService(params: {
           ) {
             return;
           }
-          const snapshot = await params.readSessions();
+          const snapshot = await params.readSessions({
+            includeUnknown: cards.some(
+              (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
+            ),
+          });
           if (generation === owner) {
             await syncWorkboardLifecycleSessions({
               store: params.store,

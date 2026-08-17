@@ -594,6 +594,45 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(readSessions).not.toHaveBeenCalled();
   });
 
+  it("reconciles a captured unknown session when agent ownership is unambiguous", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await createLinkedCard(store, { sessionKey: "unknown" });
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "agents.list") {
+        return { selectionRequired: false };
+      }
+      return {
+        sessions: [
+          {
+            key: "unknown",
+            status: "done",
+            hasActiveRun: false,
+            updatedAt: card.updatedAt + 1,
+          },
+        ],
+      };
+    });
+    const readSessions = vi.fn(
+      async (options: { includeUnknown: boolean }) =>
+        await readWorkboardLifecycleSessions({ isAvailable: async () => true, request }, options),
+    );
+    const context = { logger: { warn: vi.fn() } } as never;
+    const service = createWorkboardLifecycleService({ store, readSessions });
+
+    await service.start(context);
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    await service.stop?.(context);
+
+    expect(readSessions).toHaveBeenCalledWith({ includeUnknown: true });
+    expect(request).toHaveBeenNthCalledWith(1, "agents.list", {}, { scopes: ["operator.read"] });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "sessions.list",
+      expect.objectContaining({ includeGlobal: false, includeUnknown: true }),
+      { scopes: ["operator.read"] },
+    );
+  });
+
   it("reconciles an agent-prefixed Workboard session when discovery is relevant", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await createLinkedCard(store, { agentId: "worker", boardId: "ops" });
@@ -783,6 +822,24 @@ describe("Workboard gateway lifecycle sync", () => {
       },
       { scopes: ["operator.read"] },
     );
+  });
+
+  it("keeps unknown excluded when explicit ownership requires agent selection", async () => {
+    const request = vi.fn().mockImplementation(async (method: string, options: object) => {
+      if (method === "agents.list") {
+        return { selectionRequired: true };
+      }
+      expect(method).toBe("sessions.list");
+      expect(options).toMatchObject({ includeGlobal: false, includeUnknown: false });
+      return { sessions: [] };
+    });
+
+    await expect(
+      readWorkboardLifecycleSessions(
+        { isAvailable: async () => true, request },
+        { includeUnknown: true },
+      ),
+    ).resolves.toEqual({ sessions: [], complete: true });
   });
 
   it("returns an incomplete empty snapshot without requesting while Gateway is unavailable", async () => {
