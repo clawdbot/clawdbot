@@ -535,10 +535,14 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         const boundSession = sessions.get(sessionId);
         if (boundSession && boundSession.ownerKey !== ownerKey) {
+          // Structured invalidation details let clients with a persisted id mint a
+          // fresh one instead of retry-looping against the foreign live session.
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw session belongs to another caller."),
+            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw session belongs to another caller.", {
+              details: buildSystemAgentSessionInvalidatedErrorDetails(),
+            }),
           );
           return;
         }

@@ -534,6 +534,8 @@ class OpenClawShell
     this.shellChrome.handleDeferredTerminalToggle(event);
   readonly handleDeferredBrowserToggle = (event: Event) =>
     this.shellChrome.handleDeferredBrowserToggle(event);
+  readonly handleDeferredCustodianToggle = (event: Event) =>
+    this.shellChrome.handleDeferredCustodianToggle(event);
   readonly handleCommandPaletteSlashCommand = (command: string) =>
     this.shellChrome.handleCommandPaletteSlashCommand(command);
 
@@ -581,8 +583,11 @@ class OpenClawShell
     const gatewaySnapshot = context.gateway?.snapshot;
     if (gatewaySnapshot) {
       const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+      const custodianAvailable =
+        isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
       if (this.commandPalette) {
         this.commandPalette.desktopAvailable = desktopAvailable;
+        this.commandPalette.custodianAvailable = custodianAvailable;
       }
       if (isTerminalAvailable(gatewaySnapshot, context.config?.current.terminalEnabled ?? false)) {
         preloadOptionalElement(this, this.terminalPanelElement);
@@ -593,7 +598,7 @@ class OpenClawShell
       if (desktopAvailable) {
         preloadOptionalElement(this, this.desktopPanelElement);
       }
-      if (isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true) {
+      if (custodianAvailable) {
         preloadOptionalElement(this, this.custodianPanelElement);
       }
     }

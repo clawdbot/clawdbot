@@ -12,7 +12,8 @@
   --shell-chrome-controls-gap: 4px;
   --shell-chrome-controls-collapsed-width: calc(
     var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap) +
+      var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
+      var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-gap) +
       var(--shell-chrome-controls-gap)
   );
   --shell-chrome-safe-area-left: calc(

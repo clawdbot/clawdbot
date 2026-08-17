@@ -12,6 +12,7 @@ import {
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -72,6 +73,7 @@ export interface ShellChromeHost extends HTMLElement {
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
   readonly desktopPanelElement: OptionalCustomElement;
+  readonly custodianPanelElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
   readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
@@ -124,6 +126,7 @@ export class ShellChromeOwner {
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
   disconnect(): void {
@@ -144,6 +147,7 @@ export class ShellChromeOwner {
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
     window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
+    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
   toggleNavigationSurface(trigger?: HTMLElement): void {
@@ -532,6 +536,17 @@ export class ShellChromeOwner {
       return;
     }
     this.deliverPanelEventAfterLoad(host.desktopPanelElement, event);
+  };
+
+  readonly handleDeferredCustodianToggle = (event: Event): void => {
+    const host = this.host;
+    if (isOptionalElementDefined(host.custodianPanelElement)) {
+      return;
+    }
+    const snapshot = host.context?.gateway?.snapshot;
+    if (snapshot && isGatewayMethodAdvertised(snapshot, "openclaw.chat") === true) {
+      this.deliverPanelEventAfterLoad(host.custodianPanelElement, event);
+    }
   };
 
   readonly handleCommandPaletteSlashCommand = (command: string): void => {

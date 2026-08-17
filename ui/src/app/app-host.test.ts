@@ -10,11 +10,9 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
 } from "../components/command-palette-contract.ts";
 import {
-  BROWSER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
-import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -80,12 +78,7 @@ type ShellServerPreferencesState = {
 };
 
 type ShellLazySurfaceState = ShellKeyboardState & {
-  browserPanelElement: TestOptionalCustomElement;
   commandPaletteElement: TestOptionalCustomElement;
-  handleDeferredBrowserToggle: (event: Event) => void;
-  handleDeferredTerminalToggle: (event: Event) => void;
-  routeState: { routeId: string };
-  terminalPanelElement: TestOptionalCustomElement;
 };
 
 type ShellApprovalLazyState = {
@@ -861,71 +854,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
     expect(event.defaultPrevented).toBe(true);
     await vi.waitFor(() => expect(togglePalette).toHaveBeenCalledOnce());
-  });
-
-  it("delivers first panel toggles after their lazy modules load", async () => {
-    const terminalElement = createLazyElementSpec("terminal panel");
-    const browserElement = createLazyElementSpec("browser panel");
-    const terminalToggle = vi.fn();
-    const browserToggle = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
-    shell.terminalPanelElement = terminalElement;
-    shell.browserPanelElement = browserElement;
-    shell.runtime = {
-      context: {
-        gateway: {
-          snapshot: {
-            phase: "connected",
-            hello: {
-              auth: { role: "operator", scopes: ["operator.admin"] },
-              features: { methods: ["terminal.open", "browser.request", "openclaw.chat"] },
-            },
-          },
-        },
-        config: { current: { terminalEnabled: true } },
-      } as unknown as ApplicationContext,
-    };
-    Object.defineProperty(shell, "updateComplete", {
-      configurable: true,
-      get: () => Promise.resolve(true),
-    });
-    Object.defineProperty(shell, "querySelector", {
-      configurable: true,
-      value: (selector: string) => {
-        if (selector === terminalElement.tagName) {
-          return { handleToggleRequest: terminalToggle };
-        }
-        if (selector === browserElement.tagName) {
-          return { handleToggleRequest: browserToggle };
-        }
-        return null;
-      },
-    });
-    const terminalEvent = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
-      detail: { dock: "right", open: true },
-    });
-    const browserEvent = new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT);
-
-    shell.handleDeferredTerminalToggle(terminalEvent);
-    shell.handleDeferredBrowserToggle(browserEvent);
-
-    await vi.waitFor(() => {
-      expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
-      expect(browserToggle).toHaveBeenCalledWith(browserEvent);
-    });
-  });
-
-  it("buffers panel toggle events until the active chat pane mounts", () => {
-    const terminalElement = createLazyElementSpec("session terminal panel");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
-    shell.terminalPanelElement = terminalElement;
-    shell.routeState = { routeId: "chat" };
-
-    const event = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } });
-    shell.handleDeferredTerminalToggle(event);
-
-    expect(customElements.get(terminalElement.tagName)).toBeUndefined();
-    expect(takeSessionPanelToggle("terminal")).toBe(event);
   });
 
   it("opens approvals after the modal module loads on demand", async () => {

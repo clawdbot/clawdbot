@@ -141,7 +141,7 @@ Theme, theme mode, language, and chat display preferences sync through the gatew
 
 ## OpenClaw system care
 
-Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. The page renders a centered chat with the animated OpenClaw mascot, which switches to a thinking pose while a turn is in flight. The conversation is not trapped in Settings: the lobster button in the thread workspace rail toggles the same live session as a dockable panel (right or bottom, with placement and size persisted in the browser profile), and leaving the full page mid-conversation automatically minimizes the chat into that dock so the session follows you. The dock hides itself while the full Ask OpenClaw page is open.
+Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. Toggle it from anywhere with the lobster button in the shell chrome or the **Ask OpenClaw** command-palette action. The full page and dockable panel share one machine-wide conversation whose durable history lives on the Gateway. Closing the UI never cancels a turn; reopening Ask OpenClaw shows the completed conversation. The panel docks on the right or bottom, remembers its placement and size in the browser profile, and hides itself while the full page is open.
 
 Each chat message carries the Control UI page you are currently viewing as an untrusted ambient hint, so requests like "configure this channel" or "why is this page empty?" resolve against the page you are looking at.
 

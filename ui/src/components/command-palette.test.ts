@@ -14,7 +14,9 @@ import { createApplicationContextProvider } from "../test-helpers/application-co
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { CommandPalette } from "./command-palette.ts";
 import {
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
+  type CustodianPanelToggleDetail,
   type DesktopPanelToggleDetail,
 } from "./panel-toggle-contract.ts";
 
@@ -286,6 +288,52 @@ describe("CommandPalette lifecycle", () => {
       palette.querySelector<HTMLElement>("#cmd-palette-option-panel-desktop")?.click();
     } finally {
       window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.detail).toEqual({ open: true });
+  });
+
+  it.each([
+    { available: true, expectedCount: 1 },
+    { available: false, expectedCount: 0 },
+  ])(
+    "shows Ask OpenClaw only when availability is $available",
+    async ({ available, expectedCount }) => {
+      const { gateway } = createGateway(true);
+      const { palette } = await mountPalette(
+        createContext(
+          gateway,
+          vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+        ),
+      );
+      palette.custodianAvailable = available;
+      await enterQuery(palette, "openclaw");
+
+      expect(palette.querySelectorAll("#cmd-palette-option-panel-custodian")).toHaveLength(
+        expectedCount,
+      );
+    },
+  );
+
+  it("opens Ask OpenClaw from its palette action", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    palette.custodianAvailable = true;
+    await enterQuery(palette, "openclaw");
+    const events: CustomEvent<CustodianPanelToggleDetail>[] = [];
+    const listener = (event: Event) =>
+      events.push(event as CustomEvent<CustodianPanelToggleDetail>);
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, listener);
+    try {
+      palette.querySelector<HTMLElement>("#cmd-palette-option-panel-custodian")?.click();
+    } finally {
+      window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, listener);
     }
 
     expect(events).toHaveLength(1);
