@@ -1283,7 +1283,8 @@ install_openclaw() {
     fix_npm_prefix_if_needed
   fi
 
-  local installed_entry="$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
+  local installed_entry
+  installed_entry="$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
   if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}" || [[ ! -f "$installed_entry" ]]; then
     log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
     if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}" || [[ ! -f "$installed_entry" ]]; then
