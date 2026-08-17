@@ -297,16 +297,20 @@ export function renderMarkdownText(
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,
 ) {
+  const wrapTables = (value: string) =>
+    value
+      .replaceAll("<table>", '<div class="chat-markdown-table"><table>')
+      .replaceAll("</table>", "</table></div>");
   if (isStreaming) {
     return html`
       <div class="chat-text" dir="${detectTextDirection(markdown)}">
-        ${unsafeHTML(toStreamingMarkdownHtml(markdown, markdownRenderOptions))}
+        ${unsafeHTML(wrapTables(toStreamingMarkdownHtml(markdown, markdownRenderOptions)))}
       </div>
     `;
   }
   return html`
     <div class="chat-text" dir="${detectTextDirection(markdown)}">
-      ${unsafeHTML(toSanitizedMarkdownHtml(markdown, markdownRenderOptions))}
+      ${unsafeHTML(wrapTables(toSanitizedMarkdownHtml(markdown, markdownRenderOptions)))}
     </div>
   `;
 }
