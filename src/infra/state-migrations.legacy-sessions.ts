@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SessionEntry } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import { isErrno } from "./errors.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
@@ -43,7 +44,7 @@ export function inspectLegacyAgentDir(
   try {
     entries = fs.readdirSync(legacyDir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isErrno(error) && error.code === "ENOENT") {
       return { status: "empty" };
     }
     return legacyAgentInspectionFailure(`legacy agent directory ${legacyDir}`, error);
@@ -81,7 +82,7 @@ export function inspectLegacyAgentDir(
         "agent schema ownership metadata is missing",
       );
     }
-    const tables = opened // sqlite-allow-raw -- Read-only legacy migration payload inspection.
+    const tableNames = opened // sqlite-allow-raw -- Read-only legacy migration payload inspection.
       .prepare(
         // The excluded singleton rows are seeded schema controls, not user payload.
         `SELECT name FROM pragma_table_list
@@ -89,8 +90,13 @@ export function inspectLegacyAgentDir(
            AND substr(name, 1, 7) <> 'sqlite_'
            AND name NOT IN ('schema_meta', 'session_key_contract', 'memory_index_state')`,
       )
-      .all() as Array<{ name: string }>;
-    const hasPayload = tables.some(({ name }) =>
+      .all()
+      .flatMap((row) =>
+        row && typeof row === "object" && "name" in row && typeof row.name === "string"
+          ? [row.name]
+          : [],
+      );
+    const hasPayload = tableNames.some((name) =>
       opened // sqlite-allow-raw -- pragma-owned names stay quoted inside this bounded probe.
         .prepare(`SELECT 1 FROM ${quoteSqliteIdentifier(name)} LIMIT 1`)
         .get(),
