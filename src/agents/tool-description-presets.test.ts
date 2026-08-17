@@ -9,7 +9,7 @@ import {
 
 const SESSION_LINK_BASE = "http://127.0.0.1:18789/control";
 const SESSION_LINK_LINE =
-  "When pointing the user at a session, cite its Control UI URL: main session -> `http://127.0.0.1:18789/control/chat/<agentId>`; any other display session key -> `http://127.0.0.1:18789/control/chat/` + key without leading `agent:`, with `:` replaced by `/`.";
+  "When pointing the user at a session, cite its Control UI URL: main session -> `http://127.0.0.1:18789/control/chat/<agentId>`; any other display session key -> `http://127.0.0.1:18789/control/chat/<agentId>/~key/` + key minus `agent:<agentId>:`, with `:` replaced by `/`.";
 const SESSION_DESCRIPTIONS = [
   {
     tool: "sessions_list",

@@ -58,7 +58,7 @@ export function describeSessionVisibilityScope(
 type SessionLinkDescriptionOptions = { sessionLinkBase?: string };
 
 export function describeSessionLinkRule(base: string): string {
-  return `When pointing the user at a session, cite its Control UI URL: main session -> \`${base}/chat/<agentId>\`; any other display session key -> \`${base}/chat/\` + key without leading \`agent:\`, with \`:\` replaced by \`/\`.`;
+  return `When pointing the user at a session, cite its Control UI URL: main session -> \`${base}/chat/<agentId>\`; any other display session key -> \`${base}/chat/<agentId>/~key/\` + key minus \`agent:<agentId>:\`, with \`:\` replaced by \`/\`.`;
 }
 
 /** Describes the sessions_list tool for model-facing instructions. */

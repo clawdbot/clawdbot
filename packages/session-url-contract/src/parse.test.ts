@@ -188,10 +188,12 @@ describe("parseControlUiSessionPath", () => {
   it.each([
     {
       sessionKey: "agent:main:main",
+      agentId: "main",
       expected: { namespace: "chat", kind: "main", agentId: "main" },
     },
     {
       sessionKey: "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6",
+      agentId: "roboclaw",
       expected: {
         namespace: "chat",
         kind: "literal",
@@ -201,6 +203,7 @@ describe("parseControlUiSessionPath", () => {
     },
     {
       sessionKey: "agent:x:telegram:group:12345",
+      agentId: "x",
       expected: {
         namespace: "chat",
         kind: "literal",
@@ -210,6 +213,7 @@ describe("parseControlUiSessionPath", () => {
     },
     {
       sessionKey: "agent:x:discord:direct:9",
+      agentId: "x",
       expected: {
         namespace: "chat",
         kind: "literal",
@@ -219,34 +223,36 @@ describe("parseControlUiSessionPath", () => {
     },
     {
       sessionKey: "agent:x:standup",
+      agentId: "x",
       expected: {
         namespace: "chat",
         kind: "literal",
         agentId: "x",
         sessionKey: "agent:x:standup",
-        slugCandidate: "standup",
       },
     },
     {
       sessionKey: "agent:main:2139bddb-3211-4641-b993-10f619f124e6",
+      agentId: "main",
       expected: {
         namespace: "chat",
-        kind: "short",
+        kind: "literal",
         agentId: "main",
-        shortId: "10f619f124e6",
-        slugHint: "2139bddb-3211-4641-b993",
-        literalSessionKey: "agent:main:2139bddb-3211-4641-b993-10f619f124e6",
+        sessionKey: "agent:main:2139bddb-3211-4641-b993-10f619f124e6",
       },
     },
   ] satisfies ReadonlyArray<{
     sessionKey: string;
+    agentId: string;
     expected: ControlUiSessionPathTarget;
-  }>)("parses the mechanically composed URL for $sessionKey", ({ sessionKey, expected }) => {
+  }>)("parses the tool-composed URL for $sessionKey", ({ sessionKey, agentId, expected }) => {
     const base = "https://gateway.example/control";
     const url =
       sessionKey === "agent:main:main"
         ? `${base}/chat/main`
-        : `${base}/chat/${sessionKey.slice("agent:".length).replaceAll(":", "/")}`;
+        : `${base}/chat/${agentId}/~key/${sessionKey
+            .slice(`agent:${agentId}:`.length)
+            .replaceAll(":", "/")}`;
 
     expect(parseControlUiSessionPath(new URL(url).pathname, "/control")).toEqual(expected);
   });

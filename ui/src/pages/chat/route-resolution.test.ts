@@ -818,6 +818,52 @@ describe("gateway-backed session route resolution", () => {
     );
   });
 
+  it("uses forced-literal URLs to avoid a colliding short session reference", async () => {
+    const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
+    const collidingUuid = "567890ab-cdef-4321-8765-43210fedcba9";
+    const literal = row({
+      key: `agent:main:${literalUuid}`,
+      sessionId: literalUuid,
+      displayName: undefined,
+    });
+    const shortMatch = row({
+      key: `agent:main:thread:${collidingUuid}`,
+      sessionId: collidingUuid,
+      displayName: undefined,
+    });
+    const { context } = contextFor(({ agentId, search }) =>
+      agentId === "main" && search === literal.key ? result([literal]) : result([]),
+    );
+    const request = installShortResolver(context, [literal, shortMatch], {
+      ok: true,
+      key: shortMatch.key,
+    });
+
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: `/chat/main/~key/${literalUuid}`, search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ kind: "session", sessionKey: literal.key });
+
+    // Plain literal paths remain short-first, so this collision opens the short match.
+    // Tool-generated links advertise `~key` to bypass that intentional ambiguity.
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: `/chat/main/${literalUuid}`, search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ kind: "session", sessionKey: shortMatch.key });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.resolve",
+      expect.objectContaining({ shortId: "567890abcdef" }),
+    );
+  });
+
   it("prefers an exact literal key over slug matches", async () => {
     const literal = row({
       key: "agent:roboclaw:default-mode-with-rare-surprises",
