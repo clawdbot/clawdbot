@@ -188,6 +188,8 @@ describe("recent session prefetch", () => {
 
   it("idles, excludes open and fresh sessions, and fills five cache entries sequentially", async () => {
     store.write("agent:main:fresh", historySnapshot("fresh"));
+    await store.flush();
+    const open = vi.spyOn(indexedDB, "open");
     const pending: Array<{
       resolve: (value: ReturnType<typeof historyResult>) => void;
       sessionKey: string;
@@ -267,6 +269,14 @@ describe("recent session prefetch", () => {
     expect(
       request.mock.calls.some((call) => sessionKeyFromCall(call) === "agent:main:eligible-6"),
     ).toBe(false);
+    expect(open).toHaveBeenCalledOnce();
+
+    await store.flush();
+    open.mockClear();
+    updatePrefetch({ ...state, listRevision: 2 });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settlePromises();
+    expect(open).not.toHaveBeenCalled();
   });
 
   it("coalesces a newer list revision until the per-session cooldown expires", async () => {

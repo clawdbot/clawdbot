@@ -12,7 +12,6 @@ import {
   CHAT_SNAPSHOT_DB_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
   clearStoredChatSnapshots,
-  deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
@@ -83,14 +82,33 @@ describe("persistent chat session snapshots", () => {
     const writer = new SessionSnapshotStore();
     writer.write("agent:main:shared", snapshot({ text: "cached", callback: () => true }));
     writer.recordRowHeight("agent:main:shared", "message:1", 184);
-    const savedAt = await writer.readSavedAt("agent:main:shared");
+    const savedAt = writer.readSavedAt("agent:main:shared");
     expect(savedAt).not.toBeNull();
     await writer.flush();
+    expect(writer.readSavedAt("agent:main:shared")).toBe(savedAt);
 
     const reader = new SessionSnapshotStore();
+    await reader.loadSavedAtIndex();
     expect(await reader.read("agent:main:shared")).toEqual(snapshot({ text: "cached" }));
-    expect(await reader.readSavedAt("agent:main:shared")).toBe(savedAt);
+    expect(reader.readSavedAt("agent:main:shared")).toBe(savedAt);
     expect(reader.readRowHeight("agent:main:shared", "message:1")).toBe(184);
+  });
+
+  it("seeds the savedAt index once for every synchronous lookup", async () => {
+    const writer = new SessionSnapshotStore();
+    writer.write("agent:main:first", snapshot("first"));
+    writer.write("agent:main:second", snapshot("second"));
+    await writer.flush();
+    const open = vi.spyOn(indexedDB, "open");
+    const reader = new SessionSnapshotStore();
+
+    await reader.loadSavedAtIndex();
+    expect(reader.readSavedAt("agent:main:first")).not.toBeNull();
+    expect(reader.readSavedAt("agent:main:second")).not.toBeNull();
+    expect(reader.readSavedAt("agent:main:missing")).toBeNull();
+    await reader.loadSavedAtIndex();
+
+    expect(open).toHaveBeenCalledOnce();
   });
 
   it("defers snapshot sanitization until flush", async () => {
@@ -144,6 +162,7 @@ describe("persistent chat session snapshots", () => {
       await writer.flush();
     }
     const reader = new SessionSnapshotStore();
+    expect(writer.readSavedAt("agent:main:count-0")).toBeNull();
     expect(await reader.read("agent:main:count-0")).toBeNull();
     expect(await reader.read("agent:main:count-20")).not.toBeNull();
 
@@ -158,7 +177,7 @@ describe("persistent chat session snapshots", () => {
     expect(await weightReader.read("agent:main:weight-2")).not.toBeNull();
   });
 
-  it("resets the whole database when any record has the wrong shape", async () => {
+  it("resets the whole database when the savedAt seed finds a malformed record", async () => {
     const writer = new SessionSnapshotStore();
     writer.write("agent:main:valid", snapshot("valid"));
     await writer.flush();
@@ -171,7 +190,8 @@ describe("persistent chat session snapshots", () => {
     });
 
     const reader = new SessionSnapshotStore();
-    expect(await reader.read("agent:main:corrupt")).toBeNull();
+    await reader.loadSavedAtIndex();
+    expect(reader.readSavedAt("agent:main:corrupt")).toBeNull();
     expect(await reader.read("agent:main:valid")).toBeNull();
   });
 
@@ -181,7 +201,9 @@ describe("persistent chat session snapshots", () => {
     writer.write("agent:main:retained", snapshot("retained"));
     await writer.flush();
 
-    await deleteStoredChatSnapshot("agent:main:deleted");
+    await writer.delete("agent:main:deleted");
+    expect(writer.readSavedAt("agent:main:deleted")).toBeNull();
+    expect(writer.readSavedAt("agent:main:retained")).not.toBeNull();
 
     const reader = new SessionSnapshotStore();
     expect(await reader.read("agent:main:deleted")).toBeNull();

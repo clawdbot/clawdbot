@@ -167,7 +167,11 @@ class SessionPrefetcher {
     ) {
       return;
     }
-    const selection = await this.selectCandidates(snapshot);
+    await this.snapshotStore.loadSavedAtIndex();
+    if (!this.isCurrent(snapshot)) {
+      return;
+    }
+    const selection = this.selectCandidates(snapshot);
     if (selection.deferMs !== null) {
       this.schedule(selection.deferMs);
     }
@@ -207,10 +211,10 @@ class SessionPrefetcher {
     }
   }
 
-  private async selectCandidates(snapshot: SessionPrefetchSnapshot): Promise<{
+  private selectCandidates(snapshot: SessionPrefetchSnapshot): {
     candidates: SessionPrefetchCandidate[];
     deferMs: number | null;
-  }> {
+  } {
     const openKeys = new Set(
       snapshot.openSessionKeys.map((sessionKey) =>
         resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
@@ -232,10 +236,7 @@ class SessionPrefetcher {
       }
       seen.add(snapshotKey);
       const activityAt = sessionActivityAt(row);
-      const savedAt = await this.snapshotStore.readSavedAt(snapshotKey);
-      if (!this.isCurrent(snapshot)) {
-        return { candidates: [], deferMs: null };
-      }
+      const savedAt = this.snapshotStore.readSavedAt(snapshotKey);
       if (savedAt !== null && savedAt >= activityAt) {
         continue;
       }
