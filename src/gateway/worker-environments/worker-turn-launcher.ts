@@ -213,7 +213,7 @@ async function executeWorkerTurn(params: {
     messages: initialMessages,
     build: (agentRuntimeIdentityToken, windowedMessages) =>
       parseWorkerLaunchPlan({
-        version: 3,
+        version: 4,
         admission: {
           environmentId: placement.environmentId,
           credential: credential.credential,
@@ -231,6 +231,12 @@ async function executeWorkerTurn(params: {
           prompt: turn.prompt,
           suppressPromptTranscript: true,
           workspaceDir: placement.remoteWorkspaceDir,
+          ...(turn.permissionMode
+            ? {
+                permissionMode: turn.permissionMode,
+                workerContainmentRoot: placement.remoteWorkspaceDir,
+              }
+            : {}),
           modelRef,
           inferenceOptions: reasoning ? { reasoning } : {},
           ...(turn.extraSystemPrompt === undefined ? {} : { systemPrompt: turn.extraSystemPrompt }),

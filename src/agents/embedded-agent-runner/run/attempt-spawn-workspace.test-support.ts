@@ -748,9 +748,6 @@ vi.mock("../../tool-call-id.js", async (importOriginal) => {
 });
 
 vi.mock("../../tool-fs-policy.js", () => ({
-  createToolFsPolicy: (params: { workspaceOnly?: boolean }) => ({
-    workspaceOnly: params.workspaceOnly === true,
-  }),
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
     ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,

@@ -76,7 +76,7 @@ describe("worker tunnel manager", () => {
     expect(workspace?.argv.at(-1)).toContain("pwd");
     expect(fake.starts).toHaveLength(1);
     const plan = parseWorkerLaunchPlan({
-      version: 3,
+      version: 4,
       admission: {
         environmentId: "worker:one",
         credential: "worker-credential-fixture",
