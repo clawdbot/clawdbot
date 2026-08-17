@@ -92,9 +92,21 @@ A Gateway can remain healthy for browser users while node hosting is unavailable
 
 - **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
 - **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
-- **Edge routing:** When a reverse proxy or access edge fronts the Gateway, allow `/j/*` and `/__openclaw__/worker` through without edge identity auth. Keep WebSocket upgrade enabled for `/__openclaw__/worker`; both routes enforce their own short-lived credentials. The node's main Gateway WebSocket must also reach an auth path it can satisfy. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
+- **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
 
-Cloudflare Access service tokens (`CF-Access-Client-Id` and `CF-Access-Client-Secret`) are the intended alternative for Access-fronted machine clients, but node hosts cannot send those headers yet. Follow [node-host service-token header support](https://github.com/openclaw/openclaw/issues/125112) for that capability.
+For a Cloudflare Access-fronted Gateway:
+
+1. In Cloudflare Zero Trust, create an Access service token. Copy its Client ID and Client Secret when Cloudflare displays them.
+2. Add a **Service Auth** policy that accepts the token on the Access application protecting the Gateway. If `/j/*` and `/__openclaw__/worker` are separate Access applications, add the same policy to both.
+3. On the node, provide the conventional environment fallback and connect:
+
+   ```bash
+   export CF_ACCESS_CLIENT_ID="<client-id>"
+   export CF_ACCESS_CLIENT_SECRET="<client-secret>"
+   openclaw connect https://gateway.example/j/<code> --service
+   ```
+
+The canonical node connection keys are `gateway.cloudflareAccess.clientId` and `gateway.cloudflareAccess.clientSecret`; both accept SecretInput values. The environment fallback above persists those keys as env SecretRefs, not copied plaintext. For installed nodes, OpenClaw stores the environment values in the managed service environment file rather than inline in launchd, systemd, or Task Scheduler definitions. Resolved values are bound to the configured Gateway origin and are not followed across redirects. OpenClaw rejects the pair before resolution on plaintext `http://` or `ws://` routes; credential-free loopback and private-network plaintext behavior is unchanged.
 
 ### Start a node host (foreground)
 

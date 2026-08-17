@@ -252,7 +252,6 @@ export function createMockCronStateForJobs(params: {
     stopped: false,
     schedulingPaused: false,
     schedulerStarted: false,
-    restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },

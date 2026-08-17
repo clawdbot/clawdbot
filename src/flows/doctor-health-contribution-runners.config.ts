@@ -31,11 +31,8 @@ export async function runWriteConfigHealth(
   ctx: DoctorHealthFlowContext,
   options: { runPostWriteRepairs?: boolean } = {},
 ): Promise<void> {
-  if (ctx.configWriteDeferredByCronOwnership === true) {
-    return;
-  }
-  if (ctx.configWriteBlockedByValidation === true) {
-    // The initial write already reported the validation refusal; retrying the
+  if (ctx.configWriteRefusal) {
+    // The initial write already reported the refusal; retrying the
     // same candidate would fail identically and duplicate the warning.
     return;
   }
@@ -103,7 +100,7 @@ export async function runWriteConfigHealth(
           ].join("\n"),
           "Doctor warnings",
         );
-        ctx.configWriteBlockedByValidation = true;
+        ctx.configWriteRefusal = "validation";
         return;
       }
       const { isCronOwnerWriteRefusalError } = await import("../config/io.cron-owner-refusal.js");
@@ -119,7 +116,7 @@ export async function runWriteConfigHealth(
         ].join("\n"),
         "Doctor warnings",
       );
-      ctx.configWriteDeferredByCronOwnership = true;
+      ctx.configWriteRefusal = "cron-owner-safety";
       return;
     }
     // The atomic write committed: repair panels queued by the config flow are now

@@ -1196,10 +1196,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     const hasJobSelector = p.id !== undefined || p.jobId !== undefined;
     const jobId = resolveCronJobId(p);
     const scope: "job" | "all" = explicitScope ?? (hasJobSelector ? "job" : "all");
-    if (scope === "job" && !jobId) {
-      respondMissingCronJobId(respond, "cron.runs");
-      return;
-    }
     if (scope === "all") {
       if (callerScope) {
         respondInvalidCronParams(respond, "cron.runs", "scope all is not allowed by caller scope");
@@ -1224,8 +1220,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(true, page, undefined);
       return;
     }
+    if (!jobId) {
+      respondMissingCronJobId(respond, "cron.runs");
+      return;
+    }
     try {
-      const job = await context.cron.readJob(jobId as string);
+      const job = await context.cron.readJob(jobId);
       const defaultAgentId = context.cron.getDefaultAgentId();
       const matchedJob =
         job &&
@@ -1239,21 +1239,21 @@ export const cronHandlers: GatewayRequestHandlers = {
           ? job
           : undefined;
       // Operator history survives job deletion; scoped reads still need a live, matching owner.
-      if ((callerScope || p.agentId) && !matchedJob) {
-        if (!jobId) {
-          respondMissingCronJobId(respond, "cron.runs");
-          return;
-        }
+      const storeKey = cronStoreKey(context.cronStorePath);
+      if (
+        ((callerScope || p.agentId) && !matchedJob) ||
+        (!job && readCronTaskRunHistoryPage({ storeKey, jobId, limit: 1 }).total === 0)
+      ) {
         respondCronJobNotFound(respond, jobId);
         return;
       }
       const jobNameById =
         matchedJob && typeof matchedJob.name === "string"
-          ? { [jobId as string]: matchedJob.name }
+          ? { [jobId]: matchedJob.name }
           : undefined;
       const page = readCronTaskRunHistoryPage({
-        storeKey: cronStoreKey(context.cronStorePath),
-        jobId: jobId as string,
+        storeKey,
+        jobId,
         ...cronRunLogPageFilters(p),
         jobNameById,
       });

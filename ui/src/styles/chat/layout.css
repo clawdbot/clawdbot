@@ -2535,7 +2535,9 @@ button.chat-pr__diff {
   padding: 8px 10px 0;
 }
 
-.agent-chat__composer-status-stack:not(:has(.compaction-indicator, .agent-chat__goal)) {
+.agent-chat__composer-status-stack:not(
+  :has(.compaction-indicator, .agent-chat__goal, .session-progress-card)
+) {
   display: none;
 }
 
@@ -2595,6 +2597,10 @@ button.chat-pr__diff {
   width: 100%;
 }
 
+.chat-composer-model-control .chat-controls__permission-picker {
+  flex: 0 0 auto;
+}
+
 .agent-chat__stt-interim {
   padding: 10px 14px 0;
   color: var(--muted);
@@ -2616,53 +2622,6 @@ button.chat-pr__diff {
    of the row rather than something each new child has to remember. */
 .agent-chat__composer-input-row > * {
   min-height: var(--chat-composer-control-height);
-}
-
-/* Edit-mode marker beside the input: the queued row already names the state, so
-   this only says which mode the composer is in and how to leave it. It takes the
-   row's control height like every other child, so it needs no alignment nudge. */
-.agent-chat__composer-edit {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  flex-shrink: 0;
-  padding-inline: 7px 3px;
-  border-radius: var(--radius-full);
-  background: var(--info-subtle);
-  color: var(--info);
-}
-
-.agent-chat__composer-edit-icon,
-.agent-chat__composer-edit-cancel {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.agent-chat__composer-edit-icon svg,
-.agent-chat__composer-edit-cancel svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.85px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.agent-chat__composer-edit-cancel {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  color: inherit;
-  cursor: var(--cursor-action);
-}
-
-.agent-chat__composer-edit-cancel:hover {
-  background: color-mix(in srgb, var(--info) 18%, transparent);
 }
 
 .agent-chat__disabled-reason {
@@ -4495,6 +4454,91 @@ button.chat-pr__diff {
 .chat-controls__effort-menu {
   width: min(330px, calc(100vw - 24px));
   max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
+}
+
+.chat-controls__permission-picker::part(menu) {
+  width: min(360px, calc(100vw - 24px));
+  padding: 6px;
+  overflow: hidden;
+}
+
+.chat-controls__permission-icon,
+.chat-controls__permission-lock {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.chat-controls__permission-option-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.chat-controls__permission-label--full {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.chat-controls__permission-option::part(base) {
+  align-items: flex-start;
+  min-height: 54px;
+  border-radius: var(--radius-sm);
+}
+
+.chat-controls__permission-option--selected::part(base) {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.chat-controls__permission-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.chat-controls__permission-option-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.chat-controls__permission-option-description {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.chat-controls__permission-shortcut {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.chat-controls__permission-root {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 6px -6px -6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chat-controls__permission-root code {
+  min-width: 0;
+  color: var(--text);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-controls__model-search-wrap {

@@ -114,4 +114,86 @@ describe("prepareCodexAttemptConnection", () => {
 
     expect(connection.appServer.approvalPolicy).toBe("untrusted");
   });
+
+  it("lets a workspace session mode override explicitly configured full exec", async () => {
+    const sessionFile = path.join(tempDir, "workspace-session-policy.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-session-policy");
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = path.join(tempDir, "agent");
+    params.config = { tools: { exec: { mode: "full" } } };
+    // Dispatch owns mode→exec preparation; connection consumes the prepared override.
+    params.execOverrides = { ...params.execOverrides, mode: "auto" };
+    params.permissionMode = "workspace";
+    params.sessionRoot = workspaceDir;
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+    const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: { bindingStore: testCodexAppServerBindingStore },
+    });
+
+    expect(resolveConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ execPolicy: expect.objectContaining({ mode: "auto" }) }),
+    );
+    expect(connection.appServer).toMatchObject({
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      sessionRoot: workspaceDir,
+    });
+    expect(connection.effectiveCwd).toBe(workspaceDir);
+  });
+
+  it("keeps a full session mode on never when a before_tool_call hook is present", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "full-session-hook-policy.jsonl");
+    const workspaceDir = path.join(tempDir, "full-session-hook-policy");
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = path.join(tempDir, "agent");
+    params.permissionMode = "full";
+    params.sessionRoot = workspaceDir;
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: { bindingStore: testCodexAppServerBindingStore },
+    });
+
+    // Upstream 28f10c00b4e keeps YOLO approvals disabled despite generic tool hooks.
+    expect(connection.appServer.approvalPolicy).toBe("never");
+  });
+
+  it.each([
+    { permissionMode: "read-only" as const, execMode: "deny" as const },
+    { permissionMode: "guarded" as const, execMode: "ask" as const },
+  ])(
+    "does not preflight-kill a $permissionMode session mode for denied global exec",
+    async ({ permissionMode, execMode }) => {
+      const sessionFile = path.join(tempDir, `${permissionMode}-session-policy.jsonl`);
+      const workspaceDir = path.join(tempDir, `${permissionMode}-session-policy`);
+      const params = createParams(sessionFile, workspaceDir);
+      params.agentDir = path.join(tempDir, "agent");
+      params.config = { tools: { exec: { mode: "deny" } } };
+      params.execOverrides = { ...params.execOverrides, mode: execMode };
+      params.permissionMode = permissionMode;
+      params.sessionRoot = workspaceDir;
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      const resolveConnection = vi.spyOn(
+        bindingConnection,
+        "resolveCodexBindingAppServerConnection",
+      );
+
+      const connection = await prepareCodexAttemptConnection({
+        params,
+        options: { bindingStore: testCodexAppServerBindingStore },
+      });
+
+      expect(connection).toBeDefined();
+      expect(resolveConnection).toHaveBeenCalledWith(
+        expect.objectContaining({ execPolicy: expect.objectContaining({ mode: execMode }) }),
+      );
+    },
+  );
 });

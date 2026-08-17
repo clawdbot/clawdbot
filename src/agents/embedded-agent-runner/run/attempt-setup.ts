@@ -51,6 +51,7 @@ import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import {
+  createSandboxPromptEntryLoader,
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
@@ -96,9 +97,11 @@ type AttemptWorkspaceParams = Pick<
   | "config"
   | "cwd"
   | "execOverrides"
+  | "permissionMode"
   | "sandboxSessionKey"
   | "sessionId"
   | "sessionKey"
+  | "sessionRoot"
   | "skillWorkshopCollectionReconcile"
   | "skillsSnapshot"
   | "workspaceDir"
@@ -124,6 +127,13 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (params.permissionMode && !params.sessionRoot) {
+    throw new Error("session permission mode requires a recorded session root");
+  }
+  const sessionPermissionPolicy =
+    params.permissionMode && params.sessionRoot
+      ? { root: params.sessionRoot, mode: params.permissionMode }
+      : undefined;
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
     throw new Error(
       "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
@@ -144,6 +154,7 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     }),
     effectiveWorkspace,
     resolvedWorkspace,
+    sessionPermissionPolicy,
     sandbox,
     sandboxSessionKey,
     sessionAgentId,
@@ -500,14 +511,16 @@ export function prepareEmbeddedAttemptSkills(params: {
     effectiveWorkspace: params.effectiveWorkspace,
     skillsSnapshot: params.attempt.skillsSnapshot,
   });
-  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-    workspaceDir: skillsWorkspaceDir,
-    config: params.attempt.config,
-    agentId: params.sessionAgentId,
-    eligibility: skillsEligibility,
-    skillsSnapshot,
-    workspaceOnly,
-  });
+  const { shouldLoadSkillEntries, skillEntries, loadSkillEntries } = resolveEmbeddedRunSkillEntries(
+    {
+      workspaceDir: skillsWorkspaceDir,
+      config: params.attempt.config,
+      agentId: params.sessionAgentId,
+      eligibility: skillsEligibility,
+      skillsSnapshot,
+      workspaceOnly,
+    },
+  );
   const restoreSkillEnv = skillsSnapshot
     ? applySkillEnvOverridesFromSnapshot({
         snapshot: skillsSnapshot,
@@ -531,6 +544,11 @@ export function prepareEmbeddedAttemptSkills(params: {
     const skillsPrompt = resolveSkillsPrompt({
       skillsSnapshot,
       entries: promptSkillEntries,
+      loadEntries: createSandboxPromptEntryLoader({
+        loadEntries: loadSkillEntries,
+        skillsWorkspaceDir,
+        skillsPromptWorkspaceDir,
+      }),
       config: params.attempt.config,
       workspaceDir: skillsPromptWorkspaceDir,
       agentId: params.sessionAgentId,

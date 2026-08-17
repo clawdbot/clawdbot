@@ -23,6 +23,7 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
+import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
 import type {
   BoardCommandEvent,
   BoardProvider,
@@ -60,7 +61,7 @@ import { ChatTranscriptController } from "./components/chat-transcript-controlle
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { resolveChatSnapshotKey, type ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import { closeSlot, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // Relative labels still need a minute tick; external PR state is server-pushed.
@@ -167,6 +168,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     write: (sessionKey, rowKey, height) =>
       this.writeTranscriptRowHeight(sessionKey, rowKey, height),
   });
+  protected readonly progressCard = new SessionProgressCardController(this, {
+    gateway: () => this.context?.gateway,
+    sessionKey: () => this.state?.sessionKey,
+  });
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
     this.requestUpdate();
@@ -240,9 +245,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected selectedSessionRailMode(sessionKey: string): "expanded" | "hidden" {
     const state = this.state;
     const visible =
-      state?.sessionKey === sessionKey &&
-      state.sidebarLayout.open === true &&
-      state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === "companion") === true;
+      state?.sessionKey === sessionKey && isSidebarSlotVisible(state.sidebarLayout, "companion");
     return visible ? "expanded" : "hidden";
   }
 

@@ -960,7 +960,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
-  it("uses an already-persisted steer to recover the active stream boundary", () => {
+  it("preserves an already-recorded stream boundary for a persisted steer", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -995,9 +995,21 @@ describe("handleChatGatewayEvent", () => {
         },
       ],
     }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+      chatStreamSegments: Array<{
+        text: string;
+        ts: number;
+        itemId: string;
+        boundaryRunId: string;
+      }>;
     };
-    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    state.chatStreamSegments = [
+      {
+        text: "Looking into it.",
+        ts: 2,
+        itemId: "preamble-1",
+        boundaryRunId: "steer-send-1",
+      },
+    ];
 
     handleChatGatewayEvent(state, {
       runId: "run-1",
@@ -1012,6 +1024,47 @@ describe("handleChatGatewayEvent", () => {
     expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
     expectTextChatMessage(state.chatMessages[2], "user", "Focus on deployment");
     expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
+  });
+
+  it("keeps a terminal-only suffix after a steer with no post-boundary delta", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [
+        createTextChatMessage("user", "Ask", { idempotencyKey: "run-1:user" }, 1),
+        createTextChatMessage("user", "Steer", { idempotencyKey: "steer-1:user" }, 3),
+      ],
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & {
+      chatStreamSegments: Array<{
+        text: string;
+        ts: number;
+        runId: string;
+        boundaryRunId: string;
+      }>;
+    };
+    state.chatStreamSegments = [
+      { text: "Before steer.", ts: 2, runId: "run-1", boundaryRunId: "steer-1" },
+    ];
+
+    handleChatGatewayEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: createTextChatMessage(
+        "assistant",
+        "Before steer. Final unseen suffix.",
+        undefined,
+        4,
+      ),
+    });
+
+    expect(state.chatMessages).toHaveLength(4);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Before steer.");
+    expectTextChatMessage(state.chatMessages[2], "user", "Steer");
+    expectTextChatMessage(state.chatMessages[3], "assistant", "Final unseen suffix.");
   });
 
   it("clears keyed commentary when chatPersistCommentary is false", () => {

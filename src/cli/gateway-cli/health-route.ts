@@ -13,7 +13,7 @@ type GatewayHealthJsonRouteArgs = {
 
 type GatewayHealthRouteDependencies = {
   callGateway?: typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport;
-  readBestEffortHealthConfig?: typeof import("../../commands/health.js").readBestEffortHealthConfig;
+  readNonObservingHealthConfig?: typeof import("../../commands/health.js").readNonObservingHealthConfig;
   emitReachableGatewayAuthDiagnostic?: typeof import("../../commands/health.js").emitReachableGatewayAuthDiagnostic;
   formatGatewayAuthErrorJson?: typeof import("../../gateway/call.js").formatGatewayAuthErrorJson;
   formatGatewayClientRequestErrorJson?: typeof import("../../gateway/call.js").formatGatewayClientRequestErrorJson;
@@ -27,10 +27,10 @@ async function resolveRouteRpcOptions(
   if (args.localPortOverride === undefined) {
     return args.rpc;
   }
-  const readBestEffortHealthConfig =
-    deps.readBestEffortHealthConfig ??
-    (await import("../../commands/health.js")).readBestEffortHealthConfig;
-  const config = await readBestEffortHealthConfig();
+  const readNonObservingHealthConfig =
+    deps.readNonObservingHealthConfig ??
+    (await import("../../commands/health.js")).readNonObservingHealthConfig;
+  const config = await readNonObservingHealthConfig();
   return {
     ...args.rpc,
     localPortOverride: args.localPortOverride,
@@ -70,7 +70,7 @@ export async function runGatewayHealthJsonRoute(
       return;
     }
     const [healthModule, callModule] = await Promise.all([
-      deps.emitReachableGatewayAuthDiagnostic && deps.readBestEffortHealthConfig
+      deps.emitReachableGatewayAuthDiagnostic && deps.readNonObservingHealthConfig
         ? undefined
         : import("../../commands/health.js"),
       deps.formatGatewayAuthErrorJson &&
@@ -81,14 +81,14 @@ export async function runGatewayHealthJsonRoute(
     ]);
     const emitReachableGatewayAuthDiagnostic =
       deps.emitReachableGatewayAuthDiagnostic ?? healthModule?.emitReachableGatewayAuthDiagnostic;
-    const readBestEffortHealthConfig =
-      deps.readBestEffortHealthConfig ?? healthModule?.readBestEffortHealthConfig;
-    if (!emitReachableGatewayAuthDiagnostic || !readBestEffortHealthConfig) {
+    const readNonObservingHealthConfig =
+      deps.readNonObservingHealthConfig ?? healthModule?.readNonObservingHealthConfig;
+    if (!emitReachableGatewayAuthDiagnostic || !readNonObservingHealthConfig) {
       throw error;
     }
     const handled = await emitReachableGatewayAuthDiagnostic({
       error,
-      config: rpc.config ?? (await readBestEffortHealthConfig()),
+      config: rpc.config ?? (await readNonObservingHealthConfig()),
       runtime,
       timeoutMs: Number(rpc.timeout ?? "10000"),
       token: rpc.token,

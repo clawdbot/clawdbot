@@ -369,20 +369,30 @@ describe("Codex delegation capability", () => {
     }
     expect(start.environments).toEqual([]);
 
-    const normal = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-      appServer,
-      cwd: "/repo",
-      dynamicTools,
-      config,
-    });
-    expect(normal.config?.["features.apps"]).toBe(true);
-    expect(normal.config?.["features.image_generation"]).toBe(true);
-    expect(normal.config?.["features.multi_agent"]).toBe(true);
-    expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
-    expect(normal.config?.["features.plugins"]).toBe(true);
-    expect(normal.config?.["tools.update_plan.enabled"]).toBe(true);
-    expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
-    expect(normal.developerInstructions).toContain("`spawn_agent`");
+    const normalRequests = [
+      buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+        appServer,
+        cwd: "/repo",
+        dynamicTools,
+        config,
+      }),
+      buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+        appServer,
+        dynamicTools,
+        config,
+        threadId: "thread-normal",
+      }),
+    ];
+    for (const normal of normalRequests) {
+      expect(normal.config?.["features.apps"]).toBe(true);
+      expect(normal.config?.["features.image_generation"]).toBe(true);
+      expect(normal.config?.["features.multi_agent"]).toBe(true);
+      expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
+      expect(normal.config?.["features.plugins"]).toBe(true);
+      expect(normal.config?.["tools.update_plan.enabled"]).toBe(false);
+      expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
+      expect(normal.developerInstructions).toContain("`spawn_agent`");
+    }
   });
 });
 
@@ -1252,6 +1262,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1397,6 +1408,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
       "features.standalone_web_search": false,
@@ -1525,6 +1537,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1547,6 +1560,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1605,6 +1619,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1630,6 +1645,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": false,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1650,6 +1666,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": false,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1680,6 +1697,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1704,6 +1722,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1906,6 +1925,7 @@ describe("Codex app-server turn params", () => {
         "features.code_mode": true,
         "features.code_mode_only": false,
         "features.goals": false,
+        "tools.update_plan.enabled": false,
         "features.apply_patch_streaming_events": true,
         "features.standalone_web_search": false,
         web_search: "cached",

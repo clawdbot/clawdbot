@@ -623,31 +623,31 @@ export async function runSessionsCleanup(params: {
         mode,
         maintenance,
       });
-      const preview = previewResults.find(
-        (result) => result.summary.storePath === target.storePath,
-      );
+      const missing = missingRemovals.filter(({ sessionKey }) =>
+        removedSessionKeys.has(sessionKey),
+      ).length;
+      const dmScopeRetired = dmScopeRetiredRemovals.filter(({ sessionKey }) =>
+        removedSessionKeys.has(sessionKey),
+      ).length;
+      const maintenanceRemovedEntries =
+        lifecycleResult.modelRunPruned + lifecycleResult.pruned + lifecycleResult.capped;
       const summary: SessionCleanupSummary = {
-        ...(preview?.summary ?? {
-          agentId: target.agentId,
-          storePath: target.storePath,
-          mode,
-          dryRun: false,
-          beforeCount: 0,
-          afterCount: 0,
-          missing: 0,
-          dmScopeRetired: 0,
-          modelRunPruned: 0,
-          pruned: 0,
-          capped: 0,
-          unreferencedArtifacts,
-          diskBudget: null,
-          wouldMutate: false,
-        }),
+        agentId: target.agentId,
+        storePath: target.storePath,
+        mode,
         dryRun: false,
+        beforeCount: lifecycleResult.beforeCount,
+        afterCount: lifecycleResult.afterCount,
+        missing,
+        dmScopeRetired,
+        modelRunPruned: lifecycleResult.modelRunPruned,
+        pruned: lifecycleResult.pruned,
+        capped: lifecycleResult.capped,
         unreferencedArtifacts,
         diskBudget: appliedDiskBudget,
         wouldMutate:
-          removedSessionKeys.size > 0 ||
+          lifecycleResult.removedEntries > 0 ||
+          maintenanceRemovedEntries > 0 ||
           unreferencedArtifacts.removedFiles > 0 ||
           (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
           (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
@@ -669,24 +669,37 @@ export async function runSessionsCleanup(params: {
 export async function purgeAgentSessionStoreEntries(
   cfg: OpenClawConfig,
   agentId: string,
-): Promise<void> {
+): Promise<boolean> {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  let storePath = typeof cfg.session?.store === "string" ? cfg.session.store : "<default>";
   try {
-    const normalizedAgentId = normalizeAgentId(agentId);
     const storeConfig = cfg.session?.store;
     const storeAgentId =
       typeof storeConfig === "string" && !storeConfig.includes("{agentId}")
         ? resolveSessionStoreCompatibilityAgentId(cfg)
         : normalizedAgentId;
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, {
+    storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: normalizedAgentId,
     });
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: storeAgentId,
+    }).path;
+    if (!sqlitePath || !fs.existsSync(sqlitePath)) {
+      return false;
+    }
     await purgeDeletedAgentSessionEntries({
       cfg,
       agentId: normalizedAgentId,
       storeAgentId,
       storePath,
     });
-  } catch (err) {
-    getLogger().debug("session store purge skipped during agent delete", err);
+    return false;
+  } catch (error) {
+    getLogger().warn("session store purge failed during agent deletion", {
+      agentId: normalizedAgentId,
+      error,
+      storePath,
+    });
+    return true;
   }
 }

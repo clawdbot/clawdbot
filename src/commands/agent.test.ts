@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { executionIdentity } from "../agents/agent-command-execution-identity.js";
+import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
@@ -59,6 +60,10 @@ import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
+}));
+
+const attemptExecutionMocks = vi.hoisted(() => ({
+  useRealRunAgentAttempt: false,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -218,6 +223,12 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
       sessionEntry: params.sessionEntry,
     })),
     runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
+      if (attemptExecutionMocks.useRealRunAgentAttempt) {
+        const actual = await vi.importActual<
+          typeof import("../agents/command/attempt-execution.js")
+        >("../agents/command/attempt-execution.js");
+        return await actual.runAgentAttempt(params as never);
+      }
       const opts = params.opts as Record<string, unknown>;
       const runContext = params.runContext as Record<string, unknown>;
       const sessionEntry = params.sessionEntry as
@@ -547,6 +558,7 @@ function createOutboundSessionRouteFixture(params: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  attemptExecutionMocks.useRealRunAgentAttempt = false;
   resetPluginRuntimeStateForTest();
   installThinkingTestProviders();
   clearSessionStoreCacheForTest();
@@ -860,6 +872,64 @@ describe("agentCommand", () => {
 
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(getLastEmbeddedCall()?.sessionId).toBe("existing-harness-session");
+    });
+  });
+
+  it("enforces stored workspace permissions through public agent ingress", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:dashboard:workspace-permission";
+      const sessionRoot = path.join(home, "worktree");
+      const outsidePath = path.join(home, "outside.txt");
+      const insidePath = path.join(sessionRoot, "inside.txt");
+      fs.mkdirSync(sessionRoot, { recursive: true });
+      mockConfig(home, store);
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "workspace-permission-session",
+          updatedAt: Date.now(),
+          spawnedCwd: sessionRoot,
+          permissionMode: "workspace",
+          sessionRoot,
+        },
+      });
+      attemptExecutionMocks.useRealRunAgentAttempt = true;
+
+      let outsideWriteError: unknown;
+      vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (opts) => {
+        const codingRoot = opts.cwd ?? opts.workspaceDir;
+        const writeTool = createHostWorkspaceWriteTool(codingRoot, {
+          containmentRoot: opts.sessionRoot ?? codingRoot,
+          workspaceOnly: opts.permissionMode !== undefined && opts.permissionMode !== "full",
+        });
+        try {
+          await writeTool.execute("outside-write", {
+            path: outsidePath,
+            content: "outside",
+          });
+        } catch (error) {
+          outsideWriteError = error;
+        }
+        await writeTool.execute("inside-write", {
+          path: insidePath,
+          content: "inside",
+        });
+        return createDefaultAgentResult();
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "write inside the session worktree",
+          sessionKey,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(outsideWriteError).toBeInstanceOf(Error);
+      expect(String(outsideWriteError)).toMatch(/(?:sandbox|workspace) root/i);
+      expect(fs.existsSync(outsidePath)).toBe(false);
+      expect(fs.readFileSync(insidePath, "utf8")).toBe("inside");
     });
   });
 

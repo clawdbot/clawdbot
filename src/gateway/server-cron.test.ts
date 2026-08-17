@@ -268,10 +268,6 @@ function callArg(
   return call[argIndex];
 }
 
-function expectMainCronRunSessionKey(value: unknown, jobId: string) {
-  expect(value).toMatch(new RegExp(`^agent:main:cron:${jobId}:run:\\d+$`));
-}
-
 function lastMockCall(mock: { mock: { calls: Array<Array<unknown>> } }, label: string) {
   const calls = mock.mock.calls;
   const call = calls[calls.length - 1];
@@ -1626,12 +1622,14 @@ describe("buildGatewayCronService", () => {
         callArg(enqueueSystemEventMock, 0, 1, "system event options"),
         "options",
       );
-      expectMainCronRunSessionKey(eventOptions.sessionKey, job.id);
+      expect(eventOptions.sessionKey).toBe("agent:main:main");
+      expect(resolveSystemEventOptionsOwnerAgentId(eventOptions)).toBe("main");
       const heartbeatRequest = requireRecord(
         callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
         "request",
       );
-      expectMainCronRunSessionKey(heartbeatRequest.sessionKey, job.id);
+      expect(heartbeatRequest.agentId).toBe("main");
+      expect(heartbeatRequest.sessionKey).toBe("agent:main:main");
     } finally {
       state.cron.stop();
     }
@@ -2477,7 +2475,8 @@ describe("buildGatewayCronService", () => {
         callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
         "heartbeat request",
       );
-      expectMainCronRunSessionKey(call.sessionKey, job.id);
+      expect(call.agentId).toBe("main");
+      expect(call.sessionKey).toBe("agent:main:main");
       expect(call.heartbeat).toEqual({
         target: "last",
         to: undefined,

@@ -28,11 +28,13 @@ export {
 } from "./sessions-patch.js";
 export {
   SessionCreatedActorSchema,
+  SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionRowSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
   type SessionOwner,
+  type SessionPermissionMode,
   type SessionRow,
   type SessionRunStatus,
   type SessionToolOverrides,

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -68,16 +69,21 @@ export function makeFailedPlacement(): Extract<WorkerSessionPlacementRecord, { s
   };
 }
 
-export function makeSessionTarget(entry?: {
-  sessionId: string;
-  worktree?: { id: string; branch: string; repoRoot: string };
-  agentHarnessId?: string;
-  agentRuntimeOverride?: string;
-  archivedAt?: number;
-  modelSelectionLocked?: boolean;
-  providerOverride?: string;
-  modelOverride?: string;
-}) {
+type DispatchSessionEntry = Pick<
+  SessionEntry,
+  | "sessionId"
+  | "worktree"
+  | "agentHarnessId"
+  | "agentRuntimeOverride"
+  | "archivedAt"
+  | "modelSelectionLocked"
+  | "providerOverride"
+  | "modelOverride"
+  | "permissionMode"
+  | "sessionRoot"
+>;
+
+export function makeSessionTarget(entry?: DispatchSessionEntry) {
   // Pin an anthropic model by default: the effective-runtime fallback consults
   // the process-global harness registry, so the default openai model resolves
   // to "codex" whenever a sibling test in the shard registered that harness.

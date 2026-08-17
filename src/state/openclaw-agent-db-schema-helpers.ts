@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
 import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
@@ -27,6 +28,11 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
+import {
+  ensureOpenClawAgentProgressCardSchemaInTransaction,
+  AGENT_PROGRESS_CARD_SCHEMA_SQL,
+  SESSION_PROGRESS_CARDS_TABLE,
+} from "./openclaw-agent-progress-card-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { SESSION_PARTICIPANTS_TABLE } from "./openclaw-agent-session-participants-schema.js";
 import {
@@ -55,6 +61,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
     MESSAGE_TOOL_RUN_OUTCOMES_TABLE,
     SESSION_PARTICIPANTS_TABLE,
+    SESSION_PROGRESS_CARDS_TABLE,
     SESSION_TRANSCRIPT_ARCHIVES_TABLE,
     STANDING_INTENTS_TABLE,
     STANDING_INTENTS_FTS_TABLE,
@@ -202,6 +209,11 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     ensureOpenClawAgentBoardSchemaInTransaction(database);
     repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_V14_BOARD_SCHEMA_SQL);
   }
+  if (hasAnyCanonicalTable(database, AGENT_PROGRESS_CARD_SCHEMA_SQL)) {
+    assertSqliteSchemaTablesPresent(database, options.pathname, AGENT_PROGRESS_CARD_SCHEMA_SQL);
+    ensureOpenClawAgentProgressCardSchemaInTransaction(database);
+    repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_PROGRESS_CARD_SCHEMA_SQL);
+  }
 }
 
 export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): void {
@@ -246,7 +258,7 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
     return null;
   }
   return {
-    agentId: typeof row.agent_id === "string" ? row.agent_id : null,
+    agentId: normalizeNullableString(row.agent_id),
     role: typeof row.role === "string" ? row.role : null,
     schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
   };

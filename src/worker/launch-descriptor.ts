@@ -6,6 +6,10 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import {
+  type SessionPermissionMode,
+  SessionPermissionModeSchema,
+} from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import {
   type WorkerConnectParams,
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -32,14 +36,18 @@ import {
   type WorkerConnectionEndpoint,
 } from "./worker-connection-endpoint.js";
 
-const LAUNCH_VERSION = 3;
+const LAUNCH_VERSION = 4;
 
 export type WorkerBrowserLaunchDescriptor = {
   cdpUrl: string;
   launcherPath: string;
 };
 
-type WorkerLaunchAssignment = {
+type WorkerLaunchPermissionContext =
+  | { permissionMode: SessionPermissionMode; workerContainmentRoot: string }
+  | { permissionMode?: never; workerContainmentRoot?: never };
+
+type WorkerLaunchAssignment = WorkerLaunchPermissionContext & {
   /** Host placement namespace used for worker-local policy, hooks, and audit attribution. */
   agentId: string;
   operationalRunInstance: OperationalRunInstanceRef;
@@ -71,7 +79,7 @@ type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
 };
 
 export type WorkerLaunchPlan = {
-  version: 3;
+  version: 4;
   admission: WorkerLaunchAdmission;
   assignment: WorkerLaunchAssignment;
 };
@@ -180,8 +188,20 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "liveEvents",
         "toolAuthority",
       ],
-      ["systemPrompt", "browser"],
+      ["systemPrompt", "browser", "permissionMode", "workerContainmentRoot"],
     )
+  ) {
+    return undefined;
+  }
+  const hasPermissionMode = Object.hasOwn(value, "permissionMode");
+  const hasContainmentRoot = Object.hasOwn(value, "workerContainmentRoot");
+  if (
+    hasPermissionMode !== hasContainmentRoot ||
+    (hasPermissionMode &&
+      (!Value.Check(SessionPermissionModeSchema, value.permissionMode) ||
+        typeof value.workerContainmentRoot !== "string" ||
+        !isIdentifier(value.workerContainmentRoot) ||
+        !isAbsoluteHostPath(value.workerContainmentRoot)))
   ) {
     return undefined;
   }
@@ -331,7 +351,7 @@ export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescrip
   }
   return completeWorkerLaunchDescriptor(
     {
-      version: value.version as 3,
+      version: value.version as 4,
       admission: value.admission as WorkerLaunchAdmission,
       assignment: value.assignment as WorkerLaunchAssignment,
     },

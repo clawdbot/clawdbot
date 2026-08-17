@@ -93,6 +93,18 @@ describe("AgentsDeleteResultSchema", () => {
       removed: [{ path: "/state/agents/ops/agent", method: "trash" }],
       failed: [{ path: "/state/workspace-ops", reason: "trash unavailable" }],
     });
+    expectAccepted(AgentsDeleteResultSchema, {
+      ok: true,
+      agentId: "ops",
+      removedBindings: 1,
+      purgeFailed: true,
+    });
+    expectRejected(AgentsDeleteResultSchema, {
+      ok: true,
+      agentId: "ops",
+      removedBindings: 1,
+      purgeFailed: false,
+    });
   });
 });
 

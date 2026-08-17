@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { isLoopbackIpAddress, isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
@@ -23,6 +24,10 @@ import {
   storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import {
+  pickMatchingExternalInterfaceAddress,
+  readNetworkInterfaces,
+} from "../infra/network-interfaces.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { getFreePort } from "../test-utils/ports.js";
 
@@ -31,6 +36,13 @@ const execFileAsync = promisify(execFile);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 const activeServers = new Set<WebSocketServer>();
 const UNREACHABLE_GATEWAY_URL = "ws://127.0.0.1:9";
+const EMPTY_STABILITY_SNAPSHOT = {
+  capacity: 100,
+  count: 0,
+  dropped: 0,
+  events: [],
+  summary: { byType: {} },
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -177,6 +189,72 @@ async function startNodePairingGateway(
   await once(wss, "listening");
   const address = wss.address() as AddressInfo;
   return { calls, url: `ws://127.0.0.1:${address.port}` };
+}
+
+async function startGatewayStabilityRpcServer(
+  token: string,
+  issuedDeviceToken: string,
+): Promise<{
+  authTokens: Array<string | undefined>;
+  calls: string[];
+  url: string;
+}> {
+  const authTokens: Array<string | undefined> = [];
+  const calls: string[] = [];
+  const wss = new WebSocketServer({ host: "0.0.0.0", port: 0 });
+  activeServers.add(wss);
+  wss.on("connection", (ws) => {
+    sendMinimalGatewayConnectChallenge(ws);
+    ws.on("message", (data) => {
+      const frame = parseMinimalGatewayRequestFrame(data);
+      if (frame.type !== "req" || !frame.id) {
+        return;
+      }
+      if (frame.method === "connect") {
+        expect(frame.params?.auth?.token).toBe(token);
+        authTokens.push(frame.params?.auth?.token);
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({
+            methods: ["diagnostics.stability", "status"],
+            auth: {
+              role: "operator",
+              scopes: ["operator.admin"],
+              deviceToken: issuedDeviceToken,
+            },
+          }),
+        );
+        return;
+      }
+      if (typeof frame.method !== "string") {
+        return;
+      }
+      calls.push(frame.method);
+      if (frame.method === "diagnostics.stability") {
+        sendMinimalGatewayResponse(ws, frame.id, EMPTY_STABILITY_SNAPSHOT);
+        return;
+      }
+      if (frame.method === "status") {
+        sendMinimalGatewayResponse(ws, frame.id, {
+          runtimeVersion: "2026.8.17-test",
+          status: "ok",
+        });
+      }
+    });
+  });
+  await once(wss, "listening");
+  const address = wss.address() as AddressInfo;
+  // A private non-loopback target keeps shared-secret auth from bypassing device identity.
+  const host = pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+    family: "IPv4",
+    matches: (candidate) =>
+      isPrivateOrLoopbackIpAddress(candidate) && !isLoopbackIpAddress(candidate),
+  });
+  if (!host) {
+    throw new Error("test host has no non-loopback private IPv4 address");
+  }
+  return { authTokens, calls, url: `ws://${host}:${address.port}` };
 }
 
 async function snapshotDirectoryContents(root: string): Promise<Record<string, string>> {
@@ -465,6 +543,188 @@ describe("gateway-backed CLI process exit", () => {
       })?.token,
     ).toBe(storedToken);
   }, 30_000);
+
+  it("calls a reachable Gateway with explicit auth without creating shared state", async () => {
+    const root = tempDirs.make("openclaw-gateway-call-explicit-auth-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const token = "configured-token";
+    const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url, token } } }),
+    );
+    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
+
+    const result = await runIsolatedGatewayCli({
+      args: ["gateway", "call", "diagnostics.stability", "--json"],
+      root,
+      stateDir,
+      configPath,
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual(EMPTY_STABILITY_SNAPSHOT);
+    expect(gateway.authTokens).toEqual([token]);
+    expect(gateway.calls).toEqual(["diagnostics.stability"]);
+    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
+  }, 30_000);
+
+  it("calls a reachable Gateway with stored auth without changing shared state", async () => {
+    const root = tempDirs.make("openclaw-gateway-call-stored-auth-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const storedToken = "stored-device-token";
+    const gateway = await startGatewayStabilityRpcServer(storedToken, "issued-device-token");
+    const stateEnv = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url } } }),
+    );
+    const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
+    storeOriginDeviceToken({
+      gatewayScope: gatewayOriginScope(gateway.url),
+      deviceId: identity.deviceId,
+      role: "operator",
+      token: storedToken,
+      scopes: ["operator.admin"],
+      env: stateEnv,
+    });
+    closeOpenClawStateDatabaseForTest();
+    const before = await snapshotSharedStateArtifacts(stateDir);
+
+    const result = await runIsolatedGatewayCli({
+      args: ["gateway", "call", "diagnostics.stability", "--json"],
+      root,
+      stateDir,
+      configPath,
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual(EMPTY_STABILITY_SNAPSHOT);
+    expect(gateway.authTokens).toEqual([storedToken]);
+    expect(gateway.calls).toEqual(["diagnostics.stability"]);
+    expect(
+      loadOriginDeviceTokenReadOnly({
+        gatewayScope: gatewayOriginScope(gateway.url),
+        deviceId: identity.deviceId,
+        role: "operator",
+        env: stateEnv,
+      })?.token,
+    ).toBe(storedToken);
+    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
+  }, 30_000);
+
+  it.each([
+    { label: "absent", seeded: false },
+    { label: "seeded", seeded: true },
+  ])(
+    "requires a reachable status RPC without changing $label shared state",
+    async ({ label, seeded }) => {
+      const root = tempDirs.make(`openclaw-gateway-status-${label}-`);
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const token = "configured-token";
+      const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
+      const stateEnv = {
+        ...process.env,
+        HOME: root,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url, token } } }),
+      );
+      if (seeded) {
+        const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
+        storeOriginDeviceToken({
+          gatewayScope: gatewayOriginScope(gateway.url),
+          deviceId: identity.deviceId,
+          role: "operator",
+          token,
+          scopes: ["operator.admin"],
+          env: stateEnv,
+        });
+        closeOpenClawStateDatabaseForTest();
+      }
+      const before = await snapshotSharedStateArtifacts(stateDir);
+      expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
+
+      const result = await runIsolatedGatewayCli({
+        args: [
+          "gateway",
+          "status",
+          "--url",
+          gateway.url,
+          "--token",
+          token,
+          "--require-rpc",
+          "--json",
+          "--timeout",
+          "2000",
+        ],
+        root,
+        stateDir,
+        configPath,
+      });
+
+      expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        rpc: { ok: true, kind: "read" },
+      });
+      expect(gateway.calls).toEqual(["status"]);
+      expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
+    },
+    30_000,
+  );
+
+  it.each([
+    { label: "absent", seeded: false },
+    { label: "seeded", seeded: true },
+  ])(
+    "exports diagnostics without changing $label shared state",
+    async ({ label, seeded }) => {
+      const fixture = await prepareUnreachableGatewayCliFixture({
+        label: `gateway-diagnostics-export-${label}`,
+        seeded,
+      });
+      const outputPath = path.join(fixture.root, "diagnostics.zip");
+      const before = await snapshotSharedStateArtifacts(fixture.stateDir);
+
+      const result = await runIsolatedGatewayCli({
+        ...fixture,
+        args: [
+          "gateway",
+          "diagnostics",
+          "export",
+          "--json",
+          "--no-stability-bundle",
+          "--output",
+          outputPath,
+        ],
+      });
+
+      expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
+      const payload = JSON.parse(result.stdout) as { bytes?: unknown; path?: unknown };
+      expect(payload.path).toBe(outputPath);
+      expect(payload.bytes).toEqual(expect.any(Number));
+      expect(payload.bytes).toBeGreaterThan(0);
+      const outputStat = await fs.stat(outputPath);
+      expect(outputStat.isFile()).toBe(true);
+      expect(outputStat.size).toBe(payload.bytes);
+      expect(await snapshotSharedStateArtifacts(fixture.stateDir)).toEqual(before);
+    },
+    30_000,
+  );
 
   it("rejects invalid remote config before a node pairing mutation without opening state", async () => {
     const root = tempDirs.make("openclaw-node-pairing-invalid-config-");

@@ -48,6 +48,11 @@ export function historicalV15AgentSchemaSql(): string {
     );
   sql = removeSchemaRange(
     sql,
+    "CREATE TABLE IF NOT EXISTS session_progress_cards (",
+    "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (",
+  );
+  sql = removeSchemaRange(
+    sql,
     "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending",
     "CREATE TABLE IF NOT EXISTS session_windows (",
   );

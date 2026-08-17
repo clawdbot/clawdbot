@@ -30,6 +30,8 @@ describe("SessionRowSchema", () => {
       visibility: "suggest",
       sharingRole: "owner",
       restartRecoveryStatus: "tombstoned",
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/project",
     };
     const roundTripped = structuredClone(row);
 
@@ -53,7 +55,12 @@ describe("SessionRowSchema", () => {
       visibility: "suggest",
       sharingRole: "owner",
       restartRecoveryStatus: "tombstoned",
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/project",
     });
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, permissionMode: "unrestricted" })).toBe(
+      false,
+    );
   });
 
   it("keeps sessions.assignOwner target actors closed and non-empty", () => {

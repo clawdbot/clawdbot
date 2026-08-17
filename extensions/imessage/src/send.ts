@@ -1,6 +1,7 @@
 // Imessage plugin module implements send behavior.
 import { constants, accessSync } from "node:fs";
 import { basename } from "node:path";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
@@ -78,7 +79,7 @@ type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
 type IMessageApprovalPromptBinding = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 };
 

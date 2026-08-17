@@ -1144,6 +1144,8 @@ export function runAgentAttempt(params: {
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
+    permissionMode: params.sessionEntry?.permissionMode,
+    sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     agentHarnessId: embeddedAgentHarnessOverride,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,

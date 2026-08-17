@@ -1,5 +1,6 @@
 // Shared dashboard targets, one-time browser pairing, and served-document readiness.
 import type { PeerCertificate } from "node:tls";
+import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
@@ -17,7 +18,6 @@ import { readResponseTextSnippet } from "../infra/http-body.js";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { sleep } from "../utils.js";
@@ -191,7 +191,7 @@ export async function waitForControlUiDocument(params: {
         ...params.tlsConfig,
         autoGenerate: false,
       });
-      tlsFingerprint = normalizeFingerprint(tls.fingerprintSha256 ?? "");
+      tlsFingerprint = normalizeTlsFingerprint(tls.fingerprintSha256 ?? "");
       const serverCertificate = tls.tlsOptions?.cert;
       if (!tls.enabled || !tlsFingerprint || !serverCertificate) {
         return {
@@ -206,7 +206,7 @@ export async function waitForControlUiDocument(params: {
       tlsConnect = {
         ca: configuredCa ? [serverCertificate, configuredCa].flat() : serverCertificate,
         checkServerIdentity: (_hostname: string, certificate: PeerCertificate) =>
-          normalizeFingerprint(certificate.fingerprint256 ?? "") === expectedFingerprint
+          normalizeTlsFingerprint(certificate.fingerprint256 ?? "") === expectedFingerprint
             ? undefined
             : new Error("Gateway TLS certificate fingerprint mismatch."),
       };

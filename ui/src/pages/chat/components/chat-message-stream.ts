@@ -7,10 +7,8 @@ import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
-import type { PlanStatus } from "../tool-stream.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
-import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { shouldToggleSelectableDisclosure } from "./chat-tool-cards.ts";
@@ -19,7 +17,7 @@ import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
 export type StreamGroupPart = Extract<
   ChatItem,
-  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
+  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" }
 >;
 
 type StreamMessageOptions = Pick<
@@ -46,8 +44,6 @@ export type StreamGroupOptions = StreamMessageOptions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   showAssistantAvatar?: boolean;
-  planStatus?: PlanStatus | null;
-  planActive?: boolean;
   startupPhase?: ChatRunStartupPhase;
   waitingApproval?: boolean;
   runOutputTokens?: number | null;
@@ -77,40 +73,35 @@ export function renderStreamGroupParts(
         })
       : part.kind === "question"
         ? renderQuestionStreamPart(part, opts)
-        : part.kind === "plan"
-          ? renderChatPlanChecklist(opts.planStatus, {
-              active: opts.planActive === true,
-              variant: "card",
-            })
-          : renderGroupedMessage(
-              {
-                role: "assistant",
-                content: [{ type: "text", text: part.text }],
-                timestamp: part.startedAt,
-              },
-              part.key,
-              {
-                isStreaming: part.isStreaming,
-                showReasoning: false,
-                sessionKey: opts.sessionKey,
-                boardProvider: opts.boardProvider,
-                agentId: opts.agentId,
-                runActive: opts.runActive,
-                onRequestUpdate: opts.onRequestUpdate,
-                canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-                basePath: opts.basePath,
-                localMediaPreviewRoots: opts.localMediaPreviewRoots,
-                assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-                resolveArtifactDownload: opts.resolveArtifactDownload,
-                onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
-                onRequestOpenImage: opts.onRequestOpenImage,
-                onOpenImage: opts.onOpenImage,
-                embedSandboxMode: opts.embedSandboxMode,
-                allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
-                onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
-              },
-              opts.onOpenSidebar,
-            ),
+        : renderGroupedMessage(
+            {
+              role: "assistant",
+              content: [{ type: "text", text: part.text }],
+              timestamp: part.startedAt,
+            },
+            part.key,
+            {
+              isStreaming: part.isStreaming,
+              showReasoning: false,
+              sessionKey: opts.sessionKey,
+              boardProvider: opts.boardProvider,
+              agentId: opts.agentId,
+              runActive: opts.runActive,
+              onRequestUpdate: opts.onRequestUpdate,
+              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+              basePath: opts.basePath,
+              localMediaPreviewRoots: opts.localMediaPreviewRoots,
+              assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+              resolveArtifactDownload: opts.resolveArtifactDownload,
+              onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
+              onRequestOpenImage: opts.onRequestOpenImage,
+              onOpenImage: opts.onOpenImage,
+              embedSandboxMode: opts.embedSandboxMode,
+              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+              onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
+            },
+            opts.onOpenSidebar,
+          ),
   );
 }
 

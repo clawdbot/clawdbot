@@ -65,6 +65,7 @@ import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
+import ai.openclaw.app.ui.sessionPresentationTitle
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -3035,18 +3036,21 @@ private fun currentSessionTitle(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
 ): String {
-  val entry = sessions.firstOrNull { it.key == sessionKey }
-  val name = entry?.displayName?.takeIf { it.isNotBlank() } ?: return nativeString("New chat")
+  val entry = sessions.firstOrNull { it.key == sessionKey } ?: return nativeString("New chat")
+  val name = sessionPresentationTitle(entry) { nativeString("New chat") }
   return friendlySessionName(name)
 }
 
-private fun chatSessionChipText(
+internal fun chatSessionChipText(
   entry: ChatSessionEntry,
   mainSessionKey: String,
 ): String {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return nativeString("Main")
-  val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
+  val name =
+    sessionPresentationTitle(entry) {
+      entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
+    }
   return friendlySessionName(name)
 }
 

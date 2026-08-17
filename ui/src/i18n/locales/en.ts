@@ -160,6 +160,31 @@ export const en: TranslationMap = {
     issue: "issue",
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, by {author}",
   },
+  sessionPreview: {
+    loading: "Loading session details…",
+    unavailable: "Session preview unavailable",
+    archived: "Archived",
+    ariaLabel: "Session: {title}",
+  },
+  sessionProgressCard: {
+    ariaLabel: "Session progress",
+    title: "Progress",
+    noteLabel: "Progress note",
+    countLabel: "{completed} of {total} completed",
+    stepLabel: "{step}, {status}",
+    status: {
+      completed: "completed",
+      inProgress: "in progress",
+      pending: "pending",
+    },
+    receipt: {
+      updating: "Updating progress",
+      failed: "Progress update failed",
+      updated: "Progress updated — {completed}/{total} · {current}",
+      noteUpdated: "Progress note updated",
+      cleared: "Progress cleared",
+    },
+  },
   channels: {
     lastError: "Last error",
     refreshingStaleSnapshot:
@@ -5071,6 +5096,16 @@ export const en: TranslationMap = {
     resumeInNewSession: "Resume in new session",
     resumingSession: "Resuming…",
     systemNotice: {
+      guardian: {
+        approvedSummary: "Guardian approved {action}.",
+        deniedLabel: "Guardian denied",
+        deniedSummary: "{action} · risk: {risk}\n\n{rationale}",
+        warningLabel: "Guardian warning",
+        warningFallback: "Guardian stopped the requested action.",
+        requestedAction: "Requested action",
+        unknownRisk: "unknown",
+        noRationale: "No rationale was provided.",
+      },
       restartRecovery: {
         label: "System · restart recovery",
         summary:
@@ -5196,8 +5231,6 @@ export const en: TranslationMap = {
       editQueuedMessage: "Edit queued message",
       editing: "Editing a queued message",
       cancelEdit: "Cancel editing and keep the queued message",
-      editNeedsEmptyComposer:
-        "Editing needs an empty composer. Send or clear your current message first.",
       states: {
         steering: "Steering",
         applyingSettings: "Applying chat settings",
@@ -5327,6 +5360,34 @@ export const en: TranslationMap = {
       useDefaultReasoning: "Use default reasoning ({level})",
       fastResponsesAria: "Fast responses: {state}",
     },
+    permissionControls: {
+      label: "Permissions",
+      help: "Choose how this session handles files, commands, and escalation reviews.",
+      default: "Default",
+      defaultDescription: "Follow the agent's configured policy.",
+      rootLabel: "Root",
+      sessionRoot: "Session root: {root}",
+      fullRequiresAdmin: "Full access requires operator.admin access.",
+      updateFailed: "Failed to update permissions: {error}",
+      modes: {
+        "read-only": {
+          label: "Read only",
+          description: "Read within the session root; writes and commands are blocked.",
+        },
+        guarded: {
+          label: "Guarded",
+          description: "A human reviews requests beyond the session root.",
+        },
+        workspace: {
+          label: "Workspace",
+          description: "An AI reviewer checks requests beyond the session root.",
+        },
+        full: {
+          label: "Full access",
+          description: "No reviewer; files and commands are unrestricted.",
+        },
+      },
+    },
     rail: {
       title: "Session companion",
       subtitle: "Ask about this session or its project",
@@ -5337,8 +5398,6 @@ export const en: TranslationMap = {
       show: "Show session companion",
       moreActions: "More companion actions",
       clear: "Clear companion session",
-      plan: "Plan",
-      progress: "{completed} of {total}",
       pullRequests: "Pull requests",
       checksPassing: "{count} passed",
       checksFailing: "{count} failed",

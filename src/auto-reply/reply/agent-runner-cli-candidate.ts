@@ -448,6 +448,7 @@ export async function runCliFallbackCandidate(params: {
             channelContext: turn.followupRun.run.channelContext,
             currentThreadTs: cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
             currentMessageId: cliCurrentMessageId,
+            replyToMode: turn.followupRun.originatingReplyToMode ?? turn.sessionCtx.ReplyToMode,
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
             senderIsOwner: turn.followupRun.run.senderIsOwner,

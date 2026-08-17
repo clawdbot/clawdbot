@@ -318,7 +318,7 @@ internal fun SessionsScreen(
             val active = session.key == chatSessionKey
             SessionRow(
               session = session,
-              title = displaySessionTitle(session),
+              title = sessionPresentationTitle(session) { nativeString("Main thread") },
               subtitle =
                 sessionListSubtitle(
                   session,
@@ -1088,9 +1088,3 @@ internal fun relativeSessionTime(
   val days = hours / 24
   return nativeString("\${days}d", days)
 }
-
-/** Prefers the editable label, then falls back to the gateway display name. */
-private fun displaySessionTitle(session: ChatSessionEntry): String =
-  session.label?.takeIf { it.isNotBlank() }
-    ?: session.displayName?.takeIf { it.isNotBlank() }
-    ?: nativeString("Main thread")

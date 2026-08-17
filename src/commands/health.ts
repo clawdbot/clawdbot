@@ -249,7 +249,7 @@ export async function healthCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const cfg = opts.config ?? (await readBestEffortHealthConfig());
+  const cfg = opts.config ?? (await readNonObservingHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
   let summary: HealthSummary;
   try {
@@ -563,7 +563,7 @@ export async function healthCommand(
   }
 }
 
-export async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
+export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
   const { readConfigFileSnapshot } = await loadConfigRuntime();
   const snapshot = await readConfigFileSnapshot({
     observe: false,

@@ -58,6 +58,7 @@ import {
   retireSteeredChipsForTerminalRun,
 } from "./steer-lifecycle.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
+import { persistedSteerTargetRunId, rolloverChatStream } from "./stream-causal-boundary.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
@@ -122,11 +123,25 @@ function applyLiveSessionMessage(
     },
   };
   const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
-  reduceChatSessionProjection(
+  const previousMessageCount = state.chatMessages.length;
+  const projection = reduceChatSessionProjection(
     state,
     { type: "messagePersisted", message, envelope: event },
     { scope, runActive },
   );
+  if (
+    incoming.role === "user" &&
+    runActive === true &&
+    state.chatRunId &&
+    incoming.runId &&
+    persistedSteerTargetRunId(message) === state.chatRunId &&
+    projection.messages.length > previousMessageCount
+  ) {
+    rolloverChatStream(state, {
+      runId: state.chatRunId,
+      boundaryRunId: incoming.runId,
+    });
+  }
 }
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {

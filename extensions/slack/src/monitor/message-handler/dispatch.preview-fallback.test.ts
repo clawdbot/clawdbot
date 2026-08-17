@@ -91,7 +91,6 @@ type TestDispatchSequenceEntry =
   | { kind: "item"; progressText: string };
 let mockedDispatchSequence: TestDispatchSequenceEntry[] = [];
 let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final: 0 };
-let mockedDispatcherCapturesDeliveryErrors = false;
 let mockedAgentRunTerminalOutcome: "completed" | "failed" | undefined;
 let mockedDispatchError: Error | undefined;
 
@@ -1098,14 +1097,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
           continue;
         }
         mockedQueuedDispatchCounts[entry.kind] += 1;
-        try {
-          await params.delivery.deliver(deliverPayload, { kind: entry.kind });
-        } catch (error) {
-          if (!mockedDispatcherCapturesDeliveryErrors) {
-            throw error;
-          }
-          mockedQueuedDispatchCounts[entry.kind] -= 1;
-        }
+        await params.delivery.deliver(deliverPayload, { kind: entry.kind });
       }
       return {
         admission: { kind: "dispatch" } as const,
@@ -1165,7 +1157,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedSlackIsThreadReply = true;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedQueuedDispatchCounts = { tool: 0, block: 0, final: 0 };
-    mockedDispatcherCapturesDeliveryErrors = false;
     mockedAgentRunTerminalOutcome = undefined;
     mockedDispatchError = undefined;
     mockedProgressEvents = [];
@@ -3005,80 +2996,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       error: "fallback send failed",
       success: false,
     });
-  });
-
-  it("removes all failed buffered finals from production-style delivery counts", async () => {
-    mockedNativeStreaming = true;
-    mockedDispatcherCapturesDeliveryErrors = true;
-    mockedDispatchSequence = [
-      { kind: "final", payload: { text: "first buffered" } },
-      { kind: "final", payload: { text: "second buffered" } },
-    ];
-    const session = {
-      channel: "C123",
-      threadTs: THREAD_TS,
-      stopped: false,
-      delivered: false,
-      pendingText: "first buffered",
-    };
-    startSlackStreamMock.mockResolvedValueOnce(session);
-    appendSlackStreamMock.mockImplementationOnce(async () => {
-      session.pendingText += "\nsecond buffered";
-      throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
-    });
-    stopSlackStreamMock.mockRejectedValueOnce(
-      new TestSlackStreamNotDeliveredError("first buffered\nsecond buffered", "user_not_found"),
-    );
-    deliverRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        cfg: { messages: { statusReactions: { enabled: true } } },
-        ackReactionMessageTs: "171234.111",
-        ackReactionPromise: Promise.resolve(true),
-      }),
-    );
-
-    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(2);
-    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
-    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
-  });
-
-  it("removes all failed buffered tools from production-style delivery counts", async () => {
-    mockedNativeStreaming = true;
-    mockedDispatcherCapturesDeliveryErrors = true;
-    mockedDispatchSequence = [
-      { kind: "tool", payload: { text: "first tool" } },
-      { kind: "tool", payload: { text: "second tool" } },
-    ];
-    const session = {
-      channel: "C123",
-      threadTs: THREAD_TS,
-      stopped: false,
-      delivered: false,
-      pendingText: "first tool",
-    };
-    startSlackStreamMock.mockResolvedValueOnce(session);
-    appendSlackStreamMock.mockImplementationOnce(async () => {
-      session.pendingText += "\nsecond tool";
-      throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
-    });
-    stopSlackStreamMock.mockRejectedValueOnce(
-      new TestSlackStreamNotDeliveredError("first tool\nsecond tool", "user_not_found"),
-    );
-    deliverRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        cfg: { messages: { statusReactions: { enabled: true } } },
-        ackReactionMessageTs: "171234.111",
-        ackReactionPromise: Promise.resolve(true),
-      }),
-    );
-
-    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(2);
-    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
-    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a buffered final acknowledged when a later block flushes the stream", async () => {

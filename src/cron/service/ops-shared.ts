@@ -7,11 +7,8 @@ import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState } from "./runtime-store.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
-import {
-  type IsolatedAgentSetupTimeoutSignal,
-  maybeNotifyIsolatedAgentSetupTimeout,
-  runsDetachedFromMainSession,
-} from "./timer.js";
+import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
+import { type IsolatedAgentSetupTimeoutSignal, runsDetachedFromMainSession } from "./timer.js";
 
 /** Resolves the effective agent using explicit job identity before configured defaults. */
 export function resolveEffectiveJobAgentId(

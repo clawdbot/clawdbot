@@ -1,6 +1,7 @@
 // Slack tests cover approval handler plugin behavior.
 import type {
   ApprovalActionView,
+  ChannelApprovalKind,
   ApprovalMetadataView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -66,7 +67,7 @@ const ACTION_PRESENTATION = {
 } as const satisfies Record<ApprovalDecision, Pick<ApprovalActionView, "label" | "style">>;
 
 function buildApprovalAction(
-  approvalKind: "exec" | "plugin",
+  approvalKind: ChannelApprovalKind,
   approvalId: string,
   decision: ApprovalDecision,
 ): ApprovalActionView {

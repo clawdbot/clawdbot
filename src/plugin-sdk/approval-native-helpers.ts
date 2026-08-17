@@ -9,7 +9,7 @@ import type {
 } from "../config/types.approvals.js";
 import { doesApprovalRequestSelectChannelAccount } from "../infra/approval-request-account-binding.js";
 import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
-import { resolveApprovalRequestKind } from "../infra/approval-types.js";
+import { resolveApprovalRequestKind, type ChannelApprovalKind } from "../infra/approval-types.js";
 import {
   getExecApprovalReplyMetadata,
   type ExecApprovalReplyMetadata,
@@ -28,7 +28,6 @@ import type { OpenClawConfig } from "./config-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalKind = "exec" | "plugin";
 type DeliverySuppressionInput = Parameters<
   NonNullable<
     NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
@@ -46,7 +45,7 @@ type ChannelApprovalForwardTarget = DeliverySuppressionInput["target"];
 type ApprovalResolverParams = {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  approvalKind?: ApprovalKind;
+  approvalKind?: ChannelApprovalKind;
   request: ApprovalRequest;
 };
 
@@ -82,7 +81,7 @@ export type ChannelApprovalForwardingEligibilityParams = {
   /** Optional channel account id for account-scoped transport checks. */
   accountId?: string | null;
   /** Approval family whose forwarding config should be evaluated. */
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   /** Approval request being considered for native delivery. */
   request: ApprovalRequest;
 };
@@ -94,7 +93,7 @@ export type ChannelApprovalPotentialRouteParams = {
   /** Optional channel account id for account-scoped transport checks. */
   accountId?: string | null;
   /** Approval family whose forwarding config should be evaluated. */
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   /** When true, ignore explicit target routes and only consider session/native origin routes. */
   nativeSessionOnly?: boolean;
 };
@@ -120,19 +119,19 @@ type NativeApprovalForwardingFallbackSuppressorParams<TTarget extends NativeAppr
     request: ApprovalRequest;
   }) => string | null | undefined;
   resolveApprovalKind?: (params: {
-    approvalKind?: ApprovalKind;
+    approvalKind?: ChannelApprovalKind;
     request: ApprovalRequest;
-  }) => ApprovalKind;
+  }) => ChannelApprovalKind;
   isSessionRouteEligible: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
   }) => boolean;
   isExplicitTargetEligible?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
     target: NativeApprovalForwardTarget;
   }) => boolean;
@@ -140,19 +139,19 @@ type NativeApprovalForwardingFallbackSuppressorParams<TTarget extends NativeAppr
     forwardingTarget: TTarget;
     accountId?: string | null;
     target: NativeApprovalForwardTarget;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
   }) => TTarget | null;
   resolveOriginTarget: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
   }) => TTarget | null;
   resolveApproverDmTargets: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
   }) => readonly TTarget[];
   targetsMatch?: (left: TTarget, right: TTarget) => boolean;
@@ -173,7 +172,7 @@ type NativeApprovalChannelRouteGates = {
   canApprovalPotentiallyRouteToChannel: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     nativeSessionOnly?: boolean;
   }) => boolean;
   canAnyApprovalPotentiallyRouteToChannel: (params: {
@@ -188,20 +187,20 @@ type NativeApprovalChannelRouteGates = {
   isSessionApprovalEligible: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
   }) => boolean;
   isExplicitTargetEligible: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
     target: NativeApprovalForwardTarget;
   }) => boolean;
   shouldHandleApprovalRequest: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind?: ApprovalKind;
+    approvalKind?: ChannelApprovalKind;
     request: ApprovalRequest;
   }) => boolean;
 };
@@ -439,8 +438,8 @@ function nativeApprovalTargetMatcher(channel: string): (left: unknown, right: un
 /** Infer approval family from the request shape unless the caller already knows it. */
 export function resolveApprovalKind(
   request: ApprovalRequest,
-  approvalKind?: ApprovalKind,
-): ApprovalKind {
+  approvalKind?: ChannelApprovalKind,
+): ChannelApprovalKind {
   if (approvalKind) {
     return approvalKind;
   }
@@ -449,7 +448,7 @@ export function resolveApprovalKind(
 
 function resolveApprovalForwardingConfig(params: {
   cfg: OpenClawConfig;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
 }): ExecApprovalForwardingConfig | undefined {
   return params.approvalKind === "plugin"
     ? params.cfg.approvals?.plugin
@@ -632,7 +631,7 @@ export function createChannelApprovalForwardingEvaluator(
   const shouldHandleRequest = (input: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind?: ApprovalKind;
+    approvalKind?: ChannelApprovalKind;
     request: ApprovalRequest;
   }): boolean =>
     isSessionEligible({
@@ -743,7 +742,7 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
   const canApprovalPotentiallyRouteToChannel = (input: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     nativeSessionOnly?: boolean;
   }): boolean => {
     return canApprovalPotentiallyRoute({
@@ -771,7 +770,7 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
   const isSessionApprovalEligible = (input: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
   }): boolean => {
     // Per-account runtimes report raw candidates here. The route coordinator rejects
@@ -804,7 +803,7 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
   const isExplicitTargetEligible = (input: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: ApprovalRequest;
     target: NativeApprovalForwardTarget;
   }): boolean => {
@@ -819,7 +818,7 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
   const shouldHandleApprovalRequest = (input: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind?: ApprovalKind;
+    approvalKind?: ChannelApprovalKind;
     request: ApprovalRequest;
   }): boolean =>
     isSessionApprovalEligible({

@@ -42,6 +42,12 @@ public enum AuthProbeStatus: String, Codable, Sendable {
     case noModel = "no_model"
 }
 
+public enum ProgressCardStepStatus: String, Codable, Sendable {
+    case pending = "pending"
+    case inProgress = "in_progress"
+    case completed = "completed"
+}
+
 public enum EnvironmentStatus: String, Codable, Sendable {
     case available = "available"
     case unavailable = "unavailable"
@@ -89,6 +95,13 @@ public enum NodePresenceAliveReason: String, Codable, Sendable {
     case significantLocation = "significant_location"
     case manual = "manual"
     case connect = "connect"
+}
+
+public enum SessionPermissionMode: String, Codable, Sendable {
+    case readOnly = "read-only"
+    case guarded = "guarded"
+    case workspace = "workspace"
+    case full = "full"
 }
 
 public enum SessionObserverHealth: String, Codable, Sendable {
@@ -1135,6 +1148,136 @@ public struct BoardCommandEvent: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case command
+    }
+}
+
+public struct ProgressCardStep: Codable, Sendable {
+    public let step: String
+    public let status: ProgressCardStepStatus
+
+    public init(
+        step: String,
+        status: ProgressCardStepStatus)
+    {
+        self.step = step
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case step
+        case status
+    }
+}
+
+public struct ProgressCard: Codable, Sendable {
+    public let sessionkey: String
+    public let revision: Int
+    public let updatedat: Int
+    public let markdown: String?
+    public let steps: [ProgressCardStep]?
+
+    public init(
+        sessionkey: String,
+        revision: Int,
+        updatedat: Int,
+        markdown: String? = nil,
+        steps: [ProgressCardStep]? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.revision = revision
+        self.updatedat = updatedat
+        self.markdown = markdown
+        self.steps = steps
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case revision
+        case updatedat = "updatedAt"
+        case markdown
+        case steps
+    }
+}
+
+public struct ProgressCardGetParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct ProgressCardGetResult: Codable, Sendable {
+    public let card: AnyCodable
+
+    public init(
+        card: AnyCodable)
+    {
+        self.card = card
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case card
+    }
+}
+
+public struct ProgressCardPutParams: Codable, Sendable {
+    public let sessionkey: String
+    public let markdown: String?
+    public let plan: [ProgressCardStep]?
+
+    public init(
+        sessionkey: String,
+        markdown: String? = nil,
+        plan: [ProgressCardStep]? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.markdown = markdown
+        self.plan = plan
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case markdown
+        case plan
+    }
+}
+
+public struct ProgressCardPutResult: Codable, Sendable {
+    public let card: AnyCodable
+
+    public init(
+        card: AnyCodable)
+    {
+        self.card = card
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case card
+    }
+}
+
+public struct ProgressCardChangedEvent: Codable, Sendable {
+    public let sessionkey: String
+    public let revision: AnyCodable
+
+    public init(
+        sessionkey: String,
+        revision: AnyCodable)
+    {
+        self.sessionkey = sessionkey
+        self.revision = revision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case revision
     }
 }
 
@@ -6163,6 +6306,8 @@ public struct SessionRow: Codable, Sendable {
     public let execcwd: String?
     public let spawnedworkspacedir: String?
     public let spawnedcwd: String?
+    public let permissionmode: SessionPermissionMode?
+    public let sessionroot: String?
     public let createdvia: AnyCodable?
     public let createdactor: SessionCreatedActor?
     public let owner: SessionOwner?
@@ -6230,6 +6375,8 @@ public struct SessionRow: Codable, Sendable {
         execcwd: String? = nil,
         spawnedworkspacedir: String? = nil,
         spawnedcwd: String? = nil,
+        permissionmode: SessionPermissionMode? = nil,
+        sessionroot: String? = nil,
         createdvia: AnyCodable? = nil,
         createdactor: SessionCreatedActor? = nil,
         owner: SessionOwner? = nil,
@@ -6296,6 +6443,8 @@ public struct SessionRow: Codable, Sendable {
         self.execcwd = execcwd
         self.spawnedworkspacedir = spawnedworkspacedir
         self.spawnedcwd = spawnedcwd
+        self.permissionmode = permissionmode
+        self.sessionroot = sessionroot
         self.createdvia = createdvia
         self.createdactor = createdactor
         self.owner = owner
@@ -6364,6 +6513,8 @@ public struct SessionRow: Codable, Sendable {
         case execcwd = "execCwd"
         case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawnedcwd = "spawnedCwd"
+        case permissionmode = "permissionMode"
+        case sessionroot = "sessionRoot"
         case createdvia = "createdVia"
         case createdactor = "createdActor"
         case owner
@@ -8826,6 +8977,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let category: String?
     public let model: String?
     public let thinkinglevel: String?
+    public let permissionmode: SessionPermissionMode?
     public let incognito: Bool?
     public let visibility: SessionVisibility?
     public let catalogid: String?
@@ -8852,6 +9004,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         category: String? = nil,
         model: String? = nil,
         thinkinglevel: String? = nil,
+        permissionmode: SessionPermissionMode? = nil,
         incognito: Bool? = nil,
         visibility: SessionVisibility? = nil,
         catalogid: String? = nil,
@@ -8877,6 +9030,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.category = category
         self.model = model
         self.thinkinglevel = thinkinglevel
+        self.permissionmode = permissionmode
         self.incognito = incognito
         self.visibility = visibility
         self.catalogid = catalogid
@@ -8904,6 +9058,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case category
         case model
         case thinkinglevel = "thinkingLevel"
+        case permissionmode = "permissionMode"
         case incognito
         case visibility
         case catalogid = "catalogId"
@@ -9178,6 +9333,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execsecurity: AnyCodable?
     public let execask: AnyCodable?
     public let execnode: AnyCodable?
+    public let permissionmode: AnyCodable?
     public let model: AnyCodable?
     public let completionownersessionkey: AnyCodable?
     public let inheritedtoolpolicyversion: AnyCodable?
@@ -9213,6 +9369,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         execsecurity: AnyCodable? = nil,
         execask: AnyCodable? = nil,
         execnode: AnyCodable? = nil,
+        permissionmode: AnyCodable? = nil,
         model: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
         inheritedtoolpolicyversion: AnyCodable? = nil,
@@ -9247,6 +9404,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execsecurity = execsecurity
         self.execask = execask
         self.execnode = execnode
+        self.permissionmode = permissionmode
         self.model = model
         self.completionownersessionkey = completionownersessionkey
         self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
@@ -9283,6 +9441,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execsecurity = "execSecurity"
         case execask = "execAsk"
         case execnode = "execNode"
+        case permissionmode = "permissionMode"
         case model
         case completionownersessionkey = "completionOwnerSessionKey"
         case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"
@@ -9316,6 +9475,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let execsecurity: AnyCodable?
     public let execask: AnyCodable?
     public let execnode: AnyCodable?
+    public let permissionmode: AnyCodable?
     public let model: AnyCodable?
     public let completionownersessionkey: AnyCodable?
     public let inheritedtoolpolicyversion: AnyCodable?
@@ -9347,6 +9507,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         execsecurity: AnyCodable? = nil,
         execask: AnyCodable? = nil,
         execnode: AnyCodable? = nil,
+        permissionmode: AnyCodable? = nil,
         model: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
         inheritedtoolpolicyversion: AnyCodable? = nil,
@@ -9377,6 +9538,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.execsecurity = execsecurity
         self.execask = execask
         self.execnode = execnode
+        self.permissionmode = permissionmode
         self.model = model
         self.completionownersessionkey = completionownersessionkey
         self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
@@ -9409,6 +9571,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case execsecurity = "execSecurity"
         case execask = "execAsk"
         case execnode = "execNode"
+        case permissionmode = "permissionMode"
         case model
         case completionownersessionkey = "completionOwnerSessionKey"
         case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"
@@ -13559,19 +13722,22 @@ public struct AgentsDeleteResult: Codable, Sendable {
     public let removedbindings: Int
     public let removed: [[String: AnyCodable]]?
     public let failed: [[String: AnyCodable]]?
+    public let purgefailed: Bool?
 
     public init(
         ok: Bool,
         agentid: String,
         removedbindings: Int,
         removed: [[String: AnyCodable]]? = nil,
-        failed: [[String: AnyCodable]]? = nil)
+        failed: [[String: AnyCodable]]? = nil,
+        purgefailed: Bool? = nil)
     {
         self.ok = ok
         self.agentid = agentid
         self.removedbindings = removedbindings
         self.removed = removed
         self.failed = failed
+        self.purgefailed = purgefailed
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13580,6 +13746,7 @@ public struct AgentsDeleteResult: Codable, Sendable {
         case removedbindings = "removedBindings"
         case removed
         case failed
+        case purgefailed = "purgeFailed"
     }
 }
 

@@ -1,6 +1,7 @@
 // QA Lab Slack native approval observation and resolution.
 import { randomUUID } from "node:crypto";
 import type { WebClient } from "@slack/web-api";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { assertApprovalDecisionResult } from "../shared/live-approval-result.js";
 import {
   writeSlackApprovalCheckpoint,
@@ -9,7 +10,6 @@ import {
 } from "./slack-live.approval-checkpoint.js";
 import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
-  type SlackQaApprovalKind,
   type SlackQaApprovalDecision,
   type SlackQaApprovalScenarioRun,
   type SlackQaScenarioContext,
@@ -38,7 +38,7 @@ function resolveApprovalDecisionLabel(decision: SlackQaApprovalDecision) {
 }
 
 function resolveApprovalHeading(params: {
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   state: "pending" | "resolved";
   decision?: SlackQaApprovalDecision;
 }) {
@@ -81,7 +81,7 @@ function pushObservedApprovalMessage(params: {
 
 export async function waitForSlackApprovalPrompt(params: {
   approvalId?: string;
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   channelId: string;
   client: WebClient;
   decision: SlackQaApprovalDecision;
@@ -169,7 +169,7 @@ export async function waitForSlackApprovalPrompt(params: {
 }
 
 function matchesSlackApprovalPromptText(params: {
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   extraTextMatches?: string[];
   text: string;
   token?: string;
@@ -184,7 +184,7 @@ function matchesSlackApprovalPromptText(params: {
 }
 
 export async function waitForSlackApprovalResolvedUpdate(params: {
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   channelId: string;
   client: WebClient;
   decision: SlackQaApprovalDecision;
@@ -249,7 +249,7 @@ export async function waitForSlackApprovalResolvedUpdate(params: {
 
 function matchesSlackApprovalResolvedUpdate(params: {
   actionValues: string[];
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision: SlackQaApprovalDecision;
   extraTextMatches?: string[];
   text: string;
@@ -273,7 +273,7 @@ export async function resolveApprovalDecision(params: {
   approvalId: string;
   context: Omit<SlackQaScenarioContext, "sentTs">;
   decision: SlackQaApprovalDecision;
-  kind: SlackQaApprovalKind;
+  kind: ChannelApprovalKind;
 }) {
   const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
   return await params.context.gateway.call(

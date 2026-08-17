@@ -1,7 +1,7 @@
 // Control UI tests cover markdown link rendering: autolinking, file links, and link marks.
 import { describe, expect, it, vi } from "vitest";
 import { shortestFileLabels } from "./file-kind.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
@@ -511,6 +511,66 @@ describe("toSanitizedMarkdownHtml links", () => {
         expect(link.dataset.filePath).not.toMatch(/[\s()?]/);
       }
       expect(fragment.textContent).toContain(input);
+    });
+  });
+
+  describe("session links", () => {
+    const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+
+    it("links structural keys only when enabled", () => {
+      const disabled = htmlFragment(toSanitizedMarkdownHtml(`Open ${sessionKey}`));
+      expect(disabled.querySelector("a[data-session-key]")).toBeNull();
+
+      const enabled = htmlFragment(
+        toSanitizedMarkdownHtml(`Open ${sessionKey}`, { sessionLinks: true }),
+      );
+      const link = enabled.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      expect(link?.dataset.sessionKey).toBe(sessionKey);
+      expect(link?.textContent).toBe(sessionKey);
+      expect(link?.getAttribute("role")).toBe("link");
+      expect(link?.getAttribute("tabindex")).toBe("0");
+      expect(link?.hasAttribute("href")).toBe(false);
+    });
+
+    it.each([
+      ["plain text", `Open ${sessionKey}`],
+      ["inline code", `Open \`${sessionKey}\``],
+    ])("linkifies keys in %s", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      expect(link?.dataset.sessionKey).toBe(sessionKey);
+      expect(link?.textContent).toBe(sessionKey);
+    });
+
+    it.each([
+      ["an empty prefix", "agent:"],
+      ["a missing rest segment", "agent:x"],
+      ["an empty middle segment", "agent:x::y"],
+      ["a URL query value", `https://example.test/?session=${sessionKey}`],
+      ["a fenced code block", `\`\`\`text\n${sessionKey}\n\`\`\``],
+    ])("does not link %s", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      expect(fragment.querySelector("a[data-session-key]")).toBeNull();
+    });
+
+    it("keeps punctuation outside the link and rejects embedded word matches", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(`(${sessionKey}), x${sessionKey}`, { sessionLinks: true }),
+      );
+      const links = fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link");
+      expect(links).toHaveLength(1);
+      expect(links[0]?.textContent).toBe(sessionKey);
+      expect(fragment.textContent).toBe(`(${sessionKey}), x${sessionKey}\n`);
+    });
+
+    it("stays deterministic across streaming tail renders", () => {
+      const options = { sessionLinks: true } as const;
+      const first = htmlFragment(toStreamingMarkdownHtml(`Open ${sessionKey}`, options));
+      const extended = htmlFragment(
+        toStreamingMarkdownHtml(`Open ${sessionKey} and continue`, options),
+      );
+      expect(first.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
+      expect(extended.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
     });
   });
 

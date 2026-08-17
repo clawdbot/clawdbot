@@ -6,7 +6,8 @@ import {
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { clearPaneSessionHandoff, clearPaneSessionHandoffs } from "./chat-pane-shared.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
-import { findPane, type ChatSplitLayout, type ChatSplitPane } from "./split-layout.ts";
+import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
+import { findPane } from "./split-layout.ts";
 
 const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;

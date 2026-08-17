@@ -123,10 +123,22 @@ internal fun sidebarRecentSessions(
     ).take(limit.coerceAtLeast(0))
     .toList()
 
-internal fun sidebarSessionTitle(session: ChatSessionEntry): String =
-  session.displayName?.trim()?.takeIf(String::isNotEmpty)
-    ?: session.label?.trim()?.takeIf(String::isNotEmpty)
-    ?: session.key
+internal fun sessionPresentationTitle(
+  session: ChatSessionEntry,
+  unnamedTitle: () -> String,
+): String =
+  session.label?.trim()?.takeIf(String::isNotEmpty)
+    ?: session.displayName?.trim()?.takeIf(String::isNotEmpty)
+    ?: nativeString("New chat").takeIf { session.isDashboardSession() }
+    ?: unnamedTitle()
+
+private fun ChatSessionEntry.isDashboardSession(): Boolean {
+  if (classification == "dashboard") return true
+  val parts = key.split(':', limit = 4)
+  return parts.size == 4 && parts[0] == "agent" && parts[2] == "dashboard"
+}
+
+internal fun sidebarSessionTitle(session: ChatSessionEntry): String = sessionPresentationTitle(session) { session.key }
 
 internal fun sidebarAgentName(agent: GatewayAgentSummary): String = agent.name?.trim()?.takeIf(String::isNotEmpty) ?: agent.id
 

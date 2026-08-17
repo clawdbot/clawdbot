@@ -112,6 +112,8 @@ export const zh_CN = {
       cacheFailed: "生成 completion 缓存失败。稍后运行 `{command}`。",
       enable: "为 {cli} 启用 {shell} shell completion？",
       installed: "Shell completion 已安装。{reloadHint}",
+      profileNotWritable:
+        "Shell completion 未更改：{profile} 不可写。请对可写的 profile 文件运行 `{command}`。",
       reloadPowerShell: "重启 shell 或运行：{command}",
       reloadShell: "重启 shell 或运行：source {profile}",
       title: "Shell completion",

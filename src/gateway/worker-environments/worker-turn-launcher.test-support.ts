@@ -321,6 +321,8 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     sessionFile,
     sessionTarget,
     workspaceDir: root,
+    permissionMode: "workspace" as const,
+    sessionRoot: root,
     prompt: "Inspect this workspace",
     timeoutMs: 5_000,
     runId,

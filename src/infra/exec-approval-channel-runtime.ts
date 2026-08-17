@@ -16,20 +16,19 @@ import {
 import {
   normalizeApprovalRequest,
   type ApprovalRequestInput,
+  type ChannelApprovalKind,
   type NormalizedApprovalRequest,
 } from "./approval-types.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
   ExecApprovalChannelRuntime,
   ExecApprovalChannelRuntimeAdapter,
-  ExecApprovalChannelRuntimeEventKind,
 } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
 export type {
   ExecApprovalChannelRuntime,
   ExecApprovalChannelRuntimeAdapter,
-  ExecApprovalChannelRuntimeEventKind,
 } from "./exec-approval-channel-runtime.types.js";
 
 type ApprovalRequestEvent = ApprovalRequestInput;
@@ -74,7 +73,7 @@ type PendingApprovalValue<TPending, TRequest extends ApprovalRequestEvent> = {
 };
 
 function resolveApprovalReplayMethods(
-  eventKinds: ReadonlySet<ExecApprovalChannelRuntimeEventKind>,
+  eventKinds: ReadonlySet<ChannelApprovalKind>,
 ): ApprovalReplayMethod[] {
   const methods: ApprovalReplayMethod[] = [];
   if (eventKinds.has("exec")) {
@@ -103,7 +102,7 @@ export function createExecApprovalChannelRuntime<
 ): ExecApprovalChannelRuntime<TRequest, TResolved> {
   const log = createSubsystemLogger(adapter.label);
   const nowMs = adapter.nowMs ?? Date.now;
-  const eventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(adapter.eventKinds ?? ["exec"]);
+  const eventKinds = new Set<ChannelApprovalKind>(adapter.eventKinds ?? ["exec"]);
   const configuredGatewayRuntime = getGatewayNativeApprovalRuntime();
   const pending = createPendingApprovalRegistry<PendingApprovalValue<TPending, TRequest>>();
   let gatewayClient: GatewayClient | null = null;

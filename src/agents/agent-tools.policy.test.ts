@@ -650,14 +650,14 @@ describe("resolveEffectiveToolPolicy", () => {
             id: "messenger",
             tools: {
               profile: "messaging",
-              alsoAllow: ["image"],
+              alsoAllow: ["view_image"],
             },
           },
         ],
       },
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "messenger" });
-    expect(result.profileAlsoAllow).toEqual(["image"]);
+    expect(result.profileAlsoAllow).toEqual(["view_image"]);
     expect(result.profileAlsoAllow).not.toContain("exec");
     expect(result.profileAlsoAllow).not.toContain("process");
   });
@@ -676,7 +676,7 @@ describe("resolveEffectiveToolPolicy", () => {
               id: "sage",
               tools: {
                 profile: "messaging",
-                alsoAllow: ["image"],
+                alsoAllow: ["view_image"],
               },
             },
           ],

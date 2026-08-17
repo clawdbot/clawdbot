@@ -98,6 +98,7 @@ const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
 type InferencePlan =
   | "text"
   | "tool"
+  | "safe-tool"
   | "background-tool"
   | "session-tool"
   | "hold"
@@ -494,8 +495,11 @@ class FakeWorkerGateway {
       });
       return;
     }
-    if (plan === "tool" || plan === "background-tool") {
-      this.sendToolTurn(socket, frame.params, plan === "background-tool");
+    if (plan === "tool" || plan === "safe-tool" || plan === "background-tool") {
+      this.sendToolTurn(socket, frame.params, {
+        background: plan === "background-tool",
+        safe: plan === "safe-tool",
+      });
       return;
     }
     if (plan === "session-tool") {
@@ -674,10 +678,10 @@ class FakeWorkerGateway {
   private sendToolTurn(
     socket: WebSocket,
     identity: WorkerInferenceStartParams,
-    background = false,
+    options: { background: boolean; safe: boolean },
   ): void {
     const toolCallId = "local-exec-call";
-    const args = background
+    const args = options.background
       ? {
           // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
           command:
@@ -688,7 +692,9 @@ class FakeWorkerGateway {
               : "exec sleep 60",
           background: true,
         }
-      : { command: "printf worker-local > local-proof.txt" };
+      : {
+          command: options.safe ? "wc -c" : "printf worker-local > local-proof.txt",
+        };
     this.sendToolCallTurn(socket, identity, {
       args,
       toolCallId,
@@ -808,7 +814,7 @@ class FakeWorkerGateway {
 
 function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescriptor {
   return {
-    version: 3,
+    version: 4,
     connectionEndpoint: { kind: "unix", socketPath },
     admission: {
       environmentId: "worker-environment",
@@ -1361,6 +1367,110 @@ describe("worker runtime", () => {
     expect(
       gateway.methods.every((method) => method.startsWith("worker.") || method === "connect"),
     ).toBe(true);
+  });
+
+  it.each([
+    {
+      mode: "read-only" as const,
+      omittedTools: ["write", "edit", "apply_patch"],
+      denial: /host=gateway security=deny/u,
+    },
+    {
+      mode: "guarded" as const,
+      omittedTools: [],
+      denial:
+        /approval_required.*worker guarded permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+    },
+    {
+      mode: "workspace" as const,
+      omittedTools: [],
+      denial:
+        /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+    },
+    { mode: "full" as const, omittedTools: [], denial: null },
+  ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.permissionMode = mode;
+    launch.assignment.workerContainmentRoot = workspaceDir;
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
+    for (const toolName of omittedTools) {
+      expect(toolNames).not.toContain(toolName);
+    }
+    const toolResult = JSON.stringify(
+      gateway.inferenceRequests[1]?.context.messages.find(
+        (message) => message.role === "toolResult",
+      ),
+    );
+    if (denial) {
+      expect(toolResult).toMatch(denial);
+      await expect(
+        readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
+        "worker-local",
+      );
+    }
+  });
+
+  it.each(["guarded", "workspace"] as const)(
+    "keeps the %s worker allowlist fast path",
+    async (mode) => {
+      const { gateway, workspaceDir, launch } = await setup({
+        inferencePlans: ["safe-tool", "text"],
+      });
+      launch.assignment.permissionMode = mode;
+      launch.assignment.workerContainmentRoot = workspaceDir;
+
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+      const toolResult = JSON.stringify(
+        gateway.inferenceRequests[1]?.context.messages.find(
+          (message) => message.role === "toolResult",
+        ),
+      );
+      expect(toolResult).not.toContain("approval_required");
+      expect(toolResult).toMatch(/\b0\b/u);
+    },
+  );
+
+  it("canonicalizes an in-root worker workspace before enforcing containment", async () => {
+    const { workspaceDir, launch } = await setup();
+    const nested = path.join(workspaceDir, "nested");
+    await mkdir(nested);
+    launch.assignment.workspaceDir = path.join(nested, "..", "nested");
+    launch.assignment.permissionMode = "workspace";
+    launch.assignment.workerContainmentRoot = workspaceDir;
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("rejects a worker workspace outside its canonical containment root", async () => {
+    const { workspaceDir, launch } = await setup();
+    const narrowerRoot = path.join(workspaceDir, "contained");
+    await mkdir(narrowerRoot);
+    launch.assignment.permissionMode = "workspace";
+    launch.assignment.workerContainmentRoot = narrowerRoot;
+
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+      "worker workspace path escapes its assigned containment root",
+    );
+  });
+
+  it("rejects a dot-dot workspace escape before worker connection", async () => {
+    const { workspaceDir, launch } = await setup();
+    const outside = await mkdtemp(path.join(tmpdir(), "openclaw-worker-outside-"));
+    tempDirs.push(outside);
+    launch.assignment.workspaceDir = path.join(workspaceDir, "..", path.basename(outside));
+    launch.assignment.permissionMode = "workspace";
+    launch.assignment.workerContainmentRoot = workspaceDir;
+
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+      "worker workspace path escapes its assigned containment root",
+    );
   });
 
   it("keeps a pinned replay anchor through repeated local tool-loop inference", async () => {

@@ -122,6 +122,7 @@ export async function runCopilotExecution(context: {
   let downgradedFromResume = false;
   let resumeFailureRecovered = false;
   let yieldDetected = false;
+  let yieldAcknowledgment: string | undefined;
   let lastToolError: AgentHarnessAttemptResult["lastToolError"];
   const hostObserveToolTerminal = input.observeToolTerminal;
   const observeToolTerminal = hostObserveToolTerminal
@@ -277,8 +278,9 @@ export async function runCopilotExecution(context: {
           attemptParams: observeToolTerminal ? { ...input, observeToolTerminal } : input,
           computerContextEpoch,
           sessionRef,
-          onYieldDetected: () => {
+          onYieldDetected: (_message, acknowledgment) => {
             yieldDetected = true;
+            yieldAcknowledgment = acknowledgment;
           },
           onToolCompleted: ({ args, error, result, startedAt, toolCallId, toolName }) =>
             runAgentHarnessAfterToolCallHook({
@@ -662,5 +664,6 @@ export async function runCopilotExecution(context: {
     timedOut,
     timedOutDuringCompaction,
     yieldDetected,
+    yieldAcknowledgment,
   });
 }

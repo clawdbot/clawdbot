@@ -35,19 +35,12 @@ import {
   MIN_REFIRE_GAP_MS,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
-import { maybeNotifyIsolatedAgentSetupTimeoutWithRecovery } from "./timer-notifications.js";
+import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import {
   createCompletedCronRunOutcomeDrain,
   finalizeCompletedCronRunOutcomes,
 } from "./timer-outcome-finalization.js";
 import { collectRunnableJobs } from "./timer-runnable.js";
-
-export function maybeNotifyIsolatedAgentSetupTimeout(
-  state: CronServiceState,
-  result: Parameters<typeof maybeNotifyIsolatedAgentSetupTimeoutWithRecovery>[1],
-): boolean {
-  return maybeNotifyIsolatedAgentSetupTimeoutWithRecovery(state, result, () => armTimer(state));
-}
 
 /** Arms the cron timer for the next wake or a maintenance recheck. */
 export function armTimer(state: CronServiceState) {
@@ -61,10 +54,6 @@ export function armTimer(state: CronServiceState) {
   }
   if (!state.deps.cronEnabled) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler disabled");
-    return;
-  }
-  if (state.restartRecoveryPending) {
-    state.deps.log.warn({}, "cron: armTimer skipped - restart recovery pending");
     return;
   }
   const nextAt = nextWakeAtMs(state);
@@ -155,10 +144,6 @@ async function onAdmittedTimer(state: CronServiceState) {
   if (state.stopped || state.schedulingPaused) {
     return;
   }
-  if (state.restartRecoveryPending) {
-    state.deps.log.warn({}, "cron: timer tick skipped - restart recovery pending");
-    return;
-  }
   if (state.running) {
     // Re-arm the timer so the scheduler keeps ticking even when a job is
     // still executing.  Without this, a long-running job (e.g. an agentTurn
@@ -180,11 +165,8 @@ async function onAdmittedTimer(state: CronServiceState) {
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      if (state.stopped || state.restartRecoveryPending) {
-        state.deps.log.warn(
-          { stopped: state.stopped, restartRecoveryPending: state.restartRecoveryPending },
-          "cron: due job reservation skipped - scheduler unavailable",
-        );
+      if (state.stopped) {
+        state.deps.log.warn({}, "cron: due job reservation skipped - scheduler unavailable");
         return [];
       }
       // Timer-owned liveness reconciliation is bounded to durable non-terminal markers.
@@ -233,7 +215,6 @@ async function onAdmittedTimer(state: CronServiceState) {
     let reservationReleaseError: unknown;
     let setupTimeoutNotified = false;
     let stopAdmittingDueJobs = false;
-    const hasSetupTimeoutRecoveryHandler = state.deps.onIsolatedAgentSetupTimeout !== undefined;
     const releaseUnclaimedDueJobReservationsWithRetry = async () => {
       const reservations = dueJobs
         .filter((_, index) => !claimedIndexes.has(index))
@@ -259,7 +240,7 @@ async function onAdmittedTimer(state: CronServiceState) {
       completedResults = await pMap(
         dueJobs,
         async (due, index): Promise<TimedCronRunOutcome | typeof pMapSkip> => {
-          if (stopAdmittingDueJobs || state.stopped || state.restartRecoveryPending) {
+          if (stopAdmittingDueJobs || state.stopped) {
             stopAdmittingDueJobs = true;
             return pMapSkip;
           }
@@ -335,9 +316,9 @@ async function onAdmittedTimer(state: CronServiceState) {
                   return false;
                 }
                 if (
-                  hasSetupTimeoutRecoveryHandler &&
                   finalizedResults.length > 0 &&
-                  !setupTimeoutNotified
+                  !setupTimeoutNotified &&
+                  maybeNotifyIsolatedAgentSetupTimeout(state, result)
                 ) {
                   setupTimeoutNotified = true;
                   stopAdmittingDueJobs = true;
@@ -346,7 +327,6 @@ async function onAdmittedTimer(state: CronServiceState) {
                   } catch (err) {
                     reservationReleaseError = err;
                   }
-                  maybeNotifyIsolatedAgentSetupTimeout(state, result);
                 }
                 return true;
               },

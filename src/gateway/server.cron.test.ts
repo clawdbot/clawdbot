@@ -679,8 +679,8 @@ describe("gateway server cron", () => {
       const routeFinished = await cronEvents.wait(
         (payload) => payload.jobId === routeJobId && payload.action === "finished",
       );
-      expect(typeof routeFinished.sessionKey).toBe("string");
-      const events = peekSystemEvents(routeFinished.sessionKey as string);
+      expect(routeFinished.sessionKey).toBeUndefined();
+      const events = peekSystemEvents("agent:main:primary");
       expect(events.some((event) => event.includes("cron route check"))).toBe(true);
     } finally {
       await cleanupCronTestRun({

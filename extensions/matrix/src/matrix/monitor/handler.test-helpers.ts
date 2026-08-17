@@ -25,6 +25,19 @@ type MatrixDispatchInboundMessage = (params: {
 }) => Promise<{
   queuedFinal: boolean;
   counts: { final: number; block: number; tool: number };
+  settledReceipt?: {
+    anyVisibleDelivered: boolean;
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+  };
 }>;
 
 const DEFAULT_ROUTE = {
