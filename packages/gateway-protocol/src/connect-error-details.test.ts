@@ -264,6 +264,12 @@ describe("resolveAuthConnectErrorDetailCode", () => {
   it("maps device token scope mismatches to a dedicated auth detail", () => {
     expect(resolveAuthConnectErrorDetailCode("scope_mismatch")).toBe("AUTH_SCOPE_MISMATCH");
   });
+
+  it("keeps trusted-proxy identity rejection distinct from generic unauthorized auth", () => {
+    expect(
+      resolveAuthConnectErrorDetailCode("trusted_proxy_missing_header_cf-access-jwt-assertion"),
+    ).toBe("AUTH_IDENTITY_HEADER_REQUIRED");
+  });
 });
 
 describe("pairing connect details", () => {

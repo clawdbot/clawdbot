@@ -86,6 +86,16 @@ Approval note:
 - For direct shell/runtime file executions, OpenClaw also best-effort binds one concrete local file operand and denies the run if that file changes before execution.
 - If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command, approval-backed execution is denied instead of pretending full runtime coverage. Use sandboxing, separate hosts, or an explicit trusted allowlist/full workflow for broader interpreter semantics.
 
+### Gateway deployments that cannot host nodes
+
+A Gateway can remain healthy for browser users while node hosting is unavailable. Run `openclaw doctor` on the Gateway before onboarding nodes, and check these preconditions:
+
+- **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
+- **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
+- **Edge routing:** When a reverse proxy or access edge fronts the Gateway, allow `/j/*` and `/__openclaw__/worker` through without edge identity auth. Keep WebSocket upgrade enabled for `/__openclaw__/worker`; both routes enforce their own short-lived credentials. The node's main Gateway WebSocket must also reach an auth path it can satisfy. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
+
+Cloudflare Access service tokens (`CF-Access-Client-Id` and `CF-Access-Client-Secret`) are the intended alternative for Access-fronted machine clients, but node hosts cannot send those headers yet. Follow [node-host service-token header support](https://github.com/openclaw/openclaw/issues/125112) for that capability.
+
 ### Start a node host (foreground)
 
 On the node machine:

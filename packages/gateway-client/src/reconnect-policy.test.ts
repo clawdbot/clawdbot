@@ -18,6 +18,7 @@ describe("shouldPauseGatewayReconnect", () => {
     ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
     ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
     ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH,
+    "AUTH_IDENTITY_HEADER_REQUIRED",
     ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
     ConnectErrorDetailCodes.PAIRING_REQUIRED,
     ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
@@ -38,6 +39,15 @@ describe("shouldPauseGatewayReconnect", () => {
 
   it("leaves token mismatch to the caller's bounded retry policy", () => {
     expect(shouldPause({ code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH })).toBe(false);
+  });
+
+  it("keeps the identity-header pause behind a pending device-token retry", () => {
+    expect(
+      shouldPauseGatewayReconnect({
+        details: { code: "AUTH_IDENTITY_HEADER_REQUIRED" },
+        deviceTokenRetryPending: true,
+      }),
+    ).toBe(false);
   });
 
   it.each([undefined, {}, { code: "SOME_FUTURE_CODE" }])(

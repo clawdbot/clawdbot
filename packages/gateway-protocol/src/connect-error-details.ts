@@ -39,6 +39,7 @@ export const ConnectErrorDetailCodes = {
   AUTH_TAILSCALE_PROXY_MISSING: "AUTH_TAILSCALE_PROXY_MISSING",
   AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED",
   AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH",
+  AUTH_IDENTITY_HEADER_REQUIRED: "AUTH_IDENTITY_HEADER_REQUIRED",
   CONTROL_UI_BUILD_MISMATCH: "CONTROL_UI_BUILD_MISMATCH",
   CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
   PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
@@ -166,6 +167,9 @@ const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
+  if (reason?.startsWith("trusted_proxy_")) {
+    return ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED;
+  }
   switch (reason) {
     case "token_missing":
       return ConnectErrorDetailCodes.AUTH_TOKEN_MISSING;
