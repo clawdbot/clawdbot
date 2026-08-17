@@ -181,10 +181,12 @@
 }
 
 .chat-thread .chat-bubble .chat-markdown-table.has-overflow-left .chat-markdown-table__viewport {
+  -webkit-mask-image: linear-gradient(to right, transparent, black 32px);
   mask-image: linear-gradient(to right, transparent, black 32px);
 }
 
 .chat-thread .chat-bubble .chat-markdown-table.has-overflow-right .chat-markdown-table__viewport {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
   mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
 }
 
@@ -192,6 +194,13 @@
   .chat-bubble
   .chat-markdown-table.has-overflow-left.has-overflow-right
   .chat-markdown-table__viewport {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 32px,
+    black calc(100% - 32px),
+    transparent
+  );
   mask-image: linear-gradient(
     to right,
     transparent,
@@ -203,7 +212,7 @@
 
 .chat-thread .chat-bubble .chat-text :where(table) {
   display: table;
-  width: 100%;
+  width: max-content;
   min-width: 100%;
   margin: 0;
   border: 0;
@@ -218,6 +227,7 @@
 }
 
 .chat-thread .chat-bubble .chat-text :where(th, td) {
+  width: max-content;
   min-width: 8rem;
   max-width: 24rem;
   border-right: 0;
