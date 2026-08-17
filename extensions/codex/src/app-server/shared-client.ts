@@ -62,6 +62,7 @@ type SharedCodexAppServerClientState = {
   liveClients: Set<CodexAppServerClient>;
   entriesByClient: WeakMap<CodexAppServerClient, SharedCodexAppServerClientEntry>;
   leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
+  toolCallFences: WeakSet<CodexAppServerClient>;
   warmClientsByConfig?: WeakMap<
     object,
     WeakMap<CodexAppServerStartOptions, Map<string, WarmSharedCodexAppServerClient>>
@@ -122,6 +123,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
     liveClients: new Set(),
     entriesByClient: new WeakMap(),
     leasedReleases: new WeakMap(),
+    toolCallFences: new WeakSet(),
   };
   return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
 }
@@ -1119,6 +1121,7 @@ export function resetSharedCodexAppServerClientForTests(): void {
   state.clients.clear();
   state.entriesByClient = new WeakMap();
   state.leasedReleases = new WeakMap();
+  state.toolCallFences = new WeakSet();
   state.warmClientsByConfig = new WeakMap();
   for (const client of clients) {
     client.close();
@@ -1168,6 +1171,34 @@ export function retainSharedCodexAppServerClientIfCurrent(
     }
   }
   return undefined;
+}
+
+// Graceful retirement detaches acquisition but retained views can still read.
+// Hold the detached entry so view expiry cannot close the transport mid-read.
+export function retainLiveSharedCodexAppServerClient(
+  client: CodexAppServerClient | undefined,
+): (() => void) | undefined {
+  if (!client) {
+    return undefined;
+  }
+  const state = getSharedCodexAppServerClientState();
+  const entry = state.entriesByClient.get(client);
+  if (entry?.client !== client || entry.closeError || !state.liveClients.has(client)) {
+    return undefined;
+  }
+  return retainSharedClientEntry(entry);
+}
+
+// Duplicate src/dist copies can share one physical client. Keep the fence in
+// their shared state or a sibling copy could issue another uncertain mutation.
+export function fenceSharedCodexAppServerClientToolCalls(client: CodexAppServerClient): void {
+  getSharedCodexAppServerClientState().toolCallFences.add(client);
+}
+
+export function isSharedCodexAppServerClientToolCallFenced(
+  client: CodexAppServerClient,
+): boolean {
+  return getSharedCodexAppServerClientState().toolCallFences.has(client);
 }
 
 /** Retains the live shared client whose initialized instance id matches a thread binding. */

@@ -2499,11 +2499,14 @@ process.on("SIGINT", shutdown);`,
     const tempDir = tempDirTracker.make("bundle-mcp-catalog-deadline-");
     const serverPath = path.join(tempDir, "catalog-deadline.mjs");
     const logPath = path.join(tempDir, "server.log");
+    const catalogReleasePath = path.join(tempDir, "catalog.release");
     const toolPageCursors = [null, "2", "3", "4", "5", "6", null];
+    await fs.writeFile(catalogReleasePath, "release", "utf8");
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
       delayMs: 50,
+      listToolsReleasePath: catalogReleasePath,
       notifyListChangedOnCallTool: true,
       toolPageCursors,
       tools: [
@@ -2539,6 +2542,7 @@ process.on("SIGINT", shutdown);`,
         "list_changed to invalidate the catalog",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
+      await fs.rm(catalogReleasePath, { force: true });
 
       const initialListCount = (
         (await fs.readFile(logPath, "utf8")).match(/tools\/list cursor/g) ?? []
@@ -2553,9 +2557,14 @@ process.on("SIGINT", shutdown);`,
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
       waiter.abort(new Error("materialized tool cancelled during catalog refresh"));
-      await expect(cancelledCall).rejects.toThrow(
-        "materialized tool cancelled during catalog refresh",
-      );
+      await expect(
+        withTestTimeout(
+          cancelledCall,
+          1_000,
+          "materialized tool did not detach from catalog refresh",
+        ),
+      ).rejects.toThrow("materialized tool cancelled during catalog refresh");
+      await fs.writeFile(catalogReleasePath, "release", "utf8");
       const completedCatalog = await runtime.getCatalog();
 
       expect(completedCatalog.tools.map((tool) => tool.toolName)).toEqual(
@@ -2566,6 +2575,7 @@ process.on("SIGINT", shutdown);`,
       );
       expect(runtime.peekCatalog()).toBe(completedCatalog);
     } finally {
+      await fs.writeFile(catalogReleasePath, "release", "utf8").catch(() => {});
       await materialized?.dispose();
       await runtime.dispose();
     }

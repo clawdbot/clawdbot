@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 
 const sharedClientMocks = vi.hoisted(() => ({
-  retainSharedCodexAppServerClientIfCurrent: vi.fn(),
+  fenceSharedCodexAppServerClientToolCalls: vi.fn(),
+  isSharedCodexAppServerClientToolCallFenced: vi.fn(),
+  retainLiveSharedCodexAppServerClient: vi.fn(),
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
 }));
 
@@ -25,7 +27,18 @@ function createAttempt(enabled = true): EmbeddedRunAttemptParams {
 
 describe("Codex native MCP Apps", () => {
   beforeEach(() => {
-    sharedClientMocks.retainSharedCodexAppServerClientIfCurrent.mockReset();
+    const fencedClients = new WeakSet<object>();
+    sharedClientMocks.fenceSharedCodexAppServerClientToolCalls.mockReset();
+    sharedClientMocks.fenceSharedCodexAppServerClientToolCalls.mockImplementation(
+      (client: object) => {
+        fencedClients.add(client);
+      },
+    );
+    sharedClientMocks.isSharedCodexAppServerClientToolCallFenced.mockReset();
+    sharedClientMocks.isSharedCodexAppServerClientToolCallFenced.mockImplementation(
+      (client: object) => fencedClients.has(client),
+    );
+    sharedClientMocks.retainLiveSharedCodexAppServerClient.mockReset();
     sharedClientMocks.retireSharedCodexAppServerClientIfCurrent.mockReset();
   });
 

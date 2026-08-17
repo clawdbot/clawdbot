@@ -94,6 +94,9 @@ let clearSharedCodexAppServerClientIfCurrentAndWait: typeof import("./shared-cli
 let createIsolatedCodexAppServerClient: typeof import("./shared-client.js").createIsolatedCodexAppServerClient;
 let getLeasedSharedCodexAppServerClient: typeof import("./shared-client.js").getLeasedSharedCodexAppServerClient;
 let isCodexAppServerStartSelectionChangedError: typeof import("./shared-client.js").isCodexAppServerStartSelectionChangedError;
+let fenceSharedCodexAppServerClientToolCalls: typeof import("./shared-client.js").fenceSharedCodexAppServerClientToolCalls;
+let isSharedCodexAppServerClientToolCallFenced: typeof import("./shared-client.js").isSharedCodexAppServerClientToolCallFenced;
+let retainLiveSharedCodexAppServerClient: typeof import("./shared-client.js").retainLiveSharedCodexAppServerClient;
 let retainSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").retainSharedCodexAppServerClientIfCurrent;
 let retainSharedCodexAppServerClientByInstanceId: typeof import("./shared-client.js").retainSharedCodexAppServerClientByInstanceId;
 let releaseLeasedSharedCodexAppServerClient: typeof import("./shared-client.js").releaseLeasedSharedCodexAppServerClient;
@@ -215,6 +218,9 @@ describe("shared Codex app-server client", () => {
       createIsolatedCodexAppServerClient,
       getLeasedSharedCodexAppServerClient,
       isCodexAppServerStartSelectionChangedError,
+      fenceSharedCodexAppServerClientToolCalls,
+      isSharedCodexAppServerClientToolCallFenced,
+      retainLiveSharedCodexAppServerClient,
       retainSharedCodexAppServerClientIfCurrent,
       retainSharedCodexAppServerClientByInstanceId,
       releaseLeasedSharedCodexAppServerClient,
@@ -1995,6 +2001,39 @@ describe("shared Codex app-server client", () => {
 
     expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
     expect(first.process.stdin.destroyed).toBe(true);
+  });
+
+  it("retains a live client after graceful detachment until the later operation completes", async () => {
+    const first = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(first.client);
+
+    const viewLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(first, "openclaw/0.147.0 (macOS; test)");
+    const client = await viewLease;
+
+    expect(retireSharedCodexAppServerClientIfCurrent(client)).toEqual({
+      activeLeases: 1,
+      closed: false,
+    });
+    const releaseOperation = retainLiveSharedCodexAppServerClient(client);
+    expect(releaseOperation).toBeTypeOf("function");
+
+    expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+    expect(first.process.stdin.destroyed).toBe(false);
+    releaseOperation?.();
+    expect(first.process.stdin.destroyed).toBe(true);
+  });
+
+  it("shares native MCP tool-call fences across duplicate module copies", async () => {
+    const duplicate = await import(
+      "./shared-client.js?duplicate-native-mcp-fence" as "./shared-client.js",
+    );
+    const client = {} as CodexAppServerClient;
+
+    fenceSharedCodexAppServerClientToolCalls(client);
+
+    expect(isSharedCodexAppServerClientToolCallFenced(client)).toBe(true);
+    expect(duplicate.isSharedCodexAppServerClientToolCallFenced(client)).toBe(true);
   });
 
   it("globally disposes a gracefully detached client with an explicit retain", async () => {
