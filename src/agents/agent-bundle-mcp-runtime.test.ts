@@ -4477,6 +4477,63 @@ describe("requester-scoped MCP connection resolution", () => {
     await runtime.dispose();
   });
 
+  it("fails a combined catalog load after a second consecutive source supersession", async () => {
+    const makeCatalog = (serverName: string, toolName: string): McpToolCatalog => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: { serverName, launchSummary: serverName, toolCount: 1 },
+      },
+      tools: [
+        {
+          serverName,
+          safeServerName: serverName,
+          toolName,
+          description: toolName,
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: toolName,
+        },
+      ],
+    });
+    let current = makeCatalog("shared", "shared_v1");
+    const stableCatalog = makeCatalog("stable", "stable_tool");
+    let loadCount = 0;
+    const changingPart: SessionMcpRuntime = {
+      ...makeRuntime([], "shared"),
+      peekCatalog: () => current,
+      getCatalog: async () => {
+        loadCount += 1;
+        const loaded = current;
+        if (loadCount <= 2) {
+          current = makeCatalog("shared", `shared_v${loadCount + 1}`);
+        }
+        return loaded;
+      },
+    };
+    const stablePart: SessionMcpRuntime = {
+      ...makeRuntime([], "stable"),
+      peekCatalog: () => stableCatalog,
+      getCatalog: async () => stableCatalog,
+    };
+    const runtime = createCombinedSessionMcpRuntime({
+      sessionId: "session-combined-repeated-supersession",
+      workspaceDir: "/workspace",
+      parts: [changingPart, stablePart],
+    });
+
+    await expect(runtime.getCatalog()).rejects.toThrow(
+      "combined bundle-mcp catalog sources changed repeatedly while refreshing",
+    );
+    const recoveredCatalog = await runtime.getCatalog();
+    expect(recoveredCatalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
+      "shared_v3",
+      "stable_tool",
+    ]);
+    expect(loadCount).toBe(3);
+
+    await runtime.dispose();
+  });
+
   it("re-merges the combined catalog after a part refreshes on tools/list_changed", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     resolverTesting.setMcpServerConnectionResolversForTest([
