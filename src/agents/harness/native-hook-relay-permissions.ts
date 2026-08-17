@@ -50,6 +50,8 @@ const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
 const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
 const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
+const MCP_APPROVAL_UNAVAILABLE_REASON =
+  'MCP tool approval timed out (no operator connected). Approve in the Control UI, or set mcp.servers.<id>.codex.defaultToolsApprovalMode:"approve" for trusted servers.';
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 const {
@@ -214,6 +216,12 @@ export async function runNativeHookRelayPermissionRequest(params: {
     }
     if (decision === "deny") {
       return params.adapter.renderPermissionDecisionResponse("deny", "Denied by user");
+    }
+    if (decision === "timed-out" && request.toolName.startsWith("mcp__")) {
+      return params.adapter.renderPermissionDecisionResponse(
+        "deny",
+        MCP_APPROVAL_UNAVAILABLE_REASON,
+      );
     }
   } catch (error) {
     log.warn(
@@ -520,7 +528,10 @@ async function requestNativeHookRelayPermissionApproval(
     });
     // Bind the verdict to the request that parked this call. A stale or
     // misrouted reply must never release a different tool gate.
-    decision = waitResult?.id === approvalId ? waitResult.decision : undefined;
+    if (!waitResult || waitResult.id !== approvalId) {
+      return "defer";
+    }
+    decision = waitResult.decision;
   }
   if (decision === PluginApprovalResolutions.ALLOW_ONCE) {
     return "allow";
@@ -531,7 +542,7 @@ async function requestNativeHookRelayPermissionApproval(
   if (decision === PluginApprovalResolutions.DENY) {
     return "deny";
   }
-  return "defer";
+  return decision == null ? "timed-out" : "defer";
 }
 
 async function waitForNativeHookRelayApprovalDecision(params: {

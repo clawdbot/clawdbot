@@ -21,6 +21,7 @@ import {
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
+import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import { buildPayloadSummary } from "./deliver-payload.js";
 import {
@@ -42,7 +43,7 @@ import {
   failDurableDelivery,
   markDurableDeliveryQueued,
   rejectDurableDelivery,
-  suppressDurableDelivery,
+  settleDurableDelivery,
 } from "./delivery-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
@@ -64,7 +65,6 @@ import {
   moveToFailed,
   reserveDeliveryAttempt,
   type QueuedDelivery,
-  type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
 import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
@@ -75,23 +75,7 @@ import {
 } from "./outbound-audit.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
-export type DeliverFn = (
-  params: {
-    cfg: OpenClawConfig;
-  } & QueuedDeliveryPayload & {
-      payloads: ReturnType<typeof queuedDeliveryPayloads>;
-      deliveryQueueId?: string;
-      deliveryQueueStateDir?: string;
-      deliveryProducerClaimId?: string;
-      deliveryProducerLeaseRequired?: boolean;
-      skipQueue?: boolean;
-      deferredDeliveryAdmissionPassed?: true;
-      deferCommitHooks?: boolean;
-      onMessageSentEvent?: (event: MessageSentEvent, sourceIndex: number) => void;
-      onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
-      onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
-    },
-) => Promise<unknown>;
+export type DeliverFn = (params: DeliverOutboundPayloadsParams) => Promise<unknown>;
 
 export interface RecoveryLogger {
   info(msg: string): void;
@@ -326,7 +310,8 @@ function buildRecoveryDeliverParams(
     session: entry.session,
     gatewayClientScopes: entry.gatewayClientScopes,
     preparedMessageId: entry.preparedMessageId,
-    deliveryCompletion: entry.deliveryCompletion,
+    // Recovery owns terminal completion because nested delivery only reports
+    // process-local evidence that cannot survive another restart.
     deliveryQueueId: entry.id,
     deliveryQueueStateDir: stateDir,
     ...(producerClaimId ? { deliveryProducerClaimId: producerClaimId } : {}),
@@ -884,6 +869,7 @@ async function drainQueuedEntry(opts: {
   // persisting plugin callbacks must never become part of delivery custody.
   const messageSentEvents: IndexedMessageSentEvent[] = [];
   let postSendState: QueuedPostSendState | undefined;
+  let platformSendStarted = false;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
   const collectResults = (results: readonly OutboundDeliveryResult[]): void => {
@@ -973,6 +959,9 @@ async function drainQueuedEntry(opts: {
       ...buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir, producerClaimId),
       onPayloadDeliveryOutcome: collectPayloadOutcome,
       onMessageSentEvent: (event, sourceIndex) => messageSentEvents.push({ sourceIndex, event }),
+      onPlatformSendStart: async () => {
+        platformSendStarted = true;
+      },
       onDeliveryResult: async (deliveryResult) => {
         collectResults([deliveryResult]);
         postSendState ??= await persistRecoveredPostSendState({
@@ -984,13 +973,11 @@ async function drainQueuedEntry(opts: {
       },
     });
     const results = isOutboundDeliveryResultArray(result) ? result : [];
-    if (
-      producerClaimId !== undefined &&
-      payloadOutcomes.some(
-        (outcome) =>
-          outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
-      )
-    ) {
+    const adapterReturnedNoIdentity = payloadOutcomes.some(
+      (outcome) =>
+        outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
+    );
+    if (adapterReturnedNoIdentity || (results.length === 0 && platformSendStarted)) {
       const error = "recovered platform send returned no delivery identity";
       await recordRecoveredFailure(
         failDeliveryAfterPlatformSend,
@@ -999,6 +986,13 @@ async function drainQueuedEntry(opts: {
         opts.stateDir,
         producerClaimId,
       );
+      if (entry.deliveryCompletion) {
+        await settleDurableDelivery(
+          entry.deliveryCompletion,
+          { platformSendStarted: true },
+          opts.stateDir,
+        );
+      }
       opts.onFailed?.(entry, error);
       opts.log.warn(`Delivery entry ${entry.id} ${error}; preserving unknown_after_send`);
       emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
@@ -1044,11 +1038,12 @@ async function drainQueuedEntry(opts: {
       return "failed";
     }
     if (entry.deliveryCompletion) {
-      if (results.length > 0) {
-        await completeDurableDelivery(entry.deliveryCompletion, results.at(-1)!, opts.stateDir);
-      } else {
-        await suppressDurableDelivery(entry.deliveryCompletion, opts.stateDir);
-      }
+      const terminalResult = results.at(-1);
+      await settleDurableDelivery(
+        entry.deliveryCompletion,
+        terminalResult ? { result: terminalResult } : { platformSendStarted: false },
+        opts.stateDir,
+      );
     }
     postSendState ??=
       results.length > 0

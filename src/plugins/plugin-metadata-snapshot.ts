@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -14,7 +16,9 @@ import {
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { PluginLruCache } from "./plugin-cache-primitives.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
 import type {
@@ -41,6 +45,8 @@ const PLUGIN_METADATA_ENV_KEYS = [
   "USERPROFILE",
   "XDG_CONFIG_HOME",
 ] as const;
+const workspacePluginRootPresence = new PluginLruCache<boolean>(128);
+registerPluginMetadataProcessMemoLifecycleClear(() => workspacePluginRootPresence.clear());
 export type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotOwnerMaps,
@@ -60,6 +66,18 @@ export function resolvePluginMetadataEnvFingerprint(env: NodeJS.ProcessEnv): str
     env: pickPluginMetadataEnv(env),
     installRoots: resolveActivePluginInstallRoots(env),
   });
+}
+
+function hasWorkspacePluginRoot(workspaceDir: string): boolean {
+  const cached = workspacePluginRootPresence.getResult(workspaceDir);
+  if (cached.hit) {
+    return cached.value;
+  }
+  // Plugin metadata is lifecycle-stable. Resolve this admission fact once per workspace so
+  // configless nested readers can reuse the prepared graph without freshness-polling the disk.
+  const present = fs.existsSync(path.join(workspaceDir, ".openclaw", "extensions"));
+  workspacePluginRootPresence.set(workspaceDir, present);
+  return present;
 }
 
 function throwReadonlyPluginMetadataMutation(): never {
@@ -396,6 +414,9 @@ export function resolvePluginMetadataSnapshot(
       const hasWorkspacePlugin = lifecycleSnapshot?.index.plugins.some(
         (plugin) => plugin.origin === "workspace",
       );
+      const workspacePluginRootPresent =
+        params.workspacePluginRootPresent ??
+        (targetWorkspace ? hasWorkspacePluginRoot(targetWorkspace) : undefined);
       // Gateway metadata is lifecycle-stable. A workspace with no plugin root can reuse the
       // published graph without polling every bundled/global artifact on its first turn.
       if (
@@ -403,7 +424,7 @@ export function resolvePluginMetadataSnapshot(
         targetWorkspace &&
         targetWorkspace !== lifecycleSnapshot.workspaceDir &&
         !hasWorkspacePlugin &&
-        params.workspacePluginRootPresent === false
+        workspacePluginRootPresent === false
       ) {
         return projectPluginMetadataSnapshotWorkspace({
           snapshot: lifecycleSnapshot,

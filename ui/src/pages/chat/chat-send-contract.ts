@@ -17,6 +17,10 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
 };
 
+export type ChatSendOptions = {
+  followUpMode?: ControlUiFollowUpMode;
+};
+
 export type ChatHost = ChatInputHistoryState &
   ChatScrollHost &
   ToolStreamHost &

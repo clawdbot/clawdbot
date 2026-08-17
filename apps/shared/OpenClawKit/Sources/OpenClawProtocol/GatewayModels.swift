@@ -7589,13 +7589,13 @@ public struct SessionsReclaimResult: Codable, Sendable {
     public let ok: Bool
     public let key: String
     public let sessionid: String
-    public let placement: ReclaimedSessionPlacement
+    public let placement: SessionsReclaimResultPlacement
 
     public init(
         ok: Bool,
         key: String,
         sessionid: String,
-        placement: ReclaimedSessionPlacement)
+        placement: SessionsReclaimResultPlacement)
     {
         self.ok = ok
         self.key = key
@@ -15844,6 +15844,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let deliverystatus: AnyCodable?
     public let deliveryerror: String?
     public let failurenotificationdelivery: [String: AnyCodable]?
+    public let delivery: [String: AnyCodable]?
     public let sessionid: String?
     public let sessionkey: String?
     public let runid: String?
@@ -15869,6 +15870,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         deliverystatus: AnyCodable? = nil,
         deliveryerror: String? = nil,
         failurenotificationdelivery: [String: AnyCodable]? = nil,
+        delivery: [String: AnyCodable]? = nil,
         sessionid: String? = nil,
         sessionkey: String? = nil,
         runid: String? = nil,
@@ -15893,6 +15895,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.deliverystatus = deliverystatus
         self.deliveryerror = deliveryerror
         self.failurenotificationdelivery = failurenotificationdelivery
+        self.delivery = delivery
         self.sessionid = sessionid
         self.sessionkey = sessionkey
         self.runid = runid
@@ -15919,6 +15922,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         case deliverystatus = "deliveryStatus"
         case deliveryerror = "deliveryError"
         case failurenotificationdelivery = "failureNotificationDelivery"
+        case delivery
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
         case runid = "runId"
@@ -20328,6 +20332,37 @@ public enum SessionPlacement: Codable, Sendable {
         case .reconciling(let value): try value.encode(to: encoder)
         case .reclaimed(let value): try value.encode(to: encoder)
         case .failed(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum SessionsReclaimResultPlacement: Codable, Sendable {
+    case local(LocalSessionPlacement)
+    case reclaimed(ReclaimedSessionPlacement)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "state"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "local": self = try .local(LocalSessionPlacement(from: decoder))
+        case "reclaimed": self = try .reclaimed(ReclaimedSessionPlacement(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown SessionsReclaimResultPlacement discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .local(let value): try value.encode(to: encoder)
+        case .reclaimed(let value): try value.encode(to: encoder)
         }
     }
 }

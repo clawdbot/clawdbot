@@ -33,6 +33,7 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
+  withLocalHeavyCheckLockHeld,
 } from "./lib/local-heavy-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
@@ -156,13 +157,7 @@ if (!isDirectRun()) {
 }
 
 export function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
-  const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
-  return {
-    ...resolvedBaseEnv,
-    OPENCLAW_OXLINT_SKIP_LOCK: "1",
-    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-    OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
-  };
+  return withLocalHeavyCheckLockHeld(resolveLocalHeavyCheckEnv(baseEnv));
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {

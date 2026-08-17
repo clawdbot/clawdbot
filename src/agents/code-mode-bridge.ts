@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -6,6 +7,7 @@ import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
@@ -517,6 +519,16 @@ export async function runBridgeRequest(params: {
           );
         }
         value = await readCodeModeSkill(skill, params.signal);
+        break;
+      }
+      case "sleep": {
+        const delay = values[0];
+        if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
+          throw new ToolInputError("setTimeout delay must be a non-negative finite number.");
+        }
+        value = await sleep(resolveSafeTimeoutDelayMs(delay, { minMs: 0 }), null, {
+          signal: params.signal,
+        });
         break;
       }
       case "swarmNote": {

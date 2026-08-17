@@ -858,27 +858,17 @@ jobs:
             run_native_i18n: runNativeI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
+            // Blacksmith's Windows runner class admits exactly 2 concurrent jobs
+            // (measured on run 31865243804), so the split width is pinned to 2 on
+            // every backend. A 3rd part queues behind a finished one there, and a
+            // single lane serializes the whole 226s body onto the wall.
             checks_windows_matrix: createMatrix(
               runWindows
-                ? // Blacksmith's Windows runner class admits ~2 concurrent jobs, so a
-                  // 3-part split queues its tail behind a finished part there. Split
-                  // only where every part actually lands hosted: github mode and
-                  // dispatches (dispatch runs-on forces hosted in every mode).
-                  process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ||
-                  eventName === "workflow_dispatch"
-                  ? [1, 2, 3].map((part) => ({
-                      check_name: `checks-windows-node-test-${part}`,
-                      runtime: "node",
-                      task: `test-${part}`,
-                    }))
-                  : [
-                      {
-                        check_name: "checks-windows-node-test",
-                        runtime: "node",
-                        task: "test",
-                        runner: "blacksmith-8vcpu-windows-2025",
-                      },
-                    ]
+                ? [1, 2].map((part) => ({
+                    check_name: `checks-windows-node-test-${part}`,
+                    runtime: "node",
+                    task: `test-${part}`,
+                  }))
                 : [],
             ),
             run_macos_node: runMacos,
@@ -2433,7 +2423,7 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/agents/embedded-agent-runner/run/types.ts', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-extension-package-boundary-v1-
 
@@ -2471,7 +2461,7 @@ jobs:
           # Same tree-OID gate as the boundary lane: restore only artifacts
           # produced from identical generative sources, so stale snapshots can
           # neither false-skip rebuilds nor leave ghost declarations.
-          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:src/agents/embedded-agent-runner/run/types.ts HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
           if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
             echo "boundary source trees changed since snapshot; lint prepares cold"
             exit 0
@@ -2910,7 +2900,7 @@ jobs:
           # Restored artifacts are valid by construction: no clock-skew mtime
           # race can false-skip a rebuild, and deleted/renamed sources or a
           # toolchain bump build cold.
-          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:src/agents/embedded-agent-runner/run/types.ts HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; })"
           if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
             echo "boundary source trees changed since snapshot; building cold"
             echo "restored=false" >> "$GITHUB_OUTPUT"
@@ -2933,7 +2923,7 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/agents/embedded-agent-runner/run/types.ts', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-extension-package-boundary-v1-
 
@@ -3136,7 +3126,7 @@ jobs:
           fi
           find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
             -exec rsync -aR {} "$sticky_root/" \;
-          { git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; } > "$sticky_root/.source-trees"
+          { git rev-parse HEAD:src/plugin-sdk HEAD:src/agents/embedded-agent-runner/run/types.ts HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; echo "$BOUNDARY_CONFIG_HASH"; } > "$sticky_root/.source-trees"
           touch "$sticky_root/.snapshot-ready"
 
   # Validate docs (format, lint, broken links) only when docs files changed.
@@ -3269,7 +3259,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'windows-2025' || github.event_name == 'workflow_dispatch' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-8vcpu-windows-2025') || 'windows-2025')) }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'windows-2025' || github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-windows-2025' || 'windows-2025') }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=8192
@@ -3281,7 +3271,9 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
-      max-parallel: 3
+      # Both parts must run concurrently or the split gains nothing; Blacksmith's
+      # Windows class admits exactly 2, so this is the width, not a cap.
+      max-parallel: 2
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - &platform_checkout_step
@@ -3398,19 +3390,13 @@ jobs:
         run: |
           set -euo pipefail
           case "$TASK" in
-            test)
-              # Linux owns the full repo test suite. Keep the Windows runner focused on
-              # Windows-native process/path wrappers so platform regressions fail fast.
-              pnpm test:windows:ci
-              ;;
+            # Linux owns the full repo test suite. Keep the Windows runner focused on
+            # Windows-native process/path wrappers so platform regressions fail fast.
             test-1)
               pnpm test:windows:ci:1
               ;;
             test-2)
               pnpm test:windows:ci:2
-              ;;
-            test-3)
-              pnpm test:windows:ci:3
               ;;
             *)
               echo "Unsupported Windows checks task: $TASK" >&2

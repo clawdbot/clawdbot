@@ -303,6 +303,7 @@ describe("Code Mode catalog and model-visible surface", () => {
 
     expect(execTool.description.length).toBeLessThan(2_400);
     expect(execTool.description).toContain("parallelize independent work only");
+    expect(execTool.description).toContain("`setTimeout` and `clearTimeout`");
     expect(execTool.description).toContain("65536 bytes");
     expect(execTool.description).toContain("rerun with narrower args");
     expect(codeDescription).toEqual(expect.any(String));

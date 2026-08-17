@@ -192,13 +192,13 @@ export function renderRawOutputToggle(text: string) {
   return html`
     <div class="chat-tool-card__raw">
       <button
-        class="chat-tool-card__raw-toggle"
+        class="chat-inline-disclosure chat-tool-card__raw-toggle"
         type="button"
         aria-expanded="false"
         @click=${handleRawDetailsToggle}
       >
         <span>${t("chat.toolCards.rawDetails")}</span>
-        <span class="chat-tool-card__raw-toggle-icon">${icons.chevronDown}</span>
+        <span class="chat-inline-disclosure__chevron" aria-hidden="true">${icons.chevronDown}</span>
       </button>
       <div class="chat-tool-card__raw-body" hidden>
         ${renderToolDataBlock({ label: t("chat.toolCards.toolOutput"), text })}
@@ -630,7 +630,9 @@ export function renderToolCard(
         : ""}"
     >
       <button
-        class="chat-tool-msg-summary chat-tool-row ${isRunning ? "chat-tool-row--running" : ""}"
+        class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
+          ? "chat-tool-row--running"
+          : ""}"
         type="button"
         aria-expanded=${String(opts.expanded)}
         @click=${(event: MouseEvent) => {
@@ -641,6 +643,7 @@ export function renderToolCard(
       >
         <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
         ${renderToolRowContent(card, view, outcome)}
+        <span class="chat-inline-disclosure__chevron" aria-hidden="true">${icons.chevronDown}</span>
         ${isError
           ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
           : nothing}

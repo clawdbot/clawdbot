@@ -1355,8 +1355,11 @@ describe("config cli", () => {
       ).rejects.toThrow(ExitError);
 
       expect(mockError).not.toHaveBeenCalled();
-      const payload = parseLastLogPayload() as { error: string };
-      expect(payload.error).toBe("Config path not found: nonexistent.path");
+      const payload = parseLastLogPayload() as { error: { type: string; message: string } };
+      expect(payload.error).toEqual({
+        type: "cli_error",
+        message: "Config path not found: nonexistent.path",
+      });
     });
 
     it.each([
@@ -1386,7 +1389,11 @@ describe("config cli", () => {
         expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
         expect(mockError).not.toHaveBeenCalled();
         expect(parseLastLogPayload()).toMatchObject({
-          error: expect.stringContaining(testCase.error),
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining(testCase.error),
+          },
         });
       },
     );
@@ -1405,7 +1412,11 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
       expect(mockError).not.toHaveBeenCalled();
       expect(parseLastLogPayload()).toMatchObject({
-        error: expect.stringContaining("OpenClaw config is invalid"),
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining("OpenClaw config is invalid"),
+        },
         issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
       });
     });

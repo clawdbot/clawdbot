@@ -531,7 +531,13 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
 
 // Hybrid-specific Blacksmith observations from 31949756966, plus the
 // gateway-core-3 139.5s spike in 31938297538 that must stay singleton.
+// agents-core-models: 56.3s median (n=6, p90 58.6s) across 260 compact jobs on
+// 2026-08-16 against a 36s scaled estimate. It was the dominant term in the
+// only bin measuring >=1.25x its prediction (compact-large-19, 122s vs 88s).
+// Sum a shard's per-config Duration lines before taking a median; pooling them
+// reads as a large over-prediction that is not there.
 const COMPACT_HYBRID_GROUP_SECONDS_HINTS = new Map<string, number>([
+  ["agentic-agents-core-models", 56],
   ["agentic-commands-doctor", 64],
   ["agentic-gateway-core-3", 140],
   ["core-runtime-cron-service", 80],

@@ -9,6 +9,7 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import { formatLookupMiss } from "../cli/error-format.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -323,7 +324,12 @@ export async function tasksShowCommand(
 ) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
-    runtime.error(formatTaskLookupMiss(opts.lookup));
+    const message = formatTaskLookupMiss(opts.lookup);
+    if (opts.json) {
+      writeRuntimeJson(runtime, formatCliJsonFailure(message));
+    } else {
+      runtime.error(message);
+    }
     runtime.exit(1);
     return;
   }

@@ -547,6 +547,51 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("offline");
   });
 
+  it("schedules the guarded reload and publishes a terminal phase for a stale build", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch: Control UI updated; reload this page to continue",
+      error: {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+      },
+      willRetry: false,
+    });
+
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
+      buildId: "replacement-build",
+    });
+    expect(gateway.snapshot.phase).toBe("reload-required");
+  });
+
+  it("keeps a bare protocol mismatch in the login-gate path", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "protocol mismatch",
+        details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+      },
+      willRetry: false,
+    });
+
+    expect(scheduleStaleChunkReloadMock).not.toHaveBeenCalled();
+    expect(gateway.snapshot.phase).toBe("stopped");
+    expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
+  });
+
   it("keeps reconnecting across event-gap recovery with a fresh client", () => {
     const { gateway, clients, current } = createStore();
     gateway.start();

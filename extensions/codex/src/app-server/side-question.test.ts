@@ -400,6 +400,14 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
   };
 }
 
+function sideLoopRelayParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionParams {
+  return sideParams({
+    cfg: { tools: { loopDetection: { enabled: true } } } as never,
+    sessionKey: "agent:main:session-1",
+    ...overrides,
+  });
+}
+
 function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
   return {
     plan: {
@@ -1419,7 +1427,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     await expect(
       runCodexAppServerSideQuestion(
-        sideParams({
+        sideLoopRelayParams({
           sessionKey: "agent:main:session-1",
           messageChannel: "discord",
           messageProvider: "discord-voice",
@@ -1532,7 +1540,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     await expect(
       runCodexAppServerSideQuestion(
-        sideParams({
+        sideLoopRelayParams({
           sessionKey: "agent:main:session-1",
           messageChannel: "discord",
           messageProvider: "discord-voice",
@@ -2081,7 +2089,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     try {
       await expect(
-        runCodexAppServerSideQuestion(sideParams(), {
+        runCodexAppServerSideQuestion(sideLoopRelayParams(), {
           nativeHookRelay: { enabled: true },
         }),
       ).rejects.toThrow("side turn start exploded");
@@ -2144,7 +2152,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     try {
       await expect(
-        runCodexAppServerSideQuestion(sideParams(), {
+        runCodexAppServerSideQuestion(sideLoopRelayParams(), {
           nativeHookRelay: { enabled: true },
         }),
       ).resolves.toEqual({ text: "Side answer." });
@@ -2222,7 +2230,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     try {
       await expect(
-        runCodexAppServerSideQuestion(sideParams(), {
+        runCodexAppServerSideQuestion(sideLoopRelayParams(), {
           nativeHookRelay: { enabled: true },
         }),
       ).resolves.toEqual({ text: "Side answer." });

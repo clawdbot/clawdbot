@@ -114,6 +114,21 @@ describe("openclaw-exec-approval", () => {
     );
   });
 
+  it("exposes labelled, focusable decision buttons", async () => {
+    await renderOpenedApproval(createExecRequest());
+    await getRenderedModalDialog(container);
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
+    );
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Allow once",
+      "Always allow",
+      "Deny",
+    ]);
+    expect(buttons.every((button) => button.tabIndex === 0)).toBe(true);
+  });
+
   it("does not show exec unavailable copy for restricted plugin approvals", async () => {
     await renderOpenedApproval(
       createExecRequest({

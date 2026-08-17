@@ -205,6 +205,9 @@ export function buildEmbeddedRunPayloads(params: {
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =
     currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : params.lastAssistant);
+  // Pre-upgrade recovered messages have no stored facts, and recovery intentionally does not
+  // reparse text; one in-flight reply can lose its target across this upgrade boundary.
+  const storedDelivery = assistantForPayload?.openclawDelivery;
   const lastAssistantStopReason = assistantForPayload?.stopReason;
   const lastAssistantErrored = lastAssistantStopReason === "error";
   const lastAssistantAborted = lastAssistantStopReason === "aborted";
@@ -376,16 +379,19 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+    const delivery = shouldUseCanonicalFinalAnswer
+      ? {
+          ...storedDelivery,
+          replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
+        }
+      : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !delivery.audioAsVoice) {
       continue;
     }
     replyItems.push({
       text: cleanedText,
       media: mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
+      ...delivery,
     });
     hasUserFacingAssistantReply = true;
     if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {

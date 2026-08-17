@@ -11,6 +11,7 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   noteImplicitFallbackClobberWarnings,
@@ -49,10 +50,7 @@ function collectInvalidHookTransformsDirWarnings(
   const resolved = path.isAbsolute(transformsDir)
     ? path.resolve(transformsDir)
     : path.resolve(transformsRoot, transformsDir);
-  const relative = path.relative(transformsRoot, resolved);
-  const escapesRoot =
-    relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
-  if (!escapesRoot) {
+  if (isPathInside(transformsRoot, resolved)) {
     return [];
   }
   return [

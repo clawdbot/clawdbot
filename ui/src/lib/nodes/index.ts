@@ -25,7 +25,7 @@ hashes.sha512Async = async (message: Uint8Array) => {
   if (globalThis.crypto?.subtle && subtleSha512Async) {
     return await subtleSha512Async(message);
   }
-  return (await loadPureSha2()).sha512(message);
+  return Uint8Array.from((await loadPureSha2()).sha512(message));
 };
 
 type GatewayRequestClient = {

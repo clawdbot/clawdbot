@@ -1,3 +1,4 @@
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
@@ -380,14 +381,21 @@ export function transitionMainSessionRecovery(
       if (command.attempt !== state.chargedAttempts + 1) {
         return { kind: "rejected", reason: "stale_revision" };
       }
-      const executionIdentityAdmission =
-        command.executionIdentity.state === "disabled"
-          ? undefined
-          : state.executionIdentity?.runId === command.runId
-            ? ({ kind: "retry-reference", token: state.executionIdentity } as const)
-            : undefined;
+      const retryExecutionIdentity =
+        command.executionIdentity.state === "enabled" && state.executionIdentity
+          ? state.executionIdentity.runId === command.runId
+            ? state.executionIdentity
+            : createExecutionIdentityAdmissionToken(command.runId, {
+                contextId: state.executionIdentity.contextId,
+                executionId: state.executionIdentity.executionId,
+                now: state.executionIdentity.createdAt,
+              })
+          : undefined;
+      const executionIdentityAdmission = retryExecutionIdentity
+        ? ({ kind: "retry-reference", token: retryExecutionIdentity } as const)
+        : undefined;
       updateRecoveryState(entry, state, {
-        ...(command.executionIdentity.state === "disabled" ? { executionIdentity: undefined } : {}),
+        executionIdentity: retryExecutionIdentity,
         chargedAttempts: command.attempt,
         reservation: {
           runId: command.runId,

@@ -37,12 +37,16 @@ import {
 
 const routedPayloads = vi.hoisted(() => [] as ReplyPayload[]);
 
-vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatchCore: async ({ payloads }: { payloads: ReplyPayload[] }) => {
-    routedPayloads.push(...payloads);
-    return { status: "sent", results: [{ messageId: "tts-route-1" }] };
-  },
-}));
+vi.mock("../channels/message/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/message/runtime.js")>();
+  return {
+    ...actual,
+    sendDurableMessageBatchCore: async ({ payloads }: { payloads: ReplyPayload[] }) => {
+      routedPayloads.push(...payloads);
+      return { status: "sent", results: [{ messageId: "tts-route-1" }] };
+    },
+  };
+});
 
 function installStructuredReplyTestChannel(loaded: boolean): () => void {
   const previousRegistry = captureActivePluginRegistrySnapshot();

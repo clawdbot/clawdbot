@@ -36,7 +36,7 @@ import {
   submittedCommandScopeIsVisible,
   type ChatCommandComposerRecovery,
 } from "./chat-send-composer.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
+import type { ChatHost, ChatSendOptions } from "./chat-send-contract.ts";
 import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
 import {
   canSendVolatileQueueItem,
@@ -69,7 +69,7 @@ import {
   sendQueuedChatMessageWithQueueMode as sendQueuedChatMessageWithQueueModeLifecycle,
 } from "./steer-lifecycle.ts";
 
-type ChatSendOptions = {
+type ChatSendSubmitOptions = ChatSendOptions & {
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
   /** Lets request-scoped UI actions recover from rejected local commands. */
@@ -194,7 +194,7 @@ async function sendDetachedCommandMessage(
 export async function handleSendChat(
   host: ChatHost,
   messageOverride?: string,
-  opts?: ChatSendOptions,
+  opts?: ChatSendSubmitOptions,
 ) {
   const previousDraft = host.chatMessage;
   const userMessage = (messageOverride ?? host.chatMessage).trim();
@@ -538,7 +538,9 @@ export async function handleSendChat(
       recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
       // Only an explicit browser override replaces inherited Gateway policy.
       const followUpMode =
-        host.chatFollowUpMode ?? normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
+        opts?.followUpMode ??
+        host.chatFollowUpMode ??
+        normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
       if (
         !skillWorkshopRevision &&
         followUpMode !== "queue" &&

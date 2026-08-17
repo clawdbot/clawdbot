@@ -676,30 +676,6 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
   }
 });
 
-test("createGatewaySession persists a generated title only for a new session", async () => {
-  await createSessionStoreDir();
-  const { createGatewaySession } = await import("./session-create-service.js");
-  const key = "agent:main:dashboard:generated-worktree-title";
-  const base = {
-    cfg: getRuntimeConfig(),
-    agentId: "main",
-    key,
-    commandSource: "test",
-  };
-
-  const created = await createGatewaySession({
-    ...base,
-    generatedDisplayName: "Readable Worktree Names",
-  });
-  expect(created).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
-
-  const reused = await createGatewaySession({
-    ...base,
-    generatedDisplayName: "Replacement Title",
-  });
-  expect(reused).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
-});
-
 test("chat.send fences dashboard title persistence from concurrent session deletion", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
@@ -741,9 +717,6 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     });
     expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
     await waitForFast(() => expect(dispatchInboundMessageMock).toHaveBeenCalled());
-    expect(dashboardTitleScheduleMocks.schedule).not.toHaveBeenCalled();
-
-    finishDispatch?.();
     await waitForFast(() => expect(dashboardTitleScheduleMocks.schedule).toHaveBeenCalled(), {
       timeout: 5_000,
     });
@@ -754,6 +727,7 @@ test("chat.send fences dashboard title persistence from concurrent session delet
       }),
     );
     await titleStarted;
+    finishDispatch?.();
 
     let deletionSettled = false;
     const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
@@ -774,6 +748,49 @@ test("chat.send fences dashboard title persistence from concurrent session delet
   } finally {
     finishDispatch?.();
     finishTitle?.();
+    ws.close();
+  }
+});
+
+test("chat.send persists a dashboard title while the first turn is still running", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient();
+  let finishDispatch: (() => void) | undefined;
+  let dispatchFinished = false;
+  const dispatchPending = new Promise<void>((resolve) => {
+    finishDispatch = resolve;
+  });
+  dispatchInboundMessageMock.mockImplementationOnce(async () => {
+    await dispatchPending;
+    dispatchFinished = true;
+    return {
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    };
+  });
+  try {
+    const created = await rpcReq<{ key: string }>(ws, "sessions.create", {
+      agentId: "main",
+      key: "agent:main:dashboard:title-during-turn",
+    });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
+
+    const sent = await rpcReq(ws, "chat.send", {
+      sessionKey,
+      message: "Help me plan the release",
+      idempotencyKey: "dashboard-title-during-turn",
+    });
+    expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
+    await waitForFast(() => expect(dispatchInboundMessageMock).toHaveBeenCalled());
+    await waitForFast(() =>
+      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+        displayName: "Generated Dashboard Title",
+      }),
+    );
+    expect(dispatchFinished).toBe(false);
+  } finally {
+    finishDispatch?.();
     ws.close();
   }
 });
@@ -1333,7 +1350,7 @@ test("sessions.create preserves a committed worktree when initial-turn setup fai
   }
 });
 
-test("sessions.create names its managed worktree without waiting for the model title", async () => {
+test("sessions.create shares its generated title with the worktree and first chat send", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-session-worktree-title-",
@@ -1341,7 +1358,7 @@ test("sessions.create names its managed worktree without waiting for the model t
   const workspace = await initializeGitWorkspace(openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient({ scopes: ["operator.admin"] });
   let worktreeId: string | undefined;
   const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
@@ -1351,51 +1368,129 @@ test("sessions.create names its managed worktree without waiting for the model t
     mimeType: "text/plain",
     content: Buffer.from(pastedText).toString("base64"),
   };
-  let resolveTitle: ((title: string) => void) | undefined;
-  dashboardTitleGenerationMocks.generate.mockReturnValueOnce(
-    new Promise<string>((resolve) => {
-      resolveTitle = resolve;
-    }),
-  );
+  dashboardTitleGenerationMocks.generate.mockResolvedValueOnce("Attachment Repair");
   dispatchInboundMessageMock.mockResolvedValueOnce({
     queuedFinal: false,
     counts: { block: 0, final: 0, tool: 0 },
   });
-  const createResult = rpcReq<{
-    key: string;
-    worktree: { id: string; branch: string };
-  }>(ws, "sessions.create", {
-    agentId: "main",
-    worktree: true,
-    message,
-    attachments: [attachment],
-  });
-  let createSettled = false;
-  void createResult.then(() => {
-    createSettled = true;
-  });
   try {
-    await waitForFast(() => expect(createSettled).toBe(true), {
-      timeout: 1_000,
+    const created = await rpcReq<{
+      key: string;
+      worktree: { id: string; branch: string };
+    }>(ws, "sessions.create", {
+      agentId: "main",
+      worktree: true,
+      message,
+      attachments: [attachment],
     });
-    const created = await createResult;
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     worktreeId = created.payload?.worktree.id;
-    expect(created.payload?.worktree.branch).toBe(
-      "openclaw/review-this-rollout-pasted-deployment-plan-xxxxxxxxxxxxxxxxxxxxx",
+    expect(created.payload?.worktree.branch).toBe("openclaw/attachment-repair");
+    const sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
+    await waitForFast(() => expect(dashboardTitleScheduleMocks.schedule).toHaveBeenCalled());
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      displayName: "Attachment Repair",
+    });
+    expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 4_000 }),
     );
-    resolveTitle?.("Attachment Repair");
+    expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
   } finally {
-    resolveTitle?.("Attachment Repair");
-    const created = await createResult;
-    worktreeId ??= created.payload?.worktree.id;
     if (worktreeId) {
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
     ws.close();
+    await openClawState.cleanup();
+  }
+});
+
+test.each([
+  {
+    name: "generator error",
+    key: "agent:main:subagent:worktree-title-error",
+    arrange: () => dashboardTitleGenerationMocks.generate.mockRejectedValueOnce(new Error("boom")),
+  },
+  {
+    name: "overall timeout",
+    key: "agent:main:subagent:worktree-title-timeout",
+    arrange: () =>
+      dashboardTitleGenerationMocks.generate.mockReturnValueOnce(new Promise<string>(() => {})),
+  },
+])(
+  "sessions.create falls back to the raw title source after $name",
+  async ({ key, arrange }) => {
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-session-worktree-title-fallback-",
+    });
+    const workspace = await initializeGitWorkspace(openClawState.root);
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = { workspace };
+    await createSessionStoreDir();
+    const { ws } = await openClient({ scopes: ["operator.admin"] });
+    let worktreeId: string | undefined;
+    arrange();
+    try {
+      const created = await rpcReq<{ worktree: { id: string; branch: string } }>(
+        ws,
+        "sessions.create",
+        {
+          agentId: "main",
+          key,
+          worktree: true,
+          message: "Investigate the raw fallback title",
+        },
+      );
+
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      worktreeId = created.payload?.worktree.id;
+      expect(created.payload?.worktree.branch).toBe("openclaw/investigate-the-raw-fallback-title");
+      expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
+    } finally {
+      if (worktreeId) {
+        await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+      }
+      closeOpenClawStateDatabaseForTest();
+      testState.agentConfig = undefined;
+      ws.close();
+      await openClawState.cleanup();
+    }
+  },
+  15_000,
+);
+
+test("sessions.create keeps the crustacean fallback when no title source exists", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-worktree-empty-title-",
+  });
+  const workspace = await initializeGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let worktreeId: string | undefined;
+  try {
+    const created = await directSessionReq<{ worktree: { id: string; branch: string } }>(
+      "sessions.create",
+      { agentId: "main", worktree: true },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    worktreeId = created.payload?.worktree.id;
+    expect(created.payload?.worktree.branch).toMatch(
+      /^openclaw\/[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)$/,
+    );
+    expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
+  } finally {
+    if (worktreeId) {
+      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
 });

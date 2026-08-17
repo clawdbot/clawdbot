@@ -356,16 +356,14 @@ type SessionWorkAdmissionReleaseParams = {
   identities: Iterable<string | undefined>;
 };
 
-function resolveSessionWorkAdmissionRelease(
+/** Completion of the currently active turns that own a session. */
+export function getSessionWorkAdmissionRelease(
   params: SessionWorkAdmissionReleaseParams,
-  ownedAdmissions?: ReadonlySet<SessionWorkAdmission>,
 ): Promise<void> | undefined {
   const matchingAdmissions = new Set<SessionWorkAdmission>();
   for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
     for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
-      if (!ownedAdmissions || ownedAdmissions.has(admission)) {
-        matchingAdmissions.add(admission);
-      }
+      matchingAdmissions.add(admission);
     }
   }
   if (matchingAdmissions.size === 0) {
@@ -377,24 +375,6 @@ function resolveSessionWorkAdmissionRelease(
   return Promise.all(Array.from(matchingAdmissions, (admission) => admission.released)).then(
     () => undefined,
   );
-}
-
-/** Completion of this caller's admitted turn for the requested session identities. */
-export function getCurrentSessionWorkAdmissionRelease(
-  params: SessionWorkAdmissionReleaseParams,
-): Promise<void> | undefined {
-  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
-  if (!currentAdmissions?.size) {
-    return undefined;
-  }
-  return resolveSessionWorkAdmissionRelease(params, currentAdmissions);
-}
-
-/** Completion of the currently active turns that own a session. */
-export function getSessionWorkAdmissionRelease(
-  params: SessionWorkAdmissionReleaseParams,
-): Promise<void> | undefined {
-  return resolveSessionWorkAdmissionRelease(params);
 }
 
 /** Active session identities for one store/lifecycle scope. */

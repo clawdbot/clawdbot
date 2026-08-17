@@ -84,7 +84,20 @@
           "enabled": { "type": "boolean", "default": true },
           "homes": {
             "type": "array",
-            "items": { "type": "string", "minLength": 1, "pattern": "\\S" }
+            "items": {
+              "anyOf": [
+                { "type": "string", "minLength": 1, "pattern": "\\S" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path"],
+                  "properties": {
+                    "path": { "type": "string", "minLength": 1, "pattern": "\\S" },
+                    "label": { "type": "string", "minLength": 1, "pattern": "\\S" }
+                  }
+                }
+              ]
+            }
           }
         }
       },
@@ -406,7 +419,7 @@
     },
     "sessionCatalog.homes": {
       "label": "Additional Codex Homes",
-      "help": "Existing local Codex home directories to include in native session discovery. Paths are canonicalized and deduplicated. Requires appServer.transport=stdio and a Gateway restart.",
+      "help": "Existing local Codex home directories to include in native session discovery. String paths use the canonical directory basename as their label; object entries can override it with label. Paths are canonicalized and deduplicated. Requires appServer.transport=stdio and a Gateway restart.",
       "advanced": true
     },
     "codexDynamicToolsLoading": {

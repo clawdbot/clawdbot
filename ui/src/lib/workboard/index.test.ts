@@ -316,6 +316,18 @@ describe("workboard controller", () => {
     ).toBe("claude-cli");
   });
 
+  it("filters malformed metadata children without discarding valid siblings", () => {
+    expect(
+      normalizeMetadata({
+        comments: [
+          { id: "comment-1", body: "kept", createdAt: 1 },
+          { id: "comment-2", body: 42, createdAt: 2 },
+          null,
+        ],
+      }),
+    ).toEqual({ comments: [{ id: "comment-1", body: "kept", createdAt: 1 }] });
+  });
+
   describe("runtime ownership", () => {
     it("keeps state pristine when lifecycle teardown happens before first access", () => {
       const pristineHost = {};

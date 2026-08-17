@@ -59,6 +59,12 @@ suite.define(() => {
       approval("approval-active", "echo active", 1_000),
     );
     await currentPage.getByText("echo active", { exact: true }).waitFor();
+    await currentPage.getByRole("button", { name: "Allow once" }).focus();
+    expect(
+      await currentPage
+        .getByRole("button", { name: "Allow once" })
+        .evaluate((button) => button === document.activeElement),
+    ).toBe(true);
     await currentPage.getByRole("button", { name: "Allow once" }).click();
 
     await gateway.emitGatewayEvent(
@@ -80,6 +86,7 @@ suite.define(() => {
       .toBe("Approval failed: gateway unavailable");
 
     await approvalAttentionChip(currentPage).click();
+    await currentPage.getByRole("dialog", { name: "Exec approval needed" }).waitFor();
     const approvalModal = await waitForConfirmModal(currentPage);
     await approvalModal.getByText("echo newer", { exact: true }).click();
     await expect

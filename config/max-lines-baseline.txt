@@ -272,7 +272,6 @@ extensions/workboard/src/store-card-helpers.ts
 extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
-extensions/workboard/src/tools.ts
 extensions/xai/realtime-voice-provider.test.ts
 extensions/xai/web-search.test.ts
 extensions/zalo/src/monitor.ts
@@ -400,7 +399,6 @@ src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
 src/agents/sessions/package-manager.ts
 src/agents/sessions/resource-loader.ts
-src/agents/sessions/settings-manager.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
 src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
@@ -867,7 +865,6 @@ src/wizard/setup.finalize.ts
 src/wizard/setup.test.ts
 src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
-ui/src/api/types.ts
 ui/src/lib/cron/index.test.ts
 ui/src/lib/cron/index.ts
 ui/src/lib/nodes/index.ts

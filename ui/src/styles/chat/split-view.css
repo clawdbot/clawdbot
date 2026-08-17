@@ -585,21 +585,23 @@ openclaw-chat-pane {
 }
 
 .chat-pane__actions .chat-tasks-toggle {
-  width: auto;
-  gap: 3px;
-  padding-inline: 5px;
+  position: relative;
 }
 
 .chat-tasks-toggle__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 7px;
-  color: currentColor;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
-  line-height: 1;
+  position: absolute;
+  top: 0;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 14px;
+  text-align: center;
 }
 
 .chat-pane__sharing-menu {

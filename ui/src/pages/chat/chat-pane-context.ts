@@ -33,9 +33,9 @@ import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import {
-  invalidateChatMetadataCache,
   refreshChatModelAuthStatus,
   refreshPageChat,
+  retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
@@ -234,7 +234,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       invalidateChatAvatarCache(state);
       invalidateAssistantIdentityCache(state.client);
       state.assistantIdentityRequestVersion += 1;
-      invalidateChatMetadataCache(state);
+      retireChatMetadataRequests(state);
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
       this.taskSuggestionsRequestVersion += 1;

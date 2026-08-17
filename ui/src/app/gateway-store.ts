@@ -437,23 +437,27 @@ export function createApplicationGateway(
         if (mismatchedBuildId) {
           void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
         }
+        const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
         setSnapshot({
           ...snapshot,
           client: nextClient,
-          phase: everConnected
-            ? willRetry
-              ? "reconnecting"
-              : "offline"
-            : willRetry
-              ? "connecting"
-              : "stopped",
+          phase:
+            mismatchedBuildId !== null
+              ? "reload-required"
+              : everConnected
+                ? willRetry
+                  ? "reconnecting"
+                  : "offline"
+                : willRetry
+                  ? "connecting"
+                  : "stopped",
           hello: null,
           canvasPluginSurfaceUrl: null,
           selfUser: null,
           lastError: error?.message
             ? formatUiError(error.message)
             : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
-          lastErrorCode: resolveGatewayErrorDetailCode(error) ?? error?.code ?? null,
+          lastErrorCode,
         });
       },
       onGap: ({ expected, received }) => {

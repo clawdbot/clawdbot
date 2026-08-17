@@ -3,6 +3,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -60,7 +61,7 @@ describe("worker environment service", () => {
         ownerEpoch: 1,
         sessionId: "session-1",
       }),
-    ).rejects.toThrow("must bootstrap the current build");
+    ).rejects.toThrow(STALE_WORKER_BUILD_REASON);
     expect(support.testState.store.get(staleId)).toMatchObject({
       state: "ready",
       attachedSessionIds: [],

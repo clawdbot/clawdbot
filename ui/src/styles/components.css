@@ -5144,29 +5144,6 @@ td.data-table-key-col {
   }
 }
 
-/* ── Shared collapse chevron ── */
-
-.collapse-chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform var(--duration-fast) ease;
-}
-
-.collapse-chevron svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.collapse-chevron--collapsed {
-  transform: rotate(-90deg);
-}
-
 /* Mobile pairing */
 .device-pair-setup {
   max-height: calc(100dvh - 48px);

@@ -5,6 +5,7 @@ import {
   SessionPlacementStateSchema,
   validateSessionsDispatchParams,
   validateSessionsReclaimParams,
+  validateSessionsReclaimResult,
 } from "../index.js";
 
 const placementStates = [
@@ -80,6 +81,33 @@ describe("session dispatch protocol schemas", () => {
     expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", profileId: "dev" })).toBe(
       false,
     );
+  });
+
+  it("accepts exactly the reclaim owner's terminal outcomes", () => {
+    const result = {
+      ok: true,
+      key: "agent:main:dispatch",
+      sessionId: "session-dispatch",
+    };
+
+    expect(
+      validateSessionsReclaimResult({
+        ...result,
+        placement: { state: "local", ...basePlacement },
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsReclaimResult({
+        ...result,
+        placement: { state: "reclaimed", ...basePlacement },
+      }),
+    ).toBe(true);
+    for (const placement of [
+      { state: "requested", ...basePlacement },
+      { state: "active", ...basePlacement, ...workerOwnedFields },
+    ]) {
+      expect(validateSessionsReclaimResult({ ...result, placement })).toBe(false);
+    }
   });
 
   it("keeps placement states closed", () => {

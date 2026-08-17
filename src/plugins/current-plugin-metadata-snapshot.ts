@@ -279,10 +279,9 @@ export function withPluginMetadataSnapshotScope<T>(
     : snapshot.configFingerprint;
   const configIdentities = new WeakSet<OpenClawConfig>();
   if (options.config) {
-    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config);
-    if (policyHash === snapshot.policyHash || compatiblePolicyHashes?.includes(policyHash)) {
-      configIdentities.add(options.config);
-    }
+    // The closure owner already paired this exact config with its immutable generation.
+    // Recomputing policy compatibility here makes nested hot paths discard prepared facts.
+    configIdentities.add(options.config);
   }
   for (const config of options.compatibleConfigs ?? []) {
     configIdentities.add(config);

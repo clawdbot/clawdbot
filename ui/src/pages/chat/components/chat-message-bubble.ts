@@ -463,7 +463,7 @@ export function renderGroupedMessage(
                 : ""}"
             >
               <button
-                class="chat-tool-msg-summary"
+                class="chat-inline-disclosure chat-tool-msg-summary"
                 type="button"
                 aria-expanded=${String(toolMessageExpanded)}
                 @click=${(event: MouseEvent) => {
@@ -479,6 +479,9 @@ export function renderGroupedMessage(
                   : toolPreview
                     ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
                     : nothing}
+                <span class="chat-inline-disclosure__chevron" aria-hidden="true"
+                  >${icons.chevronDown}</span
+                >
                 ${toolMessageHasError
                   ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
                   : nothing}

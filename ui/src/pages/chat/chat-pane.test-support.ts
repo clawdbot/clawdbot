@@ -117,7 +117,6 @@ export type TestChatPane = HTMLElement & {
   loadingOlder: boolean;
   catalogCursor: string | undefined;
   olderCursorsSeen: Set<string>;
-  olderOffsetsSeen: Set<number>;
   headerEditing: boolean;
   headerRenameValue: string;
   beginHeaderRename: (row: GatewaySessionRow) => void;

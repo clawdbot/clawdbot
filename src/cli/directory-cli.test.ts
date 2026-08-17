@@ -499,7 +499,7 @@ describe("registerDirectoryCli", () => {
       ],
       "Channel demo-directory does not support group members listing",
     ],
-  ])("writes JSON errors for unsupported directory %s", async (_label, args, expectedError) => {
+  ])("bubbles JSON errors for unsupported directory %s", async (_label, args, expectedError) => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { "demo-directory": {} } },
       channelId: "demo-directory",
@@ -513,12 +513,11 @@ describe("registerDirectoryCli", () => {
     const program = new Command().name("openclaw");
     registerDirectoryCli(program);
 
-    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(expectedError);
 
-    expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledOnce();
-    expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+    expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
-    expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -541,18 +540,18 @@ describe("registerDirectoryCli", () => {
     const program = new Command().name("openclaw");
     registerDirectoryCli(program);
 
-    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
-
     if (mode === "JSON") {
-      const payload = JSON.parse(runtimeState.runtimeLogs.at(-1) ?? "");
-      expect(payload).toEqual({ error: error.message });
+      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(error.message);
+      expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
       expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
+      expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
     } else {
+      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
       expect(runtimeErrors()).toEqual([error.message]);
       expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
     }
     expect([...runtimeState.runtimeLogs, ...runtimeErrors()].join("\n")).not.toContain(error.name);
-    expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it.each([

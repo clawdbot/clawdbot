@@ -38,7 +38,6 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { BoardChatDockSize } from "./board-session-surface.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
@@ -379,12 +378,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected historyIntentTimer: number | null = null;
   protected historyTouchY: number | null = null;
   protected transcriptScrollTop: number | null = null;
-  protected nativePaginationSnapshot: ChatHistoryPagination | null = null;
   // Older cursors already requested this session. A provider that cycles cursors
   // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since
   // the sentinel never scrolls out of view when nothing new renders.
   protected readonly olderCursorsSeen = new Set<string>();
-  protected readonly olderOffsetsSeen = new Set<number>();
 
   constructor() {
     super();

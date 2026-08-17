@@ -1149,7 +1149,6 @@ openclaw-settings-save-indicator {
 
 .sidebar-update-card__actions {
   display: flex;
-  align-items: stretch;
   gap: 5px;
 }
 
@@ -1246,8 +1245,7 @@ html.openclaw-native-macos
   cursor: wait;
 }
 
-/* The install outlives the request that started it, so the card keeps moving
-   for the whole wait instead of reading as a dead disabled button. */
+/* Keep the card moving while its install outlives the initiating request. */
 .sidebar-update-card__action--busy .sidebar-update-card__icon svg {
   animation: sidebar-update-card-spin 1s linear infinite;
 }
@@ -1264,20 +1262,22 @@ html.openclaw-native-macos
   }
 }
 
-/* The update outcome belongs beside the control that started it, not over the
-   top of the shell where it covers unrelated chrome. While the update dialog is
-   open it owns the report, so the ambient copy would only duplicate it. */
+/* Keep the outcome beside its control, except while the dialog owns the report. */
 body.update-dialog-open .sidebar-update-card__status {
   display: none;
 }
 
 .sidebar-update-card__status {
-  padding: 8px 10px;
+  padding: 8px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.sidebar-update-card__status + .sidebar-update-card__actions {
+  margin-top: 6px;
 }
 
 .sidebar-update-card__status--danger {
@@ -1421,7 +1421,7 @@ body.update-dialog-open .sidebar-update-card__status {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
-  margin: 0 -8px;
+  margin-inline: -8px 0;
   /* Sessions are app chrome, not hyperlinks: the whole region follows the
      base.css cursor policy so it tracks the window it is running in. */
   cursor: var(--cursor-action);
@@ -3865,6 +3865,15 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .content > openclaw-device-scope-upgrade-banner:has(.scope-upgrade-chip-row) + * {
   margin-top: 8px;
+}
+
+.connection-action-block {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .content--chat {

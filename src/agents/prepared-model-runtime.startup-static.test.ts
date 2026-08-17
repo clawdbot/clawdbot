@@ -398,7 +398,14 @@ describe("prepared model runtime Gateway catalog mode", () => {
         includePluginCatalogs: true,
         modelsJsonContents: null,
         pluginCatalogs: [],
-        pluginMetadataSnapshot: mocks.metadataSnapshot,
+        pluginMetadataSnapshot: expect.objectContaining({
+          ...mocks.metadataSnapshot,
+          index: expect.objectContaining({
+            ...mocks.metadataSnapshot.index,
+            workspaceDir: "/tmp/prepared-static-workspace",
+          }),
+          workspaceDir: "/tmp/prepared-static-workspace",
+        }),
         workspaceDir: "/tmp/prepared-static-workspace",
       }),
     );

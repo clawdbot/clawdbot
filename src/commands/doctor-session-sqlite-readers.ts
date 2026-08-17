@@ -14,10 +14,12 @@ import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+
+type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
 type ReadOnlySqliteSessionSummary = {
   entry: SessionEntry;
@@ -472,6 +474,9 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
 }
 
 export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
+  if (target.sqlitePath) {
+    return resolveOpenClawAgentSqlitePath({ agentId: target.agentId, path: target.sqlitePath });
+  }
   const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
   });

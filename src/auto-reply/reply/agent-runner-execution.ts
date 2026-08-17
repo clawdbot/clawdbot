@@ -13,6 +13,7 @@ import {
   classifyFailoverReason,
   isContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
+import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
@@ -31,7 +32,9 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -79,6 +82,8 @@ type InternalFollowupRun = FollowupRun & {
   currentTurnImagesPrepared?: true;
   mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
 };
+
+const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
 function resolveRunStartupPhase(
   phase: EmbeddedAgentExecutionPhase,
@@ -531,7 +536,7 @@ async function executeAgentTurnInternal(
 }
 
 /** Runs the agent turn with provider/model fallback, retry, and closed settlement. */
-export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
+async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
@@ -642,6 +647,73 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     if (isReplyOperationUserAbort(executionParams.replyOperation)) {
       return { runId, outcome: { kind: "aborted", reason: "user" } };
     }
+    throw error;
+  }
+}
+
+function recordMessageToolOnlyRunOutcome(
+  params: AgentTurnParams,
+  result: AgentTurnExecutionResult | undefined,
+): void {
+  const sourceReplyDeliveryMode =
+    params.followupRun.run.sourceReplyDeliveryMode ?? params.opts?.sourceReplyDeliveryMode;
+  if (sourceReplyDeliveryMode !== "message_tool_only") {
+    return;
+  }
+  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+  if (!sessionKey) {
+    messageToolOutcomeLog.warn("message-tool-only run outcome missing session key", {
+      runId: result?.runId ?? params.opts?.runId,
+      agentId: params.followupRun.run.agentId,
+    });
+    return;
+  }
+  const outcome = result?.outcome;
+  const resolved =
+    outcome?.kind === "settled" || outcome?.kind === "rejected" ? outcome.resolved : undefined;
+  const provider = resolved?.provider ?? params.followupRun.run.provider;
+  const model = resolved?.model ?? params.followupRun.run.model;
+  const runStatus: "completed" | "errored" | "aborted" =
+    outcome?.kind === "aborted" || (outcome?.kind === "settled" && outcome.abortReason)
+      ? "aborted"
+      : !outcome || outcome.kind === "rejected" || outcome.status === "failed"
+        ? "errored"
+        : "completed";
+  const toolDelivered =
+    outcome?.kind === "settled" && hasCompletedSourceReplyDeliveryEvidence(outcome.result);
+  const values = {
+    runId: result?.runId ?? params.opts?.runId ?? "unknown",
+    sessionKey,
+    agentId: params.followupRun.run.agentId,
+    provider,
+    model,
+    outcome: toolDelivered ? ("tool_delivered" as const) : ("mute" as const),
+    runStatus,
+    occurredAt: Date.now(),
+    storePath: params.storePath,
+  };
+  try {
+    recordMessageToolRunOutcome(values);
+    messageToolOutcomeLog.info("recorded message-tool-only run outcome", values);
+  } catch (error) {
+    messageToolOutcomeLog.warn("failed to record message-tool-only run outcome", {
+      ...values,
+      error: formatErrorMessage(error),
+    });
+  }
+}
+
+/** Runs the agent turn and records its message-tool-only visible-outcome fact once. */
+export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const executionParams =
+    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
+  try {
+    const result = await executeAgentTurnOutcome(executionParams);
+    recordMessageToolOnlyRunOutcome(executionParams, result);
+    return result;
+  } catch (error) {
+    recordMessageToolOnlyRunOutcome(executionParams, undefined);
     throw error;
   }
 }

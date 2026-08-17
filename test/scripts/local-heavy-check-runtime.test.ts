@@ -13,6 +13,7 @@ import {
   resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForOxlint,
   shouldAcquireLocalHeavyCheckLockForTsgo,
+  withLocalHeavyCheckLockHeld,
 } from "../../scripts/lib/local-heavy-check-runtime.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -43,6 +44,18 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("local-heavy-check-runtime", () => {
+  it("marks every nested heavy-check wrapper as covered by the parent lock", () => {
+    const baseEnv = { BASE: "1" };
+
+    expect(withLocalHeavyCheckLockHeld(baseEnv)).toEqual({
+      BASE: "1",
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+    });
+    expect(baseEnv).toEqual({ BASE: "1" });
+  });
+
   it("resolves repo tools from the primary checkout for dependency-less worktrees", () => {
     const primaryRoot = createTempDir("openclaw-primary-checkout-");
     const cwd = path.join(primaryRoot, ".codex", "worktrees", "task", "openclaw");

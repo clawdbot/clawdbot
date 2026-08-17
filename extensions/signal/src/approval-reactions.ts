@@ -3,7 +3,6 @@ import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-clie
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import {
   addApprovalReactionHintToText,
-  buildApprovalReactionHint,
   createApprovalReactionTargetStore,
   hasApprovalReactionHintText,
   listApprovalReactionBindings,
@@ -355,19 +354,6 @@ function listSignalApprovalReactionBindings(
   return listApprovalReactionBindings({ allowedDecisions });
 }
 
-export function buildSignalApprovalReactionHint(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): string | null {
-  return buildApprovalReactionHint({ allowedDecisions });
-}
-
-export function addSignalApprovalReactionHintToText(params: {
-  text: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  return addApprovalReactionHintToText(params);
-}
-
 function buildTargetRoute(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -524,7 +510,7 @@ export function addSignalApprovalReactionHintToStructuredPayload(params: {
   }
   return {
     ...params.payload,
-    text: addSignalApprovalReactionHintToText({
+    text: addApprovalReactionHintToText({
       text: params.payload.text,
       allowedDecisions: metadata.allowedDecisions,
     }),

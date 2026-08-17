@@ -5,7 +5,10 @@ import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import { formatMs } from "./lib/check-timing-summary.mts";
-import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mts";
+import {
+  acquireLocalHeavyCheckLockSync,
+  withLocalHeavyCheckLockHeld,
+} from "./lib/local-heavy-check-runtime.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
@@ -309,7 +312,7 @@ async function main() {
           baseEnv,
           cwd: process.cwd(),
         });
-  const runSpecs = applyDefaultMultiSpecVitestCachePaths(
+  let runSpecs = applyDefaultMultiSpecVitestCachePaths(
     applyDefaultVitestNoOutputTimeout(
       applyFullExtensionsHeapBudget(rawRunSpecs, { env: baseEnv }),
       {
@@ -325,13 +328,20 @@ async function main() {
     return;
   }
 
-  releaseLock = shouldAcquireLocalHeavyCheckLock(runSpecs, baseEnv)
+  const acquiresLocalHeavyCheckLock = shouldAcquireLocalHeavyCheckLock(runSpecs, baseEnv);
+  releaseLock = acquiresLocalHeavyCheckLock
     ? acquireLocalHeavyCheckLockSync({
         cwd: process.cwd(),
         env: baseEnv,
         toolName: "test",
       })
     : () => {};
+  if (acquiresLocalHeavyCheckLock || baseEnv.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD === "1") {
+    runSpecs = runSpecs.map((spec) => ({
+      ...spec,
+      env: withLocalHeavyCheckLockHeld(spec.env),
+    }));
+  }
 
   const isFullSuiteRun =
     targetArgs.length === 0 &&
