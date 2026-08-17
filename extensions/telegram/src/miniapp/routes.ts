@@ -7,6 +7,11 @@ import {
   issueDeviceBootstrapToken,
 } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  readJsonBodyWithLimit,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
 import type { TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
@@ -89,20 +94,37 @@ async function handleAuth(
     return;
   }
 
-  const body = await readJsonBody(req);
-  if (body === "too-large") {
-    sendText(res, 413, "Payload too large");
-    return;
-  }
-  if (!body) {
+  const body = await readJsonBodyWithLimit(req, {
+    maxBytes: MAX_BODY_BYTES,
+    timeoutMs: WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs,
+    emptyObjectOnEmpty: false,
+  });
+  if (!body.ok) {
+    if (body.code === "PAYLOAD_TOO_LARGE") {
+      sendText(res, 413, body.error);
+      return;
+    }
+    if (body.code === "REQUEST_BODY_TIMEOUT") {
+      sendText(res, 408, body.error);
+      return;
+    }
+    if (body.code === "CONNECTION_CLOSED") {
+      sendText(res, 400, body.error);
+      return;
+    }
     sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     return;
   }
-  const accountId = normalizeAccountId(body.accountId ?? DEFAULT_ACCOUNT_ID);
+  const authBody = parseAuthBody(body.value);
+  if (!authBody) {
+    sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+    return;
+  }
+  const accountId = normalizeAccountId(authBody.accountId ?? DEFAULT_ACCOUNT_ID);
   const cfg = currentConfig(api);
   const account = resolveTelegramAccount({ cfg, accountId });
   const validated = validateTelegramMiniAppInitData({
-    initData: body.initData,
+    initData: authBody.initData,
     botToken: account.token,
   });
   if (!validated) {
@@ -123,7 +145,7 @@ async function handleAuth(
   }
   if (
     !launchTickets.consume({
-      ticket: body.launchTicket,
+      ticket: authBody.launchTicket,
       accountId,
       userId: validated.userId,
     })
@@ -153,36 +175,20 @@ function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
 }
 
-async function readJsonBody(
-  req: IncomingMessage,
-): Promise<{ initData: string; launchTicket: string; accountId?: string } | "too-large" | null> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.length;
-    if (total > MAX_BODY_BYTES) {
-      return "too-large";
-    }
-    chunks.push(buffer);
-  }
-  try {
-    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-      initData?: unknown;
-      launchTicket?: unknown;
-      accountId?: unknown;
-    };
-    if (typeof parsed.initData !== "string" || typeof parsed.launchTicket !== "string") {
-      return null;
-    }
-    return {
-      initData: parsed.initData,
-      launchTicket: parsed.launchTicket,
-      ...(typeof parsed.accountId === "string" ? { accountId: parsed.accountId } : {}),
-    };
-  } catch {
+function parseAuthBody(
+  value: unknown,
+): { initData: string; launchTicket: string; accountId?: string } | null {
+  if (!isRecord(value)) {
     return null;
   }
+  if (typeof value.initData !== "string" || typeof value.launchTicket !== "string") {
+    return null;
+  }
+  return {
+    initData: value.initData,
+    launchTicket: value.launchTicket,
+    ...(typeof value.accountId === "string" ? { accountId: value.accountId } : {}),
+  };
 }
 
 function consumeRateLimit(ip: string): boolean {

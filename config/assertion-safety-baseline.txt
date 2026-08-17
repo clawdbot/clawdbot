@@ -1304,7 +1304,7 @@ extensions/telegram/src/lane-delivery-text-deliverer.ts	1
 extensions/telegram/src/message-cache.ts	10
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
-extensions/telegram/src/miniapp/routes.ts	2
+extensions/telegram/src/miniapp/routes.ts	1
 extensions/telegram/src/monitor.ts	4
 extensions/telegram/src/network-config.ts	1
 extensions/telegram/src/network-errors.ts	8
