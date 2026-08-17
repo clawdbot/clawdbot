@@ -247,13 +247,32 @@ Write-Host "[OK] Windows detected" -ForegroundColor Green
 function Test-NodeVersionSupported {
     param([string]$Version)
 
-    $versionMatch = [regex]::Match($Version, '^v?(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)')
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return $false
+    }
+    # This standalone installer runs before OpenClaw exists on disk. Mirror the
+    # release grammar in node-version.mjs; parity cases guard this boundary.
+    $versionMatch = [regex]::Match(
+        $Version,
+        '^\s*v?(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\s*$'
+    )
     if (-not $versionMatch.Success) {
         return $false
     }
-    $major = [int]$versionMatch.Groups["major"].Value
-    $minor = [int]$versionMatch.Groups["minor"].Value
-    $patch = [int]$versionMatch.Groups["patch"].Value
+    $major = 0L
+    $minor = 0L
+    $patch = 0L
+    $maxSafeInteger = 9007199254740991L
+    if (
+        -not [long]::TryParse($versionMatch.Groups["major"].Value, [ref]$major) -or
+        -not [long]::TryParse($versionMatch.Groups["minor"].Value, [ref]$minor) -or
+        -not [long]::TryParse($versionMatch.Groups["patch"].Value, [ref]$patch) -or
+        $major -gt $maxSafeInteger -or
+        $minor -gt $maxSafeInteger -or
+        $patch -gt $maxSafeInteger
+    ) {
+        return $false
+    }
     if ($major -eq 22) {
         return ($minor -gt 22 -or ($minor -eq 22 -and $patch -ge 3))
     }

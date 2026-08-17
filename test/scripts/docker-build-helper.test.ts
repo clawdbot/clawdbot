@@ -4431,19 +4431,20 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(runner).not.toMatch(/openclaw_e2e_probe_tcp[^\n]*\|\|[^\n]*gateway-net-e2e\.log/u);
   });
 
-  it("copies root lifecycle scripts before cleanup-smoke installs dependencies", () => {
+  it("copies root lifecycle inputs before cleanup-smoke installs dependencies", () => {
     const dockerfile = readFileSync(CLEANUP_SMOKE_DOCKERFILE_PATH, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
 
-    for (const script of [
+    for (const input of [
+      "node-version.mjs",
       "scripts/preinstall-package-manager-warning.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
       "scripts/prepare-git-hooks.mjs",
     ]) {
-      const copyIndex = dockerfile.indexOf(script);
+      const copyIndex = dockerfile.indexOf(input);
 
-      expect(copyIndex, script).toBeGreaterThanOrEqual(0);
-      expect(copyIndex, script).toBeLessThan(installIndex);
+      expect(copyIndex, input).toBeGreaterThanOrEqual(0);
+      expect(copyIndex, input).toBeLessThan(installIndex);
     }
   });
 

@@ -4,6 +4,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
+import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.ps1";
@@ -179,14 +181,10 @@ describe("install.ps1 failure handling", () => {
           scriptWithoutEntryPoint,
           "",
           "$cases = @{",
-          "  '22.22.2' = $false",
-          "  '22.22.3' = $true",
-          "  '23.11.0' = $false",
-          "  '24.14.1' = $false",
-          "  '24.15.0' = $true",
-          "  '25.8.1' = $false",
-          "  '25.9.0' = $true",
-          "  '26.0.0' = $true",
+          ...NODE_RELEASE_VERSION_CASES.map(
+            (version) =>
+              `  ${toPowerShellSingleQuotedLiteral(version)} = $${isSupportedOpenClawNodeVersion(version)}`,
+          ),
           "}",
           "foreach ($entry in $cases.GetEnumerator()) {",
           "  $actual = Test-NodeVersionSupported -Version $entry.Key",

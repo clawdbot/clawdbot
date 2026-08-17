@@ -76,6 +76,7 @@ MIN_NODE_22_VERSION="22.22.3"
 MIN_NODE_24_VERSION="24.15.0"
 MIN_NODE_25_VERSION="25.9.0"
 SUPPORTED_NODE_VERSION_LABEL="Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+"
+NODE_RELEASE_VERSION_CORE=""
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
@@ -508,10 +509,10 @@ linked_node_is_usable() {
 
   current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
   required_version="$(required_node_version)"
-  if ! node_version_is_supported "$current_version"; then
+  if ! node_release_version_is_supported "$current_version"; then
     return 1
   fi
-  if ! semver_at_least "$current_version" "$required_version"; then
+  if ! semver_at_least "$NODE_RELEASE_VERSION_CORE" "$required_version"; then
     return 1
   fi
   candidate_bin="$(node_dir)/bin"
@@ -590,6 +591,32 @@ semver_at_least() {
   ((version_patch >= required_patch))
 }
 
+node_release_version_is_supported() {
+  local version="$1"
+  local major minor patch
+
+  NODE_RELEASE_VERSION_CORE=""
+  while [[ "$version" == [[:space:]]* ]]; do version="${version#?}"; done
+  while [[ "$version" == *[[:space:]] ]]; do version="${version%?}"; done
+  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+    return 1
+  fi
+  major="${BASH_REMATCH[1]}"
+  minor="${BASH_REMATCH[2]}"
+  patch="${BASH_REMATCH[3]}"
+  for part in "$major" "$minor" "$patch"; do
+    if ((${#part} > 16)) || ((${#part} == 16 && 10#$part > 9007199254740991)); then
+      return 1
+    fi
+  done
+
+  NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
+  node_version_is_supported "$NODE_RELEASE_VERSION_CORE"
+}
+
+# Download labels are plain numeric Node distribution versions. Installed
+# runtimes use node_release_version_is_supported, which accepts canonical
+# release labels with a leading v or build metadata.
 node_version_is_supported() {
   local version="${1#v}"
   local major minor patch

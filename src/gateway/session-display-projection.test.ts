@@ -25,7 +25,7 @@ describe("projectSessionDisplayMessage", () => {
       },
     ];
 
-    expect(messages.map(projectSessionDisplayMessage)).toEqual([
+    expect(messages.map((message) => projectSessionDisplayMessage(message))).toEqual([
       { role: "user", text: "Initial request" },
       { role: "assistant", text: "Visible final answer" },
       null,
@@ -42,6 +42,16 @@ describe("projectSessionDisplayMessage", () => {
 
     expect(preview?.text).toHaveLength(SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS);
     expect(preview?.text).toBe(`${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS - 3)}...`);
+  });
+
+  test("flattens Markdown before bounding a preview", () => {
+    const longUrl = `https://example.com/${"x".repeat(SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS)}`;
+    const preview = projectSessionDisplayMessage(
+      { role: "assistant", content: `Read the [deployment guide](${longUrl})` },
+      { flattenMarkdown: true },
+    );
+
+    expect(preview?.text).toBe("Read the deployment guide");
   });
 
   test("preserves quoted directive examples", () => {

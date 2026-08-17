@@ -98,7 +98,7 @@ function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]):
     entries
       .toReversed()
       .map(sqliteMessageEventWithSeq)
-      .map((message) => projectSessionDisplayMessage(message))
+      .map((message) => projectSessionDisplayMessage(message, { flattenMarkdown: true }))
       .find(Boolean)?.text ?? null
   );
 }

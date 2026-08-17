@@ -1,3 +1,4 @@
+import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
@@ -9,6 +10,11 @@ const SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS = 240;
 type SessionDisplayProjection = {
   role: "user" | "assistant";
   text: string;
+};
+
+type SessionDisplayProjectionOptions = {
+  flattenMarkdown?: boolean;
+  maxChars?: number;
 };
 
 function extractUserText(message: Record<string, unknown>): string | undefined {
@@ -36,7 +42,7 @@ function extractUserText(message: Record<string, unknown>): string | undefined {
 /** Projects one transcript row onto the bounded text shared by session-list consumers. */
 export function projectSessionDisplayMessage(
   message: unknown,
-  maxChars = SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS,
+  options: SessionDisplayProjectionOptions = {},
 ): SessionDisplayProjection | null {
   const entry = readRecord(message);
   if (!entry) {
@@ -55,12 +61,15 @@ export function projectSessionDisplayMessage(
   if (role === "user") {
     text = stripEnvelope(text).trim();
   }
+  if (options.flattenMarkdown) {
+    text = flattenMarkdownToPlainText(text);
+  }
   if (!text) {
     return null;
   }
   const limit = Math.min(
     SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS,
-    Math.max(20, Math.floor(maxChars)),
+    Math.max(20, Math.floor(options.maxChars ?? SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS)),
   );
   return {
     role,

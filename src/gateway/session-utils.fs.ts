@@ -1222,7 +1222,7 @@ export function buildSessionPreviewItems(
 ): SessionPreviewItem[] {
   const items: SessionPreviewItem[] = [];
   for (const message of messages) {
-    const projected = projectSessionDisplayMessage(message, maxChars);
+    const projected = projectSessionDisplayMessage(message, { maxChars });
     if (!projected) {
       continue;
     }

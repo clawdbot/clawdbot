@@ -234,7 +234,6 @@
   "music-generation",
   "video-generation",
   "video-generation-runtime",
-  "video-generation-core",
   "reply-history",
   "realtime-transcription",
   "realtime-bootstrap-context",

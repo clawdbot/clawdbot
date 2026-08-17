@@ -401,7 +401,8 @@ Default Docker image: `openclaw-sandbox:bookworm-slim`
 
 The `scripts/sandbox-setup.sh`, `scripts/sandbox-common-setup.sh`, and `scripts/sandbox-browser-setup.sh` helper scripts are only available when running from a [source checkout](https://github.com/openclaw/openclaw). They are not included in the npm package.
 
-If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker build` commands shown below instead.
+If you installed the global OpenClaw npm package, use the inline `docker build`
+commands shown below instead.
 </Note>
 
 <Steps>

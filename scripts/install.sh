@@ -1570,25 +1570,25 @@ parse_node_version_components_for_binary() {
     fi
     local version major minor patch
     version="$("$node_bin" -v 2>/dev/null || true)"
-    major="${version#v}"
-    major="${major%%.*}"
-    minor="${version#v}"
-    minor="${minor#*.}"
-    minor="${minor%%.*}"
-    patch="${version#v}"
-    patch="${patch#*.}"
-    patch="${patch#*.}"
-    patch="${patch%%.*}"
+    version="${version#"${version%%[![:space:]]*}"}"
+    version="${version%"${version##*[![:space:]]}"}"
 
-    if [[ ! "$major" =~ ^[0-9]+$ ]]; then
+    # This standalone installer runs before OpenClaw exists on disk. Mirror the
+    # release grammar in node-version.mjs; parity cases guard this boundary.
+    if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
         return 1
     fi
-    if [[ ! "$minor" =~ ^[0-9]+$ ]]; then
-        return 1
-    fi
-    if [[ ! "$patch" =~ ^[0-9]+$ ]]; then
-        return 1
-    fi
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    patch="${BASH_REMATCH[3]}"
+
+    local component
+    for component in "$major" "$minor" "$patch"; do
+        if ((${#component} > 16)) ||
+            ((${#component} == 16 && 10#$component > 9007199254740991)); then
+            return 1
+        fi
+    done
     echo "${major} ${minor} ${patch}"
     return 0
 }

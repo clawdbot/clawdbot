@@ -29,6 +29,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "node-version.mjs",
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",
@@ -241,7 +242,6 @@
     "!dist/plugin-sdk/tts-runtime.d.ts",
     "!dist/plugin-sdk/types.d.ts",
     "!dist/plugin-sdk/video-generation.d.ts",
-    "!dist/plugin-sdk/video-generation-core.d.ts",
     "!dist/plugin-sdk/video-generation-runtime.d.ts",
     "!dist/plugin-sdk/web-content-extractor.d.ts",
     "!dist/plugin-sdk/webhook-targets.d.ts",
@@ -1142,9 +1142,6 @@
     },
     "./plugin-sdk/video-generation-runtime": {
       "default": "./dist/plugin-sdk/video-generation-runtime.js"
-    },
-    "./plugin-sdk/video-generation-core": {
-      "default": "./dist/plugin-sdk/video-generation-core.js"
     },
     "./plugin-sdk/reply-history": {
       "types": "./dist/plugin-sdk/reply-history.d.ts",

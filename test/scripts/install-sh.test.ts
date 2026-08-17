@@ -17,6 +17,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
+import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
@@ -1880,7 +1882,7 @@ NODE
     expect(output).toContain("version=v22.22.3");
   });
 
-  it("uses the package engine range when accepting existing Node runtimes", () => {
+  it("mirrors the canonical release-label contract for existing Node runtimes", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       engines?: { node?: string };
     };
@@ -1909,12 +1911,12 @@ NODE
           "unset -f node 2>/dev/null || true",
           "unalias node 2>/dev/null || true",
           'node() { printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"; }',
-          "for version in 22.22.2 22.22.3 23.11.0 24.14.1 24.15.0 25.8.1 25.9.0 26.0.0; do",
-          '  FAKE_NODE_VERSION="v${version}"',
-          "  export FAKE_NODE_VERSION",
-          "  node_is_supported",
-          '  printf "%s=%s\\n" "$version" "$?"',
-          "done",
+          ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
+            `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
+            "export FAKE_NODE_VERSION",
+            "node_is_supported",
+            `printf '${index}=%s\\n' "$?"`,
+          ]),
           "exit 0",
         ].join("\n"),
         {
@@ -1927,14 +1929,10 @@ NODE
     }
 
     expect(result?.status).toBe(0);
-    expect(result?.stdout).toContain("22.22.2=1");
-    expect(result?.stdout).toContain("22.22.3=0");
-    expect(result?.stdout).toContain("23.11.0=1");
-    expect(result?.stdout).toContain("24.14.1=1");
-    expect(result?.stdout).toContain("24.15.0=0");
-    expect(result?.stdout).toContain("25.8.1=1");
-    expect(result?.stdout).toContain("25.9.0=0");
-    expect(result?.stdout).toContain("26.0.0=0");
+    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
+      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
+      expect(result?.stdout, version).toContain(`${index}=${expectedStatus}`);
+    }
   });
 
   it("rejects a supported Node version when its linked SQLite is unsafe", () => {

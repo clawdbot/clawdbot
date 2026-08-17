@@ -25,7 +25,7 @@ const sessionSecondRowProofDir = path.join(
 );
 
 suite.define(() => {
-  it("replaces an intermediate running subtitle with the durable final reply", async () => {
+  it("replaces an intermediate running subtitle with the unread final digest", async () => {
     if (captureUiProofEnabled) {
       await mkdir(terminalMetadataProofDir, { recursive: true });
     }
@@ -72,7 +72,7 @@ suite.define(() => {
         observerDigest: {
           agentId: "main",
           runId,
-          headline: "Implementing the repair",
+          headline: "Repair landed cleanly",
           health: "done",
           updatedAt: Date.now() + 1,
           revision: 2,
@@ -112,7 +112,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listCount);
-      await row.getByText("The repaired sidebar now shows the final reply.").waitFor();
+      await row.getByText("Repair landed cleanly").waitFor();
       expect(await row.textContent()).not.toContain("[[");
       if (captureUiProofEnabled) {
         await page.screenshot({

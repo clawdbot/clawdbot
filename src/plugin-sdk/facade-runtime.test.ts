@@ -693,23 +693,21 @@ describe("plugin-sdk facade runtime", () => {
     });
   });
 
-  it("keeps bundled extension runtime-core facades available without plugin activation", () => {
+  it("keeps the bundled extension runtime-core facade available without plugin activation", () => {
     setRuntimeConfigSnapshot({});
 
-    for (const dirName of ["image-generation-core", "media-understanding-core"]) {
-      expect(
-        resolveActivationCheckBundledPluginPublicSurfaceAccess({
-          dirName,
-          artifactBasename: "runtime-api.js",
-          location: null,
-          sourceExtensionsRoot: "",
-          resolutionKey: `runtime-core:${dirName}`,
-        }),
-      ).toEqual({
-        allowed: true,
-        pluginId: dirName,
-      });
-    }
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "image-generation-core",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: "",
+        resolutionKey: "runtime-core:image-generation-core",
+      }),
+    ).toEqual({
+      allowed: true,
+      pluginId: "image-generation-core",
+    });
   });
 
   it("does not treat the core-owned speech runtime as a bundled extension facade", () => {

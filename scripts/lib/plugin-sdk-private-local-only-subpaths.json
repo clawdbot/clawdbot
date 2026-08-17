@@ -185,7 +185,6 @@
   "tts-runtime",
   "types",
   "video-generation",
-  "video-generation-core",
   "video-generation-runtime",
   "web-content-extractor",
   "webhook-targets",
