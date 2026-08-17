@@ -215,84 +215,128 @@ import subprocess
 import sys
 
 checkout = os.fsencode(sys.argv[1])
-commit = sys.argv[2]
+commit = os.fsencode(sys.argv[2])
+visited: set[tuple[bytes, bytes]] = set()
 
-def run_git(*arguments: str) -> bytes:
+def run_git(repository: bytes, *arguments: str) -> bytes:
     return subprocess.run(
-        ["git", "--no-replace-objects", "-C", os.fsdecode(checkout), *arguments],
+        ["git", "-c", "core.commitGraph=false", "--no-replace-objects", "-C", os.fsdecode(repository), *arguments],
         check=True,
         stdout=subprocess.PIPE,
     ).stdout
 
-try:
-    object_format = run_git("rev-parse", "--show-object-format").strip().decode("ascii")
-    tree = run_git("ls-tree", "-rz", commit)
-except (OSError, subprocess.CalledProcessError, UnicodeError):
-    raise SystemExit(2)
-
-if object_format not in {"sha1", "sha256"}:
-    raise SystemExit(2)
-
-expected: dict[bytes, tuple[bytes, bytes]] = {}
-gitlinks: set[bytes] = set()
-for record in tree.split(b"\0"):
-    if not record:
-        continue
-    metadata, path = record.split(b"\t", 1)
-    mode, object_type, object_id = metadata.split(b" ", 2)
-    if object_type == b"blob":
-        expected[path] = (mode, object_id)
-    elif object_type == b"commit":
-        gitlinks.add(path)
-
-def is_gitlink_path(path: bytes) -> bool:
-    return any(path == gitlink or path.startswith(gitlink + b"/") for gitlink in gitlinks)
-
-actual: set[bytes] = set()
-for root, directories, files in os.walk(checkout, topdown=True, followlinks=False):
-    relative_root = os.path.relpath(root, checkout)
-    relative_root = b"" if relative_root == b"." else relative_root
-    kept_directories: list[bytes] = []
-    for directory in directories:
-        relative = os.path.join(relative_root, directory) if relative_root else directory
-        absolute = os.path.join(root, directory)
-        if relative == b".git" or is_gitlink_path(relative):
-            continue
-        if os.path.islink(absolute):
-            actual.add(relative)
-        else:
-            kept_directories.append(directory)
-    directories[:] = kept_directories
-    for filename in files:
-        relative = os.path.join(relative_root, filename) if relative_root else filename
-        if relative == b".git" or is_gitlink_path(relative):
-            continue
-        actual.add(relative)
-
-if actual != set(expected):
+def object_format_for(object_id: bytes) -> str:
+    if len(object_id) == 40:
+        return "sha1"
+    if len(object_id) == 64:
+        return "sha256"
     raise SystemExit(1)
 
-digest = hashlib.new(object_format)
-for path, (mode, expected_id) in expected.items():
-    absolute = os.path.join(checkout, path)
-    file_stat = os.lstat(absolute)
-    if mode == b"120000":
-        if not stat.S_ISLNK(file_stat.st_mode):
-            raise SystemExit(1)
-        contents = os.fsencode(os.readlink(absolute))
-    else:
-        if not stat.S_ISREG(file_stat.st_mode):
-            raise SystemExit(1)
-        executable = bool(file_stat.st_mode & stat.S_IXUSR)
-        if executable != (mode == b"100755"):
-            raise SystemExit(1)
-        with open(absolute, "rb") as source:
-            contents = source.read()
-    digest = hashlib.new(object_format)
-    digest.update(f"blob {len(contents)}\0".encode("ascii"))
+def read_verified_object(repository: bytes, object_type: str, object_id: bytes) -> bytes:
+    try:
+        contents = run_git(repository, "cat-file", object_type, object_id.decode("ascii"))
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        raise SystemExit(2) from None
+    digest = hashlib.new(object_format_for(object_id))
+    digest.update(f"{object_type} {len(contents)}\0".encode("ascii"))
     digest.update(contents)
-    if digest.hexdigest().encode("ascii") != expected_id:
+    if digest.hexdigest().encode("ascii") != object_id:
         raise SystemExit(1)
+    return contents
+
+def verify_repository(repository: bytes, expected_commit: bytes) -> None:
+    if not os.path.isdir(repository) or os.path.islink(repository):
+        raise SystemExit(1)
+    identity = (os.path.realpath(repository), expected_commit)
+    if identity in visited:
+        raise SystemExit(1)
+    visited.add(identity)
+
+    try:
+        head = run_git(repository, "rev-parse", "HEAD").strip()
+        run_git(repository, "fsck", "--full", "--strict", "--no-dangling", expected_commit.decode("ascii"))
+    except (OSError, subprocess.CalledProcessError):
+        raise SystemExit(2) from None
+    if head != expected_commit:
+        raise SystemExit(1)
+
+    commit = read_verified_object(repository, "commit", expected_commit)
+    tree_line = commit.split(b"\n", 1)[0]
+    if not tree_line.startswith(b"tree "):
+        raise SystemExit(1)
+    tree_id = tree_line.removeprefix(b"tree ")
+    object_format = object_format_for(tree_id)
+    if object_format != object_format_for(expected_commit):
+        raise SystemExit(1)
+    read_verified_object(repository, "tree", tree_id)
+    try:
+        listing = run_git(repository, "ls-tree", "-rz", tree_id.decode("ascii"))
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        raise SystemExit(2) from None
+    expected: dict[bytes, tuple[bytes, bytes]] = {}
+    gitlinks: dict[bytes, bytes] = {}
+    for record in listing.split(b"\0"):
+        if not record:
+            continue
+        metadata, path = record.split(b"\t", 1)
+        mode, object_type, object_id = metadata.split(b" ", 2)
+        if object_type == b"blob":
+            expected[path] = (mode, object_id)
+        elif object_type == b"commit":
+            gitlinks[path] = object_id
+
+    def is_gitlink_path(path: bytes) -> bool:
+        return any(path == gitlink or path.startswith(gitlink + b"/") for gitlink in gitlinks)
+
+    actual: set[bytes] = set()
+    for root, directories, files in os.walk(repository, topdown=True, followlinks=False):
+        relative_root = os.path.relpath(root, repository)
+        relative_root = b"" if relative_root == b"." else relative_root
+        kept_directories: list[bytes] = []
+        for directory in directories:
+            relative = os.path.join(relative_root, directory) if relative_root else directory
+            absolute = os.path.join(root, directory)
+            if relative == b".git" or is_gitlink_path(relative):
+                continue
+            if os.path.islink(absolute):
+                actual.add(relative)
+            else:
+                kept_directories.append(directory)
+        directories[:] = kept_directories
+        for filename in files:
+            relative = os.path.join(relative_root, filename) if relative_root else filename
+            if relative == b".git" or is_gitlink_path(relative):
+                continue
+            actual.add(relative)
+
+    if actual != set(expected):
+        raise SystemExit(1)
+
+    for path, (mode, expected_id) in expected.items():
+        absolute = os.path.join(repository, path)
+        file_stat = os.lstat(absolute)
+        if mode == b"120000":
+            if not stat.S_ISLNK(file_stat.st_mode):
+                raise SystemExit(1)
+            contents = os.fsencode(os.readlink(absolute))
+        else:
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise SystemExit(1)
+            executable = bool(file_stat.st_mode & stat.S_IXUSR)
+            if executable != (mode == b"100755"):
+                raise SystemExit(1)
+            with open(absolute, "rb") as source:
+                contents = source.read()
+        digest = hashlib.new(object_format)
+        digest.update(f"blob {len(contents)}\0".encode("ascii"))
+        digest.update(contents)
+        if digest.hexdigest().encode("ascii") != expected_id:
+            raise SystemExit(1)
+
+    for path, object_id in gitlinks.items():
+        verify_repository(os.path.join(repository, path), object_id)
+
+verify_repository(checkout, commit)
 PY
   then
     echo "ERROR: Compiled Peekaboo checkout does not exactly match its committed source" >&2

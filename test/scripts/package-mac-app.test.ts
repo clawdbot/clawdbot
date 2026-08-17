@@ -272,41 +272,11 @@ function getCompiledPeekabooHelperBlock(): string {
   return script.slice(start, end);
 }
 
-function runCompiledPeekabooHarness(options: { head: string; expected: string }) {
-  const root = tempDirs.make("openclaw-compiled-peekaboo-");
-  const binDir = path.join(root, "bin");
-  const buildPath = path.join(root, "build");
-  mkdirSync(path.join(buildPath, "checkouts", "Peekaboo", ".git"), { recursive: true });
-  mkdirSync(binDir, { recursive: true });
-  const gitPath = path.join(binDir, "git");
-  writeFileSync(
-    gitPath,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'case "$*" in',
-      "  *'rev-parse --show-object-format'*) printf '%s\\n' sha1 ;;",
-      "  *'rev-parse HEAD'*) printf '%s\\n' \"$MOCK_HEAD\" ;;",
-      "  *'ls-tree -rz'*) exit 0 ;;",
-      "  *) exit 2 ;;",
-      "esac",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  chmodSync(gitPath, 0o755);
-  return runHelper(`
-    set -euo pipefail
-    PATH=${JSON.stringify(`${binDir}:/usr/bin:/bin`)}
-    export MOCK_HEAD=${JSON.stringify(options.head)}
-    ${getCompiledPeekabooHelperBlock()}
-    compiled_peekaboo_commit ${JSON.stringify(buildPath)} ${JSON.stringify(options.expected)}
-  `);
-}
-
 function runRealCompiledPeekabooHarness(
   mutation:
     | "assume-unchanged"
+    | "corrupt-object"
+    | "dirty-gitlink"
     | "export-subst"
     | "gitlink-sibling"
     | "ignored"
@@ -314,6 +284,7 @@ function runRealCompiledPeekabooHarness(
     | "none"
     | "replacement-ref"
     | "untracked",
+  expectedOverride?: string,
 ) {
   const root = tempDirs.make(`openclaw-compiled-peekaboo-real-${mutation}-`);
   const buildPath = path.join(root, "build");
@@ -338,11 +309,32 @@ function runRealCompiledPeekabooHarness(
     encoding: "utf8",
   }).stdout.trim();
 
-  if (mutation === "gitlink-sibling" || mutation === "nested-gitlink") {
-    const gitlinkPath = mutation === "nested-gitlink" ? "Dependencies/Vendor" : "Vendor";
+  if (
+    mutation === "dirty-gitlink" ||
+    mutation === "gitlink-sibling" ||
+    mutation === "nested-gitlink"
+  ) {
+    const gitlinkPath = mutation === "gitlink-sibling" ? "Vendor" : "Dependencies/Vendor";
+    const gitlinkCheckout = path.join(checkout, gitlinkPath);
+    mkdirSync(gitlinkCheckout, { recursive: true });
+    writeFileSync(path.join(gitlinkCheckout, "README.md"), "initialized submodule\n");
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.name", "Fixture"],
+      ["config", "user.email", "fixture@example.invalid"],
+      ["add", "."],
+      ["commit", "-qm", "submodule fixture"],
+    ]) {
+      const result = spawnSync("git", args, { cwd: gitlinkCheckout, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    const gitlinkHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: gitlinkCheckout,
+      encoding: "utf8",
+    }).stdout.trim();
     const added = spawnSync(
       "git",
-      ["update-index", "--add", "--cacheinfo", `160000,${head},${gitlinkPath}`],
+      ["update-index", "--add", "--cacheinfo", `160000,${gitlinkHead},${gitlinkPath}`],
       { cwd: checkout, encoding: "utf8" },
     );
     expect(added.status, added.stderr).toBe(0);
@@ -351,8 +343,6 @@ function runRealCompiledPeekabooHarness(
       encoding: "utf8",
     });
     expect(committed.status, committed.stderr).toBe(0);
-    mkdirSync(path.join(checkout, gitlinkPath), { recursive: true });
-    writeFileSync(path.join(checkout, gitlinkPath, "README.md"), "initialized submodule\n");
     head = spawnSync("git", ["rev-parse", "HEAD"], {
       cwd: checkout,
       encoding: "utf8",
@@ -370,6 +360,16 @@ function runRealCompiledPeekabooHarness(
     );
     expect(hidden.status, hidden.stderr).toBe(0);
     writeFileSync(sourcePath, "let fixture = 2\n", "utf8");
+  } else if (mutation === "corrupt-object") {
+    const treeId = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: checkout,
+      encoding: "utf8",
+    }).stdout.trim();
+    const objectPath = path.join(checkout, ".git", "objects", treeId.slice(0, 2), treeId.slice(2));
+    chmodSync(objectPath, 0o644);
+    writeFileSync(objectPath, "corrupt object\n");
+  } else if (mutation === "dirty-gitlink") {
+    writeFileSync(path.join(checkout, "Dependencies", "Vendor", "README.md"), "dirty submodule\n");
   } else if (mutation === "export-subst") {
     writeFileSync(sourcePath, `let fixture = "${head}"\n`, "utf8");
   } else if (mutation === "gitlink-sibling") {
@@ -410,7 +410,7 @@ function runRealCompiledPeekabooHarness(
   return runHelper(`
     set -euo pipefail
     ${getCompiledPeekabooHelperBlock()}
-    compiled_peekaboo_commit ${JSON.stringify(buildPath)} ${JSON.stringify(head)}
+    compiled_peekaboo_commit ${JSON.stringify(buildPath)} ${JSON.stringify(expectedOverride ?? head)}
   `);
 }
 
@@ -1520,12 +1520,12 @@ describe("package-mac-app plist stamping", () => {
   });
 
   it("stamps only the clean Peekaboo source that SwiftPM actually compiled", () => {
-    const revision = "d".repeat(40);
-    const matching = runCompiledPeekabooHarness({ head: revision, expected: revision });
-    expect(matching.status, matching.stderr).toBe(0);
-    expect(matching.stdout).toBe(revision);
-
-    const mismatched = runCompiledPeekabooHarness({ head: "e".repeat(40), expected: revision });
+    const verifier = getCompiledPeekabooHelperBlock();
+    expect(verifier).toContain('"core.commitGraph=false"');
+    expect(verifier).toContain('"--no-replace-objects"');
+    expect(verifier).toContain('"fsck", "--full", "--strict"');
+    expect(verifier).toContain('"cat-file", object_type');
+    const mismatched = runRealCompiledPeekabooHarness("none", "e".repeat(40));
     expect(mismatched.status).toBe(1);
     expect(mismatched.stderr).toContain("does not match locked source");
 
@@ -1536,6 +1536,8 @@ describe("package-mac-app plist stamping", () => {
 
     for (const mutation of [
       "assume-unchanged",
+      "corrupt-object",
+      "dirty-gitlink",
       "export-subst",
       "gitlink-sibling",
       "ignored",
