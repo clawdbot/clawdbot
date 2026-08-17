@@ -2,18 +2,22 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-// Owns file-backed shrink-only baseline mechanics: snapshot loading, debt comparison,
-// and deterministic failure/shrink guidance. The chained-assertion exclusion ledger stays in
-// type-assertion-guard-scope.mjs because it is live scope policy synchronously imported by the
-// plain-JS oxlint plugin, not a baseline; folding it here would couple that runtime to git/fs
-// machinery without reusing any ratchet behavior.
+// Owns file-backed baseline loading, comparison, and deterministic failure/shrink guidance.
+// The chained-assertion ledger stays in type-assertion-guard-scope.mjs: it is live scope policy
+// loaded by plain-JS oxlint, not a baseline, and folding it here would couple oxlint to git/fs.
 
 export type RatchetCountDelta = { allowed: number; current: number; entry: string };
-export type RatchetFailureGroup = { entries: readonly string[]; title: string };
-export type RatchetScalarMessages = { decreased?: string; increased?: string };
 
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 const compareEntries = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
+
+function readGitText(root: string, args: string[]) {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
 
 function resolvesCommit(root: string, ref: string) {
   try {
@@ -38,11 +42,7 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
   // Branches own their grandfathered debt from the fork. Comparing against a
   // moving base tip turns unrelated cleanup there into a local expansion.
   try {
-    return execFileSync("git", ["merge-base", "HEAD", resolved], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    return readGitText(root, ["merge-base", "HEAD", resolved]).trim();
   } catch {
     return resolved;
   }
@@ -55,11 +55,7 @@ export function loadRatchetSnapshot<T>(
   parse: (source: string) => T,
 ) {
   const source = staged
-    ? execFileSync("git", ["show", ":" + baselinePath], {
-        cwd: root,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      })
+    ? readGitText(root, ["show", ":" + baselinePath])
     : fs.readFileSync(path.join(root, baselinePath), "utf8");
   return parse(source);
 }
@@ -70,25 +66,10 @@ export function loadRatchetReference<T>(
   baselinePath: string,
   parse: (source: string) => T,
 ) {
-  execFileSync("git", ["rev-parse", "--verify", ref + "^{commit}"], {
-    cwd: root,
-    stdio: "ignore",
-  });
-  const entry = execFileSync("git", ["ls-tree", "--name-only", ref, "--", baselinePath], {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
-  if (entry !== baselinePath) {
-    return null;
-  }
-  return parse(
-    execFileSync("git", ["show", ref + ":" + baselinePath], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }),
-  );
+  const entry = readGitText(root, ["ls-tree", "--name-only", ref, "--", baselinePath]).trim();
+  return entry === baselinePath
+    ? parse(readGitText(root, ["show", ref + ":" + baselinePath]))
+    : null;
 }
 
 export function loadRatchetSources(root: string, filePaths: string[]) {
@@ -210,50 +191,42 @@ export function compareRatchetCounts(
   allowed: ReadonlyMap<string, number>,
 ) {
   return {
-    increased: [...current]
-      .filter(([entry, count]) => count > (allowed.get(entry) ?? 0))
-      .map(
-        ([entry, count]): RatchetCountDelta => ({
-          allowed: allowed.get(entry) ?? 0,
-          current: count,
-          entry,
-        }),
-      )
-      .toSorted((left, right) => compareEntries(left.entry, right.entry)),
-    decreased: [...allowed]
-      .filter(([entry, count]) => (current.get(entry) ?? 0) < count)
-      .map(
-        ([entry, count]): RatchetCountDelta => ({
-          allowed: count,
-          current: current.get(entry) ?? 0,
-          entry,
-        }),
-      )
-      .toSorted((left, right) => compareEntries(left.entry, right.entry)),
+    increased: collectRatchetDeltas(current, allowed, true),
+    decreased: collectRatchetDeltas(allowed, current, false),
   };
 }
 
-export function compareRatchetScalar(current: number, allowed: number) {
-  return { decreased: current < allowed, increased: current > allowed };
+function collectRatchetDeltas(
+  entries: ReadonlyMap<string, number>,
+  counterpart: ReadonlyMap<string, number>,
+  increased: boolean,
+) {
+  return [...entries]
+    .flatMap(([entry, count]): RatchetCountDelta[] => {
+      const other = counterpart.get(entry) ?? 0;
+      return count > other
+        ? [{ allowed: increased ? other : count, current: increased ? count : other, entry }]
+        : [];
+    })
+    .toSorted((left, right) => compareEntries(left.entry, right.entry));
 }
 
 export function formatRatchetMessage(title: string, entries: readonly string[]) {
   return [title, ...entries.map((entry) => "  " + entry)].join("\n");
 }
 
-export function reportRatchetFailures(groups: readonly RatchetFailureGroup[], guidance?: string) {
-  let failed = false;
-  for (const group of groups) {
-    if (group.entries.length === 0) {
-      continue;
-    }
+export function reportRatchetFailures(
+  groups: readonly { entries: readonly string[]; title: string }[],
+  guidance?: string,
+) {
+  const active = groups.filter((group) => group.entries.length > 0);
+  for (const group of active) {
     console.error(formatRatchetMessage(group.title, group.entries));
-    failed = true;
   }
-  if (failed && guidance) {
+  if (active.length > 0 && guidance) {
     console.error(guidance);
   }
-  return failed;
+  return active.length > 0;
 }
 
 export function reportRatchetSuccess(message: string) {
@@ -263,11 +236,11 @@ export function reportRatchetSuccess(message: string) {
 export function enforceRatchetScalar(
   current: number,
   allowed: number,
-  messages: RatchetScalarMessages,
+  messages: { decreased?: string; increased?: string },
 ) {
-  const comparison = compareRatchetScalar(current, allowed);
-  const failure = comparison.increased ? messages.increased : messages.decreased;
-  if ((comparison.increased || comparison.decreased) && failure) {
+  const failure =
+    current > allowed ? messages.increased : current < allowed ? messages.decreased : undefined;
+  if (failure) {
     throw new Error(failure);
   }
 }

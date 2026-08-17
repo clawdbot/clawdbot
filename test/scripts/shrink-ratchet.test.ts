@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   compareRatchetCounts,
-  compareRatchetScalar,
   compareRatchetSets,
   enforceRatchetScalar,
   formatRatchetMessage,
@@ -127,28 +126,21 @@ describe("shrink-ratchet", () => {
       },
       name: "per-entry counts",
     },
-    {
-      compare: () => compareRatchetScalar(1, 2),
-      expected: { decreased: true, increased: false },
-      name: "scalar counts",
-    },
   ])("compares $name without permitting growth", ({ compare, expected }) => {
     expect(compare()).toEqual(expected);
   });
 
   it.each([
-    { allowed: 2, current: 1, expected: { decreased: true, increased: false } },
-    { allowed: 2, current: 2, expected: { decreased: false, increased: false } },
-    { allowed: 2, current: 3, expected: { decreased: false, increased: true } },
-  ])("classifies scalar $current against $allowed", ({ allowed, current, expected }) => {
-    expect(compareRatchetScalar(current, allowed)).toEqual(expected);
-  });
-
-  it.each([
     { current: 3, message: "budget grew", messages: { increased: "budget grew" } },
+    { current: 2, message: undefined, messages: {} },
     { current: 1, message: "shrink the budget", messages: { decreased: "shrink the budget" } },
   ])("preserves scalar failure messaging", ({ current, message, messages }) => {
-    expect(() => enforceRatchetScalar(current, 2, messages)).toThrow(message);
+    const enforce = () => enforceRatchetScalar(current, 2, messages);
+    if (message) {
+      expect(enforce).toThrow(message);
+    } else {
+      expect(enforce).not.toThrow();
+    }
   });
 
   it("formats shrink guidance", () => {

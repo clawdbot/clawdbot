@@ -182,13 +182,6 @@ export function collectCurrentSuppressionState(
   };
 }
 
-export function collectCurrentSuppressions(
-  root = process.cwd(),
-  options: { staged?: boolean } = {},
-) {
-  return collectCurrentSuppressionState(root, options).explicit;
-}
-
 function writeBaseline(root: string, entries: string[]) {
   fs.writeFileSync(path.join(root, BASELINE_PATH), BASELINE_HEADER + entries.join("\n") + "\n");
 }

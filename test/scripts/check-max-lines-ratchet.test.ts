@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  collectCurrentSuppressions,
+  collectCurrentSuppressionState,
   hasAllRuleDisable,
   hasMaxLinesDisable,
   isGovernedSourcePath,
@@ -314,7 +314,7 @@ describe("check-max-lines-ratchet", () => {
     fs.writeFileSync(path.join(root, filePath), "/* oxlint-disable max-lines */\n");
     git(root, ["add", "."]);
 
-    expect(collectCurrentSuppressions(root, { staged: true })).toEqual([filePath]);
+    expect(collectCurrentSuppressionState(root, { staged: true }).explicit).toEqual([filePath]);
   });
 
   it("checks untracked sources and tolerates unstaged deletions", () => {
