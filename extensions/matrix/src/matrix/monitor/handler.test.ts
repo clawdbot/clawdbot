@@ -323,13 +323,13 @@ describe("matrix monitor handler pairing account scope", () => {
     );
   });
 
-  it("logs final delivery from the settled dispatch receipt", async () => {
+  it("logs final delivery from the settled receipt instead of legacy counters", async () => {
     const logVerboseMessage = vi.fn();
     const { handler } = createMatrixHandlerTestHarness({
       logVerboseMessage,
       dispatchInboundMessage: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
+        queuedFinal: false,
+        counts: { final: 0, block: 0, tool: 0 },
         settledReceipt: {
           anyVisibleDelivered: true,
           counts: {
