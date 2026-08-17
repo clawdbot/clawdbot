@@ -6,6 +6,8 @@ type AssistantTextPhaseBlock = {
 
 export type PendingCommentaryTags = Map<AssistantTextPhaseBlock, string>;
 
+const EMPTY_ASSISTANT_TEXT_BLOCK_SET: ReadonlySet<unknown> = new Set();
+
 function isAssistantTextPhaseBlock(block: unknown): block is AssistantTextPhaseBlock {
   if (!block || typeof block !== "object") {
     return false;
@@ -47,6 +49,7 @@ export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): Pendi
 export function tagInterruptedTextPhases(
   content: ReadonlyArray<unknown>,
   interruptedText: unknown,
+  preservedVisibleText: ReadonlySet<unknown> = EMPTY_ASSISTANT_TEXT_BLOCK_SET,
 ): void {
   const interruptedTextIndex = content.indexOf(interruptedText);
   if (interruptedTextIndex === -1) {
@@ -61,8 +64,16 @@ export function tagInterruptedTextPhases(
   if (finalAnswerIndex === -1) {
     return;
   }
-  tagUnphasedText(content.slice(0, finalAnswerIndex), "commentary", "commentary");
-  tagUnphasedText(content.slice(finalAnswerIndex), "final_answer", "final-answer");
+  tagUnphasedText(
+    content.slice(0, finalAnswerIndex).filter((block) => !preservedVisibleText.has(block)),
+    "commentary",
+    "commentary",
+  );
+  tagUnphasedText(
+    content.filter((block, index) => index >= finalAnswerIndex || preservedVisibleText.has(block)),
+    "final_answer",
+    "final-answer",
+  );
 }
 
 /** Prevents unresolved completion text from becoming a fallback answer after stream failure. */

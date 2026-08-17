@@ -248,6 +248,19 @@ const openAiSplitVisibleReasoningDetailsChunks = [
   makeOpenAiChunk({}, "stop"),
 ] satisfies OpenAIChunk[];
 
+const openAiVisibleDetailBeforeInterruptedContentChunks = [
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "response.output_text", text: "Visible first." }],
+  }),
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "reasoning.text", text: " Hidden second." }],
+  }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ reasoning_content: "Hidden fourth." }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
 const openAiTrailingReasoningChunks = [
   makeOpenAiChunk({ reasoning_content: "First thought." }),
   makeOpenAiChunk({ content: "Answer." }),
@@ -721,6 +734,46 @@ describe("provider and transport observable parity fixtures", () => {
           { type: "text", text: " Visible third." },
         ]);
       }
+    }
+  });
+
+  it("preserves earlier visible details when later ordinary content is interrupted", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(
+        implementation,
+        "success",
+        openAiVisibleDetailBeforeInterruptedContentChunks,
+        true,
+        openRouterModel,
+      );
+
+      expect(result.terminal.content).toEqual([
+        {
+          type: "text",
+          text: "Visible first.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+        {
+          type: "thinking",
+          thinking: " Hidden second.",
+          thinkingSignature: "reasoning_details",
+        },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Hidden fourth.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-1","phase":"final_answer"}',
+        },
+      ]);
     }
   });
 });

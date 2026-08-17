@@ -214,6 +214,7 @@ export const streamOpenAICompletions: StreamFunction<
       // *_end event is emitted exactly once.
       const finishedBlocks = new Set<StreamingBlock>();
       const contentIndices = new WeakMap<StreamingBlock, number>();
+      let explicitVisibleTextBlocks: Set<TextContent> | undefined;
       const appendBlock = (block: StreamingBlock) => {
         contentIndices.set(block, blocks.length);
         blocks.push(block);
@@ -276,6 +277,9 @@ export const streamOpenAICompletions: StreamFunction<
         if (!textBlock) {
           textBlock = { type: "text", text: "" };
           textBlockSource = source;
+          if (source === "reasoning_detail") {
+            (explicitVisibleTextBlocks ??= new Set()).add(textBlock);
+          }
           appendBlock(textBlock);
           stream.push({
             type: "text_start",
@@ -639,7 +643,11 @@ export const streamOpenAICompletions: StreamFunction<
         );
       }
       if (output.stopReason !== "toolUse" && confirmedInterruptedTextBlock) {
-        tagInterruptedTextPhases(output.content, confirmedInterruptedTextBlock);
+        tagInterruptedTextPhases(
+          output.content,
+          confirmedInterruptedTextBlock,
+          explicitVisibleTextBlocks,
+        );
       }
       // Tool completion is irreversible: confirm the terminal before closing
       // blocks, then preserve their original text/thinking/tool event order.

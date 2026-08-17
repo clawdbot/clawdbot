@@ -116,6 +116,7 @@ export async function processCompletionsStream(
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const provisionalCommentaryTags: PendingCommentaryTags = new Map();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
+  let explicitVisibleTextBlocks: Set<TextBlock> | undefined;
   const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
   let sawStopFinishReason = false;
   let sawNativeToolCallDelta = false;
@@ -176,6 +177,9 @@ export async function processCompletionsStream(
     if (!currentBlock || currentBlock.type !== "text") {
       currentBlock = { type: "text", text: "" };
       currentTextSource = source;
+      if (source === "reasoning_detail") {
+        (explicitVisibleTextBlocks ??= new Set()).add(currentBlock);
+      }
       output.content.push(currentBlock);
       pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
     }
@@ -585,7 +589,11 @@ export async function processCompletionsStream(
     output.stopReason !== "error" &&
     output.stopReason !== "aborted"
   ) {
-    tagInterruptedTextPhases(output.content, confirmedInterruptedTextBlock);
+    tagInterruptedTextPhases(
+      output.content,
+      confirmedInterruptedTextBlock,
+      explicitVisibleTextBlocks,
+    );
   }
   if (output.stopReason !== "toolUse") {
     clearPendingCommentaryText(provisionalCommentaryTags);
