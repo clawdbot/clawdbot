@@ -16,10 +16,6 @@ export type CodeModeToolSurfaceObservation = {
 const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");
 const CODE_MODE_TOOL_SURFACE_COLLECTOR = Symbol("openaiCodeModeToolSurfaceCollector");
 type CodeModeToolSurfaceObserver = (observation: CodeModeToolSurfaceObservation) => void;
-type CodeModeToolSurfaceCarrier = {
-  [CODE_MODE_TOOL_SURFACE_OBSERVER]?: CodeModeToolSurfaceObserver;
-  [CODE_MODE_TOOL_SURFACE_COLLECTOR]?: CodeModeToolSurfaceObserver;
-};
 
 export const codeModeToolSurfaceObserver = {
   set(
@@ -27,17 +23,24 @@ export const codeModeToolSurfaceObserver = {
     observer: CodeModeToolSurfaceObserver,
     collector?: CodeModeToolSurfaceObserver,
   ): void {
-    const carrier = options as CodeModeToolSurfaceCarrier;
-    carrier[CODE_MODE_TOOL_SURFACE_OBSERVER] = observer;
+    Reflect.set(options, CODE_MODE_TOOL_SURFACE_OBSERVER, observer);
     if (collector) {
-      carrier[CODE_MODE_TOOL_SURFACE_COLLECTOR] = collector;
+      Reflect.set(options, CODE_MODE_TOOL_SURFACE_COLLECTOR, collector);
     }
   },
   get(options: object | undefined): CodeModeToolSurfaceObserver | undefined {
-    return (options as CodeModeToolSurfaceCarrier | undefined)?.[CODE_MODE_TOOL_SURFACE_OBSERVER];
+    if (!options) {
+      return undefined;
+    }
+    const observer: unknown = Reflect.get(options, CODE_MODE_TOOL_SURFACE_OBSERVER);
+    return typeof observer === "function" ? (observation) => observer(observation) : undefined;
   },
   getCollector(options: object | undefined): CodeModeToolSurfaceObserver | undefined {
-    return (options as CodeModeToolSurfaceCarrier | undefined)?.[CODE_MODE_TOOL_SURFACE_COLLECTOR];
+    if (!options) {
+      return undefined;
+    }
+    const collector: unknown = Reflect.get(options, CODE_MODE_TOOL_SURFACE_COLLECTOR);
+    return typeof collector === "function" ? (observation) => collector(observation) : undefined;
   },
 };
 
