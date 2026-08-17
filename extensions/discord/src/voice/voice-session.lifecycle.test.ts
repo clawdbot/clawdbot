@@ -1,3 +1,4 @@
+import { DiscordError } from "../internal/discord.js";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -7,6 +8,7 @@ defineDiscordVoiceTests(
     expect,
     it,
     vi,
+    ChannelType,
     requireRecord,
     mockCall,
     lastMockCall,
@@ -21,6 +23,7 @@ defineDiscordVoiceTests(
     createRealtimeVoiceBridgeSessionMock,
     realtimeSessionMock,
     managerModule,
+    createClient,
     createManager,
     makeVoiceConfig,
     createAgentProxyManager,
@@ -500,6 +503,116 @@ defineDiscordVoiceTests(
 
       expect(result.ok).toBe(true);
       expectConnectedStatus(manager, "1001");
+    });
+
+    const missingAccessError = new DiscordError(new Response(null, { status: 403 }), {
+      message: "Missing Access",
+      code: 50001,
+    });
+    const unknownChannelError = new DiscordError(new Response(null, { status: 404 }), {
+      message: "Unknown Channel",
+      code: 10003,
+    });
+    const networkError = new TypeError("fetch failed");
+
+    it.each([
+      {
+        name: "preserves Discord 403 / 50001 Missing Access",
+        response: missingAccessError,
+        expected: {
+          ok: false,
+          message: "Failed to resolve Discord channel 1001: Missing Access",
+          guildId: "g1",
+          channelId: "1001",
+        },
+      },
+      {
+        name: "preserves Discord 404 / 10003 Unknown Channel",
+        response: unknownChannelError,
+        expected: {
+          ok: false,
+          message: "Failed to resolve Discord channel 1001: Unknown Channel",
+          guildId: "g1",
+          channelId: "1001",
+        },
+      },
+      {
+        name: "preserves generic network failures",
+        response: networkError,
+        expected: {
+          ok: false,
+          message: "Failed to resolve Discord channel 1001: fetch failed",
+          guildId: "g1",
+          channelId: "1001",
+        },
+      },
+      {
+        name: "rejects a fetched GuildText channel",
+        response: { id: "1001", guildId: "g1", type: ChannelType.GuildText },
+        expected: { ok: false, message: "Channel 1001 is not a voice channel." },
+      },
+      {
+        name: "accepts a fetched GuildVoice channel",
+        response: { id: "1001", guildId: "g1", type: ChannelType.GuildVoice },
+        expected: {
+          ok: true,
+          message: "Joined <#1001>.",
+          guildId: "g1",
+          channelId: "1001",
+        },
+      },
+      {
+        name: "accepts a fetched GuildStageVoice channel",
+        response: { id: "1001", guildId: "g1", type: ChannelType.GuildStageVoice },
+        expected: {
+          ok: true,
+          message: "Joined <#1001>.",
+          guildId: "g1",
+          channelId: "1001",
+        },
+      },
+    ])("$name", async ({ response, expected }) => {
+      const client = createClient();
+      client.fetchChannel.mockImplementationOnce(async () => {
+        if (response instanceof Error) {
+          throw response;
+        }
+        return response as never;
+      });
+      const manager = createManager(undefined, client);
+
+      await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toEqual(expected);
+    });
+
+    it("continues autoJoin after a channel resolution failure", async () => {
+      const client = createClient();
+      client.fetchChannel.mockRejectedValueOnce(missingAccessError).mockResolvedValueOnce({
+        id: "2001",
+        guildId: "g2",
+        guild: { id: "g2", name: "Guild 2" },
+        type: ChannelType.GuildVoice,
+      });
+      const manager = createManager(
+        makeVoiceConfig({
+          autoJoin: [
+            { guildId: "g1", channelId: "1001" },
+            { guildId: "g2", channelId: "2001" },
+          ],
+        }),
+        client,
+      );
+
+      await expect(manager.autoJoin()).resolves.toBeUndefined();
+
+      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+      expect(manager.status()).toEqual([
+        {
+          ok: true,
+          message: "connected: guild g2 channel 2001",
+          guildId: "g2",
+          channelId: "2001",
+        },
+      ]);
     });
 
     it("removes voice listeners on leave", async () => {

@@ -199,7 +199,17 @@ export class DiscordVoiceSessions {
       await this.leave({ guildId }, { preserveFollowState: options?.preserveFollowState });
     }
 
-    const channelInfo = await this.params.client.fetchChannel(channelId).catch(() => null);
+    let channelInfo: Awaited<ReturnType<Client["fetchChannel"]>>;
+    try {
+      channelInfo = await this.params.client.fetchChannel(channelId);
+    } catch (err) {
+      return {
+        ok: false,
+        message: `Failed to resolve Discord channel ${channelId}: ${formatErrorMessage(err)}`,
+        guildId,
+        channelId,
+      };
+    }
     if (authority && !authority.isCurrent()) {
       return {
         ok: false,
@@ -208,7 +218,7 @@ export class DiscordVoiceSessions {
         channelId,
       };
     }
-    if (!channelInfo || ("type" in channelInfo && !isVoiceChannel(channelInfo.type))) {
+    if (!isVoiceChannel(channelInfo.type)) {
       return { ok: false, message: `Channel ${channelId} is not a voice channel.` };
     }
     const channelGuildId = "guildId" in channelInfo ? channelInfo.guildId : undefined;
