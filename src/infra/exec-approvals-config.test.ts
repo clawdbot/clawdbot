@@ -1,7 +1,9 @@
 // Covers exec approval config normalization and safe-bin policy.
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { makeTempDir } from "./exec-approvals-test-helpers.js";
+import { tryParsePersistedExecApprovals } from "./exec-approvals-config.js";
+import { makeExecApprovalsTempDir } from "./exec-approvals-test-helpers.js";
 import {
   isSafeBinUsage,
   matchAllowlist,
@@ -15,9 +17,22 @@ import {
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
 
+describe.sequential("exec approval temp fixture cleanup", () => {
+  let cleanupProbeRoot = "";
+
+  it("creates a disposable fixture root", () => {
+    cleanupProbeRoot = makeExecApprovalsTempDir();
+    expect(existsSync(cleanupProbeRoot)).toBe(true);
+  });
+
+  it("removes the fixture root before the next test", () => {
+    expect(existsSync(cleanupProbeRoot), cleanupProbeRoot).toBe(false);
+  });
+});
+
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
 
     try {
@@ -156,6 +171,36 @@ describe("exec approvals default agent migration", () => {
     expect(resolved.agent.ask).toBe("always");
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
+  });
+});
+
+describe("persisted exec approvals schema", () => {
+  it("keeps legacy string allowlist entries while normalizing them", () => {
+    const parsed = tryParsePersistedExecApprovals(
+      JSON.stringify({
+        version: 1,
+        agents: { main: { allowlist: ["ls", { pattern: "cat", source: "legacy" }] } },
+      }),
+    );
+    expect(parsed?.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
+    expect(parsed?.agents?.main?.allowlist?.[1]).toEqual(
+      expect.objectContaining({ pattern: "cat", source: undefined }),
+    );
+  });
+
+  it.each([
+    { name: "version", value: { version: 2 } },
+    { name: "socket token", value: { version: 1, socket: { token: 42 } } },
+    { name: "policy enum", value: { version: 1, defaults: { security: "none" } } },
+    {
+      name: "allowlist metadata",
+      value: {
+        version: 1,
+        agents: { main: { allowlist: [{ pattern: "ls", lastUsedAt: "now" }] } },
+      },
+    },
+  ])("rejects invalid persisted $name", ({ value }) => {
+    expect(tryParsePersistedExecApprovals(JSON.stringify(value))).toBeNull();
   });
 });
 

@@ -1,4 +1,4 @@
-// Accessor-backed transcript corpus discovery for memory/QMD session indexing.
+// Accessor-backed transcript corpus discovery for memory session indexing.
 import fsSync from "node:fs";
 import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
@@ -284,8 +284,13 @@ function listSessionTranscriptArtifactFiles(sessionsDir: string): string[] {
       .filter((name) => isUsageCountedSessionTranscriptFileName(name))
       .filter((name) => isSessionArchiveArtifactName(name))
       .map((name) => path.join(sessionsDir, name));
-  } catch {
-    return [];
+  } catch (err) {
+    // A missing artifact directory is authoritatively empty. Other failures
+    // make the corpus incomplete, so destructive consumers must not proceed.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
   }
 }
 
@@ -440,7 +445,7 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
 }
 
 /**
- * Lists transcript corpus entries for QMD/memory indexing.
+ * Lists transcript corpus entries for memory indexing.
  *
  * Active sessions come from the session accessor seam; retained reset/delete
  * transcript artifacts remain explicit file artifacts until core owns archive

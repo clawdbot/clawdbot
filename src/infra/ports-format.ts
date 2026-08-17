@@ -210,10 +210,13 @@ function formatPortListener(listener: PortListener): string {
   return `${pid}${user}: ${command}${address}`;
 }
 
-/** Formats free/busy port diagnostics into CLI output lines. */
+/** Formats port diagnostics into CLI output lines. */
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
-  if (diagnostics.status !== "busy") {
+  if (diagnostics.status === "free") {
     return [`Port ${diagnostics.port} is free.`];
+  }
+  if (diagnostics.status === "unknown") {
+    return [`Port ${diagnostics.port} availability could not be determined.`];
   }
   const lines = [`Port ${diagnostics.port} is already in use.`];
   for (const listener of diagnostics.listeners) {

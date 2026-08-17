@@ -12,6 +12,43 @@ import { createApplicationOverlays } from "./overlays.ts";
 afterEach(() => vi.useRealTimers());
 
 describe("application update campaign overlays", () => {
+  it("refreshes an explicit dev checkout comparison on demand", async () => {
+    const request = vi.fn<RequestFn>(async (method) =>
+      method === "update.status"
+        ? {
+            sentinel: null,
+            updateAvailable: null,
+            schedule: {
+              channel: "dev",
+              autoEnabled: false,
+              install: { kind: "git", git: { status: "behind", commitsBehind: 12 } },
+            },
+          }
+        : {},
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        snapshot: { updateSchedule: { channel: "dev", autoEnabled: false } },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    await overlays.refreshUpdateStatus();
+
+    expect(request).toHaveBeenCalledWith(
+      "update.status",
+      { refreshCheckout: true },
+      { timeoutMs: 5_000 },
+    );
+    expect(overlays.snapshot.updateSchedule?.install?.git).toEqual({
+      status: "behind",
+      commitsBehind: 12,
+    });
+    overlays.dispose();
+  });
+
   it("hydrates campaign state from hello and update.available events", () => {
     const harness = createGatewayHarness(client(async () => ({})));
     harness.update({

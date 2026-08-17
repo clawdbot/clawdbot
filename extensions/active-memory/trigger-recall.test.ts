@@ -233,7 +233,7 @@ describe("active-memory trigger recall", () => {
     });
     expect(hoisted.search).toHaveBeenCalledWith(
       "flight booking",
-      expect.objectContaining({ lexicalOnly: true, qmdSearchModeOverride: "search" }),
+      expect.objectContaining({ lexicalOnly: true }),
     );
     expect(hoisted.listTriggerCandidates).toHaveBeenCalledWith({
       activeProjectKeys: ["github.com/openclaw/openclaw"],
@@ -253,7 +253,7 @@ describe("active-memory trigger recall", () => {
     expect(hoisted.getManager).toHaveBeenCalledWith({ cfg: {}, agentId: "main" });
     expect(hoisted.search).toHaveBeenCalledWith(
       "flight booking",
-      expect.objectContaining({ lexicalOnly: true, qmdSearchModeOverride: "search" }),
+      expect.objectContaining({ lexicalOnly: true }),
     );
     expect(hoisted.listTriggerCandidates).toHaveBeenCalledWith({ activeProjectKeys: [] });
   });

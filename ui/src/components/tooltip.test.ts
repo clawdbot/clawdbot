@@ -153,6 +153,24 @@ describe("openclaw-tooltip", () => {
     expect(webAwesomeTooltip(tooltip)?.anchor).toBe(trigger);
   });
 
+  it("recognizes an HTML trigger created by another document realm", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const foreignDocument = frame.contentDocument;
+    if (!foreignDocument) {
+      throw new Error("Expected iframe document");
+    }
+    const tooltip = document.createElement("openclaw-tooltip") as TooltipElement;
+    tooltip.content = "Cross-realm tooltip";
+    const trigger = foreignDocument.createElement("button");
+    trigger.textContent = "trigger";
+    tooltip.append(trigger);
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+
+    expect(trigger.getAttribute("aria-describedby")).toBeTruthy();
+  });
+
   it("restores the normal hover delay after the provider reconnects", async () => {
     const provider = createProvider();
     provider.delay = 40;

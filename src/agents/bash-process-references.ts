@@ -57,7 +57,7 @@ export function listActiveProcessSessionReferences(params: {
     .map((session) => ({
       sessionId: session.id,
       status: "running" as const,
-      pid: session.pid ?? session.child?.pid,
+      pid: session.pid,
       startedAt: session.startedAt,
       runtimeMs: Math.max(0, now - session.startedAt),
       cwd: session.cwd,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runMemorySearchWithDeadline, type MemorySearchDeadlineAction } from "./search-deadline.js";
+import { runMemorySearchWithDeadline } from "./search-deadline.js";
 
 describe("runMemorySearchWithDeadline", () => {
   afterEach(() => {
@@ -65,32 +65,6 @@ describe("runMemorySearchWithDeadline", () => {
     expect(removeEventListener).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
-
-  it.each(["pause", "handoff"] satisfies MemorySearchDeadlineAction[])(
-    "does not allow %s to override an already-expired deadline",
-    async (action) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(0);
-      let controlDeadline: ((action: MemorySearchDeadlineAction) => void) | undefined;
-      const result = runMemorySearchWithDeadline({
-        timeoutMs: 15_000,
-        run: async (_signal, control) => {
-          controlDeadline = control;
-          return await new Promise(() => {});
-        },
-      });
-      const resultAssertion = expect(result).rejects.toThrow("memory_search timed out after 15s");
-      await Promise.resolve();
-
-      // Advance wall time without running the timer callback, matching an I/O
-      // continuation that reaches the transition before the timers phase.
-      vi.setSystemTime(15_000);
-      controlDeadline?.(action);
-
-      await resultAssertion;
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
 
   it("does not accept task success after the active deadline has expired", async () => {
     vi.useFakeTimers();

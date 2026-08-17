@@ -4,6 +4,33 @@ import "../../components/app-sidebar.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 
 describe("AppSidebar outbox badges", () => {
+  it("shows draft pencils only for inactive sessions with stored composer text", async () => {
+    const draftKey = "agent:main:draft-thread";
+    const activeDraftKey = "agent:main:active-draft-thread";
+    const plainKey = "agent:main:plain-thread";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", [draftKey, activeDraftKey, plainKey]),
+    );
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = activeDraftKey;
+    sidebar.hasSessionDraft = (sessionKey) =>
+      sessionKey === draftKey || sessionKey === activeDraftKey;
+    await sidebar.updateComplete;
+
+    const draftBadge = sidebar.querySelector<HTMLElement>(
+      `[data-session-key="${draftKey}"] .session-row-badge--draft`,
+    );
+    expect(draftBadge?.getAttribute("aria-label")).toBe("Unsent draft");
+    expect(
+      sidebar.querySelector(`[data-session-key="${activeDraftKey}"] .session-row-badge--draft`),
+    ).toBeNull();
+    expect(
+      sidebar.querySelector(`[data-session-key="${plainKey}"] .session-row-badge--draft`),
+    ).toBeNull();
+  });
+
   it("shows connected session outbox counts and removes the badge when empty", async () => {
     const sessionKey = "agent:main:queued-thread";
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -39,10 +66,14 @@ describe("AppSidebar outbox badges", () => {
       },
     );
     sidebar.outboxCountForSession = () => 3;
+    sidebar.hasSessionDraft = () => true;
     await sidebar.updateComplete;
 
     const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--queued");
     expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent).toContain("3");
+    expect(
+      sidebar.querySelector('.nav-item--home .session-row-badge--draft[aria-label="Unsent draft"]'),
+    ).not.toBeNull();
   });
 });

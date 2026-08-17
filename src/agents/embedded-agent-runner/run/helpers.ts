@@ -113,7 +113,7 @@ export function resolveEmbeddedAttemptBasePrompt(params: {
   return scrubAnthropicRefusalMagic(params.prompt);
 }
 
-export function createCompactionDiagId(): string {
+export function createRunRecoveryDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
@@ -122,6 +122,8 @@ const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
 const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
 
+// This per-run bound multiplies whole-turn overload replays in
+// auto-reply/reply/agent-runner-error-handler.ts; keep their product test aligned.
 // Defensive guard for the outer run loop across all retry branches.
 export function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
   const scaled =

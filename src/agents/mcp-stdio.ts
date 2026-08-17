@@ -3,8 +3,9 @@
  * Accepts OpenClaw and upstream MCP config field names, keeping only
  * command/args/env/cwd needed to spawn a stdio server.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
-import { isMcpConfigRecord, toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
+import { toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
 
 /** Normalized stdio MCP server launch config. */
 export type StdioMcpServerLaunchConfig = {
@@ -23,7 +24,7 @@ export function resolveStdioMcpServerLaunchConfig(
   raw: unknown,
   options?: { onDroppedEnv?: (key: string, value: unknown) => void },
 ): StdioMcpServerLaunchResult {
-  if (!isMcpConfigRecord(raw)) {
+  if (!isRecord(raw)) {
     return { ok: false, reason: "server config must be an object" };
   }
   if (typeof raw.command !== "string" || raw.command.trim().length === 0) {

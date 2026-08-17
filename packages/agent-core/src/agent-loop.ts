@@ -1,14 +1,17 @@
 // Keep the runtime class on the public package specifier so OpenClaw and
 // external consumers share one constructor identity.
 import { EventStream as LlmEventStream } from "@openclaw/ai/event-stream";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
   EventStream,
   ToolResultMessage,
+  EventStream as SourceEventStream,
 } from "@openclaw/llm-core";
-import type { EventStream as SourceEventStream } from "@openclaw/llm-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
@@ -31,8 +34,8 @@ import {
   isTurnHandoffAbort,
   normalizeCoreContextMessages,
 } from "./turn-interruption.js";
-import type { ToolResultContentSource } from "./types.js";
 import type {
+  ToolResultContentSource,
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
@@ -112,7 +115,9 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
     return message;
   }
   const content = message.content.filter((item) => item.type !== "toolCall");
-  return content.length === message.content.length ? message : { ...message, content };
+  return content.length === message.content.length
+    ? message
+    : replaceCompactionReplayOwnerContent(message, content);
 }
 
 function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
@@ -1331,7 +1336,7 @@ async function prepareToolCall(
   } catch (error) {
     return {
       kind: "immediate",
-      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+      result: createErrorToolResult(coerceErrorMessage(error)),
       isError: true,
     };
   }
@@ -1359,11 +1364,7 @@ async function validateToolCallForBatchAdmission(
       outcome: {
         kind: "immediate",
         result: createErrorToolResult(
-          signal?.aborted
-            ? "Operation aborted"
-            : resolution.error instanceof Error
-              ? resolution.error.message
-              : String(resolution.error),
+          signal?.aborted ? "Operation aborted" : coerceErrorMessage(resolution.error),
         ),
         isError: true,
       },
@@ -1389,7 +1390,7 @@ async function validateToolCallForBatchAdmission(
       kind: "immediate",
       outcome: {
         kind: "immediate",
-        result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+        result: createErrorToolResult(coerceErrorMessage(error)),
         isError: true,
       },
     };
@@ -1403,7 +1404,7 @@ async function validateToolCallForBatchAdmission(
       kind: "immediate",
       outcome: {
         kind: "immediate",
-        result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+        result: createErrorToolResult(coerceErrorMessage(error)),
         isError: true,
         errorKind: "argument-validation",
       },
@@ -1451,7 +1452,7 @@ async function prepareToolCallExecution(
     return {
       kind: "immediate",
       outcome: {
-        result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+        result: createErrorToolResult(coerceErrorMessage(error)),
         isError: true,
         executionStarted: false,
       },
@@ -1507,7 +1508,7 @@ async function prepareToolCallExecution(
             throw implementationStartError.error;
           }
           return {
-            result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+            result: createErrorToolResult(coerceErrorMessage(error)),
             isError: true,
             executionStarted,
             ...(executionStarted && signal?.aborted && error === signal.reason
@@ -1569,11 +1570,7 @@ async function prepareToolCallExecution(
     return {
       kind: "immediate",
       outcome: {
-        result: createErrorToolResult(
-          internalPreparation.outcome.error instanceof Error
-            ? internalPreparation.outcome.error.message
-            : String(internalPreparation.outcome.error),
-        ),
+        result: createErrorToolResult(coerceErrorMessage(internalPreparation.outcome.error)),
         isError: true,
         executionStarted: false,
       },
@@ -1626,7 +1623,7 @@ async function finalizeExecutedToolCall(
         isError = afterResult.isError ?? isError;
       }
     } catch (error) {
-      result = createErrorToolResult(error instanceof Error ? error.message : String(error));
+      result = createErrorToolResult(coerceErrorMessage(error));
       isError = true;
     }
   }
@@ -1691,9 +1688,7 @@ async function finalizeToolCallOutcome(
       isError: afterResult.isError ?? finalized.isError,
     };
   } catch (error) {
-    const errorResult = createErrorToolResult(
-      error instanceof Error ? error.message : String(error),
-    );
+    const errorResult = createErrorToolResult(coerceErrorMessage(error));
     return {
       ...finalized,
       result: {
@@ -1878,10 +1873,17 @@ type TurnTaintMetadata = {
 };
 
 function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
-  const metadata = (message as unknown as Record<string, unknown>)["__openclaw"];
-  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
-    ? (metadata as TurnTaintMetadata)
-    : undefined;
+  const metadata = Reflect.get(message, "__openclaw");
+  const record = asOptionalRecord(metadata);
+  if (!record) {
+    return undefined;
+  }
+  return {
+    ...(record.resultContentSource === "network"
+      ? { resultContentSource: record.resultContentSource }
+      : {}),
+    ...(record.turnTainted === true ? { turnTainted: true } : {}),
+  };
 }
 
 function toolResultTaintsTurn(message: ToolResultMessage): boolean {
@@ -1905,10 +1907,11 @@ function withAssistantTurnTaint(message: AssistantMessage, tainted: boolean): As
   if (!tainted) {
     return message;
   }
-  return {
+  const taintedMessage = {
     ...message,
     __openclaw: { ...readTurnTaintMetadata(message), turnTainted: true },
-  } as unknown as AssistantMessage;
+  } satisfies AssistantMessage & { __openclaw: TurnTaintMetadata };
+  return taintedMessage;
 }
 
 function withToolResultContentSource(

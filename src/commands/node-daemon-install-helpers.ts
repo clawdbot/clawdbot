@@ -60,7 +60,6 @@ export async function buildNodeInstallPlan(params: {
     displayName: params.displayName,
     installedAppsSharing: params.installedAppsSharing,
     dev: devMode,
-    runtime: params.runtime,
     nodePath,
   });
 

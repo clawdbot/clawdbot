@@ -4,13 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -73,7 +74,6 @@ function createPayload(params: {
     boundary,
     isHeartbeat: false,
     messages: [],
-    prePromptMessageCount: params.sequence,
   };
 }
 
@@ -137,7 +137,7 @@ describe("context-engine turn outbox", () => {
     ).toBeUndefined();
   });
 
-  it("recovers an accepted terminal transcript when finalization crashed", async () => {
+  it("drains prior work before fresh-turn assembly and records dispatch admission", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-recovery-"));
     tempDirs.push(stateDir);
     const target = {
@@ -146,7 +146,7 @@ describe("context-engine turn outbox", () => {
       sessionKey: "agent:main:recovered-turn",
       storePath: path.join(stateDir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const admitted = await appendTranscriptMessage(target, {
       message: { role: "user", content: "first" },
       now: 1_000,
@@ -199,7 +199,14 @@ describe("context-engine turn outbox", () => {
       logicalTurnId: "current-logical-turn",
       role: "user" as const,
     } satisfies TranscriptTurnAdmission;
-    const commitTurn = vi.fn(async () => ({ status: "committed" as const }));
+    const currentMessage = { role: "user" as const, content: "second", timestamp: 3_000 };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: currentMessage,
+      target: async () => undefined,
+    });
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
+      status: "committed",
+    }));
     const engine = {
       info: {
         id: "test",
@@ -229,9 +236,11 @@ describe("context-engine turn outbox", () => {
     } satisfies ContextEngineLogicalTurnLease;
 
     await drainPendingContextEngineTurnsBeforeRun({
-      admission: currentAdmission,
+      admission: undefined,
       isHeartbeat: false,
       lease,
+      recorder,
+      sessionTarget: target,
     });
 
     expect(commitTurn).toHaveBeenCalledOnce();
@@ -243,9 +252,14 @@ describe("context-engine turn outbox", () => {
           { role: "user", content: "first" },
           { role: "assistant", content: "first answer" },
         ],
-        prePromptMessageCount: 0,
       }),
     );
+    expect(
+      database.db.prepare("SELECT advancement_key FROM context_engine_turn_outbox").all(),
+    ).toHaveLength(0);
+    expect(commitTurn.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
+
+    recorder.markRuntimePersisted(currentMessage, currentAdmission);
     const queued = database.db
       .prepare("SELECT advancement_key, payload_json FROM context_engine_turn_outbox")
       .all() as Array<{ advancement_key: string; payload_json: string }>;
@@ -255,6 +269,9 @@ describe("context-engine turn outbox", () => {
       state: "admitted",
       isHeartbeat: false,
     });
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+
+    await drainPendingContextEngineTurnsBeforeRun({ admission: undefined, lease });
     expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
   });
 
@@ -267,7 +284,7 @@ describe("context-engine turn outbox", () => {
       sessionKey: "agent:main:unaccepted-turn",
       storePath: path.join(stateDir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const admitted = await appendTranscriptMessage(target, {
       message: { role: "user", content: "first" },
       now: 1_000,
@@ -383,9 +400,9 @@ describe("context-engine turn outbox", () => {
     const warn = vi.fn();
 
     recoverContextEngineTurnOutbox({
-      currentAdmission: payload.boundary.admission,
       database,
       engineId: "test",
+      sessionId: payload.boundary.admission.sessionId,
       warn,
     });
 

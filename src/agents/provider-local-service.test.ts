@@ -21,8 +21,9 @@ import {
   getManagedProviderLocalServiceDiagnosticsForTest,
   getModelProviderLocalService,
   hasLocalServiceProcessExited,
-  stopManagedProviderLocalServicesForTest,
+  stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
+import { hasManagedProviderLocalServices } from "./provider-runtime-lifecycle.js";
 
 const ONE_SHOT_HOST_READY_TIMEOUT_MS = 30_000;
 const ONE_SHOT_HOST_EXIT_TIMEOUT_MS = 5_000;
@@ -182,7 +183,7 @@ describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
-    stopManagedProviderLocalServicesForTest();
+    stopManagedProviderLocalServices();
   });
 
   it("attaches local service metadata to model objects", () => {
@@ -204,6 +205,7 @@ describe("provider local service", () => {
   });
 
   it("starts an on-demand local service and stops it after idle", async () => {
+    expect(hasManagedProviderLocalServices()).toBe(false);
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const model = attachModelProviderLocalService(
@@ -230,9 +232,11 @@ describe("provider local service", () => {
     if (!lease) {
       throw new Error("Expected provider local service lease");
     }
+    expect(hasManagedProviderLocalServices()).toBe(true);
     expect((await fetch(healthUrl)).ok).toBe(true);
     lease.release();
     await waitForProbeFailure(healthUrl);
+    expect(hasManagedProviderLocalServices()).toBe(false);
   });
 
   it("resolves process configuration from the host config", async () => {

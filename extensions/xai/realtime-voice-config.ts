@@ -8,9 +8,11 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
-  asFiniteNumber,
+  asFiniteNumberInRange,
+  asOptionalObjectRecord as readXaiObjectRecord,
+  asSafeIntegerInRange,
   normalizeOptionalString,
-  parseBooleanValue as readBoolean,
+  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 
@@ -131,14 +133,23 @@ export const XAI_REALTIME_VOICES = [
   "leo",
 ] as const satisfies readonly XaiRealtimeVoice[];
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+export function serializeXaiRealtimeToolResult(result: unknown): string {
+  const message = "xAI realtime voice tool result is not JSON-serializable";
+  try {
+    const serialized = JSON.stringify(result);
+    if (typeof serialized === "string") {
+      return serialized;
+    }
+  } catch (cause) {
+    throw new Error(message, { cause });
+  }
+  throw new Error(message);
 }
 
 function readNestedXaiConfig(rawConfig: RealtimeVoiceProviderConfig) {
-  const raw = readRecord(rawConfig);
-  const providers = readRecord(raw?.providers);
-  return readRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
+  const raw = readXaiObjectRecord(rawConfig);
+  const providers = readXaiObjectRecord(raw?.providers);
+  return readXaiObjectRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
 }
 
 export function normalizeXaiRealtimeBaseUrl(value?: string): string {
@@ -157,15 +168,11 @@ function normalizeXaiRealtimeVoice(value: unknown): string | undefined {
 }
 
 function asXaiVadThreshold(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && number >= 0.1 && number <= 0.9 ? number : undefined;
+  return asFiniteNumberInRange(value, { min: 0.1, max: 0.9 });
 }
 
 function asXaiDurationMs(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && Number.isSafeInteger(number) && number >= 0 && number <= 10_000
-    ? number
-    : undefined;
+  return asSafeIntegerInRange(value, { min: 0, max: 10_000 });
 }
 
 function asXaiReasoningEffort(value: unknown): XaiRealtimeReasoningEffort | undefined {
@@ -194,9 +201,9 @@ export function normalizeXaiRealtimeProviderConfig(
     vadThreshold: asXaiVadThreshold(raw.vadThreshold),
     silenceDurationMs: asXaiDurationMs(raw.silenceDurationMs),
     prefixPaddingMs: asXaiDurationMs(raw.prefixPaddingMs),
-    interruptResponseOnInputAudio: readBoolean(raw.interruptResponseOnInputAudio),
+    interruptResponseOnInputAudio: parseBooleanValue(raw.interruptResponseOnInputAudio),
     reasoningEffort: asXaiReasoningEffort(raw.reasoningEffort),
-    sessionResumption: readBoolean(raw.sessionResumption),
+    sessionResumption: parseBooleanValue(raw.sessionResumption),
   };
 }
 
@@ -204,7 +211,7 @@ export function readXaiRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {
     return error;
   }
-  const record = readRecord(error);
+  const record = readXaiObjectRecord(error);
   return (
     normalizeOptionalString(record?.message) ??
     normalizeOptionalString(record?.code) ??

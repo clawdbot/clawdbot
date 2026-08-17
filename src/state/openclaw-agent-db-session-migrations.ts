@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
@@ -10,14 +11,7 @@ import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shar
 type MigratedConversationEntry = Record<string, unknown>;
 
 function parseConversationEntry(value: unknown): MigratedConversationEntry | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  try {
-    return asOptionalRecord(JSON.parse(value));
-  } catch {
-    return undefined;
-  }
+  return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
 }
 
 function inferMigratedChatType(params: {
@@ -273,6 +267,15 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
     name?: unknown;
   }>;
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+}
+
+/** Installs the same-version project identity projection on first updated-binary open. */
+export function ensureSessionProjectColumn(db: DatabaseSync): void {
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  if (!columns || columns.has("project_id")) {
+    return;
+  }
+  db.exec("ALTER TABLE session_nodes ADD COLUMN project_id TEXT;");
 }
 
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */

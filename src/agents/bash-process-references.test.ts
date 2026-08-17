@@ -11,6 +11,7 @@ describe("bash-process-references truncation", () => {
       command,
       backgrounded: true,
       startedAt: 1,
+      pid: 4242,
     });
     session.scopeKey = "scope-a";
     addSession(session);
@@ -18,6 +19,7 @@ describe("bash-process-references truncation", () => {
     try {
       const [reference] = listActiveProcessSessionReferences({ scopeKey: "scope-a", now: 2 });
       expect(reference?.name).toBe(`${"a".repeat(136)}...`);
+      expect(reference?.pid).toBe(4242);
     } finally {
       deleteSession("emoji-proc-scoped");
     }

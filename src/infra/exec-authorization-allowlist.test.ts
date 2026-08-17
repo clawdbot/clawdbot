@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { detectPolicyInlineEval } from "./command-analysis/policy.js";
-import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import {
+  makeExecutable,
+  makePathEnv,
+  makeExecApprovalsTempDir,
+} from "./exec-approvals-test-helpers.js";
 import {
   evaluateShellAllowlistWithAuthorization,
   requiresExecApproval,
@@ -66,7 +70,7 @@ describe("authorization-backed exec allowlist", () => {
       return;
     }
 
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const pythonPath = makeExecutable(dir, "python3");
     const env = makePathEnv(dir);
     const command = "python3 -c 'print(1)'";
@@ -115,7 +119,7 @@ describe("authorization-backed exec allowlist", () => {
       return;
     }
 
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const pythonPath = makeExecutable(dir, "python3");
     const env = makePathEnv(dir);
     const command = "python3 -xcprint";

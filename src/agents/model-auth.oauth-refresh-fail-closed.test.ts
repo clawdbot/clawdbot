@@ -15,7 +15,7 @@ vi.mock("./auth-profiles.js", async (importActual) => {
   };
 });
 
-const { resolveApiKeyForProvider } = await import("./model-auth.js");
+const { resolveApiKeyForProviderCore } = await import("./model-auth.js");
 
 function withEnv<T>(key: string, value: string, fn: () => Promise<T>): Promise<T> {
   const previous = process.env[key];
@@ -33,7 +33,7 @@ afterEach(() => {
   authProfileMocks.resolveApiKeyForProfile.mockReset();
 });
 
-describe("resolveApiKeyForProvider OAuth refresh failure ordering", () => {
+describe("resolveApiKeyForProviderCore OAuth refresh failure ordering", () => {
   it("does not fall back to env after a configured OAuth profile refresh fails", async () => {
     const profileId = "openai:oauth-refresh";
     const refreshFailure = new OAuthRefreshFailureError({
@@ -59,7 +59,7 @@ describe("resolveApiKeyForProvider OAuth refresh failure ordering", () => {
     await withEnv("OPENAI_API_KEY", "fallback-must-not-be-used", async () => {
       await expect(
         (async () => {
-          const auth = await resolveApiKeyForProvider({
+          const auth = await resolveApiKeyForProviderCore({
             provider: "openai",
             cfg: {
               auth: {

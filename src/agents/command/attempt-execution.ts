@@ -21,9 +21,10 @@ import {
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
-import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
-import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
+import {
+  persistSessionTranscriptTurn,
+  type SessionTranscriptRuntimeTarget,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -44,13 +45,14 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
@@ -65,7 +67,7 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
-import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
+import { hasClaudeSession } from "../cli-runner/claude-live-registry.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
   getCliSessionBinding,
@@ -83,22 +85,16 @@ import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js"
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
-import { resolveAgentRunSessionTarget, type AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockOptions,
-  resolveSessionWriteLockTargetKey,
-} from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   isSubagentAnnounceCompletionHandoff,
   isTrustedSubagentCompletionHandoffForRun,
-} from "../subagent-announce-handoff.js";
+} from "../subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import type { ContextUsage } from "../usage.js";
@@ -139,10 +135,6 @@ function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
-}
-
-function normalizeTranscriptMirrorText(value: string): string {
-  return value.trim().replace(/\s+/gu, " ");
 }
 
 const ACP_TRANSCRIPT_USAGE = {
@@ -216,7 +208,6 @@ type PersistTextTurnTranscriptParams = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-  embeddedAssistantGapFill?: boolean;
   skipAssistantTurn?: boolean;
   assistant: {
     api: string;
@@ -377,19 +368,6 @@ async function persistTextTurnTranscript(
         stopReason: "stop",
         timestamp: Date.now(),
       },
-      shouldAppend: async (
-        context: import("../../config/sessions/session-accessor.js").SessionTranscriptTurnWriteContext,
-      ) => {
-        if (!params.embeddedAssistantGapFill) {
-          return true;
-        }
-        const latest = await readTailAssistantTextFromSessionTranscript(context, {
-          excludeTranscriptOnlyOpenClawAssistant: true,
-        });
-        const normalizedReply = normalizeTranscriptMirrorText(replyText);
-        const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
-        return !normalizedLatest || normalizedLatest !== normalizedReply;
-      },
     });
   }
 
@@ -479,83 +457,37 @@ export async function persistCliTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-  embeddedAssistantGapFill?: boolean;
   skipUserTurn?: boolean;
   skipAssistantTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
-  const replyText = resolveCliTranscriptReplyText(params.result);
-  const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
-  const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
-  const gapFill = params.embeddedAssistantGapFill ?? false;
-  const skipUserTurn = gapFill || params.skipUserTurn === true;
+  const { result, skipUserTurn: requestedSkipUserTurn, ...transcript } = params;
+  const replyText = resolveCliTranscriptReplyText(result);
+  const provider = result.meta.agentMeta?.provider?.trim() ?? "cli";
+  const model = result.meta.agentMeta?.model?.trim() ?? "default";
+  const skipUserTurn = requestedSkipUserTurn === true;
 
-  const persist = async () =>
-    await persistTextTurnTranscript({
-      body: skipUserTurn ? "" : params.body,
-      transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
-      ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
-      finalText: replyText,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-      storePath: params.storePath,
-      sessionAgentId: params.sessionAgentId,
-      threadId: params.threadId,
-      sessionCwd: params.sessionCwd,
-      config: params.config,
-      embeddedAssistantGapFill: gapFill,
-      assistant: {
-        api: "cli",
-        provider,
-        model,
-        // The marker is terminal for fallback scans: without it, readers could
-        // skip this turn and revive an older cumulative usage record as fresh.
-        usage: resolveCliTranscriptUsage(params.result.meta.agentMeta?.lastCallUsage),
-      },
-      skipAssistantTurn: params.skipAssistantTurn,
-    });
-  if (!gapFill) {
-    return await persist();
-  }
-
-  const sessionTarget = await resolveAgentRunSessionTarget({
-    agentId: params.sessionAgentId,
-    config: params.config,
-    missingSessionKey: "resolve-existing",
-    sessionFile: params.sessionFile,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionTarget: {
-      agentId: params.sessionAgentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+  return await persistTextTurnTranscript({
+    ...transcript,
+    body: skipUserTurn ? "" : transcript.body,
+    transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
+    userMessage: skipUserTurn ? undefined : transcript.userMessage,
+    finalText: replyText,
+    assistant: {
+      api: "cli",
+      provider,
+      model,
+      // The marker is terminal for fallback scans: without it, readers could
+      // skip this turn and revive an older cumulative usage record as fresh.
+      usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
     },
   });
-  const sessionLock =
-    (await acquireOwnedSessionTranscriptWriteLock({
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      sessionTarget,
-    })) ??
-    (await acquireSessionWriteLock({
-      sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
-      targetKind: "session-key",
-      ...resolveSessionWriteLockOptions(params.config),
-    }));
-  try {
-    return await persist();
-  } finally {
-    await sessionLock.release();
-  }
 }
 
 export function runAgentAttempt(params: {
+  preparedRunAdmission: PreparedAgentRunAdmission;
   providerOverride: string;
   modelOverride: string;
+  modelHasVision?: boolean;
   configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
@@ -563,7 +495,7 @@ export function runAgentAttempt(params: {
   agentHarnessRuntimeOverride?: string;
   sessionId: string;
   sessionKey: string | undefined;
-  sessionTarget?: AgentRunSessionTarget;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionAgentId: string;
   sessionFile: string;
   workspaceDir: string;
@@ -584,7 +516,7 @@ export function runAgentAttempt(params: {
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
-  skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
+  skillsSnapshot: SkillSnapshot | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
   onAgentEvent: (evt: {
@@ -903,7 +835,7 @@ export function runAgentAttempt(params: {
       const hasManagedClaudeLiveSession = Boolean(
         isClaudeCliProvider(cliExecutionProvider) &&
         cliSessionBinding?.sessionId &&
-        hasClaudeLiveSessionForOwner({
+        hasClaudeSession({
           backendId: cliExecutionProvider,
           agentAccountId: params.runContext.accountId,
           agentId: params.sessionAgentId,
@@ -971,10 +903,12 @@ export function runAgentAttempt(params: {
           agentId: params.sessionAgentId,
           runId: params.runId,
         },
-        () =>
-          runCliAgent({
+        async () => {
+          return await runCliAgent({
+            preparedRunAdmission: params.preparedRunAdmission,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
+            sessionTarget: params.sessionTarget,
             sessionEntry: params.sessionEntry,
             chatType: params.sessionEntry?.chatType,
             agentId: params.sessionAgentId,
@@ -989,6 +923,7 @@ export function runAgentAttempt(params: {
             prompt: cliPrompt,
             transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
+            modelHasVision: params.modelHasVision,
             provider: cliExecutionProvider,
             model: params.modelOverride,
             thinkLevel: params.resolvedThinkLevel,
@@ -1000,6 +935,7 @@ export function runAgentAttempt(params: {
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
+            cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,
             sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
             requireExplicitMessageTarget:
               params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
@@ -1136,7 +1072,8 @@ export function runAgentAttempt(params: {
                   },
                 }
               : {}),
-          }),
+          });
+        },
       );
     };
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
@@ -1178,6 +1115,7 @@ export function runAgentAttempt(params: {
   }
 
   const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
+    preparedRunAdmission: params.preparedRunAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     chatType: params.sessionEntry?.chatType,
@@ -1221,6 +1159,7 @@ export function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
+    modelHasVision: params.modelHasVision,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
@@ -1251,6 +1190,7 @@ export function runAgentAttempt(params: {
       ? params.opts.trustedInternalHandoff
       : undefined,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
+    cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,

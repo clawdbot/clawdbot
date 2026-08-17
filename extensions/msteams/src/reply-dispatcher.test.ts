@@ -609,6 +609,7 @@ describe("createMSTeamsReplyDispatcher", () => {
         mode: "progress",
         progress: {
           label: "Working",
+          commandText: "raw",
         },
       },
     });
@@ -632,6 +633,31 @@ describe("createMSTeamsReplyDispatcher", () => {
     const lastUpdate = getStreamMock().update.mock.calls.at(-1)?.[0];
     expect(lastUpdate).toContain("install dependencies");
     expect(lastUpdate).not.toContain("completed");
+  });
+
+  it("preserves command output text when raw command progress is configured", async () => {
+    vi.useFakeTimers();
+    const dispatcher = createDispatcher("personal", {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Working",
+          commandText: "raw",
+        },
+      },
+    });
+
+    await dispatcher.replyOptions.onCommandOutput?.({
+      phase: "end",
+      title: "pnpm test -- --watch=false",
+      name: "exec",
+      exitCode: 1,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(getStreamMock().update).toHaveBeenLastCalledWith(
+      expect.stringContaining("pnpm test -- --watch=false"),
+    );
   });
 
   it("replaces reasoning progress snapshots in progress mode", async () => {

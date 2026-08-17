@@ -6,7 +6,7 @@ export type CliCommandPluginLoadPolicy =
   | "always"
   | "text-only"
   | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
-type CliConfigGuardMode = "run" | "skip" | "when-suppressed";
+type CliConfigGuardMode = "run" | "skip" | "validate" | "when-suppressed";
 type CliConfigGuardPolicy =
   | CliConfigGuardMode
   | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);
@@ -103,6 +103,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
+    commandPath: ["database"],
+    // Release-local database inspection must not observe default state or load runtime policy.
+    policy: {
+      configGuard: "skip",
+      loadPlugins: "never",
+      hideBanner: true,
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
+  },
+  {
     commandPath: ["crestodian"], // hidden alias
     policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
   },
@@ -173,6 +184,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
+  ...["create", "validate", "build", "dev"].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["claws", subcommand],
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
   {
     commandPath: ["migrate"],
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
@@ -198,6 +216,15 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "bypass",
     },
     route: { id: "health" },
+  },
+  {
+    commandPath: ["audit"],
+    policy: {
+      configGuard: "skip",
+      loadPlugins: "never",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
   },
   {
     commandPath: ["gateway"],
@@ -255,18 +282,9 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "sessions" },
   },
   {
-    commandPath: ["commitments"],
-    policy: {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    },
-  },
-  {
     commandPath: ["agents", "list"],
-    // Text and JSON output are derived from config plus read-only channel
-    // metadata, so the route should not preload bundled plugin runtimes.
+    // Output combines config with shared-state provenance and optional read-only
+    // channel metadata, so the route should not preload bundled plugin runtimes.
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
     route: { id: "agents-list" },
   },
@@ -297,6 +315,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { configGuard: "run", ensureCliPath: false, networkProxy: "bypass" },
     route: { id: "config-unset" },
+  },
+  {
+    commandPath: ["models"],
+    exact: true,
+    policy: {
+      configGuard: "skip",
+      ensureCliPath: false,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    },
+    route: { id: "models-status" },
   },
   {
     commandPath: ["models", "list"],
@@ -382,7 +411,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["cron"], policy: { configGuard: "skip", networkProxy: "bypass" } },
   { commandPath: ["dashboard"], policy: { networkProxy: "bypass" } },
   { commandPath: ["daemon"], policy: { networkProxy: "bypass" } },
-  { commandPath: ["devices"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["devices"],
+    // Every devices subcommand either dispatches to the Gateway or uses the
+    // explicit local pairing fallback. None should observe canonical state
+    // before the Gateway-owned mutation runs.
+    policy: { configGuard: "validate", networkProxy: "bypass" },
+  },
   {
     commandPath: ["worktrees"],
     policy: { loadPlugins: "never", networkProxy: "bypass" },
@@ -432,6 +467,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ownsProtocolStdout: true },
   },
   {
+    commandPath: ["browser", "extension", "native-host"],
+    exact: true,
+    policy: { hideBanner: true, ownsProtocolStdout: true, networkProxy: "bypass" },
+  },
+  {
     commandPath: ["node"],
     policy: { networkProxy: "bypass" },
   },
@@ -451,6 +491,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { networkProxy: "default" },
   },
   {
+    commandPath: ["connect"],
+    exact: true,
+    policy: { networkProxy: "default" },
+  },
+  {
     commandPath: ["worker"],
     exact: true,
     policy: {
@@ -462,11 +507,31 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["nodes"], policy: { networkProxy: "bypass" } },
-  // Both bodies are pure gateway RPC reads, so they skip the config guard like
-  // `channels status`. Bare `openclaw nodes` keeps it because it still resolves
-  // plugin-provided node subcommands from validated config.
   { commandPath: ["nodes", "status"], exact: true, policy: { configGuard: "skip" } },
   { commandPath: ["nodes", "list"], exact: true, policy: { configGuard: "skip" } },
+  // Built-in node commands are Gateway RPCs. Keep their CLI processes off the
+  // writable canonical state database, including commands whose RPC mutates
+  // Gateway-owned pairing state. Bare and plugin-provided node commands retain
+  // the config guard because plugin discovery still needs validated config.
+  ...[
+    "describe",
+    "pending",
+    "approve",
+    "reject",
+    "remove",
+    "rename",
+    "invoke",
+    "notify",
+    "push",
+    "camera",
+    "screen",
+    "location",
+  ].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["nodes", subcommand],
+      policy: { configGuard: "validate" },
+    }),
+  ),
   { commandPath: ["pairing"], policy: { networkProxy: "bypass" } },
   { commandPath: ["proxy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["qr"], policy: { networkProxy: "bypass" } },
@@ -482,6 +547,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["secrets"], policy: { configGuard: "skip", networkProxy: "bypass" } },
   { commandPath: ["security"], policy: { networkProxy: "bypass" } },
   { commandPath: ["system"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["resume"], policy: { networkProxy: "bypass" } },
   { commandPath: ["terminal"], policy: { networkProxy: "bypass" } },
   { commandPath: ["tui"], policy: { networkProxy: "bypass" } },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },

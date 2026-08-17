@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { MediaAttachmentCache } from "./attachments.js";
 
 const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
@@ -28,7 +28,7 @@ describe("media understanding attachment MIME detection", () => {
   });
 
   it("prefers local attachment bytes over conflicting declared MIME", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-mime-local-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-mime-local-" }, async (base) => {
       const attachmentPath = path.join(base, "photo.jpg");
       await fs.writeFile(attachmentPath, PNG_1X1);
       const cache = new MediaAttachmentCache(

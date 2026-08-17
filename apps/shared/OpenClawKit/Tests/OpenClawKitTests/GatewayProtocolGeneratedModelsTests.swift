@@ -68,4 +68,14 @@ struct GatewayProtocolGeneratedModelsTests {
         #expect(additive.scopes == ["operator.read"])
         #expect(additive.locale == "en-US")
     }
+
+    @Test
+    func `projects list result decodes a legacy projects-only payload`() throws {
+        let result = try JSONDecoder().decode(
+            ProjectsListResult.self,
+            from: Data(#"{"projects":[]}"#.utf8))
+
+        #expect(result.projects.isEmpty)
+        #expect(result.observedprojects == nil)
+    }
 }

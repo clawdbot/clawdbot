@@ -1,6 +1,5 @@
 // Telegram tests cover group access.base access plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { normalizeAllowFrom, type NormalizedAllowFrom } from "./bot-access.js";
 import {
@@ -107,7 +106,6 @@ const DEFAULT_GROUP_ACCESS_PARAMS: GroupAccessParams = {
     groupConfig: { requireMention: false },
   }),
   enforcePolicy: true,
-  useTopicAndGroupOverrides: false,
   enforceAllowlistAuthorization: true,
   allowEmptyAllowlistEntries: false,
   requireSenderForAllowlistAuthorization: true,
@@ -230,6 +228,27 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
       reason: "group-policy-disabled",
       groupPolicy: "disabled",
     });
+  });
+
+  it("uses topic policy before group and account policy", () => {
+    expect(
+      runAccess({
+        telegramCfg: { groupPolicy: "open" } as TelegramAccountConfig,
+        groupConfig: { groupPolicy: "open" },
+        topicConfig: { groupPolicy: "disabled" },
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "group-policy-disabled",
+      groupPolicy: "disabled",
+    });
+    expect(
+      runAccess({
+        telegramCfg: { groupPolicy: "open" } as TelegramAccountConfig,
+        groupConfig: { groupPolicy: "disabled" },
+        topicConfig: { groupPolicy: "open" },
+      }),
+    ).toEqual({ allowed: true, groupPolicy: "open" });
   });
 
   it("allows non-group messages without any checks", () => {

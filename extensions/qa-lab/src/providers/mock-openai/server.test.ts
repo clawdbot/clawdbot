@@ -219,6 +219,13 @@ function expectOpenAiStreamingResponsesText(server: MockServer, body: Record<str
   return expectStreamingResponsesText(server, { model: "gpt-5.6-luna", ...body });
 }
 
+function parseStreamingResponseEvents(body: string): StreamEvent[] {
+  return body
+    .split("\n")
+    .filter((line) => line.startsWith("data: {") && line.endsWith("}"))
+    .map((line) => JSON.parse(line.slice("data: ".length)) as StreamEvent);
+}
+
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function requireArray(value: unknown, label: string): unknown[] {
@@ -417,6 +424,10 @@ const SLACK_CHART_PROMPT = [
   `Call the message tool exactly once with these exact arguments: ${JSON.stringify(SLACK_CHART_MESSAGE_TOOL_ARGS)}.`,
   `After the chart send succeeds, reply with only this exact marker: ${SLACK_CHART_DONE_TOKEN}`,
 ].join(" ");
+const MESSAGE_DECISION_SUPPRESSION_PROMPT = "Message delivery decision suppression QA check.";
+const MESSAGE_DECISION_SEND_PROMPT = "Message delivery decision send QA check.";
+const MESSAGE_DECISION_SUPPRESSION_TEXT =
+  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.";
 const WHATSAPP_AGENT_REACT_PROMPT =
   "React to this WhatsApp message with thumbs up for QA action check WHATSAPP_QA_AGENT_REACT_TEST.";
 const WHATSAPP_GROUP_AGENT_REACT_PROMPT =
@@ -911,6 +922,36 @@ describe("qa mock openai server", () => {
     expect(blockContinuationBody).toContain('"item_id":"msg_mock_block_2"');
     expect(blockContinuationBody).toContain("BLOCK_TWO_OK");
     expect(blockContinuationBody).not.toContain('"item_id":"msg_mock_block_1"');
+  });
+
+  it("serves Telegram visible and unsent failure directives", async () => {
+    const server = await startMockServer();
+    const visibleEvents = parseStreamingResponseEvents(
+      await expectOpenAiStreamingResponsesText(server, {
+        input: [makeUserInput("Telegram visible partial failure QA check")],
+      }),
+    );
+    const unsentEvents = parseStreamingResponseEvents(
+      await expectOpenAiStreamingResponsesText(server, {
+        input: [makeUserInput("Telegram unsent failure QA check")],
+      }),
+    );
+
+    expect(visibleEvents.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.output_item.added",
+      "response.output_text.delta",
+      "response.failed",
+    ]);
+    expect(visibleEvents[2]).toMatchObject({
+      type: "response.output_text.delta",
+      delta: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
+    });
+    expect(unsentEvents.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.failed",
+    ]);
+    expect(unsentEvents.some((event) => event.type === "response.output_text.delta")).toBe(false);
   });
 
   it("plans deterministic tool-progress reads from prompt paths", async () => {
@@ -1766,6 +1807,45 @@ describe("qa mock openai server", () => {
       ),
     ).toBe(false);
     expect(outputText(afterToolPayload)).toBe(SLACK_CHART_DONE_TOKEN);
+  });
+
+  it("emits the deterministic message-decision suppression fixture", async () => {
+    const server = await startMockServer();
+    const initial = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(MESSAGE_DECISION_SUPPRESSION_PROMPT)],
+    });
+    const toolCall = outputToolCall(initial, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({
+      action: "send",
+      message: MESSAGE_DECISION_SUPPRESSION_TEXT,
+    });
+
+    const afterTool = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(MESSAGE_DECISION_SUPPRESSION_PROMPT),
+        makeToolOutputWithCallId(
+          outputToolCallId(toolCall, "call_mock_message_suppression"),
+          '{"status":"suppressed"}',
+        ),
+      ],
+    });
+    expect(outputText(afterTool)).toBe("NO_REPLY");
+  });
+
+  it("emits the deterministic durable message-decision send fixture", async () => {
+    const server = await startMockServer();
+    const initial = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(MESSAGE_DECISION_SEND_PROMPT)],
+    });
+    expect(outputToolArgsFromItem(outputToolCall(initial, "message"))).toEqual({
+      action: "send",
+      message: "QA-MESSAGE-DELIVERY-OK",
+      final: true,
+      presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+    });
   });
 
   it("emits WhatsApp agent reaction message tool calls only when the tool is declared", async () => {
@@ -6359,6 +6439,49 @@ Update and merge these partial structured summaries.`,
     expect(await response.text()).toContain('"name":"read"');
   });
 
+  it("routes the initial model-switch read through Anthropic guest Code Mode", async () => {
+    const server = await startMockServer();
+    const body = (await expectAnthropicMessagesJson(server, {
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { code: { type: "string" } },
+            required: ["code"],
+          },
+        },
+        {
+          name: "wait",
+          input_schema: {
+            type: "object",
+            properties: { runId: { type: "string" } },
+            required: ["runId"],
+          },
+        },
+      ],
+      messages: [
+        makeAnthropicUserText(
+          "Read repo/qa/scenarios/index.yaml and summarize the QA scenario pack mission in one clause before any model switch.",
+        ),
+      ],
+    })) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+
+    expect(body.stop_reason).toBe("tool_use");
+    expect(body.content.find((block) => block.type === "tool_use")?.name).toBe("exec");
+
+    const debug = requireRecord(
+      await getJson(server, "/debug/last-request"),
+      "model switch Code Mode debug request",
+    );
+    expect(debug.plannedToolName).toBe("read");
+    expect(debug.plannedWireToolName).toBe("exec");
+    expect(debug.plannedToolArgs).toEqual({ path: "repo/qa/scenarios/index.yaml" });
+  });
+
   it("returns continuity language after the model-switch reread completes", async () => {
     const server = await startMockServer();
 
@@ -6567,7 +6690,7 @@ Update and merge these partial structured summaries.`,
     const toolUseBlock = body.content.find((block) => block.type === "tool_use") as
       | { id: string; name: string; input: Record<string, unknown> }
       | undefined;
-    expect(toolUseBlock?.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(toolUseBlock?.id).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(toolUseBlock?.id.length).toBeLessThanOrEqual(64);
     expect(toolUseBlock?.name).toBe("read");
     expect(toolUseBlock?.input).toEqual({ path: "repo/docs/help/testing.md" });
@@ -6585,6 +6708,7 @@ Update and merge these partial structured summaries.`,
   it("preserves already-native Anthropic tool IDs while adapting shared generated IDs", () => {
     const nativeId = "toolu_native_123";
     const generatedId = "call_mock_read_generated_1";
+    const secondGeneratedId = "call_mock_read_generated_2";
     const events: StreamEvent[] = [
       {
         type: "response.output_item.added",
@@ -6610,6 +6734,7 @@ Update and merge these partial structured summaries.`,
           output: [
             { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
             { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
+            { type: "function_call", name: "read", call_id: secondGeneratedId, arguments: "{}" },
           ],
           usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
         },
@@ -6650,9 +6775,13 @@ Update and merge these partial structured summaries.`,
     });
 
     expect(callIds.filter((id) => id === nativeId)).toHaveLength(3);
-    expect(new Set(adaptedGeneratedIds).size).toBe(1);
+    expect(adaptedGeneratedIds.slice(0, 3)).toEqual(
+      Array.from({ length: 3 }, () => "toolu51ca7fb8ca8ab1910ae2815b4e69a38ac71"),
+    );
+    expect(adaptedGeneratedIds[3]).toMatch(/^toolu[a-f0-9]{35}$/);
+    expect(adaptedGeneratedIds[3]).not.toBe(adaptedGeneratedIds[0]);
     expect(repeatedGeneratedIds).toEqual(adaptedGeneratedIds);
-    expect(adaptedGeneratedIds[0]).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(adaptedGeneratedIds[0]).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(adaptedGeneratedIds[0]?.length).toBeLessThanOrEqual(64);
   });
 
@@ -6710,7 +6839,7 @@ Update and merge these partial structured summaries.`,
       if (!toolUse || typeof toolUse.id !== "string" || typeof toolUse.name !== "string") {
         throw new Error("Expected Anthropic tool_use block");
       }
-      expect(toolUse.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+      expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
       expect(toolUse.id.length).toBeLessThanOrEqual(64);
       emittedToolUseIds.push(toolUse.id);
       return toolUse;
@@ -7758,7 +7887,7 @@ Update and merge these partial structured summaries.`,
       toolUseStart?.content_block,
       "Anthropic SSE tool_use content block",
     );
-    expect(toolUse.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(String(toolUse.id).length).toBeLessThanOrEqual(64);
     const debug = requireRecord(await getJson(server, "/debug/last-request"), "debug request");
     expect(debug.plannedToolCallId).toBe(toolUse.id);

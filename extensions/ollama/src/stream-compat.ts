@@ -15,8 +15,9 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
+import { supportsOllamaCloudFullThinkingEffort } from "./model-reasoning.js";
 
-export type OllamaThinkValue = boolean | "low" | "medium" | "high";
+export type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max";
 
 export function resolveConfiguredOllamaProviderConfig(params: {
   config?: OpenClawConfig;
@@ -114,42 +115,56 @@ function createOllamaThinkingWrapper(
   });
 }
 
-function resolveOllamaThinkValue(thinkingLevel: unknown): OllamaThinkValue | undefined {
-  if (thinkingLevel === "off") {
+function normalizeOllamaThinkValue(
+  value: unknown,
+  nativeMax: boolean,
+): OllamaThinkValue | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value === "off") {
     return false;
   }
-  if (thinkingLevel === "low" || thinkingLevel === "medium" || thinkingLevel === "high") {
-    return thinkingLevel;
+  if (value === "low" || value === "medium" || value === "high") {
+    return value;
   }
-  if (thinkingLevel === "minimal") {
+  if (value === "max") {
+    // Verified full-effort Cloud families accept native max. Keep the shipped
+    // high fallback for local and model-specific contracts without that tier.
+    return nativeMax ? "max" : "high";
+  }
+  if (value === "minimal") {
     return "low";
   }
-  if (thinkingLevel === "xhigh" || thinkingLevel === "adaptive" || thinkingLevel === "max") {
+  if (value === "xhigh" || value === "adaptive") {
+    // These OpenClaw-only tiers are not advertised by Ollama; keep their established high mapping.
     return "high";
   }
   return undefined;
 }
 
+function resolveOllamaThinkValue(
+  thinkingLevel: unknown,
+  nativeMax: boolean,
+): OllamaThinkValue | undefined {
+  return normalizeOllamaThinkValue(thinkingLevel, nativeMax);
+}
+
 export function resolveOllamaThinkParamValue(
   params: Record<string, unknown> | undefined,
+  nativeMax = false,
 ): OllamaThinkValue | undefined {
-  const raw = params?.think ?? params?.thinking;
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (raw === "off") {
-    return false;
-  }
-  if (raw === "low" || raw === "medium" || raw === "high") {
-    return raw;
-  }
-  if (raw === "minimal") {
-    return "low";
-  }
-  if (raw === "xhigh" || raw === "adaptive" || raw === "max") {
-    return "high";
-  }
-  return undefined;
+  return normalizeOllamaThinkValue(params?.think ?? params?.thinking, nativeMax);
+}
+
+export function supportsNativeOllamaMax(
+  model: Pick<ProviderRuntimeModel, "id" | "provider"> | undefined,
+  providerId?: string,
+): boolean {
+  const isCloudProvider =
+    normalizeProviderId(model?.provider ?? "") === "ollama-cloud" ||
+    normalizeProviderId(providerId ?? "") === "ollama-cloud";
+  return isCloudProvider && supportsOllamaCloudFullThinkingEffort(model?.id ?? "");
 }
 
 export function shouldForwardNativeOllamaThink(
@@ -209,9 +224,12 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaNumCtx(model));
   }
 
-  const configuredThinkValue = model ? resolveOllamaThinkParamValue(model.params) : undefined;
+  const nativeMax = supportsNativeOllamaMax(model, ctx.provider);
+  const configuredThinkValue = model
+    ? resolveOllamaThinkParamValue(model.params, nativeMax)
+    : undefined;
   const runtimeThinkValue = isNativeOllamaTransport
-    ? resolveOllamaThinkValue(ctx.thinkingLevel)
+    ? resolveOllamaThinkValue(ctx.thinkingLevel, nativeMax)
     : undefined;
   // "off" is also the implicit agent default. Preserve explicit native Ollama
   // model config unless the active run requests a non-off thinking level.

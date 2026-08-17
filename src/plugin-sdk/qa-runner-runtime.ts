@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   loadBundledPluginManifestRegistry,
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
 } from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
@@ -121,6 +121,7 @@ type QaRunnerTransportAdapterDefinition = {
   requiredPluginIds: readonly string[];
   supportedActions: readonly ("delete" | "edit" | "react" | "thread-create")[];
   assertTransportHealthy?: () => void;
+  describeTransportState?: () => string;
   resetTransport?: () => void | Promise<void>;
   sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
   sendNativeCommand?: (
@@ -335,7 +336,7 @@ function registerLiveTransportQaCli(
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
-    .option("--fast", "Enable provider fast mode where supported", false);
+    .option("--fast", "Enable provider fast mode where supported");
 
   if (params.allowFailuresHelp) {
     command.option("--allow-failures", params.allowFailuresHelp, false);
@@ -485,7 +486,9 @@ function listDeclaredQaRunnerPlugins(
 > {
   // Private QA is a source-checkout harness. Its command tree must be derived
   // from repo-owned manifests before Commander pre-action hooks can run.
-  const registry = env ? loadBundledPluginManifestRegistry({ env }) : loadPluginManifestRegistry();
+  const registry = env
+    ? loadBundledPluginManifestRegistry({ env })
+    : loadPluginManifestRegistryCore();
   return registry.plugins
     .filter(
       (

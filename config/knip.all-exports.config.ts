@@ -56,17 +56,12 @@ const ROOT_TEST_ENTRY_GLOBS = [
   // Invoked directly by the Docker image-auth scenario.
   "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts!",
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",
-  // Loaded through NODE_OPTIONS by the Doctor SecretRef E2E; no static import edge exists.
-  "test/fixtures/windows-acl-tools-unavailable.mjs!",
   // QA scenario YAML dispatches these scripts/tests by path rather than import.
   ...QA_SCENARIO_EXECUTION_ENTRIES,
   // Invoked directly by the sandbox bind-conflict E2E verification script.
-  "scripts/e2e-sandbox-bind-conflict.mjs!",
+  "scripts/e2e-sandbox-bind-conflict.mts!",
   // The Voice Call QA scenario loads this fixture through a generated plugin directory.
   "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
-  // Loaded with cache-busting query strings so configuration fallback tests
-  // get independent module initialization.
-  "test/helpers/config/bundled-channel-config-runtime.ts!",
   // The topology analyzer owns these as an intentionally self-contained graph.
   "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,mts,cts}!",
   // The focused Oxlint test invokes these deliberate violations by path.
@@ -132,9 +127,6 @@ const config = {
   ignoreIssues: {
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
-    // Cache-busting dynamic imports are real consumers, but Knip cannot map
-    // their query-suffixed module ids back to these named test-support exports.
-    "test/helpers/config/bundled-channel-config-runtime.ts": ["exports"],
     "test/fixtures/ts-topology/basic/**": [
       "exports",
       "nsExports",

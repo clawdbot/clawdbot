@@ -1,20 +1,22 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  claimMainSessionRecoveryOwner,
+  releaseMainSessionRecoveryOwner,
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
 } from "../../sessions/user-turn-transcript.types.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -40,24 +42,6 @@ function createTestAdmission(params: {
   };
 }
 
-function replaceSessionEntryFromIndependentConnection(params: {
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): void {
-  const database = openOpenClawAgentDatabase(
-    resolveSqliteReadScope({ storePath: params.storePath, sessionKey: params.sessionKey }),
-  );
-  const external = new DatabaseSync(database.path);
-  try {
-    external
-      .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
-      .run(JSON.stringify(params.entry), params.entry.updatedAt, params.sessionKey);
-  } finally {
-    external.close();
-  }
-}
-
 describe("createReplyRestartRecoveryClaimController", () => {
   it.each([
     { receiptState: undefined, expectedStatus: "done" },
@@ -72,7 +56,6 @@ describe("createReplyRestartRecoveryClaimController", () => {
       let entry: InternalSessionEntry = {
         abortedLastRun: false,
         lifecycleRunId: "recovery-run",
-        restartRecoveryBeforeAgentReplyState: "admitted",
         restartRecoveryDeliveryRunId: "recovery-run",
         sessionId,
         startedAt: 1,
@@ -356,119 +339,101 @@ describe("createReplyRestartRecoveryClaimController", () => {
     });
   });
 
-  it("confirms an active replacement claim after SQLite lease loss", async () => {
-    const root = tempDirs.make("openclaw-reply-restart-handoff-");
+  it("rejects durable admission when the captured recovery owner releases", async () => {
+    const root = tempDirs.make("openclaw-reply-admission-owner-release-");
     const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const sessionId = "session";
-    let entry: SessionEntry = {
-      abortedLastRun: false,
-      restartRecoveryDeliveryRunId: "old-run",
-      restartRecoveryDeliverySourceRunId: "source-run",
+    const sessionKey = "agent:main:telegram:group:chat:topic:owner-release";
+    const sessionId = "channel-session-id";
+    const sourceTurnId = "telegram-update-new";
+    const deliveryContext = {
+      channel: "telegram",
+      to: "chat",
+      accountId: "default",
+      threadId: "thread",
+    };
+    let entry: InternalSessionEntry = {
       sessionId,
+      updatedAt: 10,
+      abortedLastRun: true,
       status: "running",
-      updatedAt: Date.now(),
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 0,
+      },
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const owner = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      sessionId,
+      target: { sessionKey, storePath },
+    });
+    expect(owner.kind).toBe("claimed");
+    if (owner.kind !== "claimed") {
+      return;
+    }
+    entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
+      abortedLastRun: false,
+      restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryRunId: "orphaned-run",
+      restartRecoveryDeliverySourceRunId: "telegram-update-old",
+      status: "done",
+    }))) as InternalSessionEntry;
+    const sourceMessage = {
+      role: "user" as const,
+      content: "continue",
+      idempotencyKey: sourceTurnId,
+      timestamp: Date.now(),
+    };
+    const admission = createTestAdmission({
+      entryId: sourceTurnId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    const delegate = createUserTurnTranscriptRecorder({
+      message: sourceMessage,
+      target: {
+        agentId: "main",
+        sessionEntry: entry,
+        sessionId,
+        sessionKey,
+        storePath,
+      },
+      updateMode: "none",
+    });
+    const recorder = {
+      ...delegate,
+      getAdmissionReceipt: () => admission,
+      persistApproved: async (
+        options?: Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0],
+      ) => {
+        await releaseMainSessionRecoveryOwner(owner.lease);
+        return await delegate.persistApproved(options);
+      },
+    } satisfies UserTurnTranscriptRecorder;
     const controller = createReplyRestartRecoveryClaimController({
-      admissionRunId: "old-run",
       getEntry: () => entry,
       getSessionId: () => sessionId,
       isRestartAbort: () => false,
-      resolveDeliveryContext: () => undefined,
+      resolveDeliveryContext: () => deliveryContext,
       sessionKey,
       setEntry: (next) => {
         entry = next;
       },
-      storePath,
-    });
-    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-
-    replaceSessionEntryFromIndependentConnection({
-      entry: {
-        ...entry,
-        abortedLastRun: true,
-        status: "killed",
-        updatedAt: Date.now() + 1,
-      },
-      sessionKey,
+      sourceTurnId,
       storePath,
     });
 
-    expect(entry.abortedLastRun).toBe(false);
-    await expect(controller.confirmRestartRecoveryArmedAfterLeaseLoss()).resolves.toBe(true);
-    expect(entry).toMatchObject({
-      abortedLastRun: true,
-      restartRecoveryDeliveryRunId: "old-run",
-      restartRecoveryDeliverySourceRunId: "source-run",
-      status: "killed",
-    });
-
-    await controller.clear();
-    expect(loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })).toMatchObject({
-      abortedLastRun: true,
-      restartRecoveryDeliveryRunId: "old-run",
-      restartRecoveryDeliverySourceRunId: "source-run",
-      status: "killed",
-    });
-  });
-
-  it("confirms a completed replacement handoff by its terminal source marker", async () => {
-    const root = tempDirs.make("openclaw-reply-completed-handoff-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const sessionId = "session";
-    let entry: SessionEntry = {
-      abortedLastRun: false,
-      restartRecoveryDeliveryRunId: "old-run",
-      restartRecoveryDeliverySourceRunId: "source-run",
-      sessionId,
-      status: "running",
-      updatedAt: Date.now(),
-    };
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
-    const controller = createReplyRestartRecoveryClaimController({
-      admissionRunId: "old-run",
-      getEntry: () => entry,
-      getSessionId: () => sessionId,
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => undefined,
-      sessionKey,
-      setEntry: (next) => {
-        entry = next;
-      },
-      storePath,
-    });
-    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-
-    replaceSessionEntryFromIndependentConnection({
-      entry: {
-        ...entry,
-        abortedLastRun: false,
-        restartRecoveryDeliveryRunId: undefined,
-        restartRecoveryDeliverySourceRunId: undefined,
-        restartRecoveryTerminalRunIds: ["source-run"],
-        status: "done",
-        updatedAt: Date.now() + 1,
-      },
-      sessionKey,
-      storePath,
-    });
-
-    expect(entry.restartRecoveryTerminalRunIds).toBeUndefined();
-    await expect(controller.confirmRestartRecoveryArmedAfterLeaseLoss()).resolves.toBe(true);
-    expect(entry).toMatchObject({
-      abortedLastRun: false,
-      restartRecoveryTerminalRunIds: ["source-run"],
+    await expect(controller.admitUserTurn(recorder)).rejects.toThrow(
+      "session changed before durable user-turn admission",
+    );
+    const persisted = loadSessionEntry({ storePath, sessionKey });
+    expect(persisted).not.toHaveProperty("mainRestartRecovery");
+    expect(persisted).toMatchObject({
+      restartRecoveryDeliveryRunId: "orphaned-run",
+      restartRecoveryDeliverySourceRunId: "telegram-update-old",
       status: "done",
     });
-    expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(entry.restartRecoveryDeliverySourceRunId).toBeUndefined();
-
-    await controller.clear();
-    const persisted = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
-    expect(persisted?.restartRecoveryTerminalRunIds).toEqual(["source-run"]);
-    expect(persisted?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(persisted?.restartRecoveryDeliverySourceRunId).toBeUndefined();
   });
 });

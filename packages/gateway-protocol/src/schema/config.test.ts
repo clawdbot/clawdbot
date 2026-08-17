@@ -7,6 +7,7 @@ import {
   UpdateHoldParamsSchema,
   UpdateHoldResultSchema,
   UpdateScheduleStateSchema,
+  UpdateStatusParamsSchema,
   UpdateStatusResultSchema,
 } from "./config.js";
 
@@ -55,6 +56,12 @@ describe("ConfigSchemaLookupResultSchema", () => {
 });
 
 describe("update protocol schemas", () => {
+  it("accepts an optional explicit checkout refresh", () => {
+    expect(Value.Check(UpdateStatusParamsSchema, {})).toBe(true);
+    expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: true })).toBe(true);
+    expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: "yes" })).toBe(false);
+  });
+
   it("accepts package and git schedule targets", () => {
     expect(
       Value.Check(UpdateScheduleStateSchema, {
@@ -104,9 +111,20 @@ describe("update protocol schemas", () => {
             { sha: "def5678", subject: "Second change" },
           ],
         },
+        effectiveChannel: "dev",
         schedule: {
           channel: "dev",
           autoEnabled: true,
+          install: {
+            kind: "git",
+            git: {
+              status: "behind",
+              currentSha: "1234567890",
+              commitAtMs: 1_754_640_000_000,
+              installedAtMs: 1_754_647_200_000,
+              commitsBehind: 3,
+            },
+          },
           target: {
             kind: "git",
             upstreamRef: "origin/main",
@@ -124,6 +142,36 @@ describe("update protocol schemas", () => {
           channel: "dev",
           autoEnabled: true,
           target: { kind: "git", upstreamRef: "origin/main", commitsBehind: -1 },
+        },
+      }),
+    ).toBe(false);
+
+    for (const git of [
+      { status: "current" },
+      { status: "ahead", commitsAhead: 2 },
+      { status: "diverged", commitsAhead: 1, commitsBehind: 3 },
+      { status: "unavailable", reason: "fetch-failed" },
+    ]) {
+      expect(
+        Value.Check(UpdateStatusResultSchema, {
+          sentinel: null,
+          updateAvailable: null,
+          schedule: {
+            channel: "dev",
+            autoEnabled: false,
+            install: { kind: "git", git },
+          },
+        }),
+      ).toBe(true);
+    }
+    expect(
+      Value.Check(UpdateStatusResultSchema, {
+        sentinel: null,
+        updateAvailable: null,
+        schedule: {
+          channel: "dev",
+          autoEnabled: false,
+          install: { kind: "git", git: { status: "behind", commitsBehind: 0 } },
         },
       }),
     ).toBe(false);

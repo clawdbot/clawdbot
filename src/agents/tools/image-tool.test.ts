@@ -19,7 +19,10 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
+import {
+  createContainerWorkspaceSandboxFsBridge,
+  createHostSandboxFsBridge,
+} from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
@@ -1842,9 +1845,10 @@ describe("image tool implicit imageModel config", () => {
       testing.setProviderDepsForTest({ describeImageWithModel, describeImagesWithModel });
 
       const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision: true });
-      expect(tool.label).toBe("View Image");
+      expect(tool.label).toBe("Inspect Image");
       expect(tool.catalogMode).toBe("direct-only");
-      expect(tool.description).toContain("direct visual inspection");
+      expect(tool.description).toContain("private model context");
+      expect(tool.description).toContain("Does not display, attach, or send");
 
       const result = await tool.execute("native-image", {
         prompt: "Read the screenshot error.",
@@ -1858,7 +1862,10 @@ describe("image tool implicit imageModel config", () => {
       ).content;
 
       expect(content).toEqual([
-        { type: "text", text: "Loaded 1 image for direct visual inspection." },
+        {
+          type: "text",
+          text: "Loaded 1 image into private model context for inspection; not displayed, attached, or sent to the user.",
+        },
         expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
       ]);
       expect((result as { details?: Record<string, unknown> }).details).toMatchObject({
@@ -2391,6 +2398,29 @@ describe("image tool implicit imageModel config", () => {
       );
     });
   });
+
+  it.each(["file:///workspace/img.png", "FILE:/workspace/img.png"])(
+    "reads a mounted image from %s",
+    async (image) => {
+      await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+        await fs.writeFile(
+          path.join(sandboxRoot, "img.png"),
+          Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+        );
+        const bridge = createContainerWorkspaceSandboxFsBridge(sandboxRoot);
+        stubMinimaxOkFetch();
+        const tool = createRequiredImageTool({
+          config: createMinimaxImageConfig(),
+          agentDir,
+          workspaceDir: sandboxRoot,
+          sandbox: { root: sandboxRoot, bridge },
+          fsPolicy: { workspaceOnly: true },
+        });
+
+        await expectImageToolExecOk(tool, image);
+      });
+    },
+  );
 
   it("applies workspace-only policy to image paths in sandbox mode", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {

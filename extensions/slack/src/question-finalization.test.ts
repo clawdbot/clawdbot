@@ -97,7 +97,11 @@ describe("Slack question finalization", () => {
     ]);
     await slackOutbound.afterDeliverPayload?.({
       cfg: {},
-      target: { channel: "slack", to: "C123", accountId: "default" },
+      target: {
+        channel: "slack",
+        to: "team:T123:channel:C123",
+        accountId: "default",
+      },
       payload: renderedAfterTransport!,
       results: [
         { channel: "slack", messageId: "44", channelId: "C123" },
@@ -117,6 +121,7 @@ describe("Slack question finalization", () => {
     expect(hoisted.update).toHaveBeenCalledWith(
       expect.objectContaining({
         channelId: "C123",
+        teamId: "T123",
         messageTs: "55",
         text: expect.stringContaining("Answered: &lt;!channel&gt;"),
         blocks: expect.arrayContaining([

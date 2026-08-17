@@ -2,6 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { showToast } from "../lib/toast.ts";
 import {
   getRenderedModalDialog,
   installDialogPolyfill,
@@ -51,6 +52,8 @@ describe("openclaw-modal-dialog", () => {
 
     expect(dialog.open).toBe(true);
     expect(dialog.localName).toBe("dialog");
+    expect(dialog.getAttribute("role")).toBe("dialog");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(dialog.getAttribute("aria-label")).toBe("Confirm action");
     expect(dialog.getAttribute("aria-description")).toBe("Review the operation before continuing.");
     expect(dialog.getRootNode()).toBe(webAwesomeDialog.shadowRoot);
@@ -103,6 +106,30 @@ describe("openclaw-modal-dialog", () => {
     expect(dialog.open).toBe(true);
   });
 
+  it("hands an active toast back to the app layer when it closes", async () => {
+    const shell = document.createElement("div");
+    shell.className = "shell";
+    const appHost = document.createElement("openclaw-toast-host");
+    shell.append(appHost);
+    document.body.append(shell);
+    try {
+      const { modal } = await renderModal();
+      const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
+
+      showToast({ message: "Saved" });
+      modal.hide();
+      await modal.updateComplete;
+      await appHost.updateComplete;
+
+      expect(moveBefore).toHaveBeenCalledWith(appHost, null);
+      expect(moveBefore.mock.contexts).toContain(modal);
+      expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
+      expect(modal.querySelector(".app-toast")).toBeNull();
+    } finally {
+      shell.remove();
+    }
+  });
+
   it("keeps the navigation drawer sidebar in a full-height, shrinkable flex column", () => {
     const styles = OpenClawModalDialog.styles.cssText;
 
@@ -111,23 +138,6 @@ describe("openclaw-modal-dialog", () => {
     );
     expect(styles).toMatch(
       /::slotted\(\.shell-nav-modal__content\)\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1\s+1\s+auto;[^}]*flex-direction:\s*column;[^}]*height:\s*100%;[^}]*min-height:\s*0;/u,
-    );
-  });
-
-  it("keeps responsive width and maximum-width limits owned by the same variant", () => {
-    const styles = OpenClawModalDialog.styles.cssText;
-
-    expect(styles).toMatch(
-      /:host\(\.fullscreen\)\s+wa-dialog::part\(dialog\)\s*\{[^}]*max-width:\s*calc\(100vw\s*-\s*20px\);/u,
-    );
-    expect(styles).toMatch(
-      /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?wa-dialog\s*\{[^}]*--width:\s*min\(var\(--openclaw-modal-width,\s*540px\),\s*calc\(100vw\s*-\s*24px\)\);[\s\S]*?wa-dialog::part\(dialog\)\s*\{[^}]*max-width:\s*var\(--openclaw-modal-max-width,\s*calc\(100vw\s*-\s*24px\)\);/u,
-    );
-    expect(styles).toMatch(
-      /:host\(\.drawer\)\s+wa-dialog\s*\{[^}]*--width:\s*min\(var\(--openclaw-modal-width,\s*100vw\),\s*100vw\);/u,
-    );
-    expect(styles).toMatch(
-      /:host\(\.drawer\)\s+wa-dialog::part\(dialog\)\s*\{[^}]*max-width:\s*100vw;/u,
     );
   });
 

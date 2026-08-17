@@ -1,38 +1,31 @@
 // Agents directory tests cover agent-scoped skill directory discovery.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setTestEnvValue } from "../../test-utils/env.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
-import { writeSkill } from "../test-support/test-helpers.js";
-import { buildWorkspaceSkillsPrompt } from "./workspace.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
 }));
 
-const tempDirs: string[] = [];
-
-async function createTempDir(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return await fs.realpath(dir);
-}
+const tempDirs = createTempDirTracker();
 
 function buildSkillsPrompt(workspaceDir: string, managedDir: string, bundledDir: string): string {
-  return buildWorkspaceSkillsPrompt(workspaceDir, {
+  return buildSkillSnapshot(workspaceDir, {
     managedSkillsDir: managedDir,
     bundledSkillsDir: bundledDir,
-  });
+  }).prompt;
 }
 
 async function createWorkspaceSkillDirs() {
-  const workspaceDir = await createTempDir("openclaw-");
+  const workspaceDir = tempDirs.make("openclaw-");
   return {
     workspaceDir,
     managedDir: path.join(workspaceDir, ".managed"),
@@ -45,19 +38,13 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
   let envSnapshot: SkillsHomeEnvSnapshot;
 
   beforeEach(async () => {
-    fakeHome = await createTempDir("openclaw-home-");
+    fakeHome = tempDirs.make("openclaw-home-");
     envSnapshot = setMockSkillsHomeEnv(fakeHome);
   });
 
   afterEach(async () => {
     await restoreMockSkillsHomeEnv(envSnapshot, async () => {
-      await Promise.all(
-        tempDirs
-          .splice(0)
-          .map((dir) =>
-            fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
-          ),
-      );
+      tempDirs.cleanup();
     });
   });
 

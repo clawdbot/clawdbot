@@ -11,15 +11,14 @@ import {
   validateTasksListParams,
   validateTasksRecoveryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   dismissSubagentCompletionDelivery,
   retrySubagentCompletionDelivery,
-} from "../../agents/subagent-completion-delivery.js";
+} from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -78,15 +77,23 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    const cfg = context.getRuntimeConfig();
     let sessionKey: string | undefined;
+    let sessionAgentId: string | undefined;
     if (requestedSessionKey) {
-      const cfg = context.getRuntimeConfig();
+      const sessionOwner = resolveRequestedSessionAgentId(
+        cfg,
+        requestedSessionKey,
+        normalizeOptionalString(params.agentId),
+      );
+      if (!sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
+        return;
+      }
+      sessionAgentId = sessionOwner.agentId;
       sessionKey = canonicalizeMainSessionAlias({
         cfg,
-        agentId:
-          parseAgentSessionKey(requestedSessionKey)?.agentId ??
-          normalizeOptionalString(params.agentId) ??
-          resolveDefaultAgentId(cfg),
+        agentId: sessionOwner.agentId,
         sessionKey: requestedSessionKey,
       });
     }
@@ -97,8 +104,10 @@ export const tasksHandlers: GatewayRequestHandlers = {
       offset: cursor,
       limit,
       statuses: statusFilter ? [...statusFilter] : undefined,
-      agentId: params.agentId,
+      agentId: sessionKey ? undefined : params.agentId,
       sessionKey,
+      sessionAgentId,
+      cfg,
     });
     const nextOffset = cursor + page.tasks.length;
     respond(true, {
@@ -130,9 +139,9 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
-    const { cancelDetachedTaskRunById } =
+    const { cancelDetachedTaskRunByIdCore } =
       await import("../../tasks/task-executor-cancel.runtime.js");
-    const result = await cancelDetachedTaskRunById({
+    const result = await cancelDetachedTaskRunByIdCore({
       cfg: context.getRuntimeConfig(),
       taskId,
       ...(reason ? { reason } : {}),
@@ -161,25 +170,24 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     respond(true, { results });
   },
-  "tasks.dismiss": ({ params, respond }) => {
+  "tasks.dismiss": async ({ params, respond }) => {
     if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.dismiss", respond)) {
       return;
     }
-    respond(true, {
-      results: params.taskIds.map((taskId) => {
-        const result = dismissSubagentCompletionDelivery(taskId);
-        return {
-          taskId,
-          ok: result.ok,
-          ...(result.reason ? { reason: result.reason } : {}),
-          ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
-        };
-      }),
-    });
+    const { discardSubagentTerminalDelivery } =
+      await import("../../agents/subagents/registry/subagent-registry.js");
+    const results = [];
+    for (const taskId of params.taskIds) {
+      const result = await dismissSubagentCompletionDelivery(taskId, {
+        discardTerminalDelivery: discardSubagentTerminalDelivery,
+      });
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
   },
 };
-
-export const testApi = {
-  mapTaskSummary,
-};
-export { testApi as __test };

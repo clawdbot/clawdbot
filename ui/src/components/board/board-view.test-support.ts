@@ -1,8 +1,8 @@
 import { vi } from "vitest";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { BoardWidget } from "../../lib/board/types.ts";
-import type { BoardViewCallbacks, BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
+import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { settleLitElement, settleLitElements } from "../../test-helpers/lit-settle.ts";
 
@@ -24,7 +24,7 @@ export function boardWidget(overrides: Partial<BoardWidget> = {}): BoardWidget {
   };
 }
 
-export function snapshot(overrides: Partial<BoardViewSnapshot> = {}): BoardViewSnapshot {
+export function snapshot(overrides: Partial<BoardSnapshot> = {}): BoardSnapshot {
   return {
     sessionKey: "agent:main:test",
     revision: 1,
@@ -108,7 +108,7 @@ export async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoar
 
 export async function mount(
   options: {
-    snapshot?: BoardViewSnapshot;
+    snapshot?: BoardSnapshot;
     activeTabId?: string;
     callbacks?: BoardViewCallbacks;
     widgetFrameUrl?: (name: string, revision: number) => string;

@@ -1,9 +1,7 @@
-import { fetchExactClawHubSkillSecurityVerdicts } from "../../infra/clawhub-skill-security.js";
 // ClawHub verdict helpers normalize skill security verdicts from registry metadata.
-import {
-  resolveClawHubBaseUrl,
-  type ClawHubSkillSecurityVerdictItem,
-} from "../../infra/clawhub.js";
+import { resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
+import { fetchExactClawHubSkillSecurityVerdicts } from "../../infra/clawhub-skill-security.js";
+import type { ClawHubSkillSecurityVerdictItem } from "../../infra/clawhub-skills.js";
 import type { buildWorkspaceSkillStatus } from "../discovery/status.js";
 
 /** ClawHub verdict item shape projected into local security scan verdicts. */

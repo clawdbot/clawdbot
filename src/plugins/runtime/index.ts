@@ -142,11 +142,11 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
   );
   const getRuntimeAuthForModel = createLazyRuntimeMethod(
     loadModelAuthRuntime,
-    (runtime) => runtime.getRuntimeAuthForModel,
+    (runtime) => runtime.getRuntimeAuthForModelCore,
   );
   const resolveApiKeyForProvider = createLazyRuntimeMethod(
     loadModelAuthRuntime,
-    (runtime) => runtime.resolveApiKeyForProvider,
+    (runtime) => runtime.resolveProviderRuntimeApiKey,
   );
   return {
     getApiKeyForModel: (params) =>
@@ -292,9 +292,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       },
       openSyncKeyedStore: () => {
         throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy.");
-      },
-      withLease: async () => {
-        throw new Error("withLease is only available through the plugin runtime proxy.");
       },
       openChannelIngressQueue: () => {
         throw new Error(

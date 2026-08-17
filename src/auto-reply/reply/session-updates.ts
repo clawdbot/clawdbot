@@ -1,13 +1,18 @@
 /** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
+import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -115,7 +120,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     const payload = buildSessionEndHookPayload({
       sessionId: params.previousEntry.sessionId,
       sessionKey: params.sessionKey,
-      cfg: params.cfg,
+      agentId,
       reason: "compaction",
       sessionFile:
         transcript.sessionFile ??
@@ -140,7 +145,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     const payload = buildSessionStartHookPayload({
       sessionId: params.nextEntry.sessionId,
       sessionKey: params.sessionKey,
-      cfg: params.cfg,
+      agentId,
       resumedFrom: params.previousEntry.sessionId,
     });
     void runWithGatewayIndependentRootWorkContinuation(async () => {
@@ -322,6 +327,9 @@ export async function incrementCompactionCount(params: {
   tokensAfter?: number;
   /** Session id after compaction when a context engine changed identity. */
   newSessionId?: string;
+  compactionKind?: EmbeddedAgentCompactResult["compactionKind"];
+  expectedSession?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+  authorize?: () => boolean;
 }): Promise<number | undefined> {
   const {
     agentId,
@@ -334,6 +342,9 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
+    compactionKind,
+    expectedSession,
+    authorize,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -342,13 +353,23 @@ export async function incrementCompactionCount(params: {
   if (!entry) {
     return undefined;
   }
+  const canApply = (current: SessionEntry) =>
+    (authorize?.() ?? true) &&
+    (!expectedSession ||
+      (current.sessionId === expectedSession.sessionId &&
+        current.lifecycleRevision === expectedSession.lifecycleRevision));
+  if (!canApply(entry)) {
+    return undefined;
+  }
   const incrementBy = Math.max(0, amount);
   const nextCount = (entry.compactionCount ?? 0) + incrementBy;
-  // Build update payload with compaction count and optionally updated token counts
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,
     updatedAt: now,
   };
+  if (compactionKind === "context-engine") {
+    clearAllCliSessions(updates);
+  }
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
   if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;
@@ -357,13 +378,11 @@ export async function incrementCompactionCount(params: {
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
   }
-  // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   const tokensAfterCompaction = resolveNonNegativeTokenCount(tokensAfter);
   if (tokensAfterCompaction !== undefined) {
     updates.totalTokens = tokensAfterCompaction;
     updates.totalTokensFresh = true;
     updates.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
     updates.outputTokens = undefined;
     updates.cacheRead = undefined;
@@ -373,19 +392,48 @@ export async function incrementCompactionCount(params: {
     updates.totalTokensVersion = undefined;
   }
   const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
-  sessionStore[sessionKey] = nextEntry;
   const effectiveStorePath = storePath
     ? resolveSessionStorePathForScope({ agentId, sessionKey, storePath })
     : undefined;
   if (effectiveStorePath) {
-    const persistedEntry = await patchSessionEntry(
-      { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
-      () => updates,
-      { fallbackEntry: nextEntry },
-    );
-    if (persistedEntry) {
-      sessionStore[sessionKey] = persistedEntry;
+    let committed = false;
+    const authorityRevoked = new Error("compaction accounting authority revoked");
+    let persistedEntry: SessionEntry | null;
+    try {
+      persistedEntry = await patchSessionEntryCore(
+        { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
+        (current) => {
+          if (!canApply(current)) {
+            return null;
+          }
+          committed = true;
+          return updates;
+        },
+        {
+          ...(expectedSession ? {} : { fallbackEntry: nextEntry }),
+          ...(authorize
+            ? {
+                assertCommitAllowed: () => {
+                  if (!authorize()) {
+                    throw authorityRevoked;
+                  }
+                },
+              }
+            : {}),
+        },
+      );
+    } catch (error) {
+      if (error === authorityRevoked) {
+        return undefined;
+      }
+      throw error;
     }
+    if (!committed || !persistedEntry) {
+      return undefined;
+    }
+    sessionStore[sessionKey] = persistedEntry;
+  } else {
+    sessionStore[sessionKey] = nextEntry;
   }
   if (sessionIdChanged && cfg) {
     emitCompactionSessionLifecycleHooks({

@@ -12,7 +12,6 @@ export const zoomMeetingsConfig = MeetingPlatformAdapter.createPluginConfigSchem
         config.chrome.waitForInCallMs + config.chrome.joinTimeoutMs + 30_000,
       ) ?? 1,
     ),
-  resolveSoxAudioDevice: () => ({ device: "BlackHole 2ch", deviceType: "coreaudio" }),
 });
 
 export type ZoomMeetingsConfig = ReturnType<typeof zoomMeetingsConfig.resolveConfig>;

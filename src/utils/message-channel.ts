@@ -10,6 +10,8 @@ import {
 import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
 import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
+import { normalizeMessageChannel } from "./message-channel-normalize.js";
 export {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
@@ -17,15 +19,11 @@ export {
   normalizeMessageChannel,
   resolveGatewayMessageChannel,
   resolveMessageChannel,
-  type DeliverableMessageChannel,
-  type GatewayMessageChannel,
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
 } from "./message-channel-constants.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
-import { normalizeMessageChannel } from "./message-channel-normalize.js";
 
 /**
  * Message channel and Gateway client classification helpers.

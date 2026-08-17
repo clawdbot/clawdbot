@@ -1,7 +1,7 @@
 // Process supervisor tests cover lifecycle, restart, and termination behavior.
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test-utils/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import type { ManagedRun, SpawnProcessAdapter } from "./types.js";
 

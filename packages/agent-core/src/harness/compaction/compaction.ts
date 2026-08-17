@@ -18,6 +18,7 @@ import {
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { convertToLlm, type HarnessMessage } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
+import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import {
   type CompactionEntry,
   CompactionError,
@@ -70,13 +71,6 @@ function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage
     return undefined;
   }
   return projectSessionEntryMessage(entry);
-}
-
-function isResetReplayableEntry(entry: SessionTreeEntry): boolean {
-  return (
-    entry.type === "message" &&
-    (entry.message.role === "user" || entry.message.role === "assistant")
-  );
 }
 
 /** Generated compaction data ready to be persisted as a compaction entry. */
@@ -134,13 +128,17 @@ function isUnavailableContextBarrier(message: AgentMessage): boolean {
   if (message.role !== "assistant") {
     return false;
   }
-  if (message.api === "cli" && message.usage.contextUsage === undefined) {
-    return true;
-  }
-  if (message.usage.contextUsage?.state !== "unavailable") {
+  const usage = "usage" in message ? message.usage : undefined;
+  if (!usage) {
     return false;
   }
-  return calculateContextTokens(message.usage) === 0;
+  if (message.api === "cli" && usage.contextUsage === undefined) {
+    return true;
+  }
+  if (usage.contextUsage?.state !== "unavailable") {
+    return false;
+  }
+  return calculateContextTokens(usage) === 0;
 }
 
 /** Return usage from the last valid assistant message in session entries. */
@@ -229,13 +227,14 @@ export function shouldCompact(
   contextWindow: number,
   settings: CompactionSettings,
 ): boolean {
-  if (!settings.enabled) {
+  if (!settings.enabled || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     return false;
   }
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
-const IMAGE_BLOCK_CHARS = 4800;
+export const IMAGE_BLOCK_TOKENS = 2_000;
+const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
 
 function countContentBlockChars(
   content: Array<{ type: string; content?: unknown; text?: string }>,
@@ -293,6 +292,9 @@ export function estimateTokens(message: AgentMessage): number {
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
+      if (harnessMessage.excludeFromContext === true) {
+        return 0;
+      }
       chars =
         estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
@@ -443,7 +445,8 @@ export function findCutPoint(
     if (prevEntry.type === "compaction" || prevEntry.type === "reset") {
       break;
     }
-    if (getMessageFromEntryForCompaction(prevEntry)) {
+    // Metadata can follow the cut, but private persisted messages cannot become its boundary.
+    if (prevEntry.type === "message" || getMessageFromEntryForCompaction(prevEntry)) {
       break;
     }
     cutIndex--;
@@ -714,7 +717,7 @@ export function prepareCompaction(
     if (prevBoundary?.type === "reset") {
       const keptEntries =
         firstKeptEntryIndex >= 0
-          ? pathEntries.slice(firstKeptEntryIndex, prevBoundaryIndex).filter(isResetReplayableEntry)
+          ? selectResetKeptEntries(pathEntries.slice(firstKeptEntryIndex, prevBoundaryIndex))
           : [];
       resetPreludeMessages = keptEntries.flatMap((entry) => {
         const message = getMessageFromEntryForCompaction(entry);

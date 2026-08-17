@@ -13,6 +13,7 @@ function captureWriter(inputs: AuditEventInput[]): AuditEventWriter {
       return true;
     },
     recordExecutionIdentity: () => true,
+    recordExecutionDecision: () => true,
     stop: async () => {},
   };
 }

@@ -6,7 +6,8 @@ import {
   nativeHookRelayTesting,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
-  type EmbeddedRunAttemptParams,
+  runBeforeToolCallHook,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -14,6 +15,7 @@ import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runti
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
+import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
@@ -50,6 +52,40 @@ const execApprovalsRuntimeMocks = vi.hoisted(() => ({
   loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
 }));
 
+function createHarnessHostCapabilities(
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams["hostCapabilities"] {
+  return Object.freeze({
+    kind: "agent-harness-host-capability",
+    version: 1,
+    assertActive: () => {},
+    bindToolSurface: (tools) => tools,
+    runBeforeToolCall: async ({ nativeOperation: _nativeOperation, approvalMode, ...request }) =>
+      await runBeforeToolCallHook({
+        ...request,
+        approvalMode: approvalMode === "defer" ? "defer" : "request",
+        ctx: Object.freeze({
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.config ? { config: params.config } : {}),
+          ...(params.workspaceDir
+            ? { cwd: params.workspaceDir, workspaceDir: params.workspaceDir }
+            : {}),
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          runId: params.runId,
+          trigger: params.trigger,
+          approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+          turnSourceChannel: params.messageChannel ?? params.messageProvider,
+          turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+          turnSourceAccountId: params.agentAccountId,
+          turnSourceThreadId: params.currentThreadTs,
+        }),
+      }),
+    requestApproval: async () => undefined,
+    waitForApproval: async () => undefined,
+  });
+}
+
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>();
@@ -70,6 +106,7 @@ const activeAppServerAttemptsForTest = new Set<{
   sessionId: string;
   sessionKey?: string;
 }>();
+const activeHarnessHostClosuresForTest = new Set<() => void>();
 
 type RunCodexAppServerAttemptOptions = Omit<
   NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
@@ -223,7 +260,7 @@ export function createParams(
   const sessionKey = identity.sessionKey ?? "agent:main:session-1";
   const provider = identity.provider ?? "codex";
   const model = createCodexTestModel(provider);
-  return {
+  const params = {
     prompt: identity.prompt ?? "hello",
     sessionId,
     sessionKey,
@@ -250,11 +287,33 @@ export function createParams(
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     observeToolTerminal: createCodexTestToolTerminalObserver(),
-  } as EmbeddedRunAttemptParams;
+  } as unknown as EmbeddedRunAttemptParams;
+  params.hostCapabilities = createHarnessHostCapabilities(params);
+  return params;
 }
 
 export function createTestParams(): EmbeddedRunAttemptParams {
   return createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+}
+
+/** Replaces the lightweight default with the admitted host boundary used in production. */
+export async function bindProductionHarnessHostCapabilitiesForTest(
+  params: EmbeddedRunAttemptParams,
+): Promise<() => void> {
+  const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+  const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
+  params.hostCapabilities = host.capabilities;
+  let active = true;
+  const close = () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    activeHarnessHostClosuresForTest.delete(close);
+    host.close();
+  };
+  activeHarnessHostClosuresForTest.add(close);
+  return close;
 }
 
 export function setCodexTestModelSupportsTools(
@@ -663,6 +722,9 @@ export function setupRunAttemptTestHooks(): void {
 
   afterEach(async () => {
     await drainActiveAppServerAttemptsForTest();
+    for (const close of activeHarnessHostClosuresForTest) {
+      close();
+    }
     await sandboxExecServerRegistry.closeAll();
     resetCodexAppServerClientFactoryForTest();
     clearRuntimeAuthProfileStoreSnapshots();

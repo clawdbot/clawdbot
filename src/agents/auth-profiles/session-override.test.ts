@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -643,7 +643,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(sessionEntry).toBeDefined();
       const sessionStore = { [sessionKey]: sessionEntry! };
 
-      await patchSessionEntry(scope, () => ({ label: "renamed", pinnedAt: undefined }));
+      await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
       await clearSessionAuthProfileOverride({
         sessionEntry: sessionEntry!,
         sessionStore,
@@ -700,7 +700,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(sessionEntry).toBeDefined();
       const sessionStore = { [sessionKey]: sessionEntry! };
 
-      await patchSessionEntry(scope, () => ({ label: "renamed", pinnedAt: undefined }));
+      await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
       const resolved = await resolveOpenAiSession({
         agentDir,
         sessionEntry: sessionEntry!,
@@ -740,7 +740,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" });
       expect(sessionEntry).toBeDefined();
       const sessionStore = { [sessionKey]: sessionEntry! };
-      await patchSessionEntry(scope, () => ({ label: "renamed", pinnedAt: undefined }));
+      await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
 
       const resolved = await resolveOpenAiSession({
         agentDir,
@@ -803,7 +803,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         if (persisted) {
           await replaceSessionEntry(scope, sessionEntry);
           sessionEntry = loadSessionEntry({ ...scope, readConsistency: "latest" })!;
-          await patchSessionEntry(scope, () => ({
+          await patchSessionEntryCore(scope, () => ({
             ...latestEntry,
             authProfileOverrideSource: source,
             pinnedAt: undefined,

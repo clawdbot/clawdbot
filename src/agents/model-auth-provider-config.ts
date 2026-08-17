@@ -35,6 +35,7 @@ import {
 } from "./model-auth-markers.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { isLocalProviderBaseUrl } from "./model-provider-local.js";
+import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
 const MODEL_AUTH_LOCAL_HOST_ALIASES = new Set([
   "docker.orb.internal",
@@ -373,6 +374,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
 /** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
 export function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   credential: AuthProfileCredential;
 }): boolean {
@@ -382,6 +384,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
   if (
     isStoredCredentialCompatibleWithAuthProvider({
       cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       provider: params.provider,
       credential: params.credential,
     })
@@ -401,6 +404,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
 /** Classifies a provider entry apiKey as literal/profile/marker before resolving secrets. */
 export function resolveProviderEntryApiKeyProfileReference(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   store: AuthProfileStore;
 }): ProviderEntryApiKeyProfileReference {
@@ -429,7 +433,12 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
     };
   }
   if (
-    !canUseProfileAsProviderEntryApiKey({ cfg: params.cfg, provider: params.provider, credential })
+    !canUseProfileAsProviderEntryApiKey({
+      cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
+      provider: params.provider,
+      credential,
+    })
   ) {
     return {
       kind: "profile-incompatible",

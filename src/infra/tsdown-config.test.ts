@@ -111,6 +111,12 @@ describe("tsdown config", () => {
     const rootDir = process.cwd();
     const watchedPaths: string[] = [];
     const plugin = createStateSchemaInlinePlugin(rootDir);
+    let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
+    plugin.configureVitest({
+      experimental_defineCacheKeyGenerator: (generator) => {
+        cacheKeyGenerator = generator;
+      },
+    });
     const result = plugin.load.call(
       { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
       path.resolve(rootDir, schema.modulePath),
@@ -126,11 +132,25 @@ describe("tsdown config", () => {
     expect(JSON.parse(match?.[1] ?? "null")).toBe(canonicalSql);
     expect(schema.sourceValue).toBe(canonicalSql);
     expect(watchedPaths).toEqual([schemaPath]);
+    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, schema.modulePath) })).toBe(
+      canonicalSql,
+    );
+    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
   });
 
-  it("installs schema inlining only on the unified runtime graph", () => {
+  it("installs schema inlining only on executable runtime graphs", () => {
+    const configs = asConfigArray(tsdownConfig);
     const unifiedGraph = requireUnifiedDistGraph();
-    const inlinePlugins = asConfigArray(tsdownConfig).flatMap(
+    const workerGraph = configs.find((config) => {
+      const entry = config.entry;
+      return (
+        typeof entry === "object" &&
+        entry !== null &&
+        !Array.isArray(entry) &&
+        (entry as Record<string, unknown>)["worker/worker"] === "src/worker/worker-deploy-entry.ts"
+      );
+    });
+    const inlinePlugins = configs.flatMap(
       (config) =>
         config.plugins?.filter((plugin) => plugin.name === STATE_SCHEMA_INLINE_PLUGIN_NAME) ?? [],
     );
@@ -138,7 +158,10 @@ describe("tsdown config", () => {
     expect(unifiedGraph.plugins).toContainEqual(
       expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
     );
-    expect(inlinePlugins).toHaveLength(1);
+    expect(workerGraph?.plugins).toContainEqual(
+      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    );
+    expect(inlinePlugins).toHaveLength(2);
   });
 
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
@@ -228,6 +251,14 @@ describe("tsdown config", () => {
     );
   });
 
+  it("keeps Gateway plugin reload targets behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["gateway/plugin-channel-reload-targets"]).toBe(
+      "src/gateway/plugin-channel-reload-targets.ts",
+    );
+  });
+
   it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
     const importSpecifiers = [
@@ -294,7 +325,6 @@ describe("tsdown config", () => {
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("jimp")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("sharp")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
@@ -309,7 +339,6 @@ describe("tsdown config", () => {
         "@vitest/expect",
         "jimp",
         "matrix-js-sdk",
-        "qrcode-terminal",
         "sharp",
         "vitest",
       ]) {
@@ -321,7 +350,6 @@ describe("tsdown config", () => {
     }
     const externalize = external;
     expect(externalize("jimp", undefined, false)).toBe(true);
-    expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
     expect(externalize("sharp", undefined, false)).toBe(true);
   });
 

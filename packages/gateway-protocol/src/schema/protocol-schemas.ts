@@ -8,6 +8,7 @@ import { IntegrationProtocolSchemas } from "./protocol-schema-fragment-integrati
 import { NodeProtocolSchemas } from "./protocol-schema-fragment-nodes.js";
 import { OperationsProtocolSchemas } from "./protocol-schema-fragment-operations.js";
 import { PluginLifecycleProtocolSchemas } from "./protocol-schema-fragment-plugins-lifecycle.js";
+import { PortalProtocolSchemas } from "./protocol-schema-fragment-portals.js";
 import { SchedulerProtocolSchemas } from "./protocol-schema-fragment-scheduler.js";
 import { SessionCollaborationProtocolSchemas } from "./protocol-schema-fragment-sessions-collaboration.js";
 import { SessionCoreProtocolSchemas } from "./protocol-schema-fragment-sessions-core.js";
@@ -30,6 +31,7 @@ export const ProtocolSchemas = composeProtocolSchemaFragments([
   SchedulerProtocolSchemas,
   ApprovalProtocolSchemas,
   PluginLifecycleProtocolSchemas,
+  PortalProtocolSchemas,
 ] as const);
 
 export {

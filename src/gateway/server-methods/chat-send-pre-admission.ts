@@ -1,13 +1,12 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -20,10 +19,10 @@ import {
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
-export const ACTIVE_RUN_CHANGED_ERROR_REASON = "active-run-changed";
 
 export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
   respond(
@@ -35,26 +34,14 @@ export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerO
   );
 }
 
-function respondChatTargetChanged(
-  respond: GatewayRequestHandlerOptions["respond"],
-  target: "branch" | "run",
-  reason: string,
-) {
+export function respondChatActiveLeafChanged(respond: GatewayRequestHandlerOptions["respond"]) {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, `active ${target} changed; review and retry`, {
-      details: { reason },
+    errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and retry", {
+      details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
     }),
   );
-}
-
-export function respondChatActiveLeafChanged(respond: GatewayRequestHandlerOptions["respond"]) {
-  respondChatTargetChanged(respond, "branch", ACTIVE_LEAF_CHANGED_ERROR_REASON);
-}
-
-export function respondChatActiveRunChanged(respond: GatewayRequestHandlerOptions["respond"]) {
-  respondChatTargetChanged(respond, "run", ACTIVE_RUN_CHANGED_ERROR_REASON);
 }
 
 /** Settle stop/retry/dedupe cases before reserving lifecycle admission. */
@@ -103,18 +90,20 @@ export async function runChatSendPreAdmission(params: {
       respondChatSessionRoutingChanged(respond);
       return false;
     }
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    const stopAgentId =
-      sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
+    const stopOwnerScope = resolveChatSendStopOwnerScope({
+      cfg,
+      selectedAgentId: selectedAgent.agentId,
+      sessionKey,
+    });
     const res = await abortChatRunsForSessionKeyWithPartials({
       context,
       ops: createChatAbortOps(context),
       sessionKey: rawSessionKey,
       sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
-      agentId: stopAgentId,
+      agentId: stopOwnerScope.agentId,
       sessionId: entry?.sessionId,
       persistSessionKey: sessionKey,
-      defaultAgentId,
+      defaultAgentId: stopOwnerScope.defaultAgentId,
       abortOrigin: "stop-command",
       stopReason: "stop",
       requester: resolveChatAbortRequester(client),

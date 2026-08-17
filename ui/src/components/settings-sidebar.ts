@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
@@ -16,9 +17,10 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
@@ -40,7 +42,9 @@ type SettingsSidebarProps = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule?: UpdateScheduleState | null;
   heldUpdateCampaignId?: string | null;
-  updateRunning: boolean;
+  updateBusy: boolean;
+  updateStatusBanner?: ApplicationStatusBanner | null;
+  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   canUpdate?: boolean;
   canHoldUpdate?: boolean;
   onUpdate: () => void;
@@ -312,7 +316,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         .updateAvailable=${props.updateAvailable}
         .updateSchedule=${props.updateSchedule ?? null}
         .heldUpdateCampaignId=${props.heldUpdateCampaignId ?? null}
-        .updateRunning=${props.updateRunning}
+        .updateBusy=${props.updateBusy}
+        .statusBanner=${props.updateStatusBanner ?? null}
+        .watchUpdateProgress=${props.watchUpdateProgress}
         .canUpdate=${props.canUpdate ?? false}
         .canHoldUpdate=${props.canHoldUpdate ?? false}
         .onUpdate=${props.onUpdate}

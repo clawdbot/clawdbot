@@ -21,7 +21,10 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index-types.js";
-import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 
 export {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -57,7 +60,7 @@ function buildInstalledPluginIndex(
         ...(params.pluginIndexFilePath ? { filePath: params.pluginIndexFilePath } : {}),
       }),
   );
-  const discovery = params.candidates
+  const baseDiscovery = params.candidates
     ? { candidates: params.candidates, diagnostics: params.diagnostics ?? [] }
     : (params.discovery ??
       discoverOpenClawPlugins({
@@ -66,7 +69,14 @@ function buildInstalledPluginIndex(
         env,
         installRecords,
       }));
-  const registry = loadPluginManifestRegistry({
+  const discovery =
+    !params.candidates && params.diagnostics?.length
+      ? {
+          ...baseDiscovery,
+          diagnostics: [...baseDiscovery.diagnostics, ...params.diagnostics],
+        }
+      : baseDiscovery;
+  const registry = loadPluginManifestRegistryCore({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
@@ -93,6 +103,7 @@ function buildInstalledPluginIndex(
       migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
       policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
       generatedAtMs,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
       installRecords,
       plugins,
@@ -117,6 +128,20 @@ export function loadInstalledPluginIndexWithDiscovery(
   manifestRegistry: PluginManifestRegistry;
 } {
   return buildInstalledPluginIndex(params);
+}
+
+/** True when a persisted index cannot represent the requested workspace discovery scope. */
+export function hasInstalledPluginIndexWorkspaceScopeMismatch(
+  index: InstalledPluginIndex,
+  workspaceDir: string | undefined,
+): boolean {
+  if (workspaceDir !== undefined) {
+    return index.workspaceDir !== workspaceDir;
+  }
+  return (
+    index.workspaceDir !== undefined ||
+    index.plugins.some((plugin) => plugin.origin === "workspace")
+  );
 }
 
 export function refreshInstalledPluginIndex(

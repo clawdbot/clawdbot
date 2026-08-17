@@ -1,4 +1,5 @@
 // ACPX tests cover register plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { runtimeRegistry } = vi.hoisted(() => ({
@@ -18,6 +19,15 @@ const { realRuntime, realServiceStartMock, realServiceStopMock, createRealServic
           backend: "acpx",
           runtimeSessionName: input.sessionKey,
           sessionKey: input.sessionKey,
+        };
+      },
+      startTurn(input: { requestId: string }) {
+        return {
+          requestId: input.requestId,
+          events: (async function* () {})(),
+          result: Promise.resolve({ status: "completed", stopReason: "end_turn" }),
+          cancel: async () => {},
+          closeStream: async () => {},
         };
       },
       async *runTurn() {},
@@ -76,14 +86,6 @@ function restoreEnv(): void {
   } else {
     process.env.OPENCLAW_SKIP_ACPX_RUNTIME = previousSkipRuntime;
   }
-}
-
-function createDeferred() {
-  let resolve: () => void = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function createServiceContext() {
@@ -170,11 +172,8 @@ describe("acpx register runtime service", () => {
       requestId: "turn-1",
     });
     await expect(turn.result).resolves.toEqual({
-      status: "failed",
-      error: {
-        code: "ACP_TURN_FAILED",
-        message: "ACP turn ended without a terminal done event.",
-      },
+      status: "completed",
+      stopReason: "end_turn",
     });
 
     await service.stop?.(ctx as never);
@@ -185,8 +184,8 @@ describe("acpx register runtime service", () => {
 
   it("rejects stale publication after stop invalidates the deferred backend", async () => {
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
-    const startEntered = createDeferred();
-    const releasePublication = createDeferred();
+    const startEntered = createDeferred<void>();
+    const releasePublication = createDeferred<void>();
     realServiceStartMock.mockImplementationOnce(async (_ctx, backendLifecycle) => {
       startEntered.resolve();
       await releasePublication.promise;
@@ -236,8 +235,8 @@ describe("acpx register runtime service", () => {
 
   it("keeps a successor generation registered when old cleanup finishes late", async () => {
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
-    const published = createDeferred();
-    const releaseProbe = createDeferred();
+    const published = createDeferred<void>();
+    const releaseProbe = createDeferred<void>();
     realServiceStartMock.mockImplementationOnce(async (_ctx, backendLifecycle) => {
       if (!backendLifecycle) {
         throw new Error("expected outer backend lifecycle");

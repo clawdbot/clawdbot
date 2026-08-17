@@ -20,7 +20,10 @@ import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
-import { isWorkerTranscriptMessageFrameSafe } from "../../worker/transcript-message.js";
+import {
+  isWorkerTranscriptMessageFrameSafe,
+  WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
+} from "../../worker/transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerInferenceExecutor,
@@ -83,6 +86,13 @@ const identity: WorkerConnectionIdentity = {
   bundleHash: "bundle-hash-runtime-test",
   sessionId: SESSION_ID,
   runId: "run-runtime-test",
+  turnClaim: {
+    sessionId: SESSION_ID,
+    claimId: "claim-runtime-test",
+    runId: "run-runtime-test",
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
+  },
   ownerEpoch: 3,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -183,6 +193,7 @@ function setup(entry: SessionEntry = sessionEntry) {
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
     config,
+    authModes: {},
     metadataSnapshot: { plugins: [] } as never,
     modelCatalog: {
       entries: [
@@ -392,7 +403,6 @@ describe("worker inference provider runtime", () => {
     expect(runtime.acquireRuntimeLease).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "runtime-agent",
-        inheritedAuthDir: expect.any(String),
       }),
     );
     const [streamModel, streamContext, streamOptions] = runtime.stream.mock.calls[0] ?? [];
@@ -499,7 +509,7 @@ describe("worker inference provider runtime", () => {
     });
   });
 
-  it("keeps inference successful while omitting over-budget replay with a redacted diagnostic", async () => {
+  it("returns a typed error when authoritative replay cannot be persisted", async () => {
     const runtime = setup();
     const message = finalMessage();
     message.providerReplay = {
@@ -520,8 +530,12 @@ describe("worker inference provider runtime", () => {
 
     const outcome = await runtime.executor(params(request(), vi.fn())).finally(unsubscribe);
 
-    expect(outcome).toMatchObject({ type: "done", message: { stopReason: "stop" } });
-    expect(outcome.type === "done" ? outcome.message.providerReplay : undefined).toBeUndefined();
+    expect(outcome).toMatchObject({
+      type: "error",
+      reason: "provider-error",
+      message: WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
+      usage: message.usage,
+    });
     expect(payloadEvents).toEqual([
       expect.objectContaining({
         type: "payload.large",
@@ -535,13 +549,14 @@ describe("worker inference provider runtime", () => {
     expect(JSON.stringify(payloadEvents)).not.toContain(message.providerReplay.data);
   });
 
-  it("keeps a maximum-budget replay frame-safe through the terminal projection", async () => {
+  it("keeps a maximum fitting replay exact through the terminal projection", async () => {
     const runtime = setup();
     const message = finalMessage();
+    const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
     message.providerReplay = {
       v: 1,
       type: "openai-responses-compaction",
-      data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES),
+      data: ciphertext,
       provider: "openai",
       api: "openai-responses",
       model: MODEL,
@@ -554,9 +569,7 @@ describe("worker inference provider runtime", () => {
     if (outcome.type !== "done") {
       throw new Error("expected successful worker inference");
     }
-    expect(outcome.message.providerReplay?.data).toHaveLength(
-      WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
-    );
+    expect(outcome.message.providerReplay?.data).toBe(ciphertext);
     expect(isWorkerTranscriptMessageFrameSafe(outcome.message)).toBe(true);
   });
 
@@ -765,6 +778,30 @@ describe("worker inference provider runtime", () => {
 
     expect(toolCalls.delta(1, " ", message)).toBe("invalid");
     expect(emitted).toBe(64 * 1024);
+  });
+
+  it("synthesizes canonical arguments after deferred provider deltas", () => {
+    const complete = { ...TOOL_CALL, arguments: { env: { NODE_ENV: "test" } } };
+    const message = finalMessage();
+    message.content = [...message.content.slice(0, -1), complete];
+    const emitted: Parameters<Execution["emit"]>[0][] = [];
+    const toolCalls = createWorkerToolCallStream({
+      emit: (event) => emitted.push(event),
+      isCurrent: () => true,
+    });
+
+    expect(toolCalls.start(1, message)).toBe("ok");
+    expect(toolCalls.delta(1, "", message)).toBe("ok");
+    expect(toolCalls.end(1, message, complete)).toBe("ok");
+    expect(emitted).toEqual([
+      { type: "toolcall_start", contentIndex: 1, id: "call-1", toolName: "lookup" },
+      {
+        type: "toolcall_delta",
+        contentIndex: 1,
+        delta: '{"env":{"NODE_ENV":"test"}}',
+      },
+      { type: "toolcall_end", contentIndex: 1 },
+    ]);
   });
 
   it("fences terminal tool-call synthesis after owner rotation", async () => {

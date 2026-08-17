@@ -147,12 +147,73 @@ function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
   };
 }
 
+export function preserveRosterPresentationMetadata(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow | undefined,
+): GatewaySessionRow {
+  if (
+    !existing ||
+    !incoming.sessionId ||
+    incoming.sessionId !== existing.sessionId ||
+    (incoming.derivedTitle !== undefined && incoming.lastMessagePreview !== undefined)
+  ) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    ...(incoming.derivedTitle === undefined && existing.derivedTitle !== undefined
+      ? { derivedTitle: existing.derivedTitle }
+      : {}),
+    ...(incoming.lastMessagePreview === undefined && existing.lastMessagePreview !== undefined
+      ? { lastMessagePreview: existing.lastMessagePreview }
+      : {}),
+  };
+}
+
+export function reconcileRosterPresentationMetadata(
+  incoming: SessionsListResult | null,
+  existing: SessionsListResult | null,
+): SessionsListResult | null {
+  if (!incoming || !existing) {
+    return incoming;
+  }
+  const existingByKey = new Map(existing.sessions.map((session) => [session.key, session]));
+  let changed = false;
+  const sessions = incoming.sessions.map((session) => {
+    const reconciled = preserveRosterPresentationMetadata(session, existingByKey.get(session.key));
+    changed ||= reconciled !== session;
+    return reconciled;
+  });
+  return changed ? { ...incoming, sessions } : incoming;
+}
+
 function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {
   const next = { ...value };
   delete next.thinkingLevels;
   delete next.thinkingOptions;
   delete next.thinkingDefault;
   return next;
+}
+
+/** Same-content merge detection; row values are wire scalars/plain objects, so one level suffices. */
+function isShallowEqualSessionRow(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow,
+): boolean {
+  const incomingKeys = Object.keys(incoming);
+  if (incomingKeys.length !== Object.keys(existing).length) {
+    return false;
+  }
+  return incomingKeys.every((key) => {
+    const a = (incoming as Record<string, unknown>)[key];
+    const b = (existing as Record<string, unknown>)[key];
+    return (
+      a === b ||
+      (a !== null && b !== null && typeof a === "object" && typeof b === "object"
+        ? JSON.stringify(a) === JSON.stringify(b)
+        : false)
+    );
+  });
 }
 
 function isOlderSessionSnapshot(
@@ -362,8 +423,9 @@ export function reconcileSessionChanged(
     ts: _ts,
     ...rowFields
   } = source;
+  // The gateway wire folds cron/spawn-child into "direct" before projection
+  // (session-utils-row.ts, #115299); cron detection is isCronSessionKey.
   const kind =
-    rowFields.kind === "cron" ||
     rowFields.kind === "direct" ||
     rowFields.kind === "group" ||
     rowFields.kind === "global" ||
@@ -394,38 +456,17 @@ export function reconcileSessionChanged(
     updatedAt: updatedAt ?? null,
     ...(sessionId ? { sessionId } : {}),
   } as GatewaySessionRow;
-  if (rowFields.archivedAt === null) {
-    delete row.archivedAt;
-  }
-  if (rowFields.archivedBy === null) {
-    delete row.archivedBy;
-  }
-  if (rowFields.pinnedAt === null) {
-    delete row.pinnedAt;
-  }
-  if (rowFields.icon === null) {
-    delete row.icon;
-  }
-  if (rowFields.label === null) {
-    delete row.label;
-  }
-  if (rowFields.category === null) {
-    delete row.category;
-  }
-  if (rowFields.displayName === null) {
-    delete row.displayName;
-  }
-  if (rowFields.createdActor === null) {
-    delete row.createdActor;
-  }
-  if (rowFields.thinkingLevel === null) {
-    delete row.thinkingLevel;
-  }
-  if (rowFields.lastRunError === null) {
-    delete row.lastRunError;
-  }
-  if (rowFields.agentStatus === null) {
-    delete row.agentStatus;
+  // The gateway emits explicit null tombstones so subscribed clients clear
+  // fields during merge-reconcile (session-event-payload.ts). Row fields are
+  // typed optional-not-null, so every null tombstone deletes — a hand-kept
+  // field list here drifts as new tombstoned fields ship (it already had:
+  // toolOverrides/observerDigest/controlOwnerSessionKey/restartRecoveryStatus/
+  // goal leaked null). updatedAt/activeLeafEntryId are the schema's only
+  // legitimately nullable row fields and keep their explicit handling.
+  for (const [field, value] of Object.entries(rowFields)) {
+    if (value === null && field !== "updatedAt" && field !== "activeLeafEntryId") {
+      delete row[field as keyof GatewaySessionRow];
+    }
   }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,
@@ -519,12 +560,27 @@ export function reconcileSessionHistory(
     return defaults ? { ...result, defaults: nextDefaults } : result;
   }
   const visibleKey = existing?.key ?? session.key;
-  const visibleSession = preserveRicherThinkingMetadata(
-    visibleKey === session.key ? session : { ...session, key: visibleKey },
+  const visibleSession = preserveRosterPresentationMetadata(
+    preserveRicherThinkingMetadata(
+      visibleKey === session.key ? session : { ...session, key: visibleKey },
+      existing,
+    ),
     existing,
   );
   if (isStaleForActiveSession(visibleSession, existing)) {
-    return { ...result, defaults: nextDefaults };
+    // Keep result identity when nothing changed so the caller's
+    // result === state.result publish gate can skip a spurious re-render.
+    return defaults ? { ...result, defaults: nextDefaults } : result;
+  }
+  if (
+    existing &&
+    isShallowEqualSessionRow(visibleSession, existing) &&
+    sessionMatchesArchivedFilter(visibleSession, archivedFilter)
+  ) {
+    // The same event reconciled twice (capability handler + chat page) must
+    // no-op the second pass; a fresh array here defeats every downstream
+    // result === state.result publish gate and re-renders per event.
+    return defaults ? { ...result, defaults: nextDefaults } : result;
   }
   const sessions = sessionMatchesArchivedFilter(visibleSession, archivedFilter)
     ? [

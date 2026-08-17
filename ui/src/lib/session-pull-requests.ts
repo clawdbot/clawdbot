@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequestsChanged,
@@ -46,9 +47,7 @@ function readChangedSessions(
     return null;
   }
   const sessions = (payload as { sessions?: unknown }).sessions;
-  return sessions && typeof sessions === "object" && !Array.isArray(sessions)
-    ? (sessions as ControlUiSessionPullRequestsChanged["sessions"])
-    : null;
+  return asNullableRecord(sessions) as ControlUiSessionPullRequestsChanged["sessions"] | null;
 }
 
 function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotStore {

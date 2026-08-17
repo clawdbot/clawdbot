@@ -1,14 +1,16 @@
 // Control UI chat module implements stream reconciliation behavior.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../lib/string-coerce.ts";
 import {
   extractToolMessageRefs,
   resolveLiveToolStreamRefs,
@@ -303,8 +305,8 @@ function visibleAssistantStreamParts(
         toolCallId: explicitToolCallId ?? indexedToolRef?.id,
       });
     }
-    if (usesAccumulatedText && segment.text.trim()) {
-      previousText = segment.text;
+    if (usesAccumulatedText) {
+      previousText = advanceAccumulatedStreamText(previousText, segment.text);
     }
   }
   if (opts.includeCurrent !== false && typeof state.chatStream === "string") {
@@ -337,12 +339,8 @@ export function visibleCurrentAssistantStreamTail(
     : [];
   let previousText: string | null = null;
   for (const segment of segments) {
-    if (
-      streamSegmentUsesAccumulatedText(segment) &&
-      typeof segment.text === "string" &&
-      segment.text.trim()
-    ) {
-      previousText = segment.text;
+    if (streamSegmentUsesAccumulatedText(segment) && typeof segment.text === "string") {
+      previousText = advanceAccumulatedStreamText(previousText, segment.text);
     }
   }
   return visibleAssistantStreamText(
@@ -505,12 +503,8 @@ function messageTimestampMs(message: unknown): number | null {
   if (!message || typeof message !== "object") {
     return null;
   }
-  const timestamp = (message as { timestamp?: unknown; ts?: unknown }).timestamp;
-  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
-    return timestamp;
-  }
-  const ts = (message as { timestamp?: unknown; ts?: unknown }).ts;
-  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
+  const record = message as { timestamp?: unknown; ts?: unknown };
+  return asFiniteNumber(record.timestamp) ?? asFiniteNumber(record.ts) ?? null;
 }
 
 function timestampForInsertedVisibleStream(
@@ -654,8 +648,8 @@ export function prunePersistedToolStreamMessages(
       : indexedToolRef?.identity;
     const text = typeof segment.text === "string" ? segment.text : "";
     if (toolIdentity && persistedToolIds.has(toolIdentity)) {
-      if (streamSegmentUsesAccumulatedText(segment) && text.trim()) {
-        lastPrunedAccumulatedText = text;
+      if (streamSegmentUsesAccumulatedText(segment)) {
+        lastPrunedAccumulatedText = advanceAccumulatedStreamText(lastPrunedAccumulatedText, text);
       }
       return [];
     }

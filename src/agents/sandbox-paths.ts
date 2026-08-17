@@ -20,21 +20,16 @@ import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
-const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
 const MANAGED_MEDIA_SUBDIRS = new Set(["outbound"]);
-
-function normalizeUnicodeSpaces(str: string): string {
-  return str.replace(UNICODE_SPACES, " ");
-}
 
 function normalizeAtPrefix(filePath: string): string {
   return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
 function expandPath(filePath: string): string {
-  const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+  const normalized = normalizeAtPrefix(filePath);
   if (normalized === "~") {
     return os.homedir();
   }
@@ -241,7 +236,7 @@ export async function resolveSandboxedMediaSource(params: {
     return raw;
   }
   let candidate = raw;
-  if (/^file:\/\//i.test(candidate)) {
+  if (/^file:/i.test(candidate)) {
     const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
       fileUrl: candidate,
       sandboxRoot: params.sandboxRoot,

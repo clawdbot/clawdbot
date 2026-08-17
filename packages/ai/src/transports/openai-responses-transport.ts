@@ -6,6 +6,7 @@ import {
   createOpenAIResponsesClient,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-client.js";
+import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
 import {
   buildResponsesFailedNoDetailsObservation,
   normalizeResponsesFailedEvent,
@@ -20,12 +21,9 @@ import {
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
 import {
-  buildOpenAIResponsesReasoningReplayMetadata,
   createResponsesStreamWithEncryptedContentRetry,
   isInvalidEncryptedContentError,
-  prepareOpenAIResponsesReasoningItemForReplay,
   resolveAzureOpenAIApiVersion,
-  tagOpenAIResponsesReasoningReplayItem,
 } from "./openai-responses-replay-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import {
@@ -38,6 +36,8 @@ import {
 } from "./openai-transport-params.js";
 
 export { createAzureOpenAIResponsesTransportStreamFn, createOpenAIResponsesTransportStreamFn };
+export { requestPreparedOpenAIResponsesCompaction } from "./openai-responses-compact-request.js";
+export { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 
 const responsesTesting = {
   getCompat,
@@ -56,10 +56,8 @@ const responsesTesting = {
   buildOpenAIResponsesReasoningReplayMetadata,
   isInvalidEncryptedContentError,
   normalizeResponsesFailedEvent,
-  prepareOpenAIResponsesReasoningItemForReplay,
   createResponsesStreamWithEncryptedContentRetry,
   resolveAzureOpenAIApiVersion,
-  tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,

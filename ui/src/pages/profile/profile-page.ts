@@ -14,6 +14,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
@@ -27,7 +28,9 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { AuthenticatedAvatarRouteLoader } from "../../lib/authenticated-avatar-route.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/profile.css";
@@ -37,12 +40,7 @@ import { renderIdentitySection } from "./identity-section.ts";
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
 function toIdentityErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" && error.trim()
-    ? error
-    : t("profilePage.identity.profileUnavailable");
+  return formatUiError(error, t("profilePage.identity.profileUnavailable"));
 }
 
 export class ProfilePage extends OpenClawLightDomElement {
@@ -59,6 +57,13 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
+  private heroAvatarAuthCandidates: string[] = [];
+  private heroAvatarAuthReady = false;
+  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(() => {
+    if (this.isConnected) {
+      this.requestUpdate();
+    }
+  });
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
 
@@ -78,12 +83,32 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     this.subscriptions = [];
     this.identityRequestId += 1;
+    this.heroAvatarLoader.reset();
+    this.heroAvatarAuthCandidates = [];
+    this.heroAvatarAuthReady = false;
     this.client = null;
     this.connected = false;
     super.disconnectedCallback();
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
+    // The /api/users avatar route only accepts shared secrets; a single
+    // device-token candidate would 401 forever. Offer the full ordered list.
+    const nextHeroAvatarAuthCandidates = resolveControlUiAuthCandidates({
+      hello: snapshot.hello,
+      settings: { token: this.context.gateway.connection.token },
+      password: this.context.gateway.connection.password,
+    });
+    if (
+      nextHeroAvatarAuthCandidates.join("\u0000") !== this.heroAvatarAuthCandidates.join("\u0000")
+    ) {
+      this.heroAvatarAuthCandidates = nextHeroAvatarAuthCandidates;
+    }
+    this.heroAvatarAuthReady = Boolean(
+      snapshot.hello ||
+      this.context.gateway.connection.token.trim() ||
+      this.context.gateway.connection.password.trim(),
+    );
     const clientChanged = snapshot.client !== this.client;
     const nextConnected = snapshot.phase === "connected";
     const connectionChanged = nextConnected !== this.connected;
@@ -208,6 +233,8 @@ export class ProfilePage extends OpenClawLightDomElement {
     const identityRequestId = this.identityRequestId;
     const displayNameDraft = this.displayName;
     const hasUnsavedDisplayName = displayNameDraft.trim() !== (profile.displayName ?? "");
+    const selfAvatarUrlBefore =
+      this.selfUser?.id === profile.id ? this.selfUser.avatarUrl : undefined;
     let shouldRefresh = false;
     try {
       const avatar = await processProfileAvatar(file);
@@ -229,9 +256,11 @@ export class ProfilePage extends OpenClawLightDomElement {
       const avatarUrl = userProfileAvatarUrl(
         this.context.gateway.connection.gatewayUrl,
         result.profile.id,
-        result.profile.updatedAt,
+        result.avatarRevision,
       );
-      if (avatarUrl) {
+      const presenceAvatarChanged =
+        this.selfUser?.id === result.profile.id && this.selfUser.avatarUrl !== selfAvatarUrlBefore;
+      if (avatarUrl && !presenceAvatarChanged) {
         this.context.gateway.updateSelfUser?.({ avatarUrl });
       }
       shouldRefresh = true;
@@ -284,11 +313,14 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     // The gateway route serves an uploaded avatar first and its private Gravatar
     // fallback second, while a 404 still leaves the viewer-avatar initials visible.
-    const avatarUrl = userProfileAvatarUrl(
-      this.context.gateway.connection.gatewayUrl,
-      this.ownProfile.id,
-      this.ownProfile.updatedAt,
-    );
+    const avatarUrl =
+      this.selfUser?.id === this.ownProfile.id && this.selfUser.avatarUrl
+        ? this.selfUser.avatarUrl
+        : userProfileAvatarUrl(
+            this.context.gateway.connection.gatewayUrl,
+            this.ownProfile.id,
+            this.ownProfile.updatedAt,
+          );
     return renderIdentitySection({
       profile: this.ownProfile,
       avatarUrl,
@@ -325,15 +357,22 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
+    const imageUrl = avatarUrl?.startsWith("/")
+      ? this.heroAvatarAuthReady
+        ? this.heroAvatarLoader.resolve(avatarUrl, this.heroAvatarAuthCandidates)
+        : null
+      : avatarUrl;
     if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {
-      return html`<img
-        class="profile-hero__avatar-image"
-        src=${avatarUrl}
-        alt=${name}
-        @error=${() => {
-          this.failedHeroAvatarUrl = avatarUrl;
-        }}
-      />`;
+      if (imageUrl) {
+        return html`<img
+          class="profile-hero__avatar-image"
+          src=${imageUrl}
+          alt=${name}
+          @error=${() => {
+            this.failedHeroAvatarUrl = avatarUrl;
+          }}
+        />`;
+      }
     }
     if (textAvatar) {
       return html`<span class="profile-hero__avatar-text">${textAvatar}</span>`;
@@ -374,6 +413,10 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   override render() {
+    return this.heroAvatarLoader.withActiveRoutes(() => this.renderContent());
+  }
+
+  private renderContent() {
     return html`
       <section class="content-header">
         <div>

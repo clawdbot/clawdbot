@@ -106,15 +106,109 @@ describe("qa scenario catalog causality", () => {
         },
       },
     });
-    const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
-    const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
+    const liveMultiRestart = requireFlowScenario(readQaScenarioById("gateway-restart-multi-live"));
+    const liveMultiRestartFlow = liveMultiRestart.execution.flow;
+    const liveMultiRestartContract = JSON.stringify(liveMultiRestartFlow);
+    const liveMultiRestartPrompt =
+      typeof liveMultiRestart.execution.config?.prompt === "string"
+        ? liveMultiRestart.execution.config.prompt
+        : "";
+    const liveMultiRestartActions = liveMultiRestartFlow?.steps[1]?.actions ?? [];
+    const checkpointLoop = liveMultiRestartActions.find(
+      (action): action is { forEach?: { actions?: unknown[] } } =>
+        typeof action === "object" && action !== null && "forEach" in action,
+    );
+    const checkpointActions = checkpointLoop?.forEach?.actions ?? [];
+    const checkpointTranscriptIndex = checkpointActions.findIndex(
+      (action) =>
+        (action as { call?: string }).call === "waitForCondition" &&
+        (action as { saveAs?: string }).saveAs === "checkpointTranscript",
+    );
+    const checkpointStoreIndex = checkpointActions.findIndex(
+      (action) =>
+        (action as { call?: string }).call === "readRawQaSessionStore" &&
+        (action as { saveAs?: string }).saveAs === "checkpointStore",
+    );
+    const checkpointPersistenceAssertIndex = checkpointActions.findIndex((action) => {
+      const expression = readFlowAssertExpression(action);
+      return (
+        expression.includes("checkpointEntry") &&
+        expression.includes("checkpointTranscript.userMessageCount >= 1") &&
+        expression.includes("checkpointTranscript.eventCursor > 0") &&
+        expression.includes("checkpointTranscript.probeTextEndLine ?? 0") &&
+        expression.includes("restartRecoveryDeliveryContext?.channel === 'qa-channel'") &&
+        expression.includes("restartRecoveryDeliveryContext.to === `dm:${conversationId}`")
+      );
+    });
+    const checkpointRestartIndex = checkpointActions.findIndex(
+      (action) => (action as { call?: string }).call === "restartGatewayWithConfigPatch",
+    );
+    const finalOutboundIndex = liveMultiRestartActions.findIndex(
+      (action) =>
+        (action as { call?: string }).call === "waitForOutboundMessage" &&
+        (action as { saveAs?: string }).saveAs === "outbound",
+    );
+    const outboundCountIndex = liveMultiRestartActions.findIndex(
+      (action) => (action as { set?: string }).set === "outboundCountAfterDelivery",
+    );
+    const quietWindowIndex = liveMultiRestartActions.findIndex(
+      (action) => typeof action === "object" && action !== null && "waitForNoOutbound" in action,
+    );
+    const finalCardinalityAssertIndex = liveMultiRestartActions.findIndex((action) =>
+      readFlowAssertExpression(action).includes("finalMatches.length === 1"),
+    );
+    expect(liveMultiRestart.execution.retryCount).toBe(0);
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
       '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
     );
     expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
     expect(liveMultiRestartContract).toContain("checkpoint");
     expect(liveMultiRestartContract).toContain("restarts=3");
-    expect(liveMultiRestartContract).toContain("dmScope: 'per-channel-peer'");
+    for (const fixturePath of [
+      "restart-audit/components.md",
+      "restart-audit/risks.md",
+      "restart-audit/deployments.md",
+      "restart-audit/controls.md",
+      "restart-audit/recommendation.md",
+    ]) {
+      expect(liveMultiRestartPrompt).toContain(fixturePath);
+    }
+    expect(liveMultiRestartPrompt).toContain("your only work in this turn is the next checkpoint");
+    expect(liveMultiRestartPrompt).toContain(
+      "Make exactly one `exec` call with `restartSafe: true`",
+    );
+    expect(liveMultiRestartPrompt).toContain(
+      "expired, or aborted `wait` result after restart is expected",
+    );
+    expect(liveMultiRestartPrompt).toContain("`CHECKPOINT-N` is internal tool output");
+    expect(liveMultiRestartPrompt).toContain(
+      "Do not send any assistant text before the final audit report",
+    );
+    expect(liveMultiRestartPrompt).toContain("Do not read the `restart-audit/` directory path");
+    expect(liveMultiRestartContract).toContain("sendInbound");
+    expect(liveMultiRestartContract).not.toContain("startAgentRun");
+    expect(liveMultiRestartContract).toContain("id: `dm:${conversationId}`");
+    expect(liveMultiRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
+    expect(liveMultiRestartContract).toContain('"saveAs":"inbound"');
+    expect(liveMultiRestartContract).toContain("probeText: config.finalMarker");
+    expect(liveMultiRestartContract).toContain("completedToolCallCounts.wait ?? 0) < checkpoint");
+    expect(checkpointTranscriptIndex).toBeGreaterThanOrEqual(0);
+    expect(checkpointStoreIndex).toBeGreaterThan(checkpointTranscriptIndex);
+    expect(checkpointPersistenceAssertIndex).toBeGreaterThan(checkpointStoreIndex);
+    expect(checkpointRestartIndex).toBeGreaterThan(checkpointPersistenceAssertIndex);
+    expect(finalOutboundIndex).toBeGreaterThanOrEqual(0);
+    expect(outboundCountIndex).toBeGreaterThan(finalOutboundIndex);
+    expect(quietWindowIndex).toBeGreaterThan(outboundCountIndex);
+    expect(liveMultiRestartActions[quietWindowIndex]).toMatchObject({
+      waitForNoOutbound: {
+        quietMs: 3000,
+        sinceIndex: { ref: "outboundCountAfterDelivery" },
+      },
+    });
+    expect(finalCardinalityAssertIndex).toBeGreaterThan(quietWindowIndex);
+    expect(
+      liveMultiRestartActions.some((action) => (action as { call?: string }).call === "sleep"),
+    ).toBe(false);
     expect(liveMultiRestartContract).toContain("dispatching restart-safe recovery");
     expect(readQaScenarioExecutionConfig("gateway-restart-multi-live")).toMatchObject({
       requiredProviderMode: "live-frontier",

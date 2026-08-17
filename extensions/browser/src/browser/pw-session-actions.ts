@@ -32,8 +32,8 @@ import {
   pageTargetInfo,
   retirePlaywrightBrowserConnectionExact,
   takeCachedPlaywrightBrowserConnection,
+  ensureContextState,
 } from "./pw-session-connection.js";
-import { ensureContextState } from "./pw-session-connection.js";
 import {
   cachedByCdpUrl,
   connectingByCdpUrl,
@@ -201,7 +201,7 @@ async function tryTerminateExecutionViaCdp(opts: {
     return;
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
-  await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
+  const wsPin = await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
     source: "discovered",
     configuredUrl: opts.cdpUrl,
   });
@@ -245,7 +245,7 @@ async function tryTerminateExecutionViaCdp(opts: {
         // Best-effort; ignore
       }
     },
-    { handshakeTimeoutMs: 2000 },
+    { handshakeTimeoutMs: 2000, ...(wsPin?.lookup ? { lookup: wsPin.lookup } : {}) },
   ).catch(() => {});
 }
 

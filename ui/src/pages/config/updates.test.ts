@@ -14,6 +14,8 @@ function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProp
     configObject: { update: { channel: "stable", auto: { enabled: false } } },
     gatewayVersion: "2026.8.1",
     controlUiCommit: "0123456789abcdef0123456789abcdef01234567",
+    controlUiCommitAt: "1970-01-01T00:00:00.000Z",
+    controlUiBuiltAt: "1970-01-01T00:00:00.000Z",
     schedule: {
       channel: "stable",
       autoEnabled: false,
@@ -80,6 +82,12 @@ describe("renderUpdates", () => {
 
     expect(row("Gateway version").textContent).toContain("2026.8.1");
     expect(row("Control UI commit").textContent).toContain("0123456789ab");
+    expect(row("Built").querySelector("time")?.getAttribute("datetime")).toBe(
+      "1970-01-01T00:00:00.000Z",
+    );
+    expect(row("Last commit").querySelector("time")?.getAttribute("datetime")).toBe(
+      "1970-01-01T00:00:00.000Z",
+    );
     expect(row("Install type").textContent).toContain("Package");
     expect(
       [...container.querySelectorAll("wa-radio")].map((option) => option.textContent?.trim()),
@@ -293,7 +301,7 @@ describe("renderUpdates", () => {
           schedule: {
             channel: "dev",
             autoEnabled: false,
-            install: { kind: "git" },
+            install: { kind: "git", git: { status: "behind", commitsBehind: 2 } },
             target: {
               kind: "git",
               upstreamRef: "origin/main",
@@ -322,9 +330,108 @@ describe("renderUpdates", () => {
     expect(row("Commits").querySelectorAll("[role='listitem']")).toHaveLength(2);
     expect(row("Commits").textContent).toContain("b123456");
     expect(row("Commits").textContent).toContain("Show dev commit details");
+    expect(row("Status").textContent).toContain("Update available 2 commits behind");
+    expect(row("Status").textContent).not.toContain("Up to date");
+    expect(row("Status").querySelector(".settings-status__dot")).toBeNull();
 
     render(renderUpdates(createProps()), container);
     expect(container.querySelector(".updates-commit-list")).toBeNull();
+  });
+
+  it("shows truthful Git build, install, and commit ages", () => {
+    const installedAtMs = Date.parse("2026-08-08T12:00:00Z");
+    const commitAtMs = Date.parse("2026-08-08T10:00:00Z");
+    render(
+      renderUpdates(
+        createProps({
+          configObject: { update: { channel: "dev" } },
+          nowMs: Date.parse("2026-08-08T14:00:00Z"),
+          schedule: {
+            channel: "dev",
+            autoEnabled: false,
+            install: {
+              kind: "git",
+              git: {
+                status: "current",
+                currentSha: "a".repeat(40),
+                commitAtMs,
+                installedAtMs,
+              },
+            },
+          },
+          updateAvailable: null,
+        }),
+      ),
+      container,
+    );
+
+    expect(row("Installed").querySelector("time")?.getAttribute("datetime")).toBe(
+      "2026-08-08T12:00:00.000Z",
+    );
+    expect(row("Installed").textContent).toContain("2h ago");
+    expect(row("Last commit").querySelector("time")?.getAttribute("datetime")).toBe(
+      "2026-08-08T10:00:00.000Z",
+    );
+    expect(row("Last commit").textContent).toContain("4h ago");
+
+    render(
+      renderUpdates(
+        createProps({
+          configObject: { update: { channel: "dev" } },
+          schedule: {
+            channel: "dev",
+            autoEnabled: false,
+            install: { kind: "git", git: { status: "current" } },
+          },
+          updateAvailable: null,
+        }),
+      ),
+      container,
+    );
+    expect(row("Installed").textContent).toContain(
+      "Unknown · recorded after the next successful update",
+    );
+  });
+
+  it.each([
+    {
+      name: "current",
+      git: { status: "current" } as const,
+      label: "Up to date",
+    },
+    {
+      name: "ahead",
+      git: { status: "ahead", commitsAhead: 2 } as const,
+      label: "2 commits ahead of tracked upstream",
+    },
+    {
+      name: "diverged",
+      git: { status: "diverged", commitsAhead: 1, commitsBehind: 3 } as const,
+      label: "Diverged · 1 ahead, 3 behind",
+    },
+    {
+      name: "fetch unavailable",
+      git: { status: "unavailable", reason: "fetch-failed" } as const,
+      label: "Could not fetch the tracked upstream",
+    },
+  ])("renders explicit $name git status without a dot", ({ git, label }) => {
+    render(
+      renderUpdates(
+        createProps({
+          configObject: { update: { channel: "dev" } },
+          schedule: {
+            channel: "dev",
+            autoEnabled: false,
+            install: { kind: "git", git },
+          },
+          updateAvailable: null,
+        }),
+      ),
+      container,
+    );
+
+    expect(row("Status").textContent).toContain(label);
+    expect(row("Status").querySelector(".settings-status__dot")).toBeNull();
   });
 
   it("surfaces the latest update failure ahead of passive availability", () => {

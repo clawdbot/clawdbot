@@ -38,6 +38,17 @@ const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 
+// Codex scans every turn text input byte-for-byte for explicit `$name` skill
+// mentions and `[@name](plugin://…)` links (codex-rs/skills/src/mentions.rs);
+// quoted history must never count as a current explicit invocation, so swap
+// the sigils to same-length fullwidth lookalikes (same technique as
+// escapeCodexChatText). Only the raw current request stays selectable.
+export function neutralizeCodexExplicitMentionSigils(text: string): string {
+  return text
+    .replace(/\$(?=[A-Za-z0-9_:-])/gu, "＄")
+    .replace(/\[@(?=[A-Za-z0-9_:-]+\]\()/gu, "[＠");
+}
+
 /** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export function projectContextEngineAssemblyForCodex(params: {
   assembledMessages: AgentMessage[];
@@ -50,10 +61,12 @@ export function projectContextEngineAssemblyForCodex(params: {
   const prompt = params.prompt.trim();
   const contextMessages = dropDuplicateTrailingPrompt(params.assembledMessages, prompt);
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
-  const renderedContext = renderMessagesForCodexContext(contextMessages, {
-    maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
-    toolPayloadMode: params.toolPayloadMode ?? "elide",
-  });
+  const renderedContext = neutralizeCodexExplicitMentionSigils(
+    renderMessagesForCodexContext(contextMessages, {
+      maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
+      toolPayloadMode: params.toolPayloadMode ?? "elide",
+    }),
+  );
   const boundedContext = renderedContext
     ? truncateOlderContext(renderedContext, maxRenderedContextChars)
     : undefined;

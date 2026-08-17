@@ -308,6 +308,31 @@ describe("GPT-Live sideband protocol", () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("workspace unavailable"));
   });
 
+  it("handles structured delegated failures with a non-string message", async () => {
+    const structuredFailure = { code: "UNAVAILABLE", message: 503 };
+    const runAgentConsult = vi.fn<ConsultRunner>(() =>
+      Promise.reject(new Error(String(structuredFailure.message), { cause: structuredFailure })),
+    );
+    const { controller, logger, socket } = createDelegationHarness({ runAgentConsult });
+
+    delegate(controller, "delegation-structured-failure", "do work");
+
+    await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
+    expect(parseSent(socket)).toContainEqual(
+      expect.objectContaining({
+        delegation_item_id: "delegation-structured-failure",
+        channel: "speakable",
+        content: [
+          {
+            type: "input_text",
+            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
+          },
+        ],
+      }),
+    );
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
   it("surfaces fatal sideband errors to the lifecycle owner", () => {
     const { controller, logger, onFatalError } = createDelegationHarness();
     controller.handleEvent({ kind: "error", message: "token expired", fatalAuth: true });

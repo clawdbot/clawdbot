@@ -41,7 +41,7 @@ describe("doctor stale plugin config helpers", () => {
   beforeEach(() => {
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReset();
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({});
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
       plugins: [manifest("discord"), manifest("voice-call"), manifest("openai")],
       diagnostics: [],
     });
@@ -104,6 +104,30 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.plugins?.entries).toEqual({
       "voice-call": { enabled: true },
     });
+  });
+
+  it("removes retired thread-ownership config while retaining valid plugin ids", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["discord", "thread-ownership"],
+        deny: ["thread-ownership", "openai"],
+        entries: {
+          discord: { enabled: true },
+          "thread-ownership": { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.config.plugins).toEqual({
+      allow: ["discord"],
+      deny: ["openai"],
+      entries: { discord: { enabled: true } },
+    });
+    expect(result.changes).toEqual([
+      "- plugins.allow: removed 1 stale plugin id (thread-ownership)",
+      "- plugins.deny: removed 1 stale plugin id (thread-ownership)",
+      "- plugins.entries: removed 1 stale plugin entry (thread-ownership)",
+    ]);
   });
 
   it("resets stale plugin slots without changing valid slot sentinels", () => {
@@ -449,7 +473,7 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(scanStalePluginConfig(cfg)).toStrictEqual([]);
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
-    expect(manifestRegistry.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(manifestRegistry.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
   });
 
   it("uses missing persisted install records as stale channel evidence", () => {
@@ -476,7 +500,7 @@ describe("doctor stale plugin config helpers", () => {
   });
 
   it("does not auto-repair stale refs while plugin discovery has errors", () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
       plugins: [],
       diagnostics: [
         { level: "error", message: "plugin path not found: /missing", source: "/missing" },

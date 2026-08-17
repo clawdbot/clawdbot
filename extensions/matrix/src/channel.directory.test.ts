@@ -10,6 +10,17 @@ import type { MatrixSetupInput } from "./setup-config.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
+describe("matrix target classification", () => {
+  it("distinguishes users from rooms", () => {
+    expect(matrixPlugin.messaging?.inferTargetChatType?.({ to: "@owner:example.org" })).toBe(
+      "direct",
+    );
+    expect(matrixPlugin.messaging?.inferTargetChatType?.({ to: "!room:example.org" })).toBe(
+      "channel",
+    );
+  });
+});
+
 function requireMatrixDirectory() {
   const directory = matrixPlugin.directory;
   if (!directory?.listPeers || !directory.listGroups) {
@@ -272,7 +283,13 @@ describe("matrix directory", () => {
         }),
       }),
     ).toEqual([
-      '- Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.',
+      {
+        checkId: "channels.matrix.groups.open",
+        severity: "critical",
+        title: "Matrix security warning",
+        detail:
+          'Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.',
+      },
     ]);
 
     expect(
@@ -306,7 +323,13 @@ describe("matrix directory", () => {
         }),
       }),
     ).toEqual([
-      '- Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.accounts.assistant.groupPolicy="allowlist" + channels.matrix.accounts.assistant.groups (and optionally channels.matrix.accounts.assistant.groupAllowFrom) to restrict rooms.',
+      {
+        checkId: "channels.matrix.groups.open",
+        severity: "critical",
+        title: "Matrix security warning",
+        detail:
+          'Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.accounts.assistant.groupPolicy="allowlist" + channels.matrix.accounts.assistant.groups (and optionally channels.matrix.accounts.assistant.groupAllowFrom) to restrict rooms.',
+      },
     ]);
   });
 

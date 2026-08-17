@@ -22,6 +22,10 @@ describe("OpenClawSchema cloudWorkers config", () => {
             title?: string;
             description?: string;
             properties?: {
+              desktop?: {
+                title?: string;
+                description?: string;
+              };
               profiles?: {
                 title?: string;
                 description?: string;
@@ -36,10 +40,12 @@ describe("OpenClawSchema cloudWorkers config", () => {
         };
       }
     ).properties?.cloudWorkers;
+    const desktop = properties?.properties?.desktop;
     const profiles = properties?.properties?.profiles;
     const profile = profiles?.additionalProperties;
 
     for (const [path, schema] of [
+      ["cloudWorkers.desktop", desktop],
       ["cloudWorkers.profiles", profiles],
       ["cloudWorkers.profiles.*", profile],
       ["cloudWorkers.profiles.*.provider", profile?.properties?.provider],
@@ -56,6 +62,11 @@ describe("OpenClawSchema cloudWorkers config", () => {
   it("is absent by default and accepts an empty opt-in block", () => {
     expect(OpenClawSchema.parse({}).cloudWorkers).toBeUndefined();
     expect(parseCloudWorkers({})).toStrictEqual({});
+  });
+
+  it("accepts the desktop Labs gate only as a boolean", () => {
+    expect(parseCloudWorkers({ desktop: true })).toStrictEqual({ desktop: true });
+    expect(OpenClawSchema.safeParse({ cloudWorkers: { desktop: "true" } }).success).toBe(false);
   });
 
   it("accepts provider-owned settings", () => {

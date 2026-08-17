@@ -242,13 +242,14 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
   OPENCLAW_REPOSITORY: openclaw/openclaw
   OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     continue-on-error: ${{ inputs.advisory }}
     outputs:
       baseline_artifact_digest: ${{ steps.upload_baseline.outputs.artifact-digest }}
@@ -619,7 +620,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node workflow/scripts/resolve-openclaw-package-candidate.mjs \
+          pnpm --dir workflow exec node --import tsx scripts/resolve-openclaw-package-candidate.mts \
             --source artifact \
             --artifact-dir "$INPUT_DIR" \
             --package-sha256 "$INPUT_CANDIDATE_SHA256" \
@@ -737,11 +738,11 @@ jobs:
         env:
           BASELINE_PACK_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/pack.json
         run: |
-          node --input-type=module <<'NODE' >>"$GITHUB_OUTPUT"
+          node --import tsx --input-type=module <<'NODE' >>"$GITHUB_OUTPUT"
           import crypto from "node:crypto";
           import fs from "node:fs";
           import path from "node:path";
-          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";
+          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";
           function resolveTarballFileName(value, label) {
             const fileName = typeof value === "string" ? value.trim() : "";
             if (

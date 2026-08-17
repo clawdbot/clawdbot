@@ -10,7 +10,7 @@ import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
-import { getFreeGatewayPort } from "./test-helpers.e2e.js";
+import { getGatewayE2ePortBlock } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 const NETWORK_GATEWAY_ENV_KEYS = [
@@ -98,7 +98,7 @@ describe("gateway network runtime", () => {
       );
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 
-      server = await startGatewayServer(await getFreeGatewayPort(), {
+      server = await startGatewayServer(await getGatewayE2ePortBlock(), {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
@@ -154,7 +154,7 @@ describe("gateway network runtime", () => {
         await fs.writeFile(configPath, raw, { mode: 0o600 });
         setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 
-        server = await startGatewayServer(await getFreeGatewayPort(), {
+        server = await startGatewayServer(await getGatewayE2ePortBlock(), {
           controlUiEnabled: false,
         });
 

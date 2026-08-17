@@ -210,40 +210,57 @@ describe("Code Mode worker lifecycle", () => {
   });
 
   it.each([
-    { label: "returned values", source: 'return "x".repeat(2_048);' },
-    { label: "completed output", source: 'text("x".repeat(2_048)); return true;' },
+    { label: "returned values", source: 'return "x".repeat(2_048);', status: "completed" },
+    {
+      label: "completed output",
+      source: 'text("x".repeat(2_048)); return true;',
+      status: "completed",
+    },
     {
       label: "combined output and returned values",
       source: 'text("x".repeat(700)); return "y".repeat(700);',
+      status: "completed",
     },
     {
       label: "suspended output",
       source: 'text("x".repeat(2_048)); await yield_control("pause"); return true;',
+      status: "waiting",
     },
-    { label: "failed output", source: 'text("x".repeat(2_048)); throw new Error("boom");' },
-  ])("rejects oversized $label before sending it across worker threads", async ({ source }) => {
-    const config = resolveCodeModeConfig({
-      tools: { codeMode: { enabled: true, maxOutputBytes: 1_024 } },
-    } as never);
+    {
+      label: "failed output",
+      source: 'text("x".repeat(2_048)); throw new Error("boom");',
+      status: "failed",
+    },
+  ])(
+    "bounds oversized $label before sending it across worker threads",
+    async ({ source, status }) => {
+      const config = resolveCodeModeConfig({
+        tools: { codeMode: { enabled: true, maxOutputBytes: 1_024 } },
+      } as never);
 
-    const result = await runCodeModeWorker(
-      {
-        kind: "exec",
-        source,
-        config,
-        catalog: [],
-      },
-      10_000,
-    );
+      const result = await runCodeModeWorker(
+        {
+          kind: "exec",
+          source,
+          config,
+          catalog: [],
+        },
+        10_000,
+      );
 
-    expect(result.status).toBe("failed");
-    if (result.status !== "failed") {
-      return;
-    }
-    expect(result.code).toBe("output_limit_exceeded");
-    expect(result.error).toBe("code mode output limit exceeded");
-    expect(result.output).toEqual([]);
-  });
+      expect(result.status).toBe(status);
+      expect(JSON.stringify(result)).toContain("rerun with narrower args");
+      if (result.status === "failed") {
+        expect(result.code).toBe("internal_error");
+        expect(result.error).toContain("boom");
+      }
+      const outputBytes =
+        result.output.length > 0 ? Buffer.byteLength(JSON.stringify(result.output), "utf8") : 0;
+      const valueBytes =
+        result.status === "completed" ? Buffer.byteLength(JSON.stringify(result.value), "utf8") : 0;
+      expect(outputBytes + valueBytes).toBeLessThanOrEqual(1_024);
+    },
+  );
 
   it("expires an idle suspended snapshot and aborts its outstanding tool", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });

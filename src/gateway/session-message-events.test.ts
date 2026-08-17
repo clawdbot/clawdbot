@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 /**
  * Session message event indexing and broadcast tests.
  */
@@ -13,9 +14,9 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagent-lifecycle-events.js";
-import { createSubagentRegistryLifecycleController } from "../agents/subagent-registry-lifecycle.js";
-import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagents/registry/subagent-lifecycle-events.js";
+import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEvents,
@@ -25,12 +26,16 @@ import { appendAssistantMessageToSessionTranscript } from "../config/sessions/tr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
-import { rawDataToString } from "../infra/ws.js";
+import * as secureRandom from "../infra/secure-random.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
 import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -50,6 +55,7 @@ import { createWorkerTranscriptCommitter } from "./worker-environments/transcrip
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
+const cleanupTestStates: OpenClawTestState[] = [];
 const SETUP_RPC_TIMEOUT_MS = 30_000;
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let subscribedOperatorWs:
@@ -78,6 +84,9 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  for (const state of cleanupTestStates.splice(0).toReversed()) {
+    await state.cleanup();
+  }
   await Promise.all(
     cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
@@ -111,6 +120,21 @@ function waitForSessionMessageEvent(
       message.type === "event" &&
       message.event === "session.message" &&
       (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+    timeoutMs,
+  );
+}
+
+function waitForSessionObserverEvent(
+  ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
+  runId: string,
+  timeoutMs?: number,
+) {
+  return onceMessage(
+    ws,
+    (message) =>
+      message.type === "event" &&
+      message.event === "session.observer" &&
+      (message.payload as { runId?: string } | undefined)?.runId === runId,
     timeoutMs,
   );
 }
@@ -623,7 +647,7 @@ describe("session.message websocket events", () => {
     });
 
     const emitSubagentProgressEndedForRun = vi.fn(async () => {});
-    const controller = createSubagentRegistryLifecycleController({
+    const controller = new SubagentLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
       subagentAnnounceTimeoutMs: 1_000,
@@ -642,7 +666,7 @@ describe("session.message websocket events", () => {
       resumeSubagentRun: vi.fn(),
       callGateway: async <T = Record<string, unknown>>() => ({}) as T,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
-      runSubagentAnnounceFlow: vi.fn(async () => false),
+      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
       warn: vi.fn(),
     });
@@ -943,6 +967,11 @@ describe("session.message websocket events", () => {
 
   test("projects current revisioned sender avatars consistently across live events and RPC reads", async () => {
     const SHARED_REV = 1_800_000_000_000;
+    const profileState = await createOpenClawTestState({
+      label: "session-message-current-profile-display",
+      layout: "state-only",
+    });
+    cleanupTestStates.push(profileState);
     const storePath = await createSessionStoreFile();
     const sessionId = "sess-current-profile-display";
     const sessionKey = "agent:main:current-profile-display";
@@ -953,7 +982,17 @@ describe("session.message websocket events", () => {
     });
 
     const profile = withMockedDateNow(SHARED_REV, () => {
-      const created = ensureProfileForEmail("current-profile-display@example.com");
+      // Avoid random UUID spans such as `fc-...` that transcript redaction treats as secrets.
+      const created = (() => {
+        const profileIdSpy = vi
+          .spyOn(secureRandom, "generateSecureUuid")
+          .mockReturnValue("00000000-0000-4000-8000-000000000001");
+        try {
+          return ensureProfileForEmail("current-profile-display@example.com");
+        } finally {
+          profileIdSpy.mockRestore();
+        }
+      })();
       setDisplayName(created.id, "Old Display Name");
       expect(setAvatar(created.id, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
       return created;
@@ -1725,6 +1764,8 @@ describe("session.message websocket events", () => {
         main: {
           sessionId: "sess-main",
           updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
           modelProvider: "openai",
           model: "gpt-5.4",
           contextTokens: 123_456,
@@ -1882,7 +1923,11 @@ describe("session.message websocket events", () => {
 
   test("routes selected-agent global transcript updates to matching message subscribers", async () => {
     const storePath = await createSessionStoreFile();
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = {
+      ownership: "explicit",
+      list: [{ id: "main" }, { id: "work" }],
+    };
+    testState.agentConfig = { sessionStore: { agentId: "work" } };
     const transcriptPath = path.join(path.dirname(storePath), "global-work.jsonl");
     await writeSessionStore({
       entries: {
@@ -1927,27 +1972,30 @@ describe("session.message websocket events", () => {
       await connectOk(workWs, { scopes: ["operator.read"] });
       await connectOk(mainWs, { scopes: ["operator.read"] });
       await connectOk(bareWs, { scopes: ["operator.read"] });
-      await rpcReq(workWs, "sessions.messages.subscribe", {
-        key: "global",
-        agentId: "work",
-      });
-      await rpcReq(mainWs, "sessions.messages.subscribe", {
-        key: "global",
-        agentId: "main",
-      });
-      await rpcReq(bareWs, "sessions.messages.subscribe", {
-        key: "global",
-      });
+      expect(
+        await rpcReq(workWs, "sessions.messages.subscribe", {
+          key: "global",
+          agentId: "work",
+        }),
+      ).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
+      expect(
+        await rpcReq(mainWs, "sessions.messages.subscribe", {
+          key: "global",
+          agentId: "main",
+        }),
+      ).toMatchObject({ ok: false });
+      expect(
+        await rpcReq(bareWs, "sessions.messages.subscribe", {
+          key: "global",
+        }),
+      ).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
 
       const workMessagePromise = waitForSessionMessageEvent(workWs, "global");
       const mainMessagePromise = expectNoMessageWithin({
         watch: (timeoutMs) => waitForSessionMessageEvent(mainWs, "global", timeoutMs),
         timeoutMs: 250,
       });
-      const bareMessagePromise = expectNoMessageWithin({
-        watch: (timeoutMs) => waitForSessionMessageEvent(bareWs, "global", timeoutMs),
-        timeoutMs: 250,
-      });
+      const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
       emitSessionTranscriptUpdate({
         sessionFile: transcriptPath,
         sessionKey: "global",
@@ -1958,7 +2006,7 @@ describe("session.message websocket events", () => {
 
       const workMessage = await workMessagePromise;
       await mainMessagePromise;
-      await bareMessagePromise;
+      const bareMessage = await bareMessagePromise;
       expectRecordFields(workMessage.payload, {
         sessionKey: "global",
         agentId: "work",
@@ -1976,11 +2024,95 @@ describe("session.message websocket events", () => {
           continuationTurns: 0,
         },
       });
+      expectRecordFields(bareMessage.payload, {
+        sessionKey: "global",
+        agentId: "work",
+        messageId: "msg-work-global",
+      });
     } finally {
       workWs.close();
       mainWs.close();
       bareWs.close();
       testState.agentsConfig = undefined;
+      testState.agentConfig = undefined;
+      testState.sessionStorePath = undefined;
+    }
+  });
+
+  test("routes a subscribed global observer event through the real gateway socket once", async () => {
+    const storePath = await createSessionStoreFile();
+    testState.agentsConfig = {
+      ownership: "explicit",
+      list: [{ id: "main" }, { id: "work" }],
+    };
+    testState.agentConfig = { sessionStore: { agentId: "work" } };
+    await writeSessionStore({
+      entries: { global: { sessionId: "sess-work-observer", updatedAt: Date.now() } },
+      storePath,
+      agentId: "work",
+    });
+    const workWs = await harness.openWs();
+    const mainWs = await harness.openWs();
+    const runId = "run-work-global-observer";
+    const workEvents: unknown[] = [];
+    const mainEvents: unknown[] = [];
+    const collect = (target: unknown[]) => (data: RawData) => {
+      const message = JSON.parse(rawDataToString(data)) as { event?: string; payload?: unknown };
+      if (message.event === "session.observer") {
+        target.push(message.payload);
+      }
+    };
+    const collectWork = collect(workEvents);
+    const collectMain = collect(mainEvents);
+    workWs.on("message", collectWork);
+    mainWs.on("message", collectMain);
+    try {
+      const caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+      await connectOk(workWs, { scopes: ["operator.read"], caps });
+      await connectOk(mainWs, { scopes: ["operator.read"], caps });
+      expect(
+        await rpcReq(workWs, "sessions.messages.subscribe", {
+          key: " GLOBAL ",
+          agentId: " WORK ",
+        }),
+      ).toMatchObject({ ok: true, payload: { key: "global", subscribed: true } });
+      expect(
+        await rpcReq(mainWs, "sessions.messages.subscribe", { key: "global", agentId: "main" }),
+      ).toMatchObject({ ok: false });
+      await rpcReq(workWs, "sessions.observer.visibility", { visible: true });
+      await rpcReq(mainWs, "sessions.observer.visibility", { visible: true });
+
+      const workEvent = waitForSessionObserverEvent(workWs, runId);
+      const noMainEvent = expectNoMessageWithin({
+        watch: (timeoutMs) => waitForSessionObserverEvent(mainWs, runId, timeoutMs),
+        timeoutMs: 250,
+      });
+      emitAgentEvent({
+        runId,
+        sessionKey: "global",
+        agentId: "work",
+        stream: "item",
+        data: {
+          kind: "preamble",
+          phase: "update",
+          progressText: "Inspecting the work session",
+        },
+      });
+
+      await workEvent;
+      await noMainEvent;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(workEvents).toHaveLength(1);
+      expect(mainEvents).toHaveLength(0);
+    } finally {
+      workWs.off("message", collectWork);
+      mainWs.off("message", collectMain);
+      workWs.close();
+      mainWs.close();
+      testState.agentsConfig = undefined;
+      testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
     }
   });
@@ -2382,6 +2514,13 @@ describe("session.message websocket events", () => {
       bundleHash: "f".repeat(64),
       sessionId,
       runId: "run-fanout",
+      turnClaim: {
+        sessionId,
+        claimId: "claim-fanout",
+        runId: "run-fanout",
+        placementGeneration: 4,
+        owner: { kind: "worker", environmentId: "environment-fanout", ownerEpoch: 4 },
+      },
       ownerEpoch: 4,
       rpcSetVersion: 1,
       protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],

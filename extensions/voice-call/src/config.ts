@@ -202,7 +202,7 @@ export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfi
 const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
-const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
+const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call", "main"]);
 
 const OutboundConfigSchema = z
   .object({
@@ -731,6 +731,13 @@ export function resolveVoiceCallSessionKey(params: {
     return resolveVoiceCallAgentSessionKey({
       config: params.config,
       sessionKey: explicit,
+      coreSession: params.coreSession,
+    });
+  }
+  if (params.config.sessionScope === "main") {
+    return resolveVoiceCallAgentSessionKey({
+      config: params.config,
+      sessionKey: "main",
       coreSession: params.coreSession,
     });
   }

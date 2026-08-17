@@ -185,13 +185,10 @@ describe("deliverReplies identity passthrough", () => {
     const metadata = { event_type: "openclaw_test", event_payload: { source: "chart" } };
     const listenerClient = { chat: { postMessage: vi.fn() } } as never;
     const eventScope = {
-      apiAppId: "A1",
-      enterpriseId: "E1",
-      isEnterpriseInstall: true as const,
       teamId: "T1",
       client: listenerClient,
     };
-    const enterpriseCfg = { channels: { slack: { enterpriseOrgInstall: true } } };
+    const enterpriseCfg = { channels: { slack: {} } };
 
     const result = await deliverReplies(
       baseParams({
@@ -231,8 +228,7 @@ describe("deliverReplies identity passthrough", () => {
       mediaUrl: "https://example.com/report.png",
       threadTs: "thread-ts",
       accountId: "work",
-      client: listenerClient,
-      enterpriseEventScope: eventScope,
+      eventScope,
       textLimit: 4000,
       mediaMaxBytes: 1024,
       identity,
@@ -243,8 +239,7 @@ describe("deliverReplies identity passthrough", () => {
       token: "xoxb-test",
       threadTs: "thread-ts",
       accountId: "work",
-      client: listenerClient,
-      enterpriseEventScope: eventScope,
+      eventScope,
       textLimit: 4000,
       mediaMaxBytes: 1024,
       blocks: [
@@ -284,28 +279,24 @@ describe("deliverReplies identity passthrough", () => {
     expect(options).not.toHaveProperty("identity");
   });
 
-  it("forwards the validated Enterprise event scope and exact listener client", async () => {
+  it("forwards the validated Enterprise event scope", async () => {
     sendMock.mockResolvedValue({ messageId: "123.456", channelId: "C123" });
     const listenerClient = { chat: { postMessage: vi.fn() } } as never;
     const eventScope = {
-      apiAppId: "A1",
-      enterpriseId: "E1",
-      isEnterpriseInstall: true as const,
       teamId: "T1",
       client: listenerClient,
     };
 
     await deliverReplies(
       baseParams({
-        cfg: { channels: { slack: { enterpriseOrgInstall: true } } },
+        cfg: { channels: { slack: {} } },
         eventScope,
         mediaMaxBytes: 1024,
       }),
     );
 
     const options = requireSendCall()[2];
-    expect(options.client).toBe(listenerClient);
-    expect(options.enterpriseEventScope).toBe(eventScope);
+    expect(options.eventScope).toBe(eventScope);
     expect(options.textLimit).toBe(4000);
     expect(options.mediaMaxBytes).toBe(1024);
   });

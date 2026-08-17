@@ -9,7 +9,7 @@ export {
   listActiveEmbeddedRunSessionKeys,
   waitForActiveEmbeddedRuns,
 } from "../../agents/embedded-agent-runner/runs.js";
-export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery-marking.js";
+export { markRestartAbortedMainSessions } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export {
   respawnGatewayProcessForUpdate,

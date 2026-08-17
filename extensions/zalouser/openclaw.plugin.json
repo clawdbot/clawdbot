@@ -1,8 +1,7 @@
 {
   "id": "zalouser",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true,
+    "configRepair": true,
     "stateMigrations": true
   },
   "name": "Zalo Personal",

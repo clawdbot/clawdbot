@@ -11,20 +11,15 @@ import {
   toCssPlacement,
 } from "../../lib/board/grid.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
-import type {
-  BoardGrantDecision,
-  BoardObserverContext,
-  BoardViewWidget,
-  BoardWidgetFrameUrl,
-} from "../../lib/board/view-types.ts";
+import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
+import type { BoardGrantDecision, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import {
-  getBuiltinWidgetRenderer,
   getPluginWidgetKindContribution,
   loadPluginWidgetRenderer,
   pluginIdForWidgetKind,
   type PluginBoardWidgetRenderer,
 } from "../../lib/board/widgets/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
@@ -47,15 +42,15 @@ const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 
 export type BoardWidgetCellCallbacks = {
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
-  movePointerDown: (widget: BoardViewWidget, event: PointerEvent) => void;
-  resizePointerDown: (widget: BoardViewWidget, event: PointerEvent) => void;
-  moveToTab: (widget: BoardViewWidget, tabId: string) => Promise<void>;
-  resizeTo: (widget: BoardViewWidget, w: number, h: number) => Promise<void>;
-  setHeightMode: (widget: BoardViewWidget, mode: "auto" | "fixed") => Promise<void>;
+  movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
+  resizePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
+  moveToTab: (widget: BoardWidget, tabId: string) => Promise<void>;
+  resizeTo: (widget: BoardWidget, w: number, h: number) => Promise<void>;
+  setHeightMode: (widget: BoardWidget, mode: "auto" | "fixed") => Promise<void>;
   reportContentHeight: (name: string, height: number) => void;
-  remove: (widget: BoardViewWidget) => Promise<void>;
-  nudge: (widget: BoardViewWidget, direction: BoardGridDirection) => Promise<void>;
-  focus: (widget: BoardViewWidget, direction: BoardGridDirection) => void;
+  remove: (widget: BoardWidget) => Promise<void>;
+  nudge: (widget: BoardWidget, direction: BoardGridDirection) => Promise<void>;
+  focus: (widget: BoardWidget, direction: BoardGridDirection) => void;
   focusChanged: (name: string) => void;
   frameLoadFailed: (name: string) => Promise<void>;
   widgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
@@ -66,14 +61,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
-  @property({ attribute: false }) widget?: BoardViewWidget;
+  @property({ attribute: false }) widget?: BoardWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) contentHeightPx?: number;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
-  @property({ attribute: false }) observer?: BoardObserverContext;
+  @property({ type: Boolean }) active = true;
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
   @property({ type: Number }) positionInSet = 1;
@@ -81,7 +76,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ type: Boolean }) busy = false;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
-  @property({ type: Boolean }) ticketRefreshEnabled = true;
 
   @state() private actionError = "";
   @state() private actionPending = false;
@@ -91,12 +85,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   private pluginRendererKind = "";
   private pluginRendererLoadToken: object | null = null;
   private readonly appView = new BoardMcpAppLifecycle({
+    active: () => this.active,
     connected: () => this.isConnected,
     requestUpdate: () => this.requestUpdate(),
     sessionKey: () => this.sessionKey,
     widget: () => this.widget,
   });
   private readonly frame = new BoardWidgetFrameLifecycle({
+    active: () => this.active,
     connected: () => this.isConnected,
     context: () => this.context,
     refreshFrame: () => this.callbacks?.frameLoadFailed,
@@ -104,7 +100,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     requestUpdate: () => this.requestUpdate(),
     resolveFrameUrl: () => this.widgetFrameUrl,
     root: () => this,
-    ticketRefreshEnabled: () => this.ticketRefreshEnabled,
     widget: () => this.widget,
   });
 
@@ -121,6 +116,16 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       this.frame.widgetChanged(previousWidget, this.widget);
     }
     this.appView.update(this.widget, this.callbacks);
+    if (changed.has("active")) {
+      this.appView.activityChanged();
+      this.frame.activityChanged();
+      if (this.active) {
+        this.appView.observe(
+          this.querySelector(".board-widget"),
+          this.widget?.contentKind === "mcp-app",
+        );
+      }
+    }
     this.syncPluginRenderer();
   }
 
@@ -131,7 +136,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
     this.appView.observe(
       this.querySelector(".board-widget"),
-      this.widget?.contentKind === "mcp-app",
+      this.active && this.widget?.contentKind === "mcp-app",
     );
     queueMicrotask(() => {
       if (this.isConnected) {
@@ -158,7 +163,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     try {
       await action();
     } catch (error) {
-      this.actionError = error instanceof Error ? error.message : String(error);
+      this.actionError = formatUiError(error);
     } finally {
       this.actionPending = false;
     }
@@ -166,7 +171,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   private handleMenuSelect(
     event: CustomEvent<{ item: { value?: string } }>,
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
     if (!this.canMutate) {
@@ -195,10 +200,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
   }
 
-  private renderMcpApp(
-    widget: BoardViewWidget,
-    callbacks: BoardWidgetCellCallbacks,
-  ): TemplateResult {
+  private renderMcpApp(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
     const accessNotice =
       widget.grantState === "pending"
@@ -222,6 +224,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       accessNotice,
       appView: this.appView.state,
       busy: this.busy || this.actionPending || !this.canMutate,
+      active: this.active,
       loading: this.appView.loading,
       nearVisible: this.appView.nearVisible,
       rectHeight: this.rect?.h ?? 4,
@@ -233,7 +236,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     });
   }
 
-  private renderBody(widget: BoardViewWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+  private renderBody(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     if (widget.contentKind === "mcp-app") {
       return this.renderMcpApp(widget, callbacks);
     }
@@ -254,16 +257,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         onRemove: () => void this.runAction(() => callbacks.remove(widget)),
       });
     }
-    if (widget.contentKind === "builtin") {
-      const renderer = getBuiltinWidgetRenderer(widget.builtin);
-      if (!renderer) {
-        throw new Error(t("board.widget.frameResolverMissing"));
-      }
-      return renderer({
-        observer: this.observer,
-        sessionKey: this.sessionKey,
-      });
-    }
     if (widget.contentKind === "plugin") {
       if (this.pluginRendererError) {
         return renderBoardWidgetError(this.pluginRendererError, () => this.retryPluginRenderer());
@@ -272,7 +265,8 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         return this.pluginRenderer({
           widget,
           sessionKey: this.sessionKey,
-          canMutate: this.canMutate && !widget.readOnly,
+          active: this.active,
+          canMutate: this.canMutate,
           requestUpdate: () => this.requestUpdate(),
         });
       }
@@ -321,7 +315,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       })
       .catch((error: unknown) => {
         if (this.pluginRendererLoadToken === loadToken) {
-          this.pluginRendererError = error instanceof Error ? error.message : String(error);
+          this.pluginRendererError = formatUiError(error);
           this.requestUpdate();
         }
       });
@@ -342,10 +336,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   private handleKeyDown(
     event: KeyboardEvent,
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: BoardWidgetCellCallbacks,
   ): void {
-    if (event.target !== event.currentTarget || widget.readOnly || !this.canMutate) {
+    if (event.target !== event.currentTarget || !this.canMutate) {
       return;
     }
     const direction =
@@ -388,7 +382,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       bodyErrored = true;
     }
     const label = widget.title || widget.name;
-    const readOnly = widget.readOnly === true || !this.canMutate;
+    const readOnly = !this.canMutate;
     const bodyScrollable =
       bodyErrored ||
       this.actionError !== "" ||
@@ -431,16 +425,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
                 <span aria-hidden="true">⠿</span>
               </span>`}
           <span class="board-widget__title" title=${label}>${label}</span>
-          ${widget.contentKind === "builtin"
-            ? nothing
-            : html`<span class="board-widget__kind"
-                >${widget.contentKind === "mcp-app"
-                  ? t("board.widget.kindMcp")
-                  : widget.contentKind === "plugin"
-                    ? this.pluginRendererLabel || t("board.widget.kindPlugin")
-                    : t("board.widget.kindHtml")}</span
-              >`}
-          ${widget.contentKind === "builtin" ? nothing : renderBoardGrantedCapabilities(widget)}
+          <span class="board-widget__kind"
+            >${widget.contentKind === "mcp-app"
+              ? t("board.widget.kindMcp")
+              : widget.contentKind === "plugin"
+                ? this.pluginRendererLabel || t("board.widget.kindPlugin")
+                : t("board.widget.kindHtml")}</span
+          >
+          ${renderBoardGrantedCapabilities(widget)}
           ${readOnly
             ? nothing
             : renderBoardWidgetMenu({
@@ -468,7 +460,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
               title=${t("board.widget.resizeHandle", { title: label })}
               @pointerdown=${(event: PointerEvent) => callbacks.resizePointerDown(widget, event)}
             ></span>`}
-        ${widget.grantState === "granted" && widget.contentKind !== "builtin"
+        ${widget.grantState === "granted"
           ? html`<span class="board-widget__grant-dot" aria-hidden="true"></span>`
           : nothing}
       </section>

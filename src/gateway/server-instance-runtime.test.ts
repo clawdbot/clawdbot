@@ -3,13 +3,20 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-clien
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { waitForActiveGatewayRootWork } from "../process/gateway-work-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 
 function createContext(): GatewayRequestContext {
@@ -20,6 +27,9 @@ function createContext(): GatewayRequestContext {
       warn: vi.fn(),
       error: vi.fn(),
     },
+    chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
+    dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
 
@@ -35,43 +45,84 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("createGatewayInstanceRuntime", () => {
-  it("uses the live registry and fails closed when the owning instance closes", async () => {
-    let version = "one";
+  it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
     let available = false;
-    let registry = createRegistry({
-      agent: ({ respond }) => respond(true, { version }),
-      "agent.wait": ({ respond }) => respond(true, { status: "ok" }),
-      "message.action": ({ respond }) => respond(true, { ok: true }),
+    const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
+      respond(true, { raw: true });
     });
+    const registry = createRegistry({ agent: rawAgent });
+    const context = createContext();
     const runtime = createGatewayInstanceRuntime({
-      getContext: createContext,
+      getContext: () => context,
       getMethodRegistry: () => registry,
       isDispatchAvailable: () => available,
     });
     expect(getGatewayRecoveryRuntime()).toBe(runtime.recovery);
 
-    await expect(runtime.recovery.dispatchAgent({ message: "test" })).rejects.toThrow(
-      "Gateway instance dispatch unavailable",
-    );
+    await expect(
+      runtime.recovery.dispatchAgent({ message: "test", idempotencyKey: "run-unavailable" }),
+    ).rejects.toThrow("Gateway instance dispatch unavailable");
     available = true;
-    await expect(runtime.recovery.dispatchAgent({ message: "test" })).resolves.toEqual({
-      version: "one",
+    await expect(runtime.recovery.waitForAgent({ runId: "run-1", timeoutMs: 0 })).resolves.toEqual({
+      runId: "run-1",
+      status: "timeout",
+      timeoutPhase: "queue",
+      providerStarted: false,
     });
-    version = "two";
-    registry = createRegistry({
-      agent: ({ respond }) => respond(true, { version }),
-      "agent.wait": ({ respond }) => respond(true, { status: "ok" }),
-      "message.action": ({ respond }) => respond(true, { ok: true }),
+    context.dedupe.set("agent:run-cached-recovery", {
+      ts: Date.now(),
+      ok: true,
+      payload: { runId: "run-cached-recovery", status: "ok", summary: "replayed" },
     });
-    await expect(runtime.recovery.dispatchAgent({ message: "test" })).resolves.toEqual({
-      version: "two",
-    });
+    await expect(
+      runtime.recovery.dispatchAgent({
+        message: "test",
+        idempotencyKey: "run-cached-recovery",
+      }),
+    ).resolves.toEqual({ runId: "run-cached-recovery", status: "ok", summary: "replayed" });
+    await expect(
+      runtime.recovery.dispatchAgent({
+        message: "test",
+        idempotencyKey: "run-typed-recovery",
+        cwd: "relative",
+      }),
+    ).rejects.toThrow("cwd must be absolute");
+    expect(rawAgent).not.toHaveBeenCalled();
 
     runtime.close();
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
     await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
     );
+  });
+
+  it("captures trusted agent principal fields verbatim", () => {
+    const client = createSyntheticPluginRuntimeClient({
+      allowModelOverride: true,
+      agentRunTracking: "plugin_subagent",
+      cronRunContinuation: true,
+      internalDeliveryMediaUrls: ["https://example.test/media"],
+      internalDeliverySuppressText: true,
+      pluginRuntimeOwnerId: "memory-core",
+      delegatedToolPolicyHandoffId: "handoff-1",
+      sessionCreation: { via: "spawn", actor: { type: "agent", id: "agent:main:main" } },
+    });
+
+    const principal = captureAgentTurnPrincipal(client);
+
+    expect(principal?.connect).toBe(client.connect);
+    expect(principal?.internal).toBe(client.internal);
+    expect(principal?.internal).toEqual(client.internal);
+
+    const recoveryClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
+    const recoveryPrincipal = captureAgentTurnPrincipal(recoveryClient);
+    expect(recoveryPrincipal?.connect?.client.mode).toBe("backend");
+    expect(recoveryPrincipal?.internal).toEqual({
+      syntheticClient: true,
+      allowModelOverride: false,
+    });
+    expect(recoveryPrincipal?.internal?.agentRunTracking).toBeUndefined();
+    expect(recoveryPrincipal?.internal?.sessionCreation).toBeUndefined();
   });
 
   it("sends recovery notices through normal outbound without invoking plugin actions", async () => {
@@ -106,7 +157,12 @@ describe("createGatewayInstanceRuntime", () => {
           sendText,
         },
       };
-      setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", source: "test", plugin }]));
+      const pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
+      stageActivePluginRegistry(
+        createTestRegistry([{ pluginId: "signal", source: "test", plugin }]),
+        null,
+        "default",
+      );
       const context = {
         ...createContext(),
         getRuntimeConfig: () => ({ channels: { signal: { enabled: true } } }),
@@ -139,7 +195,7 @@ describe("createGatewayInstanceRuntime", () => {
         expect(handleAction).not.toHaveBeenCalled();
       } finally {
         runtime.close();
-        setActivePluginRegistry(createTestRegistry([]));
+        restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
       }
     });
   });
@@ -239,26 +295,35 @@ describe("createGatewayInstanceRuntime", () => {
       const started = new Promise<void>((resolve) => {
         markStarted = resolve;
       });
+      let finishHandler!: () => void;
+      const handlerCanFinish = new Promise<void>((resolve) => {
+        finishHandler = resolve;
+      });
       const runtime = createGatewayInstanceRuntime({
         getContext: createContext,
         getMethodRegistry: () =>
           createRegistry({
             send: async () => {
               markStarted();
-              await new Promise<never>(() => {});
+              await handlerCanFinish;
             },
           }),
         isDispatchAvailable: () => true,
       });
 
-      const request = runtime.nativeApprovals.requestRoute("send", { message: "test" });
-      const error = request.catch((value: unknown) => value);
-      await started;
-      await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      const caught = await error;
-      expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toContain("gateway request timeout for send");
-      runtime.close();
+      try {
+        const request = runtime.nativeApprovals.requestRoute("send", { message: "test" });
+        const error = request.catch((value: unknown) => value);
+        await started;
+        await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+        const caught = await error;
+        expect(caught).toBeInstanceOf(Error);
+        expect((caught as Error).message).toContain("gateway request timeout for send");
+      } finally {
+        finishHandler();
+        await waitForActiveGatewayRootWork();
+        runtime.close();
+      }
     } finally {
       vi.useRealTimers();
     }

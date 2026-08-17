@@ -13,6 +13,7 @@ function createTestContext(params?: {
   groupDmChannels?: string[];
   appClient?: App["client"];
   apiAppId?: string;
+  channelsConfig?: Record<string, { enabled?: boolean }>;
 }) {
   return createSlackMonitorContext({
     cfg: {
@@ -38,6 +39,7 @@ function createTestContext(params?: {
     groupDmEnabled: params?.groupDmEnabled ?? false,
     groupDmChannels: params?.groupDmChannels ?? [],
     defaultRequireMention: true,
+    channelsConfig: params?.channelsConfig,
     groupPolicy: "allowlist",
     useAccessGroups: true,
     reactionMode: "off",
@@ -56,6 +58,13 @@ function createTestContext(params?: {
     ackReactionScope: "group-mentions",
     mediaMaxBytes: 20 * 1024 * 1024,
   });
+}
+
+function createEnterpriseEventScope(teamId: string): SlackEventScope {
+  return {
+    teamId,
+    client: {} as SlackEventScope["client"],
+  };
 }
 
 beforeEach(() => setSlackRuntime(null as never));
@@ -93,6 +102,44 @@ describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
       }),
     ).toBe(false);
   });
+
+  it("reads updated identity fields and mismatch guards after auth recovery", () => {
+    const ctx = createTestContext();
+
+    ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_ENTERPRISE",
+      enterpriseId: "E_ENTERPRISE",
+    };
+    ctx.teamId = "";
+    ctx.apiAppId = "A_ENTERPRISE";
+
+    expect(ctx.installationIdentity).toEqual({
+      kind: "enterprise",
+      apiAppId: "A_ENTERPRISE",
+      enterpriseId: "E_ENTERPRISE",
+    });
+    expect(ctx.teamId).toBe("");
+    expect(ctx.apiAppId).toBe("A_ENTERPRISE");
+    expect(ctx.shouldDropMismatchedSlackEvent({ api_app_id: "A_EXPECTED" })).toBe(true);
+
+    ctx.installationIdentity = {
+      kind: "workspace",
+      apiAppId: "A_RECOVERED",
+      teamId: "T_RECOVERED",
+    };
+    ctx.teamId = "T_RECOVERED";
+    ctx.apiAppId = "A_RECOVERED";
+
+    expect(ctx.teamId).toBe("T_RECOVERED");
+    expect(ctx.apiAppId).toBe("A_RECOVERED");
+    expect(
+      ctx.shouldDropMismatchedSlackEvent({
+        api_app_id: "A_RECOVERED",
+        team_id: "T_WRONG",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("createSlackMonitorContext isChannelAllowed", () => {
@@ -105,31 +152,74 @@ describe("createSlackMonitorContext isChannelAllowed", () => {
     expect(ctx.isChannelAllowed({ channelId: "G456", channelType: "mpim" })).toBe(true);
     expect(ctx.isChannelAllowed({ channelId: "G999", channelType: "mpim" })).toBe(false);
   });
+
+  it("matches workspace-qualified channel and group DM policies", () => {
+    const ctx = createTestContext({
+      groupDmEnabled: true,
+      groupDmChannels: ["team:T11111111:channel:G01234567"],
+      channelsConfig: {
+        "team:T11111111:channel:C01234567": { enabled: true },
+        "team:T22222222:channel:C01234567": { enabled: false },
+      },
+    });
+
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T11111111",
+        channelId: "C01234567",
+        channelType: "channel",
+      }),
+    ).toBe(true);
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T22222222",
+        channelId: "C01234567",
+        channelType: "channel",
+      }),
+    ).toBe(false);
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T11111111",
+        channelId: "G01234567",
+        channelType: "mpim",
+      }),
+    ).toBe(true);
+    expect(
+      ctx.isChannelAllowed({
+        teamId: "T22222222",
+        channelId: "G01234567",
+        channelType: "mpim",
+      }),
+    ).toBe(false);
+  });
 });
 
-describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
+describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
   it("routes threaded interaction events to the Slack thread session", () => {
     const ctx = createTestContext();
 
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "C_THREAD",
         channelType: "channel",
         senderId: "U_CLICKER",
         threadTs: "1712345678.123456",
       }),
-    ).toBe("agent:main:slack:channel:c_thread:thread:1712345678.123456");
+    ).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:c_thread:thread:1712345678.123456",
+    });
   });
 
   it("routes channel-less direct interactions to the sender session", () => {
     const ctx = createTestContext({ dmScope: "per-channel-peer" });
 
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelType: "im",
         senderId: "U_SHORTCUT",
       }),
-    ).toBe("agent:main:slack:direct:u_shortcut");
+    ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:direct:u_shortcut" });
   });
 
   it("routes typeless system events through an event-carried mpDM type", () => {
@@ -137,11 +227,51 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
     ctx.rememberSlackChannelType("C0MPDM42", "mpim");
 
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "C0MPDM42",
         senderId: "U_ACTOR",
       }),
-    ).toBe("agent:main:slack:group:c0mpdm42");
+    ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:group:c0mpdm42" });
+  });
+
+  it("partitions enterprise channel system events by workspace", () => {
+    const ctx = createTestContext();
+    const resolveForTeam = (teamId: string) =>
+      ctx.resolveSlackSystemEventRoute({
+        channelId: "C_SHARED",
+        channelType: "channel",
+        senderId: "U_ACTOR",
+        eventScope: createEnterpriseEventScope(teamId),
+      });
+
+    expect(resolveForTeam("T111")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:team:t111:channel:c_shared",
+    });
+    expect(resolveForTeam("T222")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:team:t222:channel:c_shared",
+    });
+  });
+
+  it("partitions enterprise main DM system events by workspace", () => {
+    const ctx = createTestContext({ dmScope: "main" });
+    const resolveForTeam = (teamId: string) =>
+      ctx.resolveSlackSystemEventRoute({
+        channelId: "D_SHARED",
+        channelType: "im",
+        senderId: "U_SHARED",
+        eventScope: createEnterpriseEventScope(teamId),
+      });
+
+    expect(resolveForTeam("T111")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main:account:default:team:t111",
+    });
+    expect(resolveForTeam("T222")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main:account:default:team:t222",
+    });
   });
 });
 
@@ -172,10 +302,7 @@ describe("createSlackMonitorContext channel metadata cache", () => {
   it("isolates remembered types by enterprise team scope", async () => {
     const createScope = (teamId: string): SlackEventScope =>
       ({
-        apiAppId: "A_EXPECTED",
-        enterpriseId: "E_EXPECTED",
         teamId,
-        isEnterpriseInstall: true,
         client: {
           conversations: { info: vi.fn().mockRejectedValue(new Error("missing_scope")) },
         },

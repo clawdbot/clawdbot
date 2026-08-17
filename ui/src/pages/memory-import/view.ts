@@ -21,6 +21,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/memory-import.css";
 
 type MemoryCollection = {
@@ -271,7 +272,7 @@ function renderResult(result: MigrationsMemoryApplyResult | undefined) {
                 );
                 return html`<li>
                   <strong>${artifactLabel(item)}</strong>
-                  <span>${item.reason ?? item.message ?? item.status}</span>
+                  <span>${formatUiExternalText(item.reason ?? item.message, item.status)}</span>
                   ${recoveryArtifacts.map(
                     (artifact) => html`<span class="memory-import__result-artifact">
                       <span>${artifact.label}</span>
@@ -296,7 +297,7 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
     props.backfillBusy === "rollback" ||
     props.backfillRollbackPending;
   const rows = provider.error
-    ? html`<div class="callout danger" role="alert">${provider.error}</div>`
+    ? html`<div class="callout danger" role="alert">${formatUiExternalText(provider.error)}</div>`
     : !provider.found
       ? renderSettingsEmpty(provider.message ?? t("memoryImport.noMemoryFound"))
       : html`
@@ -436,24 +437,26 @@ function renderIntroSection(props: MemoryImportViewProps) {
       `,
     },
     html`
-      ${renderSettingsRow({
-        title: t("memoryImport.agent"),
-        control: html`
-          <openclaw-agent-select
-            class="agent-select--settings"
-            name="memory-import-agent"
-            .options=${props.agents.map((agent) => ({
-              value: agent.id,
-              label: normalizeAgentLabel(agent),
-              agent,
-            }))}
-            .value=${props.selectedAgentId ?? ""}
-            .accessibleLabel=${t("memoryImport.agent")}
-            .disabled=${busy}
-            .onSelect=${props.onSelectAgent}
-          ></openclaw-agent-select>
-        `,
-      })}
+      ${props.agents.length > 1
+        ? renderSettingsRow({
+            title: t("memoryImport.agent"),
+            control: html`
+              <openclaw-agent-select
+                class="agent-select--settings"
+                name="memory-import-agent"
+                .options=${props.agents.map((agent) => ({
+                  value: agent.id,
+                  label: normalizeAgentLabel(agent),
+                  agent,
+                }))}
+                .value=${props.selectedAgentId ?? ""}
+                .accessibleLabel=${t("memoryImport.agent")}
+                .disabled=${busy}
+                .onSelect=${props.onSelectAgent}
+              ></openclaw-agent-select>
+            `,
+          })
+        : nothing}
       ${renderSettingsToggleRow({
         title: t("memoryImport.replaceExisting"),
         description: t("memoryImport.replaceHint"),

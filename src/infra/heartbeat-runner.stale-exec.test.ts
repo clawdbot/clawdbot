@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { seedCommitmentsForTest } from "../commitments/store.test-utils.js";
-import type { CommitmentRecord } from "../commitments/types.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -43,33 +41,6 @@ describe("stale exec heartbeat wakes", () => {
         defaults: { heartbeat: { every } },
       },
     } as OpenClawConfig;
-  }
-
-  function buildDueCommitment(nowMs: number): CommitmentRecord {
-    return {
-      id: "cm_interview",
-      agentId: "main",
-      sessionKey: "agent:main:telegram:user-155462274",
-      channel: "telegram",
-      accountId: "primary",
-      to: "1",
-      kind: "event_check_in",
-      sensitivity: "routine",
-      source: "inferred_user_context",
-      status: "pending",
-      reason: "The user said they had an interview yesterday.",
-      suggestedText: "How did the interview go?",
-      dedupeKey: "interview:2026-04-28",
-      confidence: 0.92,
-      dueWindow: {
-        earliestMs: nowMs - 60_000,
-        latestMs: nowMs + 60 * 60_000,
-        timezone: "America/Los_Angeles",
-      },
-      createdAtMs: nowMs - 24 * 60 * 60_000,
-      updatedAtMs: nowMs - 24 * 60 * 60_000,
-      attempts: 0,
-    };
   }
 
   beforeEach(() => {
@@ -490,48 +461,5 @@ describe("stale exec heartbeat wakes", () => {
 
     expect(runSpy).toHaveBeenCalledTimes(2);
     runner.stop();
-  });
-
-  it("does not fan out due commitments for an acknowledged exec wake", async () => {
-    vi.useFakeTimers();
-    const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
-    vi.setSystemTime(nowMs);
-
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
-      seedCommitmentsForTest([buildDueCommitment(nowMs)]);
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: { every: "5m", target: "last" },
-          },
-        },
-        session: { store: storePath },
-      };
-      const runOnce = vi
-        .fn()
-        .mockResolvedValue({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT });
-      const runner = startHeartbeatRunner({
-        cfg,
-        runOnce,
-        stableSchedulerSeed: "acknowledged-exec-no-commitment",
-      });
-
-      requestHeartbeat({
-        source: "exec-event",
-        intent: "event",
-        reason: "exec-event",
-        coalesceMs: 0,
-      });
-      await vi.advanceTimersByTimeAsync(1);
-      runner.stop();
-
-      expect(runOnce).toHaveBeenCalledTimes(1);
-      expect(runOnce.mock.calls[0]?.[0]).toMatchObject({
-        source: "exec-event",
-        runScope: "global",
-      });
-    });
   });
 });

@@ -13,7 +13,7 @@ afterAll(() => {
   cleanupTrackedTempDirs(fixtureTempDirs);
 });
 
-function makeTempDir() {
+function makePluginLoaderTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
@@ -24,7 +24,7 @@ function writePlugin(params: { id: string; body: string; dir?: string }): {
   file: string;
   dir: string;
 } {
-  const dir = params.dir ?? makeTempDir();
+  const dir = params.dir ?? makePluginLoaderTempDir();
   fs.mkdirSync(dir, { recursive: true });
   const filename = `${params.id}.cjs`;
   const file = path.join(dir, filename);

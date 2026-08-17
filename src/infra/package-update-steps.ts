@@ -15,7 +15,6 @@ import {
   type PackageUpdateStepAdvisory,
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
-export type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import {
   collectInstalledGlobalPackageErrors,
   globalInstallArgs,
@@ -32,6 +31,7 @@ import {
   type NpmGlobalPrefixLayout,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+export type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 

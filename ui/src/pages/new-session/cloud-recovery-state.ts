@@ -1,13 +1,25 @@
-import type { SessionCreateParams } from "../../lib/sessions/create.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import {
   clearCloudSessionRecovery,
+  listCloudSessionRecoveries,
   parseCloudSessionCreateParams,
-  readCloudSessionRecovery,
+  promoteCloudSessionRecovery,
   type CloudSessionCreateParams,
   type CloudSessionRecovery,
   writeCloudSessionRecovery,
-} from "./cloud-recovery.ts";
+} from "../../lib/sessions/cloud-recovery.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+import { generateUUID } from "../../lib/uuid.ts";
+
+export type SubmissionOutcomeReason = "gateway-changed" | "cloud-interrupted";
+
+export function resolveSubmissionOutcomeReason(params: {
+  gatewayIdentityChanged: boolean;
+  cloudDraftOwned: boolean;
+}): SubmissionOutcomeReason {
+  return params.gatewayIdentityChanged || !params.cloudDraftOwned
+    ? "gateway-changed"
+    : "cloud-interrupted";
+}
 
 export function resolveScope(
   snapshot: {
@@ -31,6 +43,7 @@ export class PendingCloudRecoveryState {
   message = "";
   attachments: unknown[] | undefined;
   profileId = "";
+  machineClass = "";
   agentId = "";
   gatewayUrl = "";
   recoveryScope = "";
@@ -54,6 +67,8 @@ export class PendingCloudRecoveryState {
     }
   }
 
+  // Concurrent same-key replacement pages may double-clear recovery; that rare multi-tab flow is
+  // accepted in favor of ownership based only on gateway URL, recovery scope, and session key.
   owns(gatewayUrl: string, recoveryScope: string, sessionKey: string): boolean {
     return (
       this.gatewayUrl === gatewayUrl &&
@@ -68,6 +83,7 @@ export class PendingCloudRecoveryState {
     this.message = "";
     this.attachments = undefined;
     this.profileId = "";
+    this.machineClass = "";
     this.agentId = "";
     this.gatewayUrl = "";
     this.recoveryScope = "";
@@ -79,7 +95,9 @@ export class PendingCloudRecoveryState {
   }
 
   restore(gatewayUrl: string, recoveryScope: string): CloudSessionRecovery | null {
-    const recovery = readCloudSessionRecovery(gatewayUrl, recoveryScope);
+    const recovery = listCloudSessionRecoveries(gatewayUrl, recoveryScope).find(
+      (candidate) => candidate.phase === "creating",
+    );
     if (!recovery) {
       return null;
     }
@@ -94,6 +112,7 @@ export class PendingCloudRecoveryState {
   stageCreate(params: {
     agentId: string;
     profileId: string;
+    machineClass?: string;
     message: string;
     attachments?: unknown[];
     gatewayUrl: string;
@@ -120,6 +139,7 @@ export class PendingCloudRecoveryState {
       message: params.message,
       attachments: params.attachments,
       profileId: params.profileId,
+      ...(params.machineClass ? { machineClass: params.machineClass } : {}),
       agentId: params.agentId,
       gatewayUrl: params.gatewayUrl,
       recoveryScope: params.recoveryScope,
@@ -134,8 +154,12 @@ export class PendingCloudRecoveryState {
   }
 
   promoteToDispatching(sessionKey: string): boolean {
+    const previousSessionKey = this.sessionKey;
     const recovery = this.snapshot(sessionKey, "dispatching");
-    if (!recovery || (this.persistent && !writeCloudSessionRecovery(recovery))) {
+    if (
+      !recovery ||
+      (this.persistent && !promoteCloudSessionRecovery(previousSessionKey, recovery))
+    ) {
       return false;
     }
     this.sessionKey = sessionKey;
@@ -163,6 +187,7 @@ export class PendingCloudRecoveryState {
       message: this.message,
       attachments: this.attachments ? [...this.attachments] : undefined,
       profileId: this.profileId,
+      ...(this.machineClass ? { machineClass: this.machineClass } : {}),
       agentId: this.agentId,
       gatewayUrl: this.gatewayUrl,
       recoveryScope: this.recoveryScope,
@@ -179,6 +204,7 @@ export class PendingCloudRecoveryState {
     this.message = recovery.message;
     this.attachments = recovery.attachments;
     this.profileId = recovery.profileId;
+    this.machineClass = recovery.machineClass ?? "";
     this.agentId = recovery.agentId;
     this.gatewayUrl = recovery.gatewayUrl;
     this.recoveryScope = recovery.recoveryScope;

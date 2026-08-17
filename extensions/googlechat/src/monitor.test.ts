@@ -81,8 +81,8 @@ vi.mock("./monitor-routing.js", () => ({
 beforeEach(() => {
   apiMocks.deleteGoogleChatMessage.mockReset();
   apiMocks.downloadGoogleChatMedia.mockReset();
-  apiMocks.sendGoogleChatMessage.mockReset();
-  apiMocks.updateGoogleChatMessage.mockReset();
+  apiMocks.sendGoogleChatMessage.mockReset().mockResolvedValue(null);
+  apiMocks.updateGoogleChatMessage.mockReset().mockResolvedValue({});
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
   inboundMocks.buildEnvelope.mockReset().mockImplementation(({ body }: { body: string }) => body);
   inboundMocks.resolveChannelInboundRouteEnvelope

@@ -87,6 +87,131 @@ const flush = () =>
   });
 
 describe("ExtensionRelayBridge", () => {
+  it("retires an unresponsive extension and immediately fails pending CDP work", async () => {
+    vi.useFakeTimers();
+    const onStateChange = vi.fn();
+    const bridge = new ExtensionRelayBridge({ onStateChange });
+    try {
+      const { socket, handlers } = wireExtension(bridge);
+      sendHello(handlers);
+
+      const client = new FakeSocket();
+      const cdp = bridge.attachCdpClientSocket(client);
+      cdp.onMessage(
+        JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      const attached = client.frames().find((frame) => frame.method === "Target.attachedToTarget");
+      const sessionId = (attached?.params as { sessionId?: string } | undefined)?.sessionId;
+      expect(typeof sessionId).toBe("string");
+
+      socket.send = (data) => FakeSocket.prototype.send.call(socket, data);
+      await vi.advanceTimersByTimeAsync(50_000);
+      expect(socket.frames().filter((frame) => frame.type === "ping")).toHaveLength(2);
+
+      cdp.onMessage(JSON.stringify({ id: 2, sessionId, method: "Page.getFrameTree" }));
+      expect(socket.frames().at(-1)).toMatchObject({ type: "cdp", method: "Page.getFrameTree" });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(bridge.extensionConnected).toBe(true);
+      expect(client.frames().find((frame) => frame.id === 2)).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(socket).toMatchObject({
+        closed: true,
+        closeCode: 4000,
+        closeReason: "extension heartbeat timeout",
+      });
+      expect(bridge.extensionConnected).toBe(false);
+      expect(client.frames().find((frame) => frame.id === 2)).toMatchObject({
+        error: { message: "extension disconnected" },
+      });
+      expect(onStateChange).toHaveBeenCalledTimes(2);
+
+      handlers.onClose();
+      expect(onStateChange).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      bridge.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an extension alive when each heartbeat receives an immediate pong", async () => {
+    vi.useFakeTimers();
+    const bridge = new ExtensionRelayBridge();
+    try {
+      const { socket, handlers } = wireExtension(bridge);
+      const send = socket.send.bind(socket);
+      socket.send = (data) => {
+        send(data);
+        if ((JSON.parse(data) as { type: string }).type === "ping") {
+          handlers.onMessage(JSON.stringify({ type: "pong" }));
+        }
+      };
+      sendHello(handlers);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      expect(socket.frames().filter((frame) => frame.type === "ping")).toHaveLength(6);
+      expect(socket.closed).toBe(false);
+      expect(bridge.extensionConnected).toBe(true);
+    } finally {
+      bridge.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives a replacement extension its own heartbeat budget and ignores stale owners", async () => {
+    vi.useFakeTimers();
+    const bridge = new ExtensionRelayBridge();
+    try {
+      const previous = wireExtension(bridge);
+      sendHello(previous.handlers);
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      const replacement = wireExtension(bridge);
+      sendHello(replacement.handlers);
+      expect(previous.socket.closed).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(40_000);
+      previous.handlers.onMessage(JSON.stringify({ type: "pong" }));
+      previous.handlers.onClose();
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(replacement.socket.closed).toBe(false);
+      expect(bridge.extensionConnected).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(replacement.socket).toMatchObject({
+        closed: true,
+        closeCode: 4000,
+        closeReason: "extension heartbeat timeout",
+      });
+      expect(bridge.extensionConnected).toBe(false);
+    } finally {
+      bridge.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the extension heartbeat when its bridge is disposed", async () => {
+    vi.useFakeTimers();
+    const bridge = new ExtensionRelayBridge();
+    try {
+      const { socket, handlers } = wireExtension(bridge);
+      sendHello(handlers);
+      expect(vi.getTimerCount()).toBe(1);
+
+      bridge.dispose();
+
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(socket.frames().filter((frame) => frame.type === "ping")).toHaveLength(0);
+    } finally {
+      bridge.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("reports the paired browser identity through Browser.getVersion", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
@@ -105,7 +230,7 @@ describe("ExtensionRelayBridge", () => {
     });
   });
 
-  it("attaches shared tabs and announces targets on Target.setAutoAttach", async () => {
+  it("attaches accessible tabs and announces targets on Target.setAutoAttach", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
     sendHello(handlers);
@@ -162,7 +287,7 @@ describe("ExtensionRelayBridge", () => {
     expect(response?.result).toMatchObject({ ok: true });
   });
 
-  it("multiplexes Playwright page CDP sessions over the shared tab attachment", async () => {
+  it("multiplexes Playwright page CDP sessions over the accessible tab attachment", async () => {
     const bridge = new ExtensionRelayBridge();
     const { socket: extSocket, handlers } = wireExtension(bridge);
     sendHello(handlers);
@@ -330,7 +455,7 @@ describe("ExtensionRelayBridge", () => {
     },
   );
 
-  it("emits Target.detachedFromTarget when a shared tab leaves the group", async () => {
+  it("emits Target.detachedFromTarget when a tab becomes unavailable", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
     sendHello(handlers);
@@ -342,13 +467,13 @@ describe("ExtensionRelayBridge", () => {
     );
     await flush();
 
-    // Tab 1 removed from the shared set.
+    // Tab 1 removed from the accessible set.
     handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
     await flush();
 
     const detached = client.frames().find((frame) => frame.method === "Target.detachedFromTarget");
     expect(detached).toBeTruthy();
-    expect(bridge.sharedTabs()).toHaveLength(0);
+    expect(bridge.accessibleTabs()).toHaveLength(0);
   });
 
   it("rejects isolated browser contexts (real profile only)", async () => {
@@ -386,6 +511,53 @@ describe("ExtensionRelayBridge", () => {
     expect(bridge.extensionConnected).toBe(false);
   });
 
+  it("repairs reconnect attach without undoing a later explicit detach", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const initialSocket = new FakeSocket();
+    const initial = bridge.attachExtensionSocket(initialSocket);
+    sendHello(initial);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    expect(initialSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
+
+    const replacement = wireExtension(bridge);
+    sendHello(replacement.handlers);
+    await flush();
+
+    expect(replacement.socket.frames().filter((frame) => frame.type === "attach")).toEqual([
+      expect.objectContaining({ tabId: 1 }),
+    ]);
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.getTargets" }));
+    await flush();
+    expect(client.frames().find((frame) => frame.id === 2)?.result).toMatchObject({
+      targetInfos: [expect.objectContaining({ targetId: "target-1" })],
+    });
+
+    const attached = client
+      .frames()
+      .findLast((frame) => frame.method === "Target.attachedToTarget");
+    const sessionId = (attached?.params as { sessionId?: string } | undefined)?.sessionId;
+    expect(typeof sessionId).toBe("string");
+    cdp.onMessage(
+      JSON.stringify({ id: 3, method: "Target.detachFromTarget", params: { sessionId } }),
+    );
+    await flush();
+    const afterDetach = wireExtension(bridge);
+    sendHello(afterDetach.handlers, [
+      { tabId: 1, url: "https://example.com", title: "Updated", active: true },
+    ]);
+    await flush();
+
+    expect(afterDetach.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(0);
+    cdp.onMessage(JSON.stringify({ id: 4, method: "Target.getTargets" }));
+    await flush();
+    expect(client.frames().find((frame) => frame.id === 4)?.result).toEqual({ targetInfos: [] });
+  });
+
   it("reports malformed CDP client JSON instead of leaving the client waiting", () => {
     const bridge = new ExtensionRelayBridge();
     const client = new FakeSocket();
@@ -414,7 +586,7 @@ describe("ExtensionRelayBridge", () => {
     ]);
   });
 
-  it("reaps child sessions when a tab leaves the group (no stale routing)", async () => {
+  it("reaps child sessions when a tab becomes unavailable (no stale routing)", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
     sendHello(handlers);
@@ -438,7 +610,7 @@ describe("ExtensionRelayBridge", () => {
     );
     await flush();
 
-    // Tab 1 leaves the OpenClaw group.
+    // Tab 1 disappears from the extension's accessible set.
     handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
     await flush();
 
@@ -448,123 +620,6 @@ describe("ExtensionRelayBridge", () => {
     await flush();
     const response = client.frames().find((frame) => frame.id === 2);
     expect(response?.error).toBeTruthy();
-  });
-
-  it("delivers a valid page share and acknowledges success", async () => {
-    const onPageShare = vi.fn(async () => undefined);
-    const bridge = new ExtensionRelayBridge({ onPageShare });
-    const { socket, handlers } = wireExtension(bridge);
-    sendHello(handlers);
-    const payload = {
-      url: "https://example.com/article",
-      title: "Example",
-      content: "Article body",
-    };
-
-    handlers.onMessage(JSON.stringify({ type: "pageShare", requestId: 41, payload }));
-    await flush();
-
-    expect(onPageShare).toHaveBeenCalledWith(payload);
-    expect(socket.frames()).toContainEqual({
-      type: "pageShareResult",
-      requestId: 41,
-      ok: true,
-    });
-  });
-
-  it("returns the delivery error when the page-share handler rejects", async () => {
-    const bridge = new ExtensionRelayBridge({
-      onPageShare: async () => {
-        throw new Error("queue unavailable");
-      },
-    });
-    const { socket, handlers } = wireExtension(bridge);
-    sendHello(handlers);
-
-    handlers.onMessage(
-      JSON.stringify({
-        type: "pageShare",
-        requestId: 42,
-        payload: { url: "https://example.com", title: "Example", content: "Body" },
-      }),
-    );
-    await flush();
-
-    expect(socket.frames()).toContainEqual({
-      type: "pageShareResult",
-      requestId: 42,
-      ok: false,
-      error: "queue unavailable",
-    });
-  });
-
-  it("explains that page shares require a gateway-hosted relay", async () => {
-    const bridge = new ExtensionRelayBridge();
-    const { socket, handlers } = wireExtension(bridge);
-    sendHello(handlers);
-
-    handlers.onMessage(
-      JSON.stringify({
-        type: "pageShare",
-        requestId: 43,
-        payload: { url: "https://example.com", title: "Example", content: "Body" },
-      }),
-    );
-    await flush();
-
-    expect(socket.frames()).toContainEqual({
-      type: "pageShareResult",
-      requestId: 43,
-      ok: false,
-      error:
-        "Send to OpenClaw needs the extension relay hosted by the Gateway (pair on the Gateway host or use direct Gateway pairing). Node-hosted relays are not supported yet.",
-    });
-  });
-
-  it("rejects invalid and oversized page-share payloads before delivery", async () => {
-    const onPageShare = vi.fn(async () => undefined);
-    const bridge = new ExtensionRelayBridge({ onPageShare });
-    const { socket, handlers } = wireExtension(bridge);
-    sendHello(handlers);
-
-    handlers.onMessage(
-      JSON.stringify({
-        type: "pageShare",
-        requestId: 44,
-        payload: { url: "https://example.com", title: 7, content: "Body" },
-      }),
-    );
-    handlers.onMessage(
-      JSON.stringify({
-        type: "pageShare",
-        requestId: 45,
-        payload: {
-          url: "https://example.com",
-          title: "Example",
-          content: "c".repeat(200_000),
-          selection: "s".repeat(100_001),
-        },
-      }),
-    );
-    await flush();
-
-    expect(onPageShare).not.toHaveBeenCalled();
-    expect(socket.frames()).toEqual(
-      expect.arrayContaining([
-        {
-          type: "pageShareResult",
-          requestId: 44,
-          ok: false,
-          error: "Invalid page-share payload.",
-        },
-        {
-          type: "pageShareResult",
-          requestId: 45,
-          ok: false,
-          error: "Invalid page-share payload.",
-        },
-      ]),
-    );
   });
 
   it("requires a hello frame before other extension messages", () => {
@@ -627,13 +682,13 @@ describe("ExtensionRelayBridge", () => {
       closeReason: "replaced by newer extension connection",
     });
     expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
-    expect(bridge.sharedTabs()).toEqual([
+    expect(bridge.accessibleTabs()).toEqual([
       { tabId: 2, url: "https://candidate.example", title: "Candidate", active: true },
     ]);
 
     active.handlers.onClose();
     expect(bridge.extensionConnected).toBe(true);
-    expect(bridge.sharedTabs()).toHaveLength(1);
+    expect(bridge.accessibleTabs()).toHaveLength(1);
   });
 
   it("rejects an older candidate when a newer candidate promotes first", () => {
@@ -718,7 +773,7 @@ describe("ExtensionRelayBridge", () => {
     expect(contexts?.result).toEqual({ browserContextIds: [] });
   });
 
-  it("lists shared tabs as DevTools-style target descriptors", async () => {
+  it("lists accessible tabs as DevTools-style target descriptors", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
     sendHello(handlers);

@@ -1,14 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import "../../components/tooltip.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildUsageCostWindows,
   buildUsageCostWindowSummary,
@@ -602,8 +602,7 @@ function renderUsageInsights(
       : t("usage.common.emptyValue");
   const avgDurationLabel =
     stats.durationCount > 0
-      ? (formatDurationCompact(stats.avgDurationMs, { spaced: true }) ??
-        t("usage.common.emptyValue"))
+      ? (formatDurationCompact(stats.avgDurationMs) ?? t("usage.common.emptyValue"))
       : t("usage.common.emptyValue");
   const errorDays = aggregates.daily
     .filter((day) => day.messages > 0 && day.errors > 0)
@@ -824,7 +823,7 @@ function renderSessionsCard(
         `errors:${session.usage.messageCounts.errors}`,
       showColumn("duration") &&
         session.usage?.durationMs &&
-        `dur:${formatDurationCompact(session.usage.durationMs, { spaced: true }) ?? "—"}`,
+        `dur:${formatDurationCompact(session.usage.durationMs) ?? "—"}`,
     ].filter((part): part is string => typeof part === "string" && part.length > 0);
 
   const selectedDaySet = new Set(selectedDays);

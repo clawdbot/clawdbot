@@ -1,3 +1,4 @@
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CodexAppServerApprovalPolicySource,
   CodexAppServerCommandSource,
@@ -53,7 +54,6 @@ import {
   normalizeCodexServiceTier,
   normalizeHeaders,
   normalizePositiveNumber,
-  normalizeStringList,
   readBooleanEnv,
   readNonEmptyString,
   readNumberEnv,
@@ -107,6 +107,11 @@ export function resolveCodexAppServerRuntimeOptions(
   const config = pluginConfig.appServer ?? {};
   const transport = resolveTransport(config.transport);
   const homeScope = resolveCodexAppServerHomeScope({ appServer: config });
+  if (transport !== "stdio" && pluginConfig.sessionCatalog?.homes?.length) {
+    throw new Error(
+      "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
+    );
+  }
   const configCommand = readNonEmptyString(config.command);
   const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
   const command = configCommand ?? envCommand ?? "codex";
@@ -120,7 +125,7 @@ export function resolveCodexAppServerRuntimeOptions(
   }
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
-  const clearEnv = normalizeStringList(config.clearEnv);
+  const clearEnv = normalizeTrimmedStringList(config.clearEnv);
   const authToken = normalizeCodexAppServerSecretInput({
     value: config.authToken,
     path: "plugins.entries.codex.config.appServer.authToken",

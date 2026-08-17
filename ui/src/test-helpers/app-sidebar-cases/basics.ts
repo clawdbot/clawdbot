@@ -18,6 +18,7 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { installDialogPolyfill, nextFrame, waitForRenderedModalDialog } from "../modal-dialog.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
@@ -28,6 +29,7 @@ describe("AppSidebar update card wiring", () => {
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
 
     expect(sidebar.querySelector('.nav-item[href="/custodian"]')).toBeNull();
+    expect(sidebar.querySelector('.nav-item[href="/settings/secrets"]')).toBeNull();
   });
 
   it("renders the update card in the footer after the attention slot and forwards its action", async () => {
@@ -50,7 +52,14 @@ describe("AppSidebar update card wiring", () => {
     expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-attention");
     const card = footer?.querySelector("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
+    const restoreDialogPolyfill = installDialogPolyfill();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    [...modal.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Update and restart")
+      ?.click();
+    await nextFrame();
+    restoreDialogPolyfill();
     expect(onUpdate).toHaveBeenCalledOnce();
 
     sidebar.refreshRequired = true;
@@ -471,17 +480,14 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).toContain(
       "Working",
     );
-    // Run state rings the Home icon in the leading slot; the row edge keeps
-    // only approval/outbox counts.
-    const ring = sidebar.querySelector(
-      ".nav-item--home .session-glyph--running .session-glyph__ring",
-    );
-    expect(ring).not.toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .nav-item__state")).toBeNull();
-    expect(ring?.hasAttribute("title")).toBe(false);
-    expect(
-      (ring?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
-    ).toBe("Active run");
+    // Run state uses the session spinner at the row edge without changing the Home icon.
+    const spinner = sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner");
+    expect(spinner).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(spinner?.getAttribute("role")).toBe("img");
+    expect(spinner?.getAttribute("aria-label")).toBe("Active run");
+    expect(spinner?.getAttribute("title")).toBe("Active run");
   });
 
   it("uses the shared tooltip for the Home dashboard glyph", async () => {

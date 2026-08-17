@@ -197,11 +197,38 @@ describe("terminal gateway policy", () => {
     expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
   });
 
+  it("reports a missing explicit owner as invalid request", async () => {
+    const { opts, sessions, respond, resolveTerminalLaunchPolicy } = makeOpts(
+      { cols: 80, rows: 24 },
+      { enabled: true },
+    );
+    resolveTerminalLaunchPolicy.mockReturnValue({
+      ok: false,
+      block: { kind: "owner-required", message: "terminal requires an explicit owner" },
+    });
+
+    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+
+    expect(sessions.open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "terminal requires an explicit owner",
+      }),
+    );
+  });
+
   it("opens a provider-built local resume plan and returns its title", async () => {
     const openTerminal = vi.fn(async () => ({
       kind: "local" as const,
       argv: ["codex", "resume", "thread"],
-      env: { CODEX_HOME: "/agent/codex-home" },
+      env: {
+        CODEX_HOME: "/agent/codex-home",
+        ComSpec: "C:\\Windows\\System32\\ambient-cmd.exe",
+        COMSPEC: "C:\\Windows\\System32\\configured-cmd.exe",
+      },
       pathEnv: "/login-shell/bin:/usr/bin",
       title: "codex resume thread",
     }));
@@ -226,17 +253,31 @@ describe("terminal gateway policy", () => {
     );
     await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
 
-    expect(openTerminal).toHaveBeenCalledWith({ hostId: "gateway:local", threadId: "thread" });
+    expect(openTerminal).toHaveBeenCalledWith({
+      agentId: "main",
+      allowProcessHomeFallback: false,
+      hostId: "gateway:local",
+      threadId: "thread",
+    });
     expect(sessions.open).toHaveBeenCalledWith(
       expect.objectContaining({
         shell: expect.any(String),
-        args: ["-il", "-c", "'codex' 'resume' 'thread'"],
+        args:
+          process.platform === "win32"
+            ? ["resume", "thread"]
+            : ["-il", "-c", "'codex' 'resume' 'thread'"],
         env: expect.objectContaining({
           CODEX_HOME: "/agent/codex-home",
           PATH: "/login-shell/bin:/usr/bin",
         }),
       }),
     );
+    if (process.platform === "win32") {
+      const terminalEnv = sessions.open.mock.calls[0]?.[0] as { env: Record<string, string> };
+      expect(
+        Object.entries(terminalEnv.env).filter(([key]) => key.toUpperCase() === "COMSPEC"),
+      ).toEqual([["COMSPEC", "C:\\Windows\\System32\\configured-cmd.exe"]]);
+    }
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ sessionId: "terminal-1", title: "codex resume thread" }),
@@ -486,7 +527,10 @@ describe("terminal gateway policy", () => {
     await opening;
 
     expect(sessions.open).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: process.cwd(), shell: "/bin/refreshed" }),
+      expect.objectContaining({
+        cwd: process.cwd(),
+        shell: process.platform === "win32" ? "codex" : "/bin/refreshed",
+      }),
     );
   });
 
@@ -844,23 +888,5 @@ describe("terminal gateway policy", () => {
       timeoutMs: 120_000,
     });
     expect(result).toEqual({ path: "/tmp/node/report.pdf", size: 4 });
-  });
-
-  it("sanitizes terminal snapshots before returning plain text", async () => {
-    const { opts, sessions, respond } = makeOpts({ sessionId: "s1" }, { enabled: true });
-    const finals = Array.from({ length: 0x7e - 0x40 + 1 }, (_, offset) =>
-      String.fromCharCode(0x40 + offset),
-    );
-    const sequences = ["\u001B[", "\u009B"]
-      .flatMap((introducer) => finals.map((finalByte) => introducer + finalByte))
-      .join("");
-    sessions.snapshot.mockReturnValue(`before${sequences}after`);
-
-    await expectDefined(
-      terminalHandlers["terminal.text"],
-      'terminalHandlers["terminal.text"] test invariant',
-    )(opts);
-
-    expect(respond).toHaveBeenCalledWith(true, { text: "beforeafter" });
   });
 });

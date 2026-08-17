@@ -17,7 +17,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
@@ -40,7 +43,7 @@ import {
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
-import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
+import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -148,7 +151,7 @@ async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string |
   if (!raw) {
     return null;
   }
-  return await resolveNodeId(opts as NodesRpcOpts, raw);
+  return await resolveCliNodeId(opts as NodesRpcOpts, raw);
 }
 
 async function loadSnapshot(
@@ -299,8 +302,6 @@ async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
 }
 
 function exitWithError(message: string): never {
-  defaultRuntime.error(message);
-  defaultRuntime.exit(1);
   throw new Error(message);
 }
 
@@ -377,6 +378,15 @@ function formatCliError(err: unknown): string {
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
   const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
   return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
+}
+
+function failApprovalsCommand(err: unknown, opts: ExecApprovalsCliOpts): void {
+  const message = formatCliError(err);
+  if (opts.json) {
+    throw new Error(message);
+  }
+  defaultRuntime.error(message);
+  defaultRuntime.exit(1);
 }
 
 function isApprovalDecision(value: string): value is ApprovalDecision {
@@ -534,7 +544,7 @@ function renderPendingApprovals(entries: PendingApprovalCliEntry[]): void {
   const now = Date.now();
   defaultRuntime.log(`${theme.heading("Pending approvals")} ${theme.muted(`(${entries.length})`)}`);
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "ID", header: "ID", minWidth: 16, flex: true },
@@ -827,7 +837,7 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
     Notes: `${summary.security.note}; ${summary.ask.note}`,
   }));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "Scope", header: "Scope", minWidth: 12 },
@@ -901,7 +911,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
 
   defaultRuntime.log(heading("Approvals"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: tableWidth,
       columns: [
         { key: "Field", header: "Field", minWidth: 8 },
@@ -920,7 +930,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   defaultRuntime.log("");
   defaultRuntime.log(heading("Allowlist"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: tableWidth,
       columns: [
         { key: "Target", header: "Target", minWidth: 10 },
@@ -951,7 +961,7 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
   ];
   defaultRuntime.log(heading("Approvals"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "Field", header: "Field", minWidth: 8 },
@@ -968,7 +978,7 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
   defaultRuntime.log("");
   defaultRuntime.log(heading("Rules"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
@@ -1079,8 +1089,7 @@ async function runAllowlistMutation(
       targetLabel: context.targetLabel,
     });
   } catch (err) {
-    defaultRuntime.error(formatCliError(err));
-    defaultRuntime.exit(1);
+    failApprovalsCommand(err, opts);
   }
 }
 
@@ -1129,8 +1138,7 @@ export function registerExecApprovalsCli(program: Command) {
         }
         renderPendingApprovals(entries);
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(pendingCmd);
@@ -1143,8 +1151,7 @@ export function registerExecApprovalsCli(program: Command) {
       try {
         await resolvePendingApproval(id, decision, opts);
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(resolveCmd);
@@ -1184,8 +1191,7 @@ export function registerExecApprovalsCli(program: Command) {
         renderApprovalsSnapshot(snapshot, targetLabel);
         renderEffectivePolicy({ report: effectivePolicy });
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(getCmd, { timeoutMs: APPROVALS_GET_DEFAULT_TIMEOUT_MS });
@@ -1233,8 +1239,7 @@ export function registerExecApprovalsCli(program: Command) {
         file.version = 1;
         await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(setCmd);

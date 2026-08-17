@@ -243,10 +243,17 @@ export const ApprovalHistoryResultSchema = closedObject({
 });
 
 /** Reviewer decision for one approval identified by its exact full id. */
+export const ApprovalChannelReviewerSchema = closedObject({
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+  senderId: NonEmptyString,
+});
+
 export const ApprovalResolveParamsSchema = closedObject({
   id: ApprovalRecordCommonFields.id,
   kind: ApprovalKindSchema,
   decision: ApprovalDecisionSchema,
+  reviewer: Type.Optional(ApprovalChannelReviewerSchema),
 });
 
 /** First-answer outcome plus the canonical recorded state returned to all contenders. */
@@ -315,6 +322,7 @@ export type ApprovalGetParams = Static<typeof ApprovalGetParamsSchema>;
 export type ApprovalGetResult = Static<typeof ApprovalGetResultSchema>;
 export type ApprovalHistoryParams = Static<typeof ApprovalHistoryParamsSchema>;
 export type ApprovalHistoryResult = Static<typeof ApprovalHistoryResultSchema>;
+export type ApprovalChannelReviewer = Static<typeof ApprovalChannelReviewerSchema>;
 export type ApprovalResolveParams = Static<typeof ApprovalResolveParamsSchema>;
 export type ApprovalResolveResult = Static<typeof ApprovalResolveResultSchema>;
 export type AllowedApprovalSnapshot = Static<typeof AllowedApprovalSnapshotSchema>;

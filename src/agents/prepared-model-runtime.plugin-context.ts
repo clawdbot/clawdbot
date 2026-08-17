@@ -1,6 +1,9 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  projectPluginMetadataSnapshotWorkspace,
+  resolvePluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -59,11 +62,22 @@ export function prepareOwnedPluginLoadContext(
   env: NodeJS.ProcessEnv,
   registry: PluginRegistry | undefined,
 ): PluginMetadataSnapshot {
-  const metadataSnapshot = resolvePluginMetadataSnapshot({
+  const resolvedMetadataSnapshot = resolvePluginMetadataSnapshot({
     config: input.config,
     env,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    ...(input.workspacePluginRootPresent === undefined
+      ? {}
+      : { workspacePluginRootPresent: input.workspacePluginRootPresent }),
   });
+  const metadataSnapshot = input.workspaceDir
+    ? projectPluginMetadataSnapshotWorkspace({
+        snapshot: resolvedMetadataSnapshot,
+        config: input.config,
+        env,
+        workspaceDir: input.workspaceDir,
+      })
+    : resolvedMetadataSnapshot;
   preparePluginLoadContext(input, env, registry, metadataSnapshot);
   return metadataSnapshot;
 }

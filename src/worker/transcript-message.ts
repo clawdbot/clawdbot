@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core";
 import type {
   WorkerTranscriptCommitRequestFrame,
   WorkerTranscriptMessage,
@@ -7,16 +8,28 @@ import {
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
 
 const SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
 type WorkerTranscriptAssistantMessage = Extract<WorkerTranscriptMessage, { role: "assistant" }>;
-export type WorkerProviderReplayOmission = {
+export type WorkerProviderReplayUnavailable = {
   bytes: number;
   limitBytes: number;
   reason: "provider-replay-data-budget" | "transcript-commit-frame-budget";
 };
+type WorkerProviderReplayUnavailableProjection = {
+  kind: "provider-replay-unavailable";
+  details: WorkerProviderReplayUnavailable;
+};
+export type WorkerMessageProjection<T> =
+  | { kind: "complete"; message: T }
+  | WorkerProviderReplayUnavailableProjection;
+type WorkerMessageProjectionPurpose = "inference" | "transcript";
+export const WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE =
+  "Cloud worker could not preserve authoritative provider replay. " +
+  "Stop or reclaim the cloud worker, then retry locally.";
 
 export function cloneTextContent(part: { type: "text"; text: string; textSignature?: string }) {
   return {
@@ -28,6 +41,12 @@ export function cloneTextContent(part: { type: "text"; text: string; textSignatu
 
 export function cloneImageContent(part: { type: "image"; data: string; mimeType: string }) {
   return { type: "image" as const, data: part.data, mimeType: part.mimeType };
+}
+
+function providerReplayUnavailable(
+  details: WorkerProviderReplayUnavailable,
+): WorkerProviderReplayUnavailableProjection {
+  return { kind: "provider-replay-unavailable", details };
 }
 
 function cloneProviderReplay(state: ProviderReplayState): ProviderReplayState {
@@ -43,6 +62,31 @@ function cloneProviderReplay(state: ProviderReplayState): ProviderReplayState {
     ...(state.baseUrlHash === undefined ? {} : { baseUrlHash: state.baseUrlHash }),
     ...(state.sessionHash === undefined ? {} : { sessionHash: state.sessionHash }),
     ...(state.authProfileHash === undefined ? {} : { authProfileHash: state.authProfileHash }),
+  };
+}
+
+function redactWorkerDiagnosticText(value: string): string {
+  const redacted = redactAgentDiagnosticPayload(value);
+  return typeof redacted === "string" ? redacted : "[unreadable diagnostic text]";
+}
+
+function projectWorkerDiagnostic(diagnostic: NonNullable<AssistantMessage["diagnostics"]>[number]) {
+  const details = asOptionalRecord(redactAgentDiagnosticPayload(diagnostic.details));
+  const error = diagnostic.error;
+  return {
+    type: diagnostic.type,
+    timestamp: diagnostic.timestamp,
+    ...(error
+      ? {
+          error: {
+            message: redactWorkerDiagnosticText(error.message),
+            ...(error.name ? { name: redactWorkerDiagnosticText(error.name) } : {}),
+            ...(error.stack ? { stack: redactWorkerDiagnosticText(error.stack) } : {}),
+            ...(error.code === undefined ? {} : { code: error.code }),
+          },
+        }
+      : {}),
+    ...(details ? { details } : {}),
   };
 }
 
@@ -70,41 +114,39 @@ export function projectWorkerProviderReplay<
 >(params: {
   message: TMessage;
   providerReplay: ProviderReplayState | undefined;
-  onOmitted?: (omission: WorkerProviderReplayOmission) => void;
-}): TMessage {
+  purpose: WorkerMessageProjectionPurpose;
+}): WorkerMessageProjection<TMessage> {
   if (!params.providerReplay) {
-    return params.message;
+    return { kind: "complete", message: params.message };
   }
   const dataBytes = Buffer.byteLength(params.providerReplay.data, "utf8");
   if (dataBytes > WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES) {
-    params.onOmitted?.({
+    return providerReplayUnavailable({
       bytes: dataBytes,
       limitBytes: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
       reason: "provider-replay-data-budget",
     });
-    return params.message;
   }
   const candidate = {
     ...params.message,
     providerReplay: cloneProviderReplay(params.providerReplay),
   };
+  if (params.purpose === "inference") {
+    return { kind: "complete", message: candidate };
+  }
   const frameBytes = workerTranscriptMessageFrameBytes(candidate);
   if (frameBytes === undefined || frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
-    params.onOmitted?.({
+    return providerReplayUnavailable({
       bytes: frameBytes ?? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1,
       limitBytes: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
       reason: "transcript-commit-frame-budget",
     });
-    return params.message;
   }
-  return candidate;
+  return { kind: "complete", message: candidate };
 }
 
-export function cloneUsage(
-  message: AssistantMessage,
-  onProviderReplayOmitted?: (omission: WorkerProviderReplayOmission) => void,
-): WorkerTranscriptMessage & { role: "assistant" } {
-  const projected: WorkerTranscriptAssistantMessage = {
+function toWorkerAssistantMessage(message: AssistantMessage): WorkerTranscriptAssistantMessage {
+  return {
     role: "assistant",
     content: message.content.map((part) => {
       if (part.type === "text") {
@@ -133,23 +175,7 @@ export function cloneUsage(
     ...(message.responseModel ? { responseModel: message.responseModel } : {}),
     ...(message.responseId ? { responseId: message.responseId } : {}),
     ...(message.diagnostics
-      ? {
-          diagnostics: message.diagnostics.map((diagnostic) => ({
-            type: diagnostic.type,
-            timestamp: diagnostic.timestamp,
-            ...(diagnostic.error
-              ? {
-                  error: {
-                    ...(diagnostic.error.name ? { name: diagnostic.error.name } : {}),
-                    message: diagnostic.error.message,
-                    ...(diagnostic.error.stack ? { stack: diagnostic.error.stack } : {}),
-                    ...(diagnostic.error.code === undefined ? {} : { code: diagnostic.error.code }),
-                  },
-                }
-              : {}),
-            ...(diagnostic.details ? { details: structuredClone(diagnostic.details) } : {}),
-          })),
-        }
+      ? { diagnostics: message.diagnostics.map(projectWorkerDiagnostic) }
       : {}),
     usage: {
       input: message.usage.input,
@@ -170,25 +196,20 @@ export function cloneUsage(
       },
     },
     stopReason: message.stopReason,
-    ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
+    ...(message.errorMessage
+      ? { errorMessage: redactWorkerDiagnosticText(message.errorMessage) }
+      : {}),
     ...(message.errorCode ? { errorCode: message.errorCode } : {}),
     ...(message.errorType ? { errorType: message.errorType } : {}),
-    ...(message.errorBody ? { errorBody: message.errorBody } : {}),
+    ...(message.errorBody ? { errorBody: redactWorkerDiagnosticText(message.errorBody) } : {}),
     timestamp: message.timestamp,
   };
-  return projectWorkerProviderReplay({
-    message: projected,
-    providerReplay: message.providerReplay,
-    onOmitted: onProviderReplayOmitted,
-  });
 }
 
 export function toWorkerTranscriptMessage(
   message: AgentMessage,
-  options?: {
-    onProviderReplayOmitted?: (omission: WorkerProviderReplayOmission) => void;
-  },
-): WorkerTranscriptMessage | undefined {
+  purpose: WorkerMessageProjectionPurpose,
+): WorkerMessageProjection<WorkerTranscriptMessage> | undefined {
   if (message.role === "user") {
     const content =
       typeof message.content === "string"
@@ -196,22 +217,31 @@ export function toWorkerTranscriptMessage(
         : message.content.map((part) =>
             part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
           );
-    return { role: "user", content, timestamp: message.timestamp };
+    return { kind: "complete", message: { role: "user", content, timestamp: message.timestamp } };
   }
   if (message.role === "assistant") {
-    return cloneUsage(message, options?.onProviderReplayOmitted);
+    return projectWorkerProviderReplay({
+      message: toWorkerAssistantMessage(message),
+      providerReplay: message.providerReplay,
+      purpose,
+    });
   }
   if (message.role === "toolResult") {
     return {
-      role: "toolResult",
-      toolCallId: message.toolCallId,
-      toolName: message.toolName,
-      content: message.content.map((part) =>
-        part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-      ),
-      ...(message.details === undefined ? {} : { details: structuredClone(message.details) }),
-      isError: message.isError,
-      timestamp: message.timestamp,
+      kind: "complete",
+      message: {
+        role: "toolResult",
+        toolCallId: message.toolCallId,
+        toolName: message.toolName,
+        content: message.content.map((part) =>
+          part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
+        ),
+        ...(message.details === undefined
+          ? {}
+          : { details: redactAgentDiagnosticPayload(message.details) }),
+        isError: message.isError,
+        timestamp: message.timestamp,
+      },
     };
   }
   return undefined;

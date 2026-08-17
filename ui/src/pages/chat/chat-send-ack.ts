@@ -1,6 +1,7 @@
 // Leaf contract for chat.send acknowledgment shapes and timing records.
 // Kept import-free of chat-page modules so lifecycle/steer/history layers
 // can consume ack types without forming import cycles.
+import { asNonNegativeFiniteNumber as normalizeAckTimingValue } from "@openclaw/normalization-core/number-coercion";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 
 type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
@@ -16,10 +17,6 @@ export type ChatSendAck = {
   status: ChatSendAckStatus;
   serverTiming?: ChatSendAckServerTiming;
 };
-
-function normalizeAckTimingValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
 
 function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTiming | undefined {
   if (!value || typeof value !== "object") {

@@ -78,26 +78,28 @@ describe("Control UI Vite config", () => {
     expect(readGitCommitTimestamp).toHaveBeenCalledWith("0123456789abcdef0123456789abcdef01234567");
   });
 
-  it("falls back to Git and the current UTC time only when inputs are absent", () => {
-    expect(
-      resolveControlUiBuildInfo({
-        env: {},
-        now: () => new Date("2026-07-10T13:14:15.000Z"),
-        readGitCommit: () => "a".repeat(40),
-        readGitCommitTimestamp: () => null,
-        readGitBranch: () => null,
-        readGitDirty: () => null,
-        readPackageVersion: () => null,
-      }),
-    ).toEqual({
+  it("keeps source-build identity stable when no build timestamp is provided", () => {
+    const sources = {
+      env: {},
+      readGitCommit: () => "a".repeat(40),
+      readGitCommitTimestamp: () => null,
+      readGitBranch: () => null,
+      readGitDirty: () => null,
+      readPackageVersion: () => null,
+    };
+    const first = resolveControlUiBuildInfo(sources);
+    const second = resolveControlUiBuildInfo(sources);
+
+    expect(first).toEqual(second);
+    expect(first).toEqual({
       version: null,
       commit: "a".repeat(40),
       commitAt: null,
-      builtAt: "2026-07-10T13:14:15.000Z",
+      builtAt: null,
       branch: null,
       dirty: null,
       release: false,
-      buildId: "aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
+      buildId: "aaaaaaaaaaaa",
     });
   });
 
@@ -182,7 +184,6 @@ describe("Control UI Vite config", () => {
     expect(
       resolveControlUiBuildInfo({
         env: { GITHUB_SHA: "b".repeat(40) },
-        now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit,
         readPackageVersion: () => null,
       }),
@@ -191,7 +192,6 @@ describe("Control UI Vite config", () => {
     expect(
       resolveControlUiBuildInfo({
         env: { GITHUB_SHA: "b".repeat(40) },
-        now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit: () => null,
         readPackageVersion: () => null,
       }).commit,
@@ -210,7 +210,6 @@ describe("Control UI Vite config", () => {
     expect(
       resolveControlUiBuildInfo({
         env: { GIT_SHA: "A".repeat(40), GITHUB_SHA: "b".repeat(40) },
-        now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit,
         readPackageVersion: () => null,
       }).commit,
@@ -351,6 +350,12 @@ describe("Control UI Vite config", () => {
   it("resolves Control UI dev-server source aliases for internal packages", () => {
     const aliases = resolveSourcePackageAliasesForVite();
     expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/agent-id"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/agent-id",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/agent-id.ts"),
+    });
+    expect(
       aliases.find((alias) => alias.find === "@openclaw/normalization-core/json-schema"),
     )?.toEqual({
       find: "@openclaw/normalization-core/json-schema",
@@ -454,6 +459,7 @@ describe("Control UI Vite config", () => {
     }
     const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
     expect(catalog.common.health).toBe("Santé");
+    expect(catalog.activity.title).toBeTypeOf("string");
     expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl"));
   });
 });

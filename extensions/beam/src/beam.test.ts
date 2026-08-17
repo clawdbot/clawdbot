@@ -24,6 +24,7 @@ function sampleUpload(overrides: Record<string, unknown> = {}): BeamUploadFixtur
 }
 
 const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] });
+const mainControlUiTarget = () => ({ agentId: "main" });
 
 function memoryStore(): BeamStore & { values: Map<string, BeamStoredSession> } {
   const values = new Map<string, BeamStoredSession>();
@@ -138,7 +139,12 @@ describe("Beam receiver", () => {
     const store = memoryStore();
     let now = 100;
     const endpoint = await serve(
-      createBeamRequestHandler({ store, now: () => now, resolveClient: writeClient }),
+      createBeamRequestHandler({
+        store,
+        now: () => now,
+        resolveClient: writeClient,
+        resolveControlUiTarget: mainControlUiTarget,
+      }),
     );
     const first = await fetch(endpoint, {
       method: "POST",
@@ -149,7 +155,7 @@ describe("Beam receiver", () => {
     expect(await first.json()).toEqual({
       ok: true,
       beamId: "0123456789abcdef0123456789abcdef",
-      url: "/chat?session=catalog%3Abeam%3Agateway%3A0123456789abcdef0123456789abcdef",
+      url: "/chat/main?catalog=beam&host=gateway&thread=0123456789abcdef0123456789abcdef",
     });
     expect(store.values.get("0123456789abcdef0123456789abcdef")).toMatchObject({
       createdAt: 100,
@@ -169,13 +175,16 @@ describe("Beam receiver", () => {
     });
   });
 
-  it("returns a catalog URL beneath the configured Control UI base path", async () => {
+  it("returns a catalog URL beneath a nested base path for the configured default agent", async () => {
     const store = memoryStore();
     const endpoint = await serve(
       createBeamRequestHandler({
         store,
         resolveClient: writeClient,
-        resolveControlUiBasePath: () => "/openclaw/",
+        resolveControlUiTarget: () => ({
+          agentId: "research",
+          basePath: "/admin/openclaw/",
+        }),
       }),
     );
     const response = await fetch(endpoint, {
@@ -188,7 +197,7 @@ describe("Beam receiver", () => {
     expect(await response.json()).toEqual({
       ok: true,
       beamId: "0123456789abcdef0123456789abcdef",
-      url: "/openclaw/chat?session=catalog%3Abeam%3Agateway%3A0123456789abcdef0123456789abcdef",
+      url: "/admin/openclaw/chat/research?catalog=beam&host=gateway&thread=0123456789abcdef0123456789abcdef",
     });
   });
 
@@ -198,6 +207,7 @@ describe("Beam receiver", () => {
       createBeamRequestHandler({
         store,
         resolveClient: () => ({ clientIp: "127.0.0.1", scopes: ["operator.read"] }),
+        resolveControlUiTarget: mainControlUiTarget,
       }),
     );
     const response = await fetch(endpoint, {
@@ -213,7 +223,13 @@ describe("Beam receiver", () => {
 
   it("rejects method, media type, malformed JSON, and oversized bodies", async () => {
     const store = memoryStore();
-    const endpoint = await serve(createBeamRequestHandler({ store, resolveClient: writeClient }));
+    const endpoint = await serve(
+      createBeamRequestHandler({
+        store,
+        resolveClient: writeClient,
+        resolveControlUiTarget: mainControlUiTarget,
+      }),
+    );
     expect((await fetch(endpoint)).status).toBe(405);
     expect(
       (
@@ -264,7 +280,7 @@ describe("Beam session catalog", () => {
     });
     const catalog = createBeamSessionCatalog(store);
 
-    const [host] = await catalog.list({ limitPerHost: 1 });
+    const [host] = await catalog.list({ agentId: "main", limitPerHost: 1 });
     expect(host).toBeDefined();
     if (!host) {
       throw new Error("Beam catalog did not return its gateway host");
@@ -280,6 +296,7 @@ describe("Beam session catalog", () => {
     expect(host.nextCursor).toBe("1");
 
     const transcript = await catalog.read({
+      agentId: "main",
       hostId: "gateway",
       threadId: "0123456789abcdef0123456789abcdef",
       limit: 1,
@@ -291,6 +308,7 @@ describe("Beam session catalog", () => {
     expect(transcript.nextCursor).toEqual(expect.any(String));
 
     const older = await catalog.read({
+      agentId: "main",
       hostId: "gateway",
       threadId: "0123456789abcdef0123456789abcdef",
       limit: 1,
@@ -316,6 +334,7 @@ describe("Beam session catalog", () => {
 
     await expect(
       catalog.read({
+        agentId: "main",
         hostId: "gateway",
         threadId: "0123456789abcdef0123456789abcdef",
         limit: 1,

@@ -1,7 +1,7 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 // Thread binding policy tests cover how channel thread bindings are created and reused.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { MAX_DATE_TIMESTAMP_MS } from "../shared/number-coercion.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   requiresNativeThreadContextForThreadHere,

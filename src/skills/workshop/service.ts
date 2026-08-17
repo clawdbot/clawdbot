@@ -23,7 +23,6 @@ import {
   prepareSkillProposalDraft,
   resolveUpdateProposalDescription,
 } from "./proposal-draft.js";
-export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   assertExpectedRevisionHash,
@@ -42,14 +41,6 @@ import {
   withSkillProposalTargetLock,
   type PreparedSkillProposalSupportFile,
 } from "./store.js";
-import { assertWritableSkillTarget } from "./workspace-skill-read.js";
-export {
-  getSkillProposalRunProgress,
-  inspectSkillProposal,
-  listSkillProposals,
-  resolvePendingSkillProposal,
-} from "./service-query.js";
-export { evaluateSkillProposal, listSkillProposalEvents } from "./service-evaluation.js";
 import {
   MAX_SKILL_PROPOSAL_ORIGIN_RUN_IDS,
   SKILL_WORKSHOP_SCHEMA,
@@ -63,11 +54,22 @@ import {
   type SkillProposalSupportFile,
   type SkillProposalUpdateInput,
 } from "./types.js";
+import { assertWritableSkillTarget } from "./workspace-skill-read.js";
+export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
+export {
+  getSkillProposalRunProgress,
+  inspectSkillProposal,
+  listSkillProposals,
+  resolvePendingSkillProposal,
+} from "./service-query.js";
+export { evaluateSkillProposal, listSkillProposalEvents } from "./service-evaluation.js";
 
 type SkillWorkshopWorkspaceOptions = {
   config?: OpenClawConfig;
   agentId?: string;
 };
+
+export class SkillProposalStaleTargetError extends Error {}
 
 function proposalStoreOptions(env?: NodeJS.ProcessEnv) {
   return env ? { env } : {};
@@ -269,8 +271,8 @@ export async function proposeUpdateSkill(
     input.expectedCurrentContentHash !== undefined &&
     sha256Hex(currentContent) !== input.expectedCurrentContentHash
   ) {
-    throw new Error(
-      "Patch target changed since the reviewer's read: read the skill again and redraft the patch.",
+    throw new SkillProposalStaleTargetError(
+      "Skill changed since the reviewer's read: read it again and redraft the update.",
     );
   }
   // Composition uses the same read that currentContentHash binds the proposal to, so a

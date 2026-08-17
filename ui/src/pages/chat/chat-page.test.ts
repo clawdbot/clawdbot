@@ -7,8 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const nativeGateways = vi.hoisted(() => ({ current: null as NativeGatewaysCapability | null }));
 
-// The dedicated unit-mock-registry project keeps this complete, side-effect-only
-// module mock from sharing a worker's mock registry with component tests.
+// Keep this complete mock in the dedicated unit-mock-registry project.
 vi.mock("./chat-pane.ts", () => ({}));
 vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => nativeGateways.current,
@@ -54,6 +53,7 @@ type RenderedPane = HTMLElement & {
   focusComposer: boolean;
   chatMessagesBySession: ChatMessageCache;
   sessionKey: string;
+  presented: boolean;
   active: boolean;
   paneTitle: string;
   narrow: boolean;
@@ -62,7 +62,7 @@ type RenderedPane = HTMLElement & {
   gatewaysSnapshot: NativeGatewaysSnapshot | null;
   onOpenSplitView?: () => void;
   onClosePane?: (paneId: string) => void;
-  onFaceChange?: (face: "chat" | "dashboard") => void;
+  onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
 };
 
 type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical" };
@@ -141,6 +141,12 @@ function setNavigationContext(page: ChatPage) {
   const setAgent = vi.fn((agentId: string) => {
     agentSelectionState.selectedId = agentId;
   });
+  const chatAttachmentHandoff = {
+    prepare: vi.fn(),
+    consume: vi.fn(() => null),
+    clearPane: vi.fn(),
+    dispose: vi.fn(),
+  };
   const context = {
     basePath: "",
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
@@ -149,9 +155,10 @@ function setNavigationContext(page: ChatPage) {
     navigate,
     replace,
     agentSelection: { state: agentSelectionState, set: setAgent },
+    chatAttachmentHandoff,
   } as unknown as ApplicationContext;
   (page as unknown as { context: ApplicationContext }).context = context;
-  return { context, navigate, replace, setAgent, patch };
+  return { chatAttachmentHandoff, context, navigate, replace, setAgent, patch };
 }
 
 function setViewerPresenceContext(page: ChatPage) {
@@ -255,64 +262,7 @@ describe("chat page split layout host", () => {
       false,
     );
     expect(page.querySelector("resizable-divider")).toBeNull();
-    // The always-on pane header owns the classic split-view opener.
     expect(typeof itemAt(panes, 0, "rendered pane").onOpenSplitView).toBe("function");
-  });
-
-  it("hands route-owned focus to the final page across pane replacement", async () => {
-    const sourcePage = new ChatPage();
-    setNavigationContext(sourcePage);
-    sourcePage.data = {
-      sessionKey: "main",
-      draft: "What can you do?",
-      focusComposer: true,
-    };
-    const page = new ChatPage();
-    setNavigationContext(page);
-    page.data = { sessionKey: "main" };
-
-    vi.useFakeTimers();
-    try {
-      document.body.append(sourcePage);
-      await sourcePage.updateComplete;
-      await Promise.resolve();
-
-      document.body.append(page);
-      await page.updateComplete;
-      const pane = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
-      expect(pane.focusComposer).toBe(true);
-
-      const combobox = document.createElement("div");
-      combobox.className = "agent-chat__composer-combobox";
-      const textarea = document.createElement("textarea");
-      combobox.append(textarea);
-      pane.append(combobox);
-      vi.advanceTimersByTime(250);
-      expect(document.activeElement).toBe(textarea);
-
-      const replacementPane = document.createElement("openclaw-chat-pane") as RenderedPane;
-      replacementPane.active = true;
-      replacementPane.sessionKey = "main";
-      const replacementCombobox = document.createElement("div");
-      replacementCombobox.className = "agent-chat__composer-combobox";
-      const replacementTextarea = document.createElement("textarea");
-      replacementCombobox.append(replacementTextarea);
-      replacementPane.append(replacementCombobox);
-      pane.replaceWith(replacementPane);
-
-      vi.advanceTimersByTime(250);
-      expect(document.activeElement).toBe(replacementTextarea);
-
-      const userTarget = document.createElement("button");
-      document.body.append(userTarget);
-      userTarget.focus();
-      vi.advanceTimersByTime(250);
-      expect(document.activeElement).toBe(userTarget);
-    } finally {
-      sourcePage.remove();
-      page.remove();
-      vi.useRealTimers();
-    }
   });
 
   it("passes the chat-owned gateway capability only to the rightmost pane", async () => {
@@ -357,6 +307,7 @@ describe("chat page split layout host", () => {
 
   it("retains the classic pane element while split view opens and closes", async () => {
     const page = new ChatPage();
+    setNavigationContext(page);
     page.data = { sessionKey: "main" };
     document.body.append(page);
     await page.updateComplete;
@@ -636,7 +587,7 @@ describe("chat page split layout host", () => {
     await page.updateComplete;
 
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
-    pane?.onFaceChange?.("dashboard");
+    pane?.onFaceChange?.(pane.paneId, pane.sessionKey, "dashboard");
     const expectedSearch = catalogSessionSearch(CATALOG_KEY);
     expect(navigation.navigate).toHaveBeenCalledWith("dashboard", {
       pathname: "/dashboard/research",
@@ -671,7 +622,7 @@ describe("chat page split layout host", () => {
     });
     navigation.navigate.mockClear();
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
-    pane?.onFaceChange?.("dashboard");
+    pane?.onFaceChange?.(pane.paneId, pane.sessionKey, "dashboard");
     expect(navigation.navigate).toHaveBeenCalledWith("dashboard", {
       pathname: "/dashboard/main/1234567890",
     });
@@ -775,7 +726,7 @@ describe("chat page split layout host", () => {
     expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, { sessionKeys: [] });
   });
 
-  it("renders only the active pane from a preserved split on narrow viewports", async () => {
+  it("keeps split panes mounted but presents only the active pane on narrow viewports", async () => {
     stubMatchMedia(true);
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
@@ -784,9 +735,12 @@ describe("chat page split layout host", () => {
     await page.updateComplete;
 
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
-    expect(panes.map((pane) => pane.paneId)).toEqual(["p2"]);
-    expect(itemAt(panes, 0, "rendered pane").active).toBe(true);
-    expect(itemAt(panes, 0, "rendered pane").narrow).toBe(true);
+    expect(panes.map((pane) => pane.paneId)).toEqual(["p1", "p2"]);
+    expect(panes.filter((pane) => pane.active).map((pane) => pane.paneId)).toEqual(["p2"]);
+    expect(panes.every((pane) => pane.narrow)).toBe(true);
+    expect(panes.filter((pane) => pane.presented).map((pane) => pane.paneId)).toEqual(["p2"]);
+    expect(panes[0]?.hasAttribute("inert")).toBe(true);
+    expect(panes[0]?.closest(".chat-split-view__cell--narrow-hidden")).not.toBeNull();
     expect(page.querySelector("resizable-divider")).toBeNull();
   });
 
@@ -807,7 +761,7 @@ describe("chat page split layout host", () => {
 
     const narrowPane = itemAt(
       page.querySelectorAll<RenderedPane>("openclaw-chat-pane"),
-      0,
+      1,
       "active narrow pane",
     );
     expect(narrowPane).toBe(activePane);

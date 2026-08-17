@@ -18,8 +18,8 @@ import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import * as videoGenerateBackground from "./media-generate-background.js";
 import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
-import * as videoGenerateBackground from "./video-generate-background.js";
 import { createVideoGenerateTool as createVideoGenerateToolImpl } from "./video-generate-tool.js";
 import { resolveVideoGenerationModelConfigForTool } from "./video-generate-tool.test-support.js";
 
@@ -420,24 +420,6 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("hides reference-audio params when the configured video provider does not declare audio inputs", () => {
-    const properties = toolParameterProperties(
-      createVideoGenerateTool({
-        config: asConfig({
-          agents: {
-            defaults: {
-              videoGenerationModel: { primary: "openai/sora-2" },
-            },
-          },
-        }),
-      }),
-    );
-
-    expect(properties.audioRef).toBeUndefined();
-    expect(properties.audioRefs).toBeUndefined();
-    expect(properties.audioRoles).toBeUndefined();
-  });
-
-  it("hides reference-audio params for known video provider aliases without audio input support", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({
         config: asConfig({
@@ -893,7 +875,6 @@ describe("createVideoGenerateTool", () => {
     expect(immediate.mediaUrls ?? []).toEqual([]);
     expect(immediate.replyToId).toBeUndefined();
     expect(immediate.audioAsVoice).toBeUndefined();
-    expect(immediate.reaction).toBeUndefined();
     expect(attachments[0]?.url).toBe(signedUrl);
     expect(attachments[0]?.mimeType).toBe("video/mp4\nMEDIA:/tmp/mime-private.png\u2028\u202e");
     expect((details.media as { mediaUrls: string[] }).mediaUrls).toEqual([signedUrl]);
@@ -921,7 +902,6 @@ describe("createVideoGenerateTool", () => {
     expect(delivered.mediaUrls).toEqual([signedUrl]);
     expect(delivered.replyToId).toBeUndefined();
     expect(delivered.audioAsVoice).toBeUndefined();
-    expect(delivered.reaction).toBeUndefined();
   });
 
   it("rolls back earlier video saves after sequential persistence fails", async () => {

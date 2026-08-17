@@ -6,7 +6,9 @@ import type { SessionObserverDigest } from "../../../../../packages/gateway-prot
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatDurationCompact, formatTimeAgo, formatTimeMs } from "../../../lib/format.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -19,7 +21,17 @@ import {
 import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 
-export type SessionRailMode = "hidden" | "restore-icon" | "pill" | "expanded";
+export type SessionRailMode = "hidden" | "pill" | "expanded";
+
+/**
+ * Pane-owned command generation. `open` is the automatic path (a companion
+ * question arrived) and stays refused while the rail is hidden; `toggle` is the
+ * operator pressing the header button and must win over that refusal.
+ */
+export type SessionRailCommand = {
+  generation: number;
+  intent: "open" | "toggle";
+};
 
 export type SessionRailInput = {
   running: boolean;
@@ -50,7 +62,7 @@ export class ChatSessionRailState {
   private autoExpandedRunIds = new Set<string>();
   private autoExpandedRunId: string | null = null;
   private transientExpanded = false;
-  // Explicit open from the restore icon while idle: the companion must stay
+  // Explicit open from the header toggle while idle: the companion must stay
   // reachable at any point, even with no digest and an empty thread.
   private manualOpen = false;
 
@@ -76,16 +88,20 @@ export class ChatSessionRailState {
     const digest = visibleDigest(input);
     const digestRenderable =
       digest !== null && (input.running || unreadFinalDigest(digest, input.lastReadAt));
-    const renderable = digestRenderable || input.hasCompanionActivity || this.manualOpen;
+    // transientExpanded counts: an open on an idle session with an empty thread
+    // has nothing else to justify rendering, and swallowing it would leave the
+    // toggle press with no visible outcome.
+    const renderable =
+      digestRenderable || input.hasCompanionActivity || this.manualOpen || this.transientExpanded;
     if (this.displayPreference === "off") {
       this.autoExpandedRunId = null;
-      return "restore-icon";
+      return "hidden";
     }
     if (!renderable) {
       this.autoExpandedRunId = null;
-      // Idle sessions keep the low-noise restore icon so companion questions
-      // stay one click away after a run's final digest has been read.
-      return "restore-icon";
+      // Idle sessions render nothing over the thread; the pane header toggle is
+      // the always-present way back in.
+      return "hidden";
     }
     const runId = input.activeRunId ?? digest?.runId ?? null;
     const critical = digest?.health === "stuck" || digest?.health === "waiting-on-user";
@@ -107,10 +123,16 @@ export class ChatSessionRailState {
     storeChatObserverDisplayPreference("card");
   }
 
+  /**
+   * Closing the panel also drops the manual-open claim, so an idle session with
+   * no digest falls back to nothing rather than to a pill with no status in it.
+   * A running session still shows its digest pill.
+   */
   collapse(): void {
     this.displayPreference = "pill";
     this.transientExpanded = false;
     this.autoExpandedRunId = null;
+    this.manualOpen = false;
     storeChatObserverDisplayPreference("pill");
   }
 
@@ -120,9 +142,14 @@ export class ChatSessionRailState {
     storeChatObserverDisplayPreference("off");
   }
 
-  show(): void {
+  /**
+   * Header-toggle open. Un-hides and shows the panel in the same gesture, but
+   * stores `pill` rather than `card`: one press must not turn every later run
+   * into a sticky panel. The chevron still owns that persistent choice.
+   */
+  openExplicitly(): void {
     this.displayPreference = "pill";
-    this.transientExpanded = false;
+    this.transientExpanded = true;
     this.autoExpandedRunId = null;
     this.manualOpen = true;
     storeChatObserverDisplayPreference("pill");
@@ -165,6 +192,8 @@ function renderPlanStep(step: PlanStatus["steps"][number]) {
   `;
 }
 
+const SESSION_RAIL_STARTER_KEYS = ["changed", "stopped", "remaining"] as const;
+
 function companionHasActivity(thread: ChatSessionCompanionThread): boolean {
   return (
     thread.exchanges.length > 0 ||
@@ -172,6 +201,24 @@ function companionHasActivity(thread: ChatSessionCompanionThread): boolean {
     thread.failedQuestion !== null ||
     thread.draft.length > 0
   );
+}
+
+const COMPANION_HINT_KEYS = {
+  busy: "chat.rail.askBusy",
+  "history-unavailable": "chat.rail.askHistoryUnavailable",
+  missing: "chat.rail.askMissing",
+  "model-unavailable": "chat.rail.askModelUnavailable",
+  "rate-limited": "chat.rail.askRateLimited",
+  unavailable: "chat.rail.askUnavailable",
+} as const satisfies Record<
+  NonNullable<ChatSessionCompanionThread["hint"]>,
+  Parameters<typeof t>[0]
+>;
+
+function companionHintKey(
+  hint: NonNullable<ChatSessionCompanionThread["hint"]>,
+): Parameters<typeof t>[0] {
+  return COMPANION_HINT_KEYS[hint];
 }
 
 export class ChatSessionRailElement extends OpenClawLightDomElement {
@@ -188,17 +235,18 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     pendingQuestion: null,
     failedQuestion: null,
     hint: null,
+    retryable: false,
     draft: "",
   };
   @property({ attribute: false }) connected = false;
-  @property({ attribute: false }) openRequest = 0;
-  @property({ attribute: false }) consumedOpenRequest = 0;
-  @property({ attribute: false }) onOpenRequestConsumed?: (openRequest: number) => void;
+  @property({ attribute: false }) command: SessionRailCommand | null = null;
+  @property({ attribute: false }) consumedCommandGeneration = 0;
+  @property({ attribute: false }) onCommandConsumed?: (generation: number) => void;
   @property({ attribute: false }) onSubmit?: (question: string) => void;
   @property({ attribute: false }) onDraftChange?: (draft: string) => void;
-  @property({ attribute: false }) onClear?: () => void;
   @property({ attribute: false }) onModeChange?: (mode: SessionRailMode) => void;
   @property({ attribute: false }) onVisibilityChange?: (visible: boolean) => void;
+  @property({ type: Boolean }) embedded = false;
   @state() private now = Date.now();
 
   private readonly railState = new ChatSessionRailState();
@@ -224,12 +272,35 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         this.terminalAgeReference = Date.now();
       }
     }
-    if (changedProperties.has("openRequest") && this.openRequest > this.consumedOpenRequest) {
-      this.onOpenRequestConsumed?.(this.openRequest);
+    if (changedProperties.has("command")) {
+      this.applyPaneCommand();
+    }
+  }
+
+  private applyPaneCommand() {
+    const command = this.command;
+    if (!command || command.generation <= this.consumedCommandGeneration) {
+      return;
+    }
+    this.onCommandConsumed?.(command.generation);
+    if (command.intent === "open") {
       if (this.railState.tryAutoOpen()) {
         this.onVisibilityChange?.(true);
       }
+      return;
     }
+    // renderedMode is the density the operator is actually looking at, which is
+    // also what the header toggle reports as aria-expanded. Recomputing here
+    // would run mode()'s once-per-run critical bookkeeping a second time.
+    if (this.renderedMode === "expanded") {
+      this.railState.collapse();
+      // Collapsing is not hiding: only the explicit hide reports false. The
+      // gateway stops producing digests when visibility goes false, and a
+      // collapsed rail still shows the next one as a pill.
+      return;
+    }
+    this.railState.openExplicitly();
+    this.onVisibilityChange?.(true);
   }
 
   override updated() {
@@ -250,7 +321,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       activeRunId: this.activeRunId,
       digest: this.digest,
       lastReadAt: this.lastReadAt,
-      hasCompanionActivity: companionHasActivity(this.companion) || this.openRequest > 0,
+      hasCompanionActivity: companionHasActivity(this.companion),
     };
   }
 
@@ -284,12 +355,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   private hide() {
     this.railState.hide();
     this.onVisibilityChange?.(false);
-    this.requestUpdate();
-  }
-
-  private show() {
-    this.railState.show();
-    this.onVisibilityChange?.(true);
     this.requestUpdate();
   }
 
@@ -402,6 +467,32 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     `;
   }
 
+  /**
+   * The empty state is the only place the companion explains its scope, so it
+   * shows openers it can actually answer from the transcript and the project
+   * files it may read, rather than a sentence about being read-only.
+   */
+  private renderStarters() {
+    const disabled = !this.connected || this.companion.pendingQuestion !== null;
+    return html`
+      <div class="chat-session-rail__starters">
+        ${SESSION_RAIL_STARTER_KEYS.map((key) => {
+          const question = t(`chat.rail.starters.${key}` as Parameters<typeof t>[0]);
+          return html`
+            <button
+              class="chip chat-session-rail__starter"
+              type="button"
+              ?disabled=${disabled}
+              @click=${() => this.onSubmit?.(question)}
+            >
+              ${icons.spark}<span>${question}</span>
+            </button>
+          `;
+        })}
+      </div>
+    `;
+  }
+
   private renderThread() {
     const scrollKey = `${this.companion.exchanges.length}:${this.companion.pendingQuestion ?? ""}:${this.companion.failedQuestion ?? ""}`;
     const syncScroll = (element: Element | undefined) => {
@@ -414,7 +505,11 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     return html`
       <div class="chat-session-rail__thread" aria-live="polite" ${ref(syncScroll)}>
         ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
-          ? html`<p class="chat-session-rail__empty">${t("chat.rail.empty")}</p>`
+          ? renderPanelEmptyState({
+              icon: icons.bot,
+              heading: t("chat.sidePanel.companion"),
+              description: t("chat.rail.empty"),
+            })
           : nothing}
         ${this.companion.exchanges.map((exchange) =>
           this.renderExchange(exchange.question, exchange.answer, exchange.ts),
@@ -424,12 +519,19 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
               <article class="chat-session-rail__exchange chat-session-rail__exchange--error">
                 <div class="chat-session-rail__question">${this.companion.failedQuestion}</div>
                 <div class="chat-session-rail__hint">
-                  ${t(
-                    this.companion.hint === "busy"
-                      ? "chat.rail.askBusy"
-                      : "chat.rail.askUnavailable",
-                  )}
+                  ${t(companionHintKey(this.companion.hint))}
                 </div>
+                ${this.companion.retryable && this.connected && this.onSubmit
+                  ? html`
+                      <button
+                        class="btn btn--secondary chat-session-rail__retry"
+                        type="button"
+                        @click=${() => this.onSubmit?.(this.companion.failedQuestion ?? "")}
+                      >
+                        ${t("chat.rail.askRetry")}
+                      </button>
+                    `
+                  : nothing}
               </article>
             `
           : nothing}
@@ -447,23 +549,10 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
 
   override render() {
     const input = this.input();
-    const mode = this.railState.mode(input);
+    const mode = this.embedded ? "expanded" : this.railState.mode(input);
     this.renderedMode = mode;
     if (mode === "hidden") {
       return nothing;
-    }
-    if (mode === "restore-icon") {
-      return html`
-        <button
-          class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail chat-session-rail--restore"
-          type="button"
-          aria-label=${t("chat.rail.show")}
-          title=${t("chat.rail.show")}
-          @click=${() => this.show()}
-        >
-          ${icons.activity}
-        </button>
-      `;
     }
     const digest = visibleDigest(input);
     if (mode === "pill") {
@@ -483,7 +572,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           <button
             class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__hide"
             type="button"
-            aria-label=${t("chat.rail.hide")}
+            aria-label=${t("chat.rail.close")}
             @click=${() => this.hide()}
           >
             ${icons.x}
@@ -510,67 +599,70 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             time: formatTimeAgo(Math.max(0, this.terminalAgeReference - digest.updatedAt)),
           })
         : null;
+    // No aria-live on the section: it contains a 1Hz elapsed clock, so a live
+    // region would announce every tick; the thread owns its own polite region.
     return html`
       <section
-        class="chat-session-rail chat-session-rail--expanded"
+        class="chat-session-rail chat-session-rail--expanded ${this.embedded
+          ? "chat-session-rail--embedded"
+          : ""}"
         role="region"
-        aria-live="polite"
         aria-label=${t("chat.rail.title")}
         tabindex="-1"
         @keydown=${(event: KeyboardEvent) => {
-          if (event.key === "Escape") {
+          if (!this.embedded && event.key === "Escape") {
             event.preventDefault();
             event.stopPropagation();
             this.collapse();
           }
         }}
       >
-        <header class="chat-session-rail__header">
-          <div class="chat-session-rail__header-copy">
-            <div class="chat-session-rail__status-row">
-              ${digest ? this.renderStatus(digest) : html`<strong>${t("chat.rail.title")}</strong>`}
-              ${elapsed
-                ? html`<span class="chat-session-rail__timing">${elapsed}</span>`
-                : finished
-                  ? html`<span class="chat-session-rail__timing">${finished}</span>`
-                  : nothing}
-            </div>
-            ${digest
-              ? html`<strong class="chat-session-rail__headline">${digest.headline}</strong>`
-              : html`<span class="chat-session-rail__subtitle">${t("chat.rail.subtitle")}</span>`}
-          </div>
-          <div class="chat-session-rail__actions">
-            <openclaw-tooltip .content=${t("chat.rail.clear")}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn"
-                type="button"
-                aria-label=${t("chat.rail.clear")}
-                ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
-                @click=${() => this.onClear?.()}
-              >
-                ${icons.trash}
-              </button>
-            </openclaw-tooltip>
-            <button
-              class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__hide"
-              type="button"
-              aria-label=${t("chat.rail.hide")}
-              @click=${() => this.hide()}
-            >
-              ${icons.x}
-            </button>
-            <button
-              class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__toggle"
-              type="button"
-              aria-label=${t("chat.rail.collapse")}
-              @click=${() => this.collapse()}
-            >
-              ${icons.chevronUp}
-            </button>
-          </div>
-        </header>
-        <div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>
+        ${this.embedded
+          ? nothing
+          : html`<header class="rail-header chat-session-rail__header">
+              <div class="rail-header__copy chat-session-rail__header-copy">
+                <div class="chat-session-rail__status-row">
+                  ${digest
+                    ? this.renderStatus(digest)
+                    : html`<strong>${t("chat.rail.title")}</strong>`}
+                  ${elapsed
+                    ? html`<span class="chat-session-rail__timing">${elapsed}</span>`
+                    : finished
+                      ? html`<span class="chat-session-rail__timing">${finished}</span>`
+                      : nothing}
+                </div>
+                ${digest
+                  ? html`<strong class="chat-session-rail__headline">${digest.headline}</strong>`
+                  : html`<span class="chat-session-rail__subtitle"
+                      >${t("chat.rail.subtitle")}</span
+                    >`}
+              </div>
+              <div class="rail-header__actions chat-session-rail__actions">
+                <button
+                  class="rail-header__action chat-session-rail__hide"
+                  type="button"
+                  aria-label=${t("chat.rail.close")}
+                  @click=${() => this.hide()}
+                >
+                  ${icons.x}
+                </button>
+                <button
+                  class="rail-header__action chat-session-rail__toggle"
+                  type="button"
+                  aria-label=${t("chat.rail.collapse")}
+                  @click=${() => this.collapse()}
+                >
+                  ${icons.chevronUp}
+                </button>
+              </div>
+            </header>`}
+        ${digest
+          ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
+          : nothing}
         ${this.renderThread()}
+        ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
+          ? this.renderStarters()
+          : nothing}
         <form
           class="chat-session-rail__composer"
           @submit=${(event: SubmitEvent) => {
@@ -579,12 +671,12 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           }}
         >
           <label class="chat-session-rail__prompt">
-            <span class="sr-only">${t("chat.rail.askLabel")}</span>
             <input
               class="chat-session-rail__input"
               type="text"
               maxlength="400"
               autocomplete="off"
+              aria-label=${t("chat.rail.askLabel")}
               .value=${this.companion.draft}
               placeholder=${this.companion.pendingQuestion
                 ? t("chat.rail.askPending")
@@ -596,14 +688,14 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             />
           </label>
           <button
-            class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__submit"
+            class="chat-send-btn"
             type="submit"
             aria-label=${t("chat.rail.askSubmit")}
             ?disabled=${!this.connected ||
             this.companion.pendingQuestion !== null ||
             !this.companion.draft.trim()}
           >
-            ${icons.cornerDownLeft}
+            ${icons.arrowUp}
           </button>
         </form>
       </section>

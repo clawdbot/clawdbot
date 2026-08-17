@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
@@ -78,6 +79,8 @@ export type TurnAdoptionLifecycle = {
   /** Stable cancellation owner for collect-mode batches. */
   ownerKey?: string;
   abortSignal?: AbortSignal;
+  /** Ephemeral fact: a direct local operator turn lost fresh cron authority when queued. */
+  cronCreatorAuthorityUnavailable?: "queued-local-operator";
 };
 
 /** Partial assistant payload emitted during streaming or replacement updates. */
@@ -121,7 +124,10 @@ export type GetReplyOptions = {
   /** Ordered media facts whose model-facing text projection is already present in the prompt. */
   media?: MediaFact[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
-  onAgentRunStart?: (runId: string) => void;
+  onAgentRunStart?: (
+    runId: string,
+    executionIdentityToken?: ExecutionIdentityAdmissionToken,
+  ) => void;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */
@@ -170,6 +176,8 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Suppress standalone tool/progress text even when verbose progress is enabled. */
+  suppressToolProgressMessages?: boolean;
   /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
   allowToolLifecycleWhenProgressHidden?: boolean;
   /**
@@ -226,6 +234,7 @@ export type GetReplyOptions = {
     summary?: string;
     progressText?: string;
     meta?: string;
+    commandBearing?: boolean;
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;
@@ -260,6 +269,9 @@ export type GetReplyOptions = {
   reasoningPayloadsEnabled?: boolean;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
   commentaryPayloadsEnabled?: boolean;
+  /** Optional turn-frozen commentary owner; visibility is live by default.
+   * With the static opt-in and this callback, core freezes, evaluates once, and snapshots. */
+  shouldDeliverCommentaryPayloads?: () => boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;

@@ -10,11 +10,16 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
-  isWorkerPlacementSessionRuntimeSupported,
+  resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
+import type { WorkerPlacementDispatchContract } from "../worker-environments/service-contract.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 import {
   isWorkerDispatchInputError,
   loadAccessorSessionEntryForGatewayTarget,
@@ -22,6 +27,13 @@ import {
 } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+type InternalTransitionDispatchService = {
+  dispatch(
+    request: Parameters<WorkerPlacementDispatchContract["dispatch"]>[0],
+    onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+  ): ReturnType<WorkerPlacementDispatchContract["dispatch"]>;
+};
 
 function respondInvalidWorkerSession(respond: RespondFn, message: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
@@ -31,6 +43,8 @@ function resolveWorkerSessionTarget(params: {
   key: string;
   agentId?: string;
   profileId?: string;
+  deviceId?: string;
+  machineClass?: string;
   context: GatewayRequestContext;
   respond: RespondFn;
 }) {
@@ -40,14 +54,14 @@ function resolveWorkerSessionTarget(params: {
     params.respond(false, undefined, requestedAgent.error);
     return undefined;
   }
-  if (
-    params.profileId !== undefined &&
-    !Object.hasOwn(cfg.cloudWorkers?.profiles ?? {}, params.profileId)
-  ) {
-    respondInvalidWorkerSession(
-      params.respond,
-      `cloud worker profile is not configured: ${params.profileId}`,
-    );
+  const destination = resolveWorkerPlacementDestination({
+    cfg,
+    profileId: params.profileId,
+    deviceId: params.deviceId,
+    machineClass: params.machineClass,
+  });
+  if (!destination.ok) {
+    respondInvalidWorkerSession(params.respond, destination.error);
     return undefined;
   }
   const target = loadAccessorSessionEntryForGatewayTarget({
@@ -61,7 +75,7 @@ function resolveWorkerSessionTarget(params: {
     respondInvalidWorkerSession(params.respond, `session not found: ${params.key}`);
     return undefined;
   }
-  return { cfg, target, entry, sessionId };
+  return { cfg, target, entry, sessionId, dispatchTarget: destination.value };
 }
 
 function hasManagedSessionWorktree(params: {
@@ -138,13 +152,19 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       key,
       agentId: params.agentId,
       profileId: params.profileId,
+      deviceId: params.deviceId,
+      machineClass: params.machineClass,
       context,
       respond,
     });
     if (!resolved) {
       return;
     }
-    const { cfg, target, entry, sessionId } = resolved;
+    const { cfg, target, entry, sessionId, dispatchTarget } = resolved;
+    if (!dispatchTarget) {
+      respondInvalidWorkerSession(respond, "worker dispatch target is missing");
+      return;
+    }
     if (entry.archivedAt !== undefined) {
       respondInvalidWorkerSession(respond, "cannot dispatch an archived session");
       return;
@@ -155,18 +175,33 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       agentId: target.target.agentId,
       sessionKey: target.canonicalKey,
     });
-    if (!isWorkerPlacementSessionRuntimeSupported(sessionRuntime)) {
+    const executionMode = resolveWorkerPlacementExecutionMode(sessionRuntime);
+    if (!executionMode) {
       respondInvalidWorkerSession(
         respond,
-        `cloud worker dispatch requires the OpenClaw runtime, not ${sessionRuntime}`,
+        `runtime ${sessionRuntime} lacks cloud placement support`,
       );
       return;
     }
     const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
     if (
+      existingPlacement?.state === "failed" &&
+      !isFailedWorkerPlacementEnvironmentGone({
+        environmentService: context.workerEnvironmentService,
+        placement: existingPlacement,
+      })
+    ) {
+      respondInvalidWorkerSession(
+        respond,
+        "cloud worker environment must be stopped before redispatch; use Stop cloud worker",
+      );
+      return;
+    }
+    if (
       existingPlacement &&
-      existingPlacement.state !== "local" &&
-      existingPlacement.state !== "reclaimed"
+      (existingPlacement.state === "active" ||
+        existingPlacement.state === "draining" ||
+        existingPlacement.state === "reconciling")
     ) {
       respondInvalidWorkerSession(
         respond,
@@ -188,12 +223,20 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       // Dispatch is session-id addressed after this point; reject a replacement before handing
       // the captured instance to the asynchronous worker service.
       sessionMutationAuthorization?.assertCurrent();
-      const placement = await dispatchService.dispatch({
-        sessionId,
-        sessionKey: target.canonicalKey,
-        agentId: target.target.agentId,
-        profileId: params.profileId,
-      });
+      const placement = await (dispatchService as InternalTransitionDispatchService).dispatch(
+        {
+          sessionId,
+          sessionKey: target.canonicalKey,
+          agentId: target.target.agentId,
+          executionMode,
+          ...dispatchTarget,
+        },
+        () =>
+          emitSessionsChanged(context, {
+            reason: "dispatch",
+            sessionKey: target.canonicalKey,
+          }),
+      );
       respondWorkerPlacement({ respond, key: target.canonicalKey, sessionId, placement });
     } catch (error) {
       respondWorkerDispatchError(error, respond);
@@ -233,7 +276,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    if (existingPlacement?.state !== "active") {
+    if (existingPlacement?.state !== "active" && existingPlacement?.state !== "failed") {
       respondInvalidWorkerSession(
         respond,
         `session cannot stop cloud worker from placement ${existingPlacement?.state ?? "local"}`,

@@ -1,11 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type {
-  WorkerLiveEventErrorDetails as ErrorDetails,
-  WorkerLiveEventParams as Params,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  FAILOVER_REASONS,
+  type FailoverReason,
+} from "../../../packages/gateway-protocol/src/failover-reasons.js";
+import {
+  type WorkerLiveEventErrorDetails as ErrorDetails,
+  type WorkerLiveEventParams as Params,
+  WorkerLiveEventParamsSchema,
+} from "../../../packages/gateway-protocol/src/schema.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig as Config } from "../../config/types.openclaw.js";
 import {
@@ -40,6 +46,13 @@ const ID: Identity = {
   bundleHash: "b".repeat(64),
   sessionId: SID,
   runId: RUN,
+  turnClaim: {
+    sessionId: SID,
+    claimId: "claim-worker-live",
+    runId: RUN,
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-live", ownerEpoch: EPOCH },
+  },
   ownerEpoch: EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-live-event-v1"],
@@ -69,6 +82,49 @@ type Payload<K extends WireEvent["kind"]> = Extract<WireEvent, { kind: K }>["pay
 const tool = (payload: Payload<"tool">): WireEvent => ({ kind: "tool", payload });
 const approval = (payload: Payload<"approval">): WireEvent => ({ kind: "approval", payload });
 const lifecycle = (payload: Payload<"lifecycle">): WireEvent => ({ kind: "lifecycle", payload });
+
+const validateLiveProtocolEvent = (event: unknown) =>
+  Value.Check(WorkerLiveEventParamsSchema, {
+    runEpoch: EPOCH,
+    lastAckedSeq: 0,
+    seq: 1,
+    runId: RUN,
+    event,
+  });
+const fallbackEvent = (reason: FailoverReason) => ({
+  kind: "lifecycle",
+  payload: {
+    phase: "fallback",
+    selectedProvider: "p",
+    selectedModel: "m",
+    activeProvider: "q",
+    activeModel: "n",
+    reasonSummary: "x",
+    attemptSummaries: ["x"],
+    attempts: [{ provider: "p", model: "m", error: "x", reason }],
+  },
+});
+const fallbackStepEvent = (reason: string) => ({
+  kind: "lifecycle",
+  payload: {
+    phase: "fallback_step",
+    fallbackStepType: "fallback_step",
+    fallbackStepFromModel: "p/m",
+    fallbackStepFromFailureReason: reason,
+    fallbackStepFinalOutcome: "chain_exhausted",
+  },
+});
+
+describe("worker live protocol conformance", () => {
+  it("accepts every core failover reason in live fallback schemas", () => {
+    for (const reason of FAILOVER_REASONS) {
+      expect(validateLiveProtocolEvent(fallbackEvent(reason))).toBe(true);
+      expect(validateLiveProtocolEvent(fallbackStepEvent(reason))).toBe(true);
+    }
+
+    expect(validateLiveProtocolEvent(fallbackStepEvent("not-a-reason"))).toBe(false);
+  });
+});
 
 describe("worker live events", () => {
   let root: string;
@@ -106,7 +162,7 @@ describe("worker live events", () => {
       target,
     });
   const create = (updatedAt = 20) =>
-    sessions.upsertSessionEntry(
+    sessions.upsertSessionEntryCore(
       { agentId: "main", sessionKey: KEY, storePath: store },
       { sessionId: SID, updatedAt },
     );
@@ -263,6 +319,7 @@ describe("worker live events", () => {
         phase: "fallback_step",
         fallbackStepType: "fallback_step",
         fallbackStepFromModel: "openai/gpt-primary",
+        fallbackStepFromFailureReason: "tls_certificate",
         fallbackStepFinalOutcome: "next_fallback",
       }),
     ];
@@ -275,6 +332,9 @@ describe("worker live events", () => {
     expect(events[4]?.data).toMatchObject({
       name: "exec",
       result: { content: [{ bytes: 6, omitted: true }], details: { aggregated: capped("r") } },
+    });
+    expect(events[8]?.data).toMatchObject({
+      fallbackStepFromFailureReason: "tls_certificate",
     });
     expect(JSON.stringify(events)).not.toContain(credential);
   });
@@ -493,7 +553,9 @@ describe("worker live events", () => {
 
   it.each([RUN, "run-sibling"])("resyncs after a swept context before %s", (runId) => {
     ack(msg(1, "before"));
-    expect(sweepStaleRunContexts(-1)).toBe(1);
+    expect(getAgentRunContext(RUN)).toBeDefined();
+    sweepStaleRunContexts(-1);
+    expect(getAgentRunContext(RUN)).toBeUndefined();
     fail(msg(2, "stale", 1, runId), "resync-required");
     ack(msg(1, "fresh", 0, runId));
     expect(deltas()).toEqual(["before", "fresh"]);

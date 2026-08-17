@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupAuthStartResult, WizardNextResult } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
@@ -12,10 +13,15 @@ export type ModelSetupWizardStartMethod =
   | "openclaw.setup.auth.start"
   | "openclaw.setup.prepare.start";
 
+export type ModelSetupWizardCompletion = {
+  startMethod: ModelSetupWizardStartMethod;
+  preparedModelRef?: string;
+};
+
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
+  getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
-  onDone: (startMethod: ModelSetupWizardStartMethod, preparedModelRef?: string) => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
@@ -37,10 +43,10 @@ export class ModelSetupWizardRunner {
   async start(
     authChoice: string,
     startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start",
-  ): Promise<void> {
+  ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
     if (!client || this.currentState.phase !== "idle") {
-      return;
+      return null;
     }
     const generation = ++this.generation;
     const sessionId = crypto.randomUUID();
@@ -50,45 +56,53 @@ export class ModelSetupWizardRunner {
     this.startMethod = startMethod;
     this.setState({ phase: "starting", authChoice });
     try {
+      const agentId = this.options.getAgentId();
       const started = await client.request<SystemAgentSetupAuthStartResult>(
         startMethod,
-        { sessionId, authChoice },
+        {
+          sessionId,
+          authChoice,
+          ...(agentId ? { agentId } : {}),
+        },
         { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS, signal: abortController.signal },
       );
       if (generation !== this.generation) {
-        return;
+        return null;
       }
       if (started.done) {
-        this.applyResult(authChoice, started);
-        return;
+        return this.applyResult(authChoice, started);
       }
-      await this.requestNext(authChoice, undefined, generation);
+      return await this.requestNext(authChoice, undefined, generation);
     } catch (error) {
       this.handleError(error, generation);
+      return null;
     }
   }
 
-  async answer(value: unknown, includeValue = true): Promise<void> {
+  async answer(value: unknown, includeValue = true): Promise<ModelSetupWizardCompletion | null> {
     const state = this.currentState;
     if (state.phase !== "step" || state.busy || !this.sessionId) {
-      return;
+      return null;
     }
     const generation = this.generation;
     this.setState({ ...state, busy: true, validationError: null });
     const answer = includeValue ? { stepId: state.step.id, value } : { stepId: state.step.id };
     try {
-      await this.requestNext(state.authChoice, answer, generation);
+      return await this.requestNext(state.authChoice, answer, generation);
     } catch (error) {
       this.handleError(error, generation);
+      return null;
     }
   }
 
-  async cancel(): Promise<void> {
+  async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
     const client = this.options.getClient();
     const sessionId = this.sessionId;
     this.generation += 1;
     this.sessionId = null;
-    this.abortController?.abort();
+    if (!options.settleActiveRequest) {
+      this.abortController?.abort();
+    }
     this.abortController = null;
     this.setState({ phase: "idle" });
     if (!client || !sessionId) {
@@ -123,25 +137,41 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     answer: { stepId: string; value?: unknown } | undefined,
     generation: number,
-  ): Promise<void> {
+  ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
     const sessionId = this.sessionId;
     const signal = this.abortController?.signal;
     if (!client || !sessionId || !signal) {
-      return;
+      return null;
     }
-    const result = await client.request<WizardNextResult>(
-      "wizard.next",
-      { sessionId, ...(answer ? { answer } : {}) },
-      { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
-    );
-    if (generation !== this.generation) {
-      return;
+    let nextAnswer = answer;
+    while (true) {
+      const result = await client.request<WizardNextResult>(
+        "wizard.next",
+        { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
+        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
+      );
+      if (generation !== this.generation) {
+        return null;
+      }
+      const completion = this.applyResult(authChoice, result);
+      if (completion) {
+        return completion;
+      }
+      const next = this.currentState;
+      if (next.phase !== "step" || next.step.executor !== "gateway") {
+        return null;
+      }
+      // Gateway-owned progress has no user control to trigger the next poll.
+      // Keep it in this request chain so its mutation owner settles with it.
+      nextAnswer = undefined;
     }
-    this.applyResult(authChoice, result);
   }
 
-  private applyResult(authChoice: string, result: WizardNextResult): void {
+  private applyResult(
+    authChoice: string,
+    result: WizardNextResult,
+  ): ModelSetupWizardCompletion | null {
     const next = wizardStateFromResult(
       authChoice,
       result,
@@ -150,22 +180,15 @@ export class ModelSetupWizardRunner {
         : this.options.requestFailedMessage(),
     );
     this.setState(next);
-    if (next.phase === "done") {
-      this.sessionId = null;
-      this.abortController = null;
-      this.options.onDone(this.startMethod, next.preparedModelRef);
-      return;
+    if (next.phase !== "done") {
+      return null;
     }
-    // Gateway-executed steps (download/pull progress) carry no input controls,
-    // so nothing would ever ask for the next one. Keep polling: the session
-    // long-polls until the next update or the terminal result, so this renders
-    // live progress instead of freezing on the first frame.
-    if (next.phase === "step" && next.step.executor === "gateway") {
-      const generation = this.generation;
-      void this.requestNext(authChoice, undefined, generation).catch((error: unknown) => {
-        this.handleError(error, generation);
-      });
-    }
+    this.sessionId = null;
+    this.abortController = null;
+    return {
+      startMethod: this.startMethod,
+      ...(next.preparedModelRef ? { preparedModelRef: next.preparedModelRef } : {}),
+    };
   }
 
   private handleError(error: unknown, generation: number): void {
@@ -187,9 +210,7 @@ export class ModelSetupWizardRunner {
     }
     const message = sessionExpired
       ? this.options.sessionExpiredMessage()
-      : error instanceof Error && error.message.trim()
-        ? error.message
-        : this.options.requestFailedMessage();
+      : formatUiError(error, this.options.requestFailedMessage());
     this.setState({ phase: "error", message });
   }
 

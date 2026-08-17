@@ -4,19 +4,15 @@
  * This handler demonstrates how to create a hook that logs all command events
  * to a centralized log file for audit/debugging purposes.
  *
- * To enable this handler, add it to your config:
+ * Enable this bundled hook with `openclaw hooks enable command-logger` or config:
  *
  * ```json
  * {
  *   "hooks": {
  *     "internal": {
- *       "enabled": true,
- *       "handlers": [
- *         {
- *           "event": "command",
- *           "module": "./hooks/handlers/command-logger.ts"
- *         }
- *       ]
+ *       "entries": {
+ *         "command-logger": { "enabled": true }
+ *       }
  *     }
  *   }
  * }

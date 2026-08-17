@@ -6,12 +6,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
-import {
-  getFreePort,
-  parseProcessRssKb,
-  readProcessRssMb,
-  readProcessTreeCpuMs,
-} from "./lib/gateway-bench-probes.ts";
+import { getFreePort, readProcessRssMb, readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
@@ -832,14 +827,9 @@ export const testing = {
   collectResultFailures,
   collectStartupTrace,
   parseOptions,
-  parseNonNegativeInt,
-  parsePositiveInt,
-  parseProcessRssKb,
-  resolveEntry,
   sanitizedEnv,
   stopChild,
   summarizeCase,
-  validateCliArgs,
   waitForProbe,
   waitForStartupTracePhase,
   writeConfig,

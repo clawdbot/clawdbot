@@ -36,7 +36,7 @@ function isQaOpenAiResponsesProviderConfig(config: ModelProviderConfig) {
   );
 }
 
-export function resolveQaBundledPluginSourceDir(params: { repoRoot: string; pluginId: string }) {
+function resolveQaBundledPluginSourceDir(params: { repoRoot: string; pluginId: string }) {
   assertSafeQaBundledPluginId(params.pluginId);
   const candidates = [
     path.join(params.repoRoot, "dist", "extensions", params.pluginId),

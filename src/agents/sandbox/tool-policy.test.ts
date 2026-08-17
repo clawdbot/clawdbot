@@ -224,6 +224,104 @@ describe("sandbox/tool-policy", () => {
     ).toBe(true);
   });
 
+  it("classifies a borrowed runtime key under its own sandbox agent", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          worker: {
+            sandbox: { mode: "non-main", scope: "agent" },
+            tools: { sandbox: { tools: { deny: ["sessions_list"] } } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const runtime = resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      classificationSessionKey: "agent:worker:discord:default:direct:peer-42",
+      classificationAgentId: "worker",
+    });
+
+    expect(runtime).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      classificationAgentId: "worker",
+      classificationSessionKey: "agent:worker:discord:default:direct:peer-42",
+      sandboxed: true,
+    });
+    expect(runtime.toolPolicy.deny).toContain("sessions_list");
+  });
+
+  it("recognizes the classification agent's main session in non-main mode", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          worker: { sandbox: { mode: "non-main", scope: "agent" } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const runtime = resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      classificationSessionKey: "agent:worker:main",
+      classificationAgentId: "worker",
+    });
+
+    expect(runtime.agentId).toBe("main");
+    expect(runtime.classificationAgentId).toBe("worker");
+    expect(runtime.sandboxed).toBe(false);
+  });
+
+  it("rejects a classification agent that conflicts with its session key", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, worker: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        classificationSessionKey: "agent:worker:main",
+        classificationAgentId: "main",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
+
+  it("keeps the session identity as the sandbox classification when none is supplied", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: { sandbox: { mode: "non-main", scope: "agent" } } },
+      },
+    } satisfies OpenClawConfig;
+
+    const runtime = resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: "agent:main:telegram:default:direct:42",
+      agentId: "main",
+    });
+
+    expect(runtime).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:default:direct:42",
+      classificationAgentId: "main",
+      classificationSessionKey: "agent:main:telegram:default:direct:42",
+      sandboxed: true,
+    });
+  });
+
   it("keeps the agent main session sandboxed in all mode", () => {
     const cfg: OpenClawConfig = {
       agents: {

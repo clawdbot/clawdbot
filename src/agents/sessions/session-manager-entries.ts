@@ -1,4 +1,8 @@
-import type { TranscriptEntryAnchor } from "../../config/sessions/session-accessor.js";
+import {
+  readActiveTranscriptEntryAnchor,
+  type TranscriptEntryAnchor,
+} from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import {
@@ -87,11 +91,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.pendingDeliberateAppend = false;
     if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
       this.appendMode = "side";
-      this.promptReleasedSideBranchParentId = canonicalEntry.id;
     } else {
       this.leafId = canonicalEntry.id;
       this.appendMode = undefined;
-      this.promptReleasedSideBranchParentId = undefined;
     }
     return persistenceResult && typeof persistenceResult === "object"
       ? persistenceResult.anchor
@@ -134,12 +136,24 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): { entryId: string; anchor?: TranscriptEntryAnchor } {
+    if (message.role === "assistant") {
+      applyAssistantDeliveryDirectives(message);
+    }
     if (options?.idempotencyLookup !== "caller-checked") {
       const currentUserId = this.resolveCurrentKeyedUserId(message);
       if (currentUserId) {
         // Session setup may insert context-free metadata after the ingress-persisted user.
         // Keep that metadata as the append parent while adopting the canonical user once.
-        return { entryId: currentUserId };
+        const anchor = this.persistenceTarget
+          ? readActiveTranscriptEntryAnchor({
+              ...this.persistenceTarget,
+              entryId: currentUserId,
+            })
+          : undefined;
+        if (this.persistenceTarget && !anchor) {
+          throw new Error(`Session transcript anchor was not returned: ${currentUserId}`);
+        }
+        return { entryId: currentUserId, ...(anchor ? { anchor } : {}) };
       }
     }
     const entry: SessionMessageEntry = {
@@ -304,8 +318,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = params.targetId;
     this.appendParentId = params.appendParentId;
     this.appendMode = params.appendMode;
-    this.promptReleasedSideBranchParentId =
-      params.appendMode === "side" ? params.appendParentId : undefined;
     this.pendingDeliberateAppend = false;
     return entry;
   }
@@ -441,7 +453,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = branchTargetId;
     this.appendParentId = branchTargetId;
     this.appendMode = undefined;
-    this.promptReleasedSideBranchParentId = undefined;
     this.pendingDeliberateAppend = true;
   }
 
@@ -449,7 +460,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = null;
     this.appendParentId = null;
     this.appendMode = undefined;
-    this.promptReleasedSideBranchParentId = undefined;
     this.pendingDeliberateAppend = true;
   }
 

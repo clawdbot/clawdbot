@@ -1,9 +1,26 @@
-// Private ACPX runtime backend helpers for bundled extensions.
-// Keep this surface narrow and limited to the ACP runtime/backend contract.
+// Private ACPX runtime backend implementation.
+// The public ACP runtime and shipped compatibility facade project this narrow owner surface.
 
+import { hasExplicitCommandContextText } from "../auto-reply/reply/context-text.js";
+import {
+  finalizeInboundContextForSdk,
+  isFinalizedInboundContext,
+} from "../auto-reply/reply/inbound-context.js";
+import type {
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchResult,
+} from "../plugins/types.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+
+export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
-export { AcpRuntimeError } from "../acp/runtime/errors.js";
-export { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
+export {
+  getAcpRuntimeBackend,
+  registerAcpRuntimeBackend,
+  requireAcpRuntimeBackend,
+  unregisterAcpRuntimeBackend,
+} from "../acp/runtime/registry.js";
 export type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -13,29 +30,90 @@ export type {
   AcpRuntimeHandle,
   AcpRuntimeStatus,
   AcpRuntimeTurn,
+  AcpRuntimeTurnAttachment,
   AcpRuntimeTurnInput,
   AcpRuntimeTurnResult,
   AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
 } from "@openclaw/acp-core/runtime/types";
-export type {
-  OpenClawPluginApi,
-  OpenClawPluginConfigSchema,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
-  PluginLogger,
-} from "../plugins/types.js";
-export type {
-  WindowsSpawnProgram,
-  WindowsSpawnProgramCandidate,
-  WindowsSpawnResolution,
-} from "./windows-spawn.js";
-export {
-  applyWindowsSpawnProgramPolicy,
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgramCandidate,
-} from "./windows-spawn.js";
-export {
-  listKnownProviderAuthEnvVarNames,
-  omitEnvKeysCaseInsensitive,
-} from "../secrets/provider-env-vars.js";
+
+// ACP dispatch pulls in session/media/manager code; keep it lazy so
+// startup-loaded plugin surfaces stay light and concurrent hooks share one load.
+const loadDispatchAcpRuntime = createLazyRuntimeModule(
+  () => import("../auto-reply/reply/dispatch-acp.runtime.js"),
+);
+
+/**
+ * Dispatch a plugin reply hook through ACP when the event targets an ACP-bound session.
+ * Returns a handled result only when ACP consumes the reply; otherwise callers continue normal delivery.
+ */
+export async function tryDispatchAcpReplyHook(
+  event: PluginHookReplyDispatchEvent,
+  ctx: PluginHookReplyDispatchContext,
+): Promise<PluginHookReplyDispatchResult | void> {
+  const finalizedCtx = isFinalizedInboundContext(event.ctx)
+    ? event.ctx
+    : finalizeInboundContextForSdk(event.ctx);
+  // Under sendPolicy: "deny", ACP-bound sessions still need their turns to flow
+  // through acpManager.runTurn so session state, tool calls, and memory stay
+  // consistent. Delivery suppression is handled by the ACP delivery path.
+  if (
+    event.sendPolicy === "deny" &&
+    !event.suppressUserDelivery &&
+    !hasExplicitCommandContextText(finalizedCtx) &&
+    !event.isTailDispatch
+  ) {
+    return;
+  }
+  const runtime = await loadDispatchAcpRuntime();
+  const bypassForCommand = await runtime.shouldBypassAcpDispatchForCommand(finalizedCtx, ctx.cfg);
+
+  if (
+    event.sendPolicy === "deny" &&
+    !event.suppressUserDelivery &&
+    !bypassForCommand &&
+    !event.isTailDispatch
+  ) {
+    return;
+  }
+
+  const result = await runtime.tryDispatchAcpReply({
+    ctx: finalizedCtx,
+    cfg: ctx.cfg,
+    dispatcher: ctx.dispatcher,
+    runId: event.runId,
+    sessionKey: event.sessionKey,
+    toolsAllow: event.toolsAllow,
+    images: event.images,
+    abortSignal: ctx.abortSignal,
+    inboundAudio: event.inboundAudio,
+    sessionTtsAuto: event.sessionTtsAuto,
+    ttsChannel: event.ttsChannel,
+    suppressUserDelivery: event.suppressUserDelivery,
+    suppressReplyLifecycle: event.suppressReplyLifecycle === true || event.sendPolicy === "deny",
+    sourceReplyDeliveryMode: event.sourceReplyDeliveryMode,
+    shouldRouteToOriginating: event.shouldRouteToOriginating,
+    originatingChannel: event.originatingChannel,
+    originatingTo: event.originatingTo,
+    originatingAccountId: event.originatingAccountId,
+    originatingThreadId: event.originatingThreadId,
+    originatingChatType: event.originatingChatType,
+    shouldSendToolSummaries: event.shouldSendToolSummaries,
+    shouldSendToolSummariesNow: () => event.shouldSendToolSummaries,
+    shouldSendFullToolDetails: event.shouldSendFullToolDetails,
+    bypassForCommand,
+    onReplyStart: ctx.onReplyStart,
+    recordProcessed: ctx.recordProcessed,
+    markIdle: ctx.markIdle,
+  });
+
+  if (!result) {
+    return;
+  }
+
+  return {
+    handled: true,
+    queuedFinal: result.queuedFinal,
+    counts: result.counts,
+  };
+}

@@ -61,6 +61,8 @@ import {
   QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
   QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
   QA_SLACK_CHART_PRESENTATION_PROMPT_RE,
+  QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE,
+  QA_MESSAGE_DECISION_SEND_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
   buildSlackMpimHistoryBotReply,
@@ -134,7 +136,6 @@ import {
   isHeartbeatPrompt,
 } from "./mock-openai-directives.js";
 import {
-  buildToolCallEvents,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
   extractPlannedToolName,
@@ -144,6 +145,7 @@ import {
   buildQaLongFinalText,
   buildAssistantThenToolCallEvents,
   buildAssistantEvents,
+  buildPartialFailureEvents,
   buildReasoningOnlyEvents,
   buildReasoningAndAssistantEvents,
   buildFailedResponseEvents,
@@ -288,6 +290,9 @@ const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
 const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
+const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
+const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
+const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
 // Keep each real provider request active long enough for retries to span the
 // unchanged five-minute recovery bound while remaining below first-byte timeout.
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 110_000;
@@ -867,6 +872,12 @@ async function buildResponsesPayload(
   // current-turn dispatch must win before the persistent recovery fixture.
   if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
     return buildAssistantEvents(QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER);
+  }
+  if (QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE.test(prompt)) {
+    return buildPartialFailureEvents(QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER);
+  }
+  if (QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE.test(prompt)) {
+    return buildFailedResponseEvents();
   }
   if (QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText)) {
     return buildFailedResponseEvents();
@@ -1474,6 +1485,31 @@ async function buildResponsesPayload(
     }
     if (hasCompletedToolOutput) {
       return buildAssistantEvents(slackChartMatch[2]);
+    }
+  }
+  if (QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message:
+          "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+      });
+    }
+    if (hasCompletedToolOutput) {
+      return buildAssistantEvents("NO_REPLY");
+    }
+  }
+  if (QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: "QA-MESSAGE-DELIVERY-OK",
+        final: true,
+        presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+      });
+    }
+    if (hasCompletedToolOutput) {
+      return buildAssistantEvents("NO_REPLY");
     }
   }
   if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
@@ -2353,7 +2389,7 @@ async function buildResponsesPayload(
     });
   }
   if (!hasCompletedToolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
-    return buildToolCallEvents(prompt);
+    return buildToolCallEventsWithArgs("read", { path: readTargetFromPrompt(prompt) });
   }
   if (/visible skill marker/i.test(prompt) && !hasCompletedToolOutput) {
     return buildAssistantEvents("VISIBLE-SKILL-OK");

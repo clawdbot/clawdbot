@@ -629,4 +629,35 @@ describe("isRunningToolCard", () => {
     });
     expect(finished[0]).toMatchObject({ live: true, completed: true });
   });
+
+  it("keeps a live card running when partial update output emits a result block", () => {
+    // The stream emits toolresult blocks for partial `update` output; only
+    // resultReceived may complete a live card, or a running tool flips to
+    // "succeeded" (or "failed", if the partial text looks like an error).
+    const partial = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-live",
+      __openclawToolStreamLive: true,
+      __openclawToolStreamResultReceived: false,
+      content: [
+        { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
+        { type: "toolresult", name: "bash", text: '{"error": "partial text"}' },
+      ],
+    });
+    expect(partial).toHaveLength(1);
+    expect(partial[0]).toMatchObject({ live: true, completed: false });
+    expect(partial[0]?.outputText).toContain("partial text");
+
+    const done = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-live",
+      __openclawToolStreamLive: true,
+      __openclawToolStreamResultReceived: true,
+      content: [
+        { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
+        { type: "toolresult", name: "bash", text: "ok" },
+      ],
+    });
+    expect(done[0]).toMatchObject({ live: true, completed: true });
+  });
 });

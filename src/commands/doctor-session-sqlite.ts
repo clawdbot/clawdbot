@@ -3,10 +3,11 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveSessionFilePath } from "../config/sessions/paths.js";
-import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite.js";
+import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
@@ -14,15 +15,20 @@ import {
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
   resolveSessionStoreTargets,
-  type SessionStoreTarget,
+  type SessionStoreTarget as ResolvedSessionStoreTarget,
 } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import {
+  LEGACY_IMPLICIT_AGENT_ID,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
@@ -83,6 +89,8 @@ export type {
   DoctorSessionSqliteRestoreReport,
   DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
+
+type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
 type LegacySessionRecord = {
   entry: SessionEntry;
@@ -197,10 +205,7 @@ function resolveDoctorSessionSqliteMaintenanceRoots(
 }
 
 function isPathWithin(rootPath: string, candidatePath: string): boolean {
-  const relativePath = path.relative(rootPath, path.resolve(candidatePath));
-  return (
-    relativePath === "" || (!relativePath.startsWith(`..${path.sep}`) && relativePath !== "..")
-  );
+  return isPathInside(rootPath, path.resolve(candidatePath));
 }
 
 function commonPathAncestor(leftPath: string, rightPath: string): string {
@@ -258,10 +263,27 @@ function resolveDoctorSessionSqliteTargets(params: {
     );
   }
   if (params.allAgents) {
-    return filterLegacySessionStoreTargets(
+    const targets = filterLegacySessionStoreTargets(
       resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
       params.mode,
     );
+    if (params.mode !== "dry-run" && params.mode !== "import" && params.mode !== "validate") {
+      return targets;
+    }
+    const legacyStorePath = path.join(resolveStateDir(params.env), "sessions", "sessions.json");
+    if (!fs.existsSync(legacyStorePath)) {
+      return targets;
+    }
+    const legacyTargets = resolveSessionStoreTargets(
+      params.cfg,
+      { allAgents: true },
+      { env: params.env },
+    ).map((target) => ({
+      agentId: target.agentId,
+      sqlitePath: resolveTargetSqlitePath(target),
+      storePath: legacyStorePath,
+    }));
+    return [...legacyTargets, ...targets];
   }
   return resolveSessionStoreTargets(params.cfg, {}, { env: params.env }).filter((target) =>
     fs.existsSync(target.storePath),
@@ -507,6 +529,16 @@ function isLegacySessionRecordOwnedByTarget(
   target: SessionStoreTarget,
   sessionKey: string,
 ): boolean {
+  if (target.sqlitePath) {
+    const parsed = parseAgentSessionKey(sessionKey);
+    const ownerAgentId =
+      parsed?.agentId ??
+      cfg.agents?.defaults?.sessionStore?.agentId?.trim() ??
+      tryResolveLegacyCompatibilityAgentId(cfg);
+    return ownerAgentId
+      ? normalizeAgentId(ownerAgentId) === normalizeAgentId(target.agentId)
+      : false;
+  }
   const ownerAgentId = resolveStoredSessionOwnerAgentId({
     cfg,
     agentId: target.agentId,
@@ -531,14 +563,29 @@ function resolveLegacyTranscriptPath(
   if (parseSqliteSessionFileMarker(legacySessionFile)) {
     return undefined;
   }
-  const defaultPath = resolveSessionFilePath(entry.sessionId, entry, {
-    agentId: target.agentId,
-    sessionsDir: path.dirname(target.storePath),
-  });
+  const sessionsDir = path.dirname(target.storePath);
+  const relocatedPath = legacySessionFile?.trim()
+    ? path.join(sessionsDir, path.basename(legacySessionFile))
+    : undefined;
+  let defaultPath: string;
+  try {
+    defaultPath = resolveSessionFilePathCore(entry.sessionId, entry, {
+      agentId: target.agentId,
+      sessionsDir,
+    });
+  } catch (error) {
+    if (!relocatedPath) {
+      throw error;
+    }
+    defaultPath = relocatedPath;
+  }
   if (fs.existsSync(defaultPath)) {
     return defaultPath;
   }
-  return legacySessionFile?.trim() ? defaultPath : undefined;
+  if (relocatedPath && fs.existsSync(relocatedPath)) {
+    return relocatedPath;
+  }
+  return relocatedPath ? defaultPath : undefined;
 }
 
 function countLegacyTranscript(
@@ -593,7 +640,7 @@ async function importLegacySessionRecord(
       entry: record.entry,
       preserveExactStoredKey: true,
       sessionKey: record.sessionKey,
-      storePath: target.storePath,
+      storePath: target.sqlitePath ?? target.storePath,
     });
     report.importedEntries += 1;
     report.importedTranscriptEvents += imported.transcriptEvents;
@@ -610,7 +657,7 @@ async function importLegacySessionRecord(
       entry: record.entry,
       preserveExactStoredKey: true,
       sessionKey: record.sessionKey,
-      storePath: target.storePath,
+      storePath: target.sqlitePath ?? target.storePath,
       ...(record.transcriptPath && shouldImportTranscript
         ? {
             readTranscriptEvents: createTranscriptEventPrefixReader(
@@ -639,7 +686,7 @@ async function importLegacySessionRecord(
     entry: record.entry,
     preserveExactStoredKey: true,
     sessionKey: record.sessionKey,
-    storePath: target.storePath,
+    storePath: target.sqlitePath ?? target.storePath,
     ...(record.transcriptPath && result.status === "ok" && shouldImportTranscript
       ? {
           readTranscriptEvents: createTranscriptEventReader(
@@ -1147,7 +1194,7 @@ function resolveActiveSqliteTranscriptFile(
 ): string | undefined {
   let transcriptPath: string;
   try {
-    transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+    transcriptPath = resolveSessionFilePathCore(entry.sessionId, entry, {
       agentId: target.agentId,
       sessionsDir: path.dirname(target.storePath),
     });

@@ -1,5 +1,6 @@
 // Curated Updates settings presentation. The existing update config remains
 // the source of authored policy; the Gateway schedule DTO owns runtime status.
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import type { UpdateAvailable, UpdateScheduleState } from "../../api/types.ts";
@@ -19,6 +20,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 
 type UpdatesChannel = "stable" | "beta" | "dev" | "extended-stable";
 
@@ -26,6 +28,8 @@ type UpdatesViewProps = {
   configObject: Record<string, unknown>;
   gatewayVersion: string | null;
   controlUiCommit: string | null;
+  controlUiCommitAt: string | null;
+  controlUiBuiltAt: string | null;
   schedule: UpdateScheduleState | null;
   heldUpdateCampaignId: string | null;
   updateAvailable: UpdateAvailable | null;
@@ -67,8 +71,25 @@ function readUpdatesSettings(
   };
 }
 
+function parseTimestampMs(value: string | null): number | null {
+  return parseDateStringTimestampMs(value) ?? null;
+}
+
+function renderTimestamp(timestampMs: number, nowMs = Date.now()) {
+  const relative = formatTimeAgo(Math.max(0, nowMs - timestampMs));
+  return renderSettingsValue(
+    html`<time datetime=${new Date(timestampMs).toISOString()} title=${relative}
+      >${formatDateTimeMs(timestampMs, { dateStyle: "medium", timeStyle: "short" })}
+      <span class="muted">· ${relative}</span></time
+    >`,
+  );
+}
+
 function renderBuildFacts(props: UpdatesViewProps) {
   const installKind = props.schedule?.install?.kind;
+  const git = props.schedule?.install?.git;
+  const builtAtMs = parseTimestampMs(props.controlUiBuiltAt);
+  const commitAtMs = git?.commitAtMs ?? parseTimestampMs(props.controlUiCommitAt);
   return renderSettingsSection({ title: t("updates.page.buildTitle") }, [
     renderSettingsRow({
       title: t("updates.page.gatewayVersion"),
@@ -90,6 +111,27 @@ function renderBuildFacts(props: UpdatesViewProps) {
         { mono: true },
       ),
     }),
+    builtAtMs === null
+      ? nothing
+      : renderSettingsRow({
+          title: t("updates.page.builtAt"),
+          control: renderTimestamp(builtAtMs, props.nowMs),
+        }),
+    installKind === "git"
+      ? renderSettingsRow({
+          title: t("updates.page.installedAt"),
+          control:
+            git?.installedAtMs === undefined
+              ? renderSettingsValue(t("updates.page.installedAtUnknown"))
+              : renderTimestamp(git.installedAtMs, props.nowMs),
+        })
+      : nothing,
+    commitAtMs === null
+      ? nothing
+      : renderSettingsRow({
+          title: t("updates.page.lastCommitAt"),
+          control: renderTimestamp(commitAtMs, props.nowMs),
+        }),
     installKind
       ? renderSettingsRow({
           title: t("updates.page.installKind"),
@@ -116,10 +158,44 @@ function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
           ? "warn"
           : "accent";
     label = props.statusBanner.text;
+  } else if (props.schedule?.install?.kind === "git") {
+    const git = props.schedule.install.git;
+    if (!git) {
+      label = t("updates.page.statusUnavailable");
+    } else if (git.status === "current") {
+      kind = "ok";
+      label = t("updates.page.upToDate");
+    } else if (git.status === "behind") {
+      kind = "accent";
+      const lag = t(
+        git.commitsBehind === 1 ? "updates.target.commitBehind" : "updates.target.commitsBehind",
+        { count: String(git.commitsBehind) },
+      );
+      label = t("updates.page.available", { target: lag });
+    } else if (git.status === "ahead") {
+      label = t(
+        git.commitsAhead === 1 ? "updates.page.gitCommitAhead" : "updates.page.gitCommitsAhead",
+        { count: String(git.commitsAhead) },
+      );
+    } else if (git.status === "diverged") {
+      kind = "warn";
+      label = t("updates.page.gitDiverged", {
+        ahead: String(git.commitsAhead),
+        behind: String(git.commitsBehind),
+      });
+    } else {
+      kind = "warn";
+      label =
+        git.reason === "fetch-failed"
+          ? t("updates.page.gitFetchFailed")
+          : git.reason === "no-upstream"
+            ? t("updates.page.gitNoUpstream")
+            : t("updates.page.gitComparisonFailed");
+    }
   } else if (target) {
     kind = "accent";
     label = t("updates.page.available", { target });
-  } else if (props.schedule) {
+  } else if (props.schedule?.install?.kind === "package") {
     kind = "ok";
     label = t("updates.page.upToDate");
   } else {
@@ -127,14 +203,28 @@ function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
   }
   const countdown = campaign?.state === "waiting-for-idle" || campaign?.state === "countdown";
   return html`<span role=${countdown ? "timer" : nothing} aria-live=${countdown ? "off" : nothing}
-    >${renderSettingsStatus({ kind, label })}</span
+    >${renderSettingsStatus({ kind, label, dot: false })}</span
   >`;
 }
 
 function readGitCommits(props: UpdatesViewProps) {
   const update = props.updateAvailable;
   const gitUpdate = props.schedule?.target?.kind === "git" || Boolean(update?.currentSha);
-  return gitUpdate ? (update?.commits ?? []) : [];
+  const comparedBehind = props.schedule?.install?.git;
+  if (
+    comparedBehind &&
+    comparedBehind.status !== "behind" &&
+    comparedBehind.status !== "diverged"
+  ) {
+    return [];
+  }
+  const comparedBehindCount =
+    comparedBehind?.status === "behind" || comparedBehind?.status === "diverged"
+      ? comparedBehind.commitsBehind
+      : undefined;
+  const commitsMatch =
+    comparedBehindCount === undefined || comparedBehindCount === update?.commitsBehind;
+  return gitUpdate && commitsMatch ? (update?.commits ?? []) : [];
 }
 
 function renderCommitList(props: UpdatesViewProps) {

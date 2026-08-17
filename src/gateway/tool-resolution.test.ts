@@ -90,6 +90,68 @@ describe("resolveGatewayScopedTools", () => {
     expect(grantBound.tools.some((tool) => tool.name === "image")).toBe(true);
   });
 
+  it("uses the prepared vision fact for the loopback image loader", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      agentDir: "/agents/cli",
+      sessionKey: "agent:main:main",
+      modelHasVision: true,
+      surface: "loopback",
+    });
+
+    const imageTool = result.tools.find((tool) => tool.name === "image");
+    expect(imageTool).toMatchObject({
+      label: "Inspect Image",
+      catalogMode: "direct-only",
+    });
+    expect(imageTool?.description).toContain("private model context");
+  });
+
+  it("applies a borrowed runtime policy without reassigning session tools", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          worker: { tools: { deny: ["sessions_list"] } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      runtimePolicySessionKey: "agent:worker:discord:default:direct:peer-42",
+      runtimePolicyAgentId: "worker",
+      surface: "loopback",
+    });
+
+    expect(result.agentId).toBe("main");
+    expect(result.tools.some((tool) => tool.name === "sessions_list")).toBe(false);
+    expect(result.tools.some((tool) => tool.name === "sessions_history")).toBe(true);
+  });
+
+  it("rejects a runtime policy agent that conflicts with its session key", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, worker: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveGatewayScopedTools({
+        cfg,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        runtimePolicySessionKey: "agent:worker:main",
+        runtimePolicyAgentId: "main",
+        surface: "loopback",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
+
   it("materializes an executable write tool on the mediated CLI surface", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-write-"));
     try {
@@ -157,9 +219,9 @@ describe("resolveGatewayScopedTools", () => {
       surface: "loopback",
     });
 
-    expect(withoutActions.tools.some((tool) => tool.name === "spawn_task")).toBe(false);
+    expect(withoutActions.tools.some((tool) => tool.name === "suggest_task")).toBe(false);
     expect(withActions.tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["spawn_task", "dismiss_task"]),
+      expect.arrayContaining(["suggest_task", "dismiss_task"]),
     );
   });
 

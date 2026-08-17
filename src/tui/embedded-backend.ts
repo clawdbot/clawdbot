@@ -33,7 +33,7 @@ import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
-import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
+import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import {
   DEFAULT_QUEUE_CAP,
   DEFAULT_QUEUE_DEBOUNCE_MS,
@@ -42,6 +42,7 @@ import {
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
@@ -72,11 +73,11 @@ import {
   getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   loadSessionEntry,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   resolveCanonicalGatewaySessionStoreKey,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
@@ -493,7 +494,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
       const { cfg, canonicalKey, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
-      let queueSettings = resolveQueueSettings({
+      let queueSettings = resolveQueueSettingsCore({
         cfg,
         channel: INTERNAL_MESSAGE_CHANNEL,
         sessionEntry: entry,
@@ -507,6 +508,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             {
               steeringMode: "all",
               debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
+              isInboundUserMessage: true,
             },
           ).catch(() => undefined);
           if (outcome?.queued) {
@@ -625,7 +627,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
+    const { cfg, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
       opts.sessionKey,
       { ...loadOptions, includeStoreChildEntries: true },
     );
@@ -730,7 +732,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+    const { storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
       agentId: opts?.agentId,
       projection: "list",
     });
@@ -751,30 +753,29 @@ export class EmbeddedTuiBackend implements TuiBackend {
   ): Promise<SessionsPatchResult> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveGatewaySessionStoreTargetWithStore({
       cfg,
       key: opts.key,
       agentId: opts.agentId,
+      exactRead: true,
     });
     const applied = await applySessionPatchProjection({
+      ...(opts.label === undefined ? { sessionKeys: target.storeKeys } : {}),
       storePath: target.storePath,
-      resolveTarget: ({ entries }) => {
-        const store = Object.fromEntries(
-          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-        );
+      resolveTarget: ({ store }) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key: opts.key,
-          store,
+          store: store as Record<string, SessionEntry>,
           agentId: opts.agentId,
         });
         return { primaryKey, candidateKeys: migratedTarget.storeKeys };
       },
-      project: async ({ primaryKey, existingEntry, entries }) =>
+      project: async ({ primaryKey, existingEntry, isLabelInUse }) =>
         await projectSessionsPatchEntry({
           cfg,
-          entries,
           existingEntry,
+          isLabelInUse,
           storeKey: primaryKey,
           agentId: opts.agentId,
           patch: opts,
@@ -796,7 +797,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ok: true as const,
       path: target.storePath,
       key: target.canonicalKey ?? opts.key,
-      entry: applied.entry as unknown as Record<string, unknown>,
+      entry: { ...applied.entry },
       resolved: {
         modelProvider: resolved.provider,
         model: resolved.model,
@@ -806,7 +807,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
     await this.ready;
-    if (loadSessionEntryReadOnly(key, opts).entry?.incognito === true) {
+    if (loadGatewaySessionEntryReadOnly(key, opts).entry?.incognito === true) {
       throw new Error("Incognito sessions cannot reset in place.");
     }
     const result = await performGatewaySessionReset({

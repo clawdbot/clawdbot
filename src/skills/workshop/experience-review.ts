@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
+import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { autoApplySkillProposal } from "./auto-apply.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
@@ -71,6 +74,7 @@ type ExperienceReviewAgentContext = {
 export type SkillExperienceReviewParams = {
   event: ExperienceReviewAgentEndEvent;
   ctx: ExperienceReviewAgentContext;
+  usedSkills?: readonly RunSkillUsage[];
   config?: OpenClawConfig;
 };
 
@@ -79,6 +83,7 @@ export type ExperienceReviewCandidate = {
   config?: OpenClawConfig;
   transcript: string;
   modelIterations: number;
+  usedSkills?: readonly RunSkillUsage[];
   turnAborted?: boolean;
 };
 
@@ -103,6 +108,18 @@ type PendingExperienceReview = {
   generation: number;
   timer?: ExperienceReviewTimer;
 };
+
+function mergeRunSkillUsage(
+  ...groups: Array<readonly RunSkillUsage[] | undefined>
+): RunSkillUsage[] {
+  const merged = new Map<string, RunSkillUsage>();
+  for (const group of groups) {
+    for (const usage of group ?? []) {
+      merged.set(`${usage.source}\u0000${usage.name}\u0000${usage.activation}`, usage);
+    }
+  }
+  return [...merged.values()];
+}
 
 function isAuthProfileMigrationRequiredError(
   error: unknown,
@@ -216,6 +233,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       senderScope: string;
       iterations: number;
       messages: unknown[];
+      usedSkills: RunSkillUsage[];
       aborted: boolean;
       lastRunId?: string;
     }
@@ -347,6 +365,12 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       let reviewIterations = modelIterations;
       let reviewMessages = turnMessages;
       let reviewAborted = !params.event.success;
+      let reviewUsedSkills = mergeRunSkillUsage(
+        existing && existing.candidate.ctx.runId === params.ctx.runId
+          ? existing.candidate.usedSkills
+          : undefined,
+        params.usedSkills,
+      );
       if (modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
         shallowBySession.delete(sessionKey);
       } else {
@@ -393,7 +417,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
               shallowBySession.delete(oldestKey);
             }
           }
-          accumulator = { senderScope, iterations: 0, messages: [], aborted: false };
+          accumulator = {
+            senderScope,
+            iterations: 0,
+            messages: [],
+            usedSkills: [],
+            aborted: false,
+          };
           shallowBySession.set(sessionKey, accumulator);
         }
         const runId = params.ctx.runId?.trim();
@@ -405,6 +435,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         accumulator.lastRunId = runId;
         accumulator.iterations += modelIterations;
         accumulator.aborted = accumulator.aborted || !params.event.success;
+        accumulator.usedSkills = mergeRunSkillUsage(accumulator.usedSkills, params.usedSkills);
         accumulator.messages = [...accumulator.messages, ...turnMessages].slice(
           -EXPERIENCE_REVIEW_MAX_SHALLOW_MESSAGES,
         );
@@ -418,6 +449,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         reviewIterations = accumulator.iterations;
         reviewMessages = accumulator.messages;
         reviewAborted = accumulator.aborted;
+        reviewUsedSkills = accumulator.usedSkills;
       }
       {
         if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
@@ -462,6 +494,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           ...(params.config ? { config: params.config } : {}),
           transcript: formatSkillExperienceReviewTranscript(reviewMessages),
           modelIterations: reviewIterations,
+          usedSkills: reviewUsedSkills,
           turnAborted: reviewAborted,
         };
         const pending = existing ?? { candidate, generation: 0 };
@@ -512,76 +545,88 @@ async function runSkillExperienceReviewInner(
   }
 
   const sessionId = randomUUID();
+  const runId = `skill-workshop-review:${randomUUID()}`;
+  const config = candidate.config ?? getRuntimeConfig();
   const proposalMutationBudget: SkillWorkshopProposalMutationBudget = {
     remaining: 1,
-    patchProposalIds: new Set(),
     readSkillHashes: new Map(),
   };
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
   const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
-    config: candidate.config,
+    config,
     agentId: candidate.ctx.agentId,
   }).map((skill) =>
     skill.description ? { name: skill.name, description: skill.description } : { name: skill.name },
   );
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-  await runEmbeddedAgent({
-    sessionId,
-    sessionKey: reviewSessionKey,
-    sandboxSessionKey: sessionKey,
-    sessionManager: SessionManager.inMemory(workspaceDir),
-    ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
-    trigger: "manual",
-    // Never occupy the foreground agent lane after the idle gate opens.
-    lane: CommandLane.SkillWorkshopReview,
-    messageChannel: candidate.ctx.messageChannel ?? undefined,
-    messageProvider: candidate.ctx.messageProvider ?? undefined,
-    ...(candidate.ctx.chatType ? { chatType: candidate.ctx.chatType } : {}),
-    ...(candidate.ctx.agentAccountId ? { agentAccountId: candidate.ctx.agentAccountId } : {}),
-    groupId: candidate.ctx.groupId,
-    groupChannel: candidate.ctx.groupChannel,
-    groupSpace: candidate.ctx.groupSpace,
-    memberRoleIds: candidate.ctx.memberRoleIds ? [...candidate.ctx.memberRoleIds] : undefined,
-    spawnedBy: candidate.ctx.spawnedBy,
-    senderId: candidate.ctx.senderId,
-    senderName: candidate.ctx.senderName,
-    senderUsername: candidate.ctx.senderUsername,
-    senderE164: candidate.ctx.senderE164,
-    senderIsOwner: candidate.ctx.senderIsOwner,
-    agentHarnessId: "openclaw",
-    agentHarnessRuntimeOverride: "openclaw",
-    workspaceDir,
-    ...(candidate.config ? { config: candidate.config } : {}),
-    prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
-    provider: modelProviderId,
-    model: modelId,
-    modelSelectionLocked: true,
-    modelFallbacksOverride: [],
-    ...(candidate.ctx.authProfileId
-      ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
-      : {}),
-    timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
-    runId: `skill-workshop-review:${randomUUID()}`,
-    toolsAllow: ["skill_workshop"],
-    disableMessageTool: true,
-    disableTrajectory: true,
-    skillWorkshopProposalOnly: true,
-    skillWorkshopUpdateProposals: true,
-    skillWorkshopAutonomousCapture: true,
-    skillWorkshopProposalMutationBudget: proposalMutationBudget,
-    skillWorkshopOrigin: {
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    config,
+    runId,
+    candidate.ctx.agentId ?? "main",
+    "skill-workshop.experience",
+  );
+  try {
+    await runEmbeddedAgent({
+      preparedRunAdmission,
+      sessionId,
+      sessionKey: reviewSessionKey,
+      sandboxSessionKey: sessionKey,
+      sessionManager: SessionManager.inMemory(workspaceDir),
       ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
-      sessionKey,
-      ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
-    },
-    cleanupBundleMcpOnRunEnd: true,
-    bootstrapContextMode: "lightweight",
-    skillsSnapshot: { prompt: "", skills: [] },
-    verboseLevel: "off",
-    reasoningLevel: "off",
-    suppressToolErrorWarnings: true,
-  });
+      trigger: "manual",
+      // Never occupy the foreground agent lane after the idle gate opens.
+      lane: CommandLane.SkillWorkshopReview,
+      messageChannel: candidate.ctx.messageChannel ?? undefined,
+      messageProvider: candidate.ctx.messageProvider ?? undefined,
+      ...(candidate.ctx.chatType ? { chatType: candidate.ctx.chatType } : {}),
+      ...(candidate.ctx.agentAccountId ? { agentAccountId: candidate.ctx.agentAccountId } : {}),
+      groupId: candidate.ctx.groupId,
+      groupChannel: candidate.ctx.groupChannel,
+      groupSpace: candidate.ctx.groupSpace,
+      memberRoleIds: candidate.ctx.memberRoleIds ? [...candidate.ctx.memberRoleIds] : undefined,
+      spawnedBy: candidate.ctx.spawnedBy,
+      senderId: candidate.ctx.senderId,
+      senderName: candidate.ctx.senderName,
+      senderUsername: candidate.ctx.senderUsername,
+      senderE164: candidate.ctx.senderE164,
+      senderIsOwner: candidate.ctx.senderIsOwner,
+      agentHarnessId: "openclaw",
+      agentHarnessRuntimeOverride: "openclaw",
+      workspaceDir,
+      config,
+      prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
+      provider: modelProviderId,
+      model: modelId,
+      modelSelectionLocked: true,
+      modelFallbacksOverride: [],
+      ...(candidate.ctx.authProfileId
+        ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
+        : {}),
+      timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
+      runId,
+      toolsAllow: ["skill_workshop"],
+      disableMessageTool: true,
+      disableTrajectory: true,
+      skillWorkshopProposalOnly: true,
+      skillWorkshopUpdateProposals: true,
+      skillWorkshopAutonomousCapture: true,
+      skillWorkshopProposalMutationBudget: proposalMutationBudget,
+      skillWorkshopOrigin: {
+        ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
+        sessionKey,
+        ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
+      },
+      cleanupBundleMcpOnRunEnd: true,
+      bootstrapContextMode: "lightweight",
+      skillsSnapshot: { prompt: "", skills: [] },
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      suppressToolErrorWarnings: true,
+    });
+  } finally {
+    preparedRunAdmission.close();
+  }
 
   const currentConfig = deps.getCurrentConfig
     ? await deps.getCurrentConfig()
@@ -604,18 +649,6 @@ async function runSkillExperienceReviewInner(
       proposal.record.status !== "pending" ||
       proposal.record.autonomousCapture !== true
     ) {
-      continue;
-    }
-    // Patch proposals auto-apply: the service composed them by replacing only the span
-    // the reviewer quoted from the live body (or appending), so untouched content
-    // survives by construction. Full-body update proposals stay pending for review.
-    if (
-      proposal.record.kind === "update" &&
-      proposalMutationBudget.patchProposalIds?.has(proposalId) !== true
-    ) {
-      log.info(
-        `skill experience review left full-body update proposal ${proposalId} pending for operator review`,
-      );
       continue;
     }
     await autoApplySkillProposal({

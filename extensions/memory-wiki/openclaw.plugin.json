@@ -1,8 +1,7 @@
 {
   "id": "memory-wiki",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true,
+    "configRepair": true,
     "stateMigrations": true
   },
   "activation": {
@@ -10,6 +9,13 @@
   },
   "name": "Memory Wiki",
   "description": "Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.",
+  "cliCommands": [
+    {
+      "name": "wiki",
+      "description": "Inspect and initialize the memory wiki vault",
+      "hasSubcommands": true
+    }
+  ],
   "catalog": { "featured": true, "order": 30 },
   "contracts": {
     "tools": ["wiki_apply", "wiki_get", "wiki_lint", "wiki_search", "wiki_status"]

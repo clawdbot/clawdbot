@@ -12,15 +12,20 @@ import {
   resolvePublicAgentAvatarSource,
 } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
-import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import {
+  matchRootFileOpenFailure,
+  openRootFileSync,
+  readFileDescriptorBounded,
+} from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
-import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
+import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
-import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
+import { assertLocalMediaAllowed, getDefaultLocalRootsCore } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { probePlaybackMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
 import {
@@ -36,7 +41,7 @@ import { extractOriginalFilename } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
@@ -89,8 +94,12 @@ import {
   resolveTrustedHttpOperatorScopes,
   setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
 } from "./http-utils.js";
+import {
+  prepareGatewayIngressAttribution,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
+} from "./ingress-attribution.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { resolveRequestClientIp } from "./net.js";
+import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -224,7 +233,7 @@ function respondControlUiAssetsUnavailable(
   respondPlainText(res, 503, message);
 }
 
-function isValidAgentId(agentId: string): boolean {
+function isValidAgentPathSegment(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
 
@@ -284,30 +293,70 @@ function resolveControlUiReadAuthToken(
   return resolveAssistantMediaAuthToken(req);
 }
 
+type ControlUiReadAuthOptions = {
+  auth?: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+  allowQueryToken?: boolean;
+  requiredOperatorMethod?: string;
+  onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
+};
+
 async function authorizeControlUiReadRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts?: {
-    auth?: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-    allowQueryToken?: boolean;
-    requiredOperatorMethod?: string;
-    onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
-  },
+  opts?: ControlUiReadAuthOptions,
 ): Promise<boolean> {
   if (!opts?.auth) {
     opts?.onPluginFrameGrants?.([]);
     return true;
   }
+  const authOpts = { ...opts, auth: opts.auth };
 
-  const token = resolveControlUiReadAuthToken(req, {
-    allowQueryToken: opts.allowQueryToken,
+  const queryTokenPolicy = opts.allowQueryToken;
+  const token = resolveControlUiReadAuthToken(req, { allowQueryToken: queryTokenPolicy });
+  const ingressAttribution = prepareGatewayIngressAttribution({
+    req,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
   });
-  const clientIp =
-    resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
-    req.socket?.remoteAddress;
+  if (ingressAttribution.kind === "unattributable-proxy") {
+    sendGatewayAuthFailure(res, { ok: false, reason: ingressAttribution.reason });
+    return false;
+  }
+  const clientIp = ingressAttribution.rateLimit.subject.key;
+  const canUseDeviceTokenFallback =
+    Boolean(token) && authOpts.auth.mode !== "trusted-proxy" && authOpts.auth.mode !== "none";
+  const run = async () =>
+    await authorizeControlUiReadRequestCore(req, res, authOpts, {
+      token,
+      clientIp,
+      canUseDeviceTokenFallback,
+    });
+  if (!canUseDeviceTokenFallback || !authOpts.rateLimiter) {
+    return await run();
+  }
+  // Shared and device credentials form one terminal auth attempt. Keep their
+  // async checks together so concurrent fallbacks cannot outrun either bucket.
+  return await withSerializedCredentialFallbackAttempt({
+    limiter: authOpts.rateLimiter,
+    ip: clientIp,
+    run,
+  });
+}
+
+async function authorizeControlUiReadRequestCore(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: ControlUiReadAuthOptions & { auth: ResolvedGatewayAuth },
+  prepared: {
+    token: string | undefined;
+    clientIp: string | undefined;
+    canUseDeviceTokenFallback: boolean;
+  },
+): Promise<boolean> {
+  const { token, clientIp, canUseDeviceTokenFallback } = prepared;
   const authResult = await authorizeHttpGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -318,6 +367,7 @@ async function authorizeControlUiReadRequest(
     rateLimiter: token ? opts.rateLimiter : undefined,
     clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    deferRateLimitFailure: canUseDeviceTokenFallback,
   });
   const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
     opts.auth,
@@ -327,12 +377,21 @@ async function authorizeControlUiReadRequest(
   let verifiedDeviceScopes: string[] | undefined;
   if (
     !resolvedAuthResult.ok &&
-    token &&
-    opts.auth.mode !== "trusted-proxy" &&
-    opts.auth.mode !== "none"
+    resolvedAuthResult.reason !== PROXY_ATTRIBUTION_REQUIRED_REASON &&
+    canUseDeviceTokenFallback &&
+    token
   ) {
+    const recordDeferredSharedSecretFailure = async () => {
+      if (authResult.reason === "token_mismatch" || authResult.reason === "password_mismatch") {
+        await opts.rateLimiter?.recordFailureAndDelay(
+          clientIp,
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+      }
+    };
     const deviceRateCheck = opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
     if (deviceRateCheck && !deviceRateCheck.allowed) {
+      await recordDeferredSharedSecretFailure();
       resolvedAuthResult = {
         ok: false,
         reason: "rate_limited",
@@ -347,9 +406,9 @@ async function authorizeControlUiReadRequest(
       if (deviceScopes) {
         verifiedDeviceScopes = deviceScopes;
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
+        await recordDeferredSharedSecretFailure();
         await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       }
     }
@@ -570,7 +629,7 @@ async function resolveAssistantMediaAvailability(
         const sniffLength = Math.min(sizeBytes, 8192);
         const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
         const bytesRead = sniffBuffer
-          ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
+          ? await readFileWindowFully(opened.handle, sniffBuffer, 0)
           : 0;
         mimeType =
           (await detectMime({
@@ -663,7 +722,7 @@ export async function handleControlUiAssistantMediaRequest(
   }
   const localRoots = opts?.config
     ? getAgentScopedMediaLocalRoots(opts.config, opts.agentId)
-    : getDefaultLocalRoots();
+    : getDefaultLocalRootsCore();
 
   if (isMetaRequest) {
     const availability = await resolveAssistantMediaAvailability(source, localRoots);
@@ -687,9 +746,7 @@ export async function handleControlUiAssistantMediaRequest(
     const sniffLength = Math.min(opened.stat.size, 8192);
     const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
     const bytesRead =
-      sniffBuffer && sniffLength > 0
-        ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
-        : 0;
+      sniffBuffer && sniffLength > 0 ? await readFileWindowFully(opened.handle, sniffBuffer, 0) : 0;
     const mime = await detectMime({
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
@@ -782,7 +839,7 @@ export async function handleControlUiAvatarRequest(
   applyControlUiSecurityHeaders(res);
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
   const agentId = agentIdParts[0] ?? "";
-  if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
+  if (agentIdParts.length !== 1 || !agentId || !isValidAgentPathSegment(agentId)) {
     respondControlUiNotFound(res);
     return true;
   }
@@ -874,7 +931,11 @@ async function serveResolvedIndexHtml(
   // terminal's WASM relaxation is applied to the page that loads ghostty-web.
   res.setHeader(
     "Content-Security-Policy",
-    buildControlUiCspHeader({ inlineScriptHashes: hashes, allowWasm }),
+    buildControlUiCspHeader({
+      inlineScriptHashes: hashes,
+      allowWasm,
+      portalHost: req.headers.host,
+    }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
@@ -1072,6 +1133,10 @@ export async function handleControlUiHttpRequest(
       assistantAvatarReason: avatarMeta.avatarReason,
       ...(assistantAgentId ? { assistantAgentId } : {}),
       serverVersion: resolveRuntimeServiceVersion(process.env),
+      serverBuildId:
+        config?.gateway?.controlUi?.root === undefined
+          ? (resolveRuntimeServiceBuildId() ?? undefined)
+          : undefined,
       devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, assistantAgentId)],
       embedSandbox:
@@ -1083,6 +1148,7 @@ export async function handleControlUiHttpRequest(
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       seamColor: config?.ui?.seamColor,
       terminalEnabled,
+      cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,
         path: grantPath,

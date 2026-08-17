@@ -11,11 +11,11 @@
       "openclaw/plugin-sdk/sandbox": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/sandbox.d.ts"
       ],
-      "openclaw/plugin-sdk/runtime-doctor": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor.d.ts"
-      ],
       "openclaw/plugin-sdk/runtime-doctor-migrations": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor-migrations.d.ts"
+      ],
+      "openclaw/plugin-sdk/runtime-doctor": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor.d.ts"
       ],
       "openclaw/plugin-sdk/approval-reference-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/approval-reference-runtime.d.ts"
@@ -127,6 +127,9 @@
       ],
       "openclaw/plugin-sdk/codex-mcp-projection": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/codex-mcp-projection.d.ts"
+      ],
+      "openclaw/plugin-sdk/native-hook-relay-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/native-hook-relay-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/codex-session-transcript-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/codex-session-transcript-runtime.d.ts"
@@ -257,6 +260,9 @@
       "openclaw/plugin-sdk/direct-dm-guard-policy": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/direct-dm-guard-policy.d.ts"
       ],
+      "openclaw/plugin-sdk/channel-config-ui-hints": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-config-ui-hints.d.ts"
+      ],
       "openclaw/plugin-sdk/channel-config-writes": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/channel-config-writes.d.ts"
       ],
@@ -362,6 +368,9 @@
       "openclaw/plugin-sdk/realtime-voice-audio-queue": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-audio-queue.d.ts"
       ],
+      "openclaw/plugin-sdk/realtime-voice-activation": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-activation.d.ts"
+      ],
       "openclaw/plugin-sdk/realtime-voice": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice.d.ts"
       ],
@@ -389,8 +398,8 @@
       "openclaw/plugin-sdk/memory-core-host-engine-fs": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-fs.d.ts"
       ],
-      "openclaw/plugin-sdk/memory-core-host-engine-qmd": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-qmd.d.ts"
+      "openclaw/plugin-sdk/memory-core-host-engine-sessions": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-sessions.d.ts"
       ],
       "openclaw/plugin-sdk/memory-core-host-engine-schema": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-schema.d.ts"
@@ -550,12 +559,6 @@
       ],
       "openclaw/plugin-sdk/channel-secret-basic-runtime": [
         "../dist/plugin-sdk/channel-secret-basic-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/channel-secret-runtime": [
-        "../dist/plugin-sdk/channel-secret-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/channel-streaming": [
-        "../dist/plugin-sdk/channel-streaming.d.ts"
       ],
       "openclaw/plugin-sdk/error-runtime": [
         "../dist/plugin-sdk/error-runtime.d.ts"
@@ -719,6 +722,9 @@
       "@openclaw/media-core": [
         "../dist/plugin-sdk/packages/media-core/src/index.d.ts"
       ],
+      "@openclaw/media-core/attachment-classify": [
+        "../dist/plugin-sdk/packages/media-core/src/attachment-classify.d.ts"
+      ],
       "@openclaw/media-core/base64": [
         "../dist/plugin-sdk/packages/media-core/src/base64.d.ts"
       ],
@@ -876,6 +882,24 @@
       ],
       "@openclaw/plugin-sdk/*": [
         "../dist/plugin-sdk/*.d.ts"
+      ],
+      "openclaw/plugin-sdk/doctor-repair-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/doctor-repair-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/plugin-state-store-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/plugin-state-store-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/model-ref-parse": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/model-ref-parse.d.ts"
+      ],
+      "openclaw/plugin-sdk/outbound-echo-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/outbound-echo-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/secret-provider-alias": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/secret-provider-alias.d.ts"
+      ],
+      "openclaw/plugin-sdk/session-store-paths": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/session-store-paths.d.ts"
       ]
     }
   }

@@ -8,6 +8,7 @@ import {
 } from "./bash-tools.exec-approval-output.js";
 import {
   appendExecTimeoutRetryGuidance,
+  renderExecExitLabel,
   renderExecOutputText,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
@@ -209,6 +210,20 @@ describe("exec output rendering", () => {
 
   it("leaves non-timeout exits unchanged", () => {
     expect(appendExecTimeoutRetryGuidance("Command failed.", "signal")).toBe("Command failed.");
+  });
+
+  it.each([
+    { name: "successful exit", exit: { exitCode: 0 }, expected: "code 0" },
+    { name: "nonzero exit", exit: { exitCode: 7 }, expected: "code 7" },
+    {
+      name: "signal exit",
+      exit: { exitCode: null, exitSignal: "SIGKILL" },
+      expected: "signal SIGKILL",
+    },
+    { name: "missing exit code", exit: { exitCode: null }, expected: "unknown exit code" },
+    { name: "missing exit details", exit: {}, expected: "unknown exit code" },
+  ] as const)("renders $name without inventing exit details", ({ exit, expected }) => {
+    expect(renderExecExitLabel(exit)).toBe(expected);
   });
 
   it.each([

@@ -1,7 +1,10 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
 
 /**
  * Persists a thread's preferred face so generic navigation opens the same face on
@@ -15,6 +18,12 @@ export function persistSessionBoardFace(
   face: BoardFace,
 ): void {
   if (parseCatalogSessionKey(sessionKey)) {
+    return;
+  }
+  const cached = context.sessions.state.result?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, sessionKey),
+  );
+  if (cached?.boardFace === face) {
     return;
   }
   const agentId = parseAgentSessionKey(sessionKey)?.agentId;

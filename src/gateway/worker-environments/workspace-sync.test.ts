@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import type { PreparedWorkerSsh } from "./ssh.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
+import { runBoundedInboundRsync } from "./workspace-sync-helpers.js";
 import { createWorkerWorkspaceRsyncTransport } from "./workspace-sync-transport.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
@@ -45,10 +46,10 @@ function createWorkspaceActions(
 ) {
   const prepared = createPreparedSsh();
   return createWorkerWorkspaceActions({
+    bundleHash: "a".repeat(64),
     environmentId: "worker:test",
     ownerSignal: new AbortController().signal,
-    isConnected: () => true,
-    getPrepared: () => prepared,
+    waitForPrepared: async () => prepared,
     runner: { run },
     tasks: new Set(),
   });
@@ -56,6 +57,10 @@ function createWorkspaceActions(
 
 describe("worker workspace command transport retry", () => {
   it("runs never commands once without changing the selected port", async () => {
+    // Pin the clock: the impl derives the dispatch timeout from a Date.now()
+    // deadline, so real elapsed ms between admission and dispatch would turn
+    // the exact 777 assertion below into a loaded-runner flake.
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
     const run = vi.fn(async (argv: string[], _options: CommandOptions) =>
       argv.at(-1)?.includes("never-command") ? result(255) : result(),
     );
@@ -70,6 +75,8 @@ describe("worker workspace command transport retry", () => {
     ).resolves.toMatchObject({ code: 255, termination: "exit" });
     expect(run).toHaveBeenCalledOnce();
     expect(sshArgvPort(run.mock.calls[0]![0])).toBe(2222);
+    // The pinned clock makes the derived dispatch timeout deterministic; a
+    // less-than bound would also accept zero and mask a broken deadline.
     expect(run.mock.calls[0]![1].timeoutMs).toBe(777);
 
     await actions.runWorkspaceCommand({
@@ -183,6 +190,68 @@ describe("worker workspace rsync transport retry", () => {
       ).resolves.toEqual(result());
       expect(runTask.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([1_000, 875]);
       expect(runTask.mock.calls[0]![1]).not.toBe(runTask.mock.calls[1]![1]);
+    } finally {
+      await fs.rm(destinationRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bounded inbound workspace transfer", () => {
+  it("aborts an in-flight transfer when the destination crosses quota", async () => {
+    const destinationRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rsync-quota-"));
+    let transferSignal: AbortSignal | undefined;
+    try {
+      const runTask = vi.fn(async (_argv: string[], options: CommandOptions) => {
+        transferSignal = options.signal;
+        await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
+        return await new Promise<SpawnResult>((_resolve, reject) => {
+          const abort = () => {
+            const reason = options.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("aborted"));
+          };
+          options.signal?.addEventListener("abort", abort, { once: true });
+          if (options.signal?.aborted) {
+            abort();
+          }
+        });
+      });
+
+      await expect(
+        runBoundedInboundRsync({
+          argv: ["rsync"],
+          destinationRoot,
+          entryLimit: 10,
+          totalByteLimit: 1,
+          ownerSignal: new AbortController().signal,
+          runTask,
+          timeoutMs: 10_000,
+        }),
+      ).rejects.toThrow("inbound transfer exceeds");
+      expect(transferSignal?.aborted).toBe(true);
+    } finally {
+      await fs.rm(destinationRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a completed over-quota transfer in the authoritative final scan", async () => {
+    const destinationRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rsync-final-quota-"));
+    try {
+      const runTask = vi.fn(async () => {
+        await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
+        return result();
+      });
+
+      await expect(
+        runBoundedInboundRsync({
+          argv: ["rsync"],
+          destinationRoot,
+          entryLimit: 10,
+          totalByteLimit: 1,
+          ownerSignal: new AbortController().signal,
+          runTask,
+          timeoutMs: 10_000,
+        }),
+      ).rejects.toThrow("inbound transfer exceeds");
     } finally {
       await fs.rm(destinationRoot, { recursive: true, force: true });
     }

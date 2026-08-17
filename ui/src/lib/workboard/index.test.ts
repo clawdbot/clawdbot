@@ -2,6 +2,7 @@
 // Control UI tests cover workboard behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -29,7 +30,6 @@ import {
 } from "./index.ts";
 import { normalizeExecution, normalizeMetadata } from "./metadata-normalization.ts";
 import {
-  createDeferred,
   createGatewaySession,
   createLifecycleHarness,
   createWorkboardCard,
@@ -316,6 +316,18 @@ describe("workboard controller", () => {
     ).toBe("claude-cli");
   });
 
+  it("filters malformed metadata children without discarding valid siblings", () => {
+    expect(
+      normalizeMetadata({
+        comments: [
+          { id: "comment-1", body: "kept", createdAt: 1 },
+          { id: "comment-2", body: 42, createdAt: 2 },
+          null,
+        ],
+      }),
+    ).toEqual({ comments: [{ id: "comment-1", body: "kept", createdAt: 1 }] });
+  });
+
   describe("runtime ownership", () => {
     it("keeps state pristine when lifecycle teardown happens before first access", () => {
       const pristineHost = {};
@@ -499,7 +511,7 @@ describe("workboard controller", () => {
   it("keeps loading cards when diagnostics refresh fails", async () => {
     const client = createClient((method) => {
       if (method === "workboard.cards.diagnostics.refresh") {
-        throw new Error("diagnostics denied");
+        throw new Error("diagnostics denied: OPENAI_API_KEY=sk-1234567890abcdef");
       }
       return listResult([sampleCard], ["todo", "done"]);
     });
@@ -510,7 +522,7 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.list", {});
     expect(state.cards).toEqual([sampleCard]);
     expect(state.error).toBeNull();
-    expect(state.lastRefreshError).toBe("diagnostics denied");
+    expect(state.lastRefreshError).toBe("diagnostics denied: OPENAI_API_KEY=sk-123...cdef");
   });
 
   it("links loaded cards to matching Gateway tasks", async () => {

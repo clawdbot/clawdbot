@@ -630,7 +630,7 @@
     },
     {
       "source": "/mac/child-process",
-      "destination": "/platforms/mac/child-process"
+      "destination": "/platforms/mac/bundled-gateway"
     },
     {
       "source": "/mac/dev-setup",
@@ -1086,6 +1086,7 @@
               {
                 "group": "Maintenance",
                 "pages": [
+                  "install/backups",
                   "install/updating",
                   {
                     "group": "Migrating",
@@ -1114,6 +1115,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/cloudflare",
                   "install/daytona",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
@@ -1247,6 +1249,7 @@
                   "concepts/main-session",
                   "concepts/multi-user",
                   "concepts/session",
+                  "concepts/session-attachment",
                   "concepts/session-search",
                   "concepts/channel-docking",
                   "concepts/session-pruning",
@@ -1260,11 +1263,9 @@
                       "concepts/user-model",
                       "concepts/standing-intents",
                       "concepts/memory-builtin",
-                      "concepts/memory-qmd",
                       "concepts/memory-honcho",
                       "concepts/memory-search",
                       "concepts/active-memory",
-                      "concepts/commitments",
                       "concepts/dreaming"
                     ]
                   },
@@ -1612,7 +1613,6 @@
                     "group": "Runtime",
                     "pages": [
                       "platforms/mac/bundled-gateway",
-                      "platforms/mac/child-process",
                       "platforms/mac/health",
                       "platforms/mac/logging",
                       "platforms/mac/remote",
@@ -1725,6 +1725,7 @@
                       "network",
                       "gateway/pairing",
                       "gateway/discovery",
+                      "gateway/portals",
                       "gateway/bonjour"
                     ]
                   }
@@ -1832,7 +1833,6 @@
                       "cli/hooks",
                       "cli/infer",
                       "cli/memory",
-                      "cli/commitments",
                       "cli/message",
                       "cli/models",
                       "cli/promos",
@@ -1859,6 +1859,7 @@
                       "cli/browser",
                       "cli/cron",
                       "cli/flows",
+                      "cli/connect",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox",
@@ -1888,6 +1889,7 @@
                     "pages": [
                       "cli/attach",
                       "cli/dashboard",
+                      "cli/resume",
                       "cli/tui"
                     ]
                   },

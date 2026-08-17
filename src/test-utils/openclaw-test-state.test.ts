@@ -2,12 +2,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import {
+  closeAuthProfileReadPool,
+  resolveAuthProfileDatabasePath,
+} from "../agents/auth-profiles/sqlite.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import {
   GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   snapshotGatewayStartupEnv,
 } from "../gateway/test-helpers.env.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -176,6 +183,27 @@ describe("openclaw test state", () => {
       layout: "state-only",
       label: "database-cleanup",
     });
+    const authStore = {
+      version: 1,
+      profiles: {
+        "openai:test": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "sk-test",
+        },
+      },
+    };
+    const fixtureAuthDir = state.agentDir("auth-reader");
+    const fixtureAuthPath = resolveAuthProfileDatabasePath(fixtureAuthDir);
+    saveAuthProfileStore(authStore, fixtureAuthDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+    const unrelatedAgentDir = path.join(unrelatedRoot, "state", "agents", "outside", "agent");
+    saveAuthProfileStore(authStore, unrelatedAgentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
     const fixtureShared = openOpenClawStateDatabase({ env: state.env });
     const fixtureAgent = openOpenClawAgentDatabase({
       agentId: "worker",
@@ -186,12 +214,40 @@ describe("openclaw test state", () => {
       agentId: "outside",
       env: unrelatedEnv,
     });
+    const openSpy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    expect(loadPersistedAuthProfileStore(state.agentDir("auth-reader"))).not.toBeNull();
+    expect(loadPersistedAuthProfileStore(unrelatedAgentDir)).not.toBeNull();
+    const readOnlyDatabases = openSpy.mock.calls.flatMap((call, index) => {
+      if (call[1]?.readOnly !== true) {
+        return [];
+      }
+      const database = openSpy.mock.results[index]?.value as DatabaseSync | undefined;
+      return database ? [{ path: path.resolve(call[0]), database }] : [];
+    });
+    const fixtureAuthReader = readOnlyDatabases.find(
+      (entry) => entry.path === path.resolve(fixtureAuthPath),
+    )?.database;
+    const unrelatedAuthReader = readOnlyDatabases.find(
+      (entry) => entry.path === path.resolve(unrelatedAgent.path),
+    )?.database;
+    if (!fixtureAuthReader || !unrelatedAuthReader) {
+      throw new Error("expected fixture and unrelated pooled auth readers");
+    }
+    expect(fixtureAuthReader.isOpen).toBe(true);
+    expect(unrelatedAuthReader.isOpen).toBe(true);
     const restoreEnv = state.restoreEnv;
-    const rmSpy = vi.spyOn(fs, "rm");
+    const originalRm = fs.rm;
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation((...args) => {
+      expect(fixtureAuthReader.isOpen).toBe(false);
+      expect(unrelatedAuthReader.isOpen).toBe(true);
+      return originalRm(...args);
+    });
     state.restoreEnv = () => {
       expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+      expect(fixtureAuthReader.isOpen).toBe(false);
       expect(fixtureShared.db.isOpen).toBe(false);
       expect(fixtureAgent.db.isOpen).toBe(false);
+      expect(unrelatedAuthReader.isOpen).toBe(true);
       expect(unrelatedShared.db.isOpen).toBe(true);
       expect(unrelatedAgent.db.isOpen).toBe(true);
       restoreEnv();
@@ -208,15 +264,19 @@ describe("openclaw test state", () => {
         retryDelay: 25,
       });
       await expectPathMissing(state.root);
+      expect(unrelatedAuthReader.isOpen).toBe(true);
       expect(unrelatedShared.db.isOpen).toBe(true);
       expect(unrelatedAgent.db.isOpen).toBe(true);
     } finally {
       state.restoreEnv = restoreEnv;
       restoreEnv();
+      closeAuthProfileReadPool({ kind: "database", databasePath: fixtureAuthPath });
+      closeAuthProfileReadPool({ kind: "database", databasePath: unrelatedAgent.path });
       closeOpenClawAgentDatabaseByPath(fixtureAgent.path);
       closeOpenClawAgentDatabaseByPath(unrelatedAgent.path);
       closeOpenClawStateDatabaseByPath(fixtureShared.path);
       closeOpenClawStateDatabaseByPath(unrelatedShared.path);
+      openSpy.mockRestore();
       rmSpy.mockRestore();
       await fs.rm(state.root, {
         recursive: true,

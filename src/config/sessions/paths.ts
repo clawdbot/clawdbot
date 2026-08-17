@@ -286,7 +286,7 @@ export function resolveSessionTranscriptPath(
 ): string {
   return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
 }
-export function resolveSessionFilePath(
+export function resolveSessionFilePathCore(
   sessionId: string,
   entry?: object,
   opts?: SessionFilePathOptions,
@@ -317,7 +317,7 @@ export class SessionStoreAgentIdRequiredError extends Error {
 }
 
 /** Resolves fixed literal paths without an owner; derived or templated paths require agentId. */
-export function resolveStorePath(
+export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {

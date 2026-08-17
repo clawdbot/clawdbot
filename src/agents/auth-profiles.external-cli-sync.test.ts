@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
 
 let readExternalCliBootstrapCredential: typeof import("./auth-profiles/external-cli-sync.js").readExternalCliBootstrapCredential;
 let resolveExternalCliAuthProfiles: typeof import("./auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
-let hasUsableOAuthCredential: typeof import("./auth-profiles/oauth-shared.js").hasUsableOAuthCredential;
+let hasUsableOAuthCredential: typeof import("./auth-profiles/credential-state.js").hasUsableOAuthCredential;
 let shouldBootstrapFromExternalCliCredential: typeof import("./auth-profiles/oauth-shared.js").shouldBootstrapFromExternalCliCredential;
 let shouldReplaceStoredOAuthCredential: typeof import("./auth-profiles/oauth-shared.js").shouldReplaceStoredOAuthCredential;
 let CLAUDE_CLI_PROFILE_ID: typeof import("./auth-profiles/constants.js").CLAUDE_CLI_PROFILE_ID;
@@ -119,11 +119,9 @@ describe("external cli oauth resolution", () => {
     mocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
     ({ readExternalCliBootstrapCredential, resolveExternalCliAuthProfiles } =
       await import("./auth-profiles/external-cli-sync.js"));
-    ({
-      hasUsableOAuthCredential,
-      shouldBootstrapFromExternalCliCredential,
-      shouldReplaceStoredOAuthCredential,
-    } = await import("./auth-profiles/oauth-shared.js"));
+    ({ hasUsableOAuthCredential } = await import("./auth-profiles/credential-state.js"));
+    ({ shouldBootstrapFromExternalCliCredential, shouldReplaceStoredOAuthCredential } =
+      await import("./auth-profiles/oauth-shared.js"));
     ({ CLAUDE_CLI_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } =
       await import("./auth-profiles/constants.js"));
   });

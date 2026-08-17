@@ -28,7 +28,7 @@ const claudeCliProfile = {
 function resolveScope(params: {
   cfg?: OpenClawConfig;
   store?: AuthProfileStore;
-  userLockedAuthProfileId?: string;
+  userPinnedAuthProfileId?: string;
 }) {
   return resolveExternalCliAuthOverlayScopeFromSelection({
     provider: "anthropic",
@@ -139,9 +139,10 @@ describe("resolveExternalCliAuthOverlayScopeFromSelection", () => {
     expect(resolveScope({ cfg })).toEqual({ ignoreAutoPreferredProfile: false });
   });
 
-  it("scopes a user lock to the locked profile instead of ambient CLI auth", () => {
+  it("loads ordered same-provider CLI fallbacks behind a user pin", () => {
     const cfg = {
       auth: {
+        order: { anthropic: ["anthropic:claude-cli"] },
         profiles: {
           "anthropic:api": { provider: "anthropic", mode: "api_key" },
           "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
@@ -149,7 +150,8 @@ describe("resolveExternalCliAuthOverlayScopeFromSelection", () => {
       },
     } satisfies OpenClawConfig;
 
-    expect(resolveScope({ cfg, userLockedAuthProfileId: "anthropic:api" })).toEqual({
+    expect(resolveScope({ cfg, userPinnedAuthProfileId: "anthropic:api" })).toEqual({
+      providerIds: ["claude-cli"],
       ignoreAutoPreferredProfile: false,
     });
   });

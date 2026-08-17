@@ -32,10 +32,13 @@ describe("executeAgentTurn: context failures", () => {
 
     const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
     const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
+        followupRun,
         sessionCtx: {
           Provider: "webchat",
           MessageSid: "msg",
@@ -75,10 +78,13 @@ describe("executeAgentTurn: context failures", () => {
 
     const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
     const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
+        followupRun,
         sessionCtx: {
           Provider: "webchat",
           MessageSid: "msg",

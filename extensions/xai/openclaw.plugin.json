@@ -1,8 +1,7 @@
 {
   "id": "xai",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true
+    "configRepair": true
   },
   "activation": {
     "onStartup": false

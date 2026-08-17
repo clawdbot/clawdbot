@@ -1,3 +1,4 @@
+import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import type {
   SessionBranch,
   SessionsBranchesListResult,
@@ -59,7 +60,7 @@ function buildTranscriptMutationParams(
   };
 }
 
-function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
+export function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
   const params: Record<string, unknown> = { ...SESSION_LIST_PARAMS };
   if (options.limit === undefined) {
     params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
@@ -77,6 +78,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   }
   if (options.includeDerivedTitles === true) {
     params.includeDerivedTitles = true;
+  }
+  if (options.includeLastMessage === true) {
+    params.includeLastMessage = true;
   }
   if (options.archivedFilter === "archived") {
     params.archived = true;
@@ -121,10 +125,14 @@ export async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions = {},
 ): Promise<SessionsListResult | null> {
-  const result = await client.request<SessionsListResult | undefined>(
-    "sessions.list",
-    buildSessionListParams(options),
-  );
+  return requestSessionListParams(client, buildSessionListParams(options));
+}
+
+export async function requestSessionListParams(
+  client: SessionRequestClient,
+  params: Readonly<Record<string, unknown>>,
+): Promise<SessionsListResult | null> {
+  const result = await client.request<SessionsListResult | undefined>("sessions.list", params);
   return result ?? null;
 }
 
@@ -132,12 +140,17 @@ export function requestSessionPatch(
   client: SessionRequestClient,
   key: string,
   patch: SessionPatch,
-  options: { agentId?: string | null } = {},
+  options: { agentId?: string | null; expectedSessionId?: string | null } = {},
 ): Promise<SessionsPatchResult> {
-  return client.request<SessionsPatchResult>("sessions.patch", {
+  const expectedSessionId = options.expectedSessionId?.trim();
+  const params = {
     ...buildSessionRequestParams(key, options.agentId),
+    ...(expectedSessionId ? { expectedSessionId } : {}),
     ...patch,
-  });
+  };
+  return patch.archived === true
+    ? client.request<SessionsPatchResult>("sessions.patch", params, SESSION_ARCHIVE_REQUEST_OPTIONS)
+    : client.request<SessionsPatchResult>("sessions.patch", params);
 }
 
 export function requestSessionDelete(
@@ -148,6 +161,7 @@ export function requestSessionDelete(
   return client.request<SessionDeleteResponse>("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
+    ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
     ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
   });
 }

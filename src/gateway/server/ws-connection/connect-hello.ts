@@ -3,22 +3,29 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
-  revokeDeviceBootstrapToken,
-  restoreDeviceBootstrapToken,
+  restoreGenericDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
 import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
-} from "../../../infra/node-pairing.js";
-import { listProfiles } from "../../../state/user-profiles.js";
-import { resolveRuntimeServiceVersion } from "../../../version.js";
+} from "../../../infra/device-pairing-node.js";
+import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import {
+  broadcastSetupHandoffDeliveryUncertain,
+  broadcastSetupHandoffCompletion,
+  confirmSetupHandoffDelivery,
+  consumeSetupHandoff,
+  type SetupHandoff,
+} from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
@@ -37,6 +44,7 @@ export async function sendGatewayHello(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
   pluginSurfaceUrls: Record<string, string>,
+  authenticatedUserProfileId?: string,
 ): Promise<void> {
   const {
     connId,
@@ -63,17 +71,34 @@ export async function sendGatewayHello(
     role,
     scopes,
     device,
+    devicePublicKey,
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,
+    authResult,
     authMethod,
+    sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
-    controlUiDeviceAuthMigrationPending,
   } = state;
-  const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
+  // Prefer the authenticated human; principal scopes never inherit device-token rows.
+  const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
+  const recoveryScopeMaterial = authenticatedPrincipal
+    ? ["principal", authenticatedPrincipal, device?.id ?? ""]
+    : deviceToken?.token
+      ? ["device-token", deviceToken.token]
+      : sessionSharedGatewaySessionGeneration
+        ? ["shared-auth", sessionSharedGatewaySessionGeneration, device?.id ?? ""]
+        : device?.id
+          ? ["device", device.id]
+          : undefined;
+  const recoveryScope =
+    role === "operator" && recoveryScopeMaterial
+      ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
+      : undefined;
+  const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
@@ -83,15 +108,24 @@ export async function sendGatewayHello(
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
-  const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
+  const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
-  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(helloOkAuthScopes);
+  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
+  // A configured UI root can be built independently from the Gateway. Exact
+  // comparison is authoritative only for the package-owned bundled artifact.
+  const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
+    ? ("configured" as const)
+    : ("bundled" as const);
+  const serverBuildId = controlUiBuildSource === "bundled" ? resolveRuntimeServiceBuildId() : null;
   const helloOk = {
     type: "hello-ok",
+    // Admission already verified range overlap; this field reports the server's current protocol.
     protocol: PROTOCOL_VERSION,
     server: {
       version: resolveRuntimeServiceVersion(process.env),
+      ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      controlUiBuildSource,
       connId,
     },
     features: {
@@ -100,19 +134,23 @@ export async function sendGatewayHello(
       capabilities: [
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+        GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
+        GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
       ],
     },
     snapshot,
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
-    ...(controlUiDeviceAuthMigrationPending
-      ? { deviceAuthMigration: { pending: true as const } }
-      : {}),
     auth: {
       role,
-      scopes: helloOkAuthScopes,
+      scopes,
+      ...(recoveryScope ? { recoveryScope } : {}),
+      ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,
@@ -129,15 +167,12 @@ export async function sendGatewayHello(
       tickIntervalMs: TICK_INTERVAL_MS,
       attachments: resolveChatAttachmentPolicy(context.configSnapshot),
       allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
-      hasMultipleSessionSharingIdentities:
-        listProfiles().filter((profile) => !profile.mergedInto).length >= 2,
+      hasMultipleSessionSharingIdentities: hasMultipleSessionSharingIdentities(),
     },
   };
   advanceHandshakePhase("hello_payload_prepared");
 
-  let revokedBootstrapTokenRecord:
-    | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
-    | undefined;
+  let bootstrapHandoff: SetupHandoff | undefined;
   if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
     try {
       if (handoffBootstrapProfile || issuedBootstrapProfile) {
@@ -147,40 +182,87 @@ export async function sendGatewayHello(
           scopes,
         });
         if (handoffBootstrapProfile || redemption.fullyRedeemed) {
-          const revoked = await revokeDeviceBootstrapToken({
+          const consumed = await consumeSetupHandoff({
             token: bootstrapTokenCandidate,
+            deviceId: device.id,
+            pairedDeviceMatches: (paired) => paired?.publicKey === devicePublicKey,
           });
-          if (!revoked.removed) {
-            logGateway.warn(
-              `bootstrap token revoke skipped after profile redemption device=${device.id}`,
-            );
-          } else {
-            revokedBootstrapTokenRecord = revoked.record;
+          if (!consumed) {
+            await releasePendingNodePairingCleanup();
+            setCloseCause("bootstrap-token-consume-failed");
+            close();
+            return;
           }
+          bootstrapHandoff = consumed;
         }
       }
     } catch (err) {
       logGateway.warn(
         `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
       );
+      await releasePendingNodePairingCleanup();
+      setCloseCause("bootstrap-token-consume-failed", { error: formatForLog(err) });
+      close();
+      return;
     }
   }
   try {
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
-    if (revokedBootstrapTokenRecord) {
-      try {
-        await restoreDeviceBootstrapToken({ record: revokedBootstrapTokenRecord });
-      } catch (restoreErr) {
-        logGateway.warn(
-          `bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreErr)}`,
-        );
+    if (bootstrapHandoff) {
+      if (bootstrapHandoff.completion) {
+        try {
+          broadcastSetupHandoffDeliveryUncertain({
+            handoff: bootstrapHandoff,
+            broadcast: buildRequestContext().broadcast,
+          });
+        } catch (broadcastError) {
+          logGateway.warn(
+            `setup delivery-uncertain broadcast failed device=${device?.id ?? "unknown"}: ${formatForLog(broadcastError)}`,
+          );
+        }
+      } else {
+        try {
+          await restoreGenericDeviceBootstrapToken({ record: bootstrapHandoff.record });
+        } catch (restoreError) {
+          logGateway.warn(
+            `generic bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreError)}`,
+          );
+        }
       }
     }
     await releasePendingNodePairingCleanup();
     setCloseCause("hello-send-failed", { error: formatForLog(err) });
     close();
     return;
+  }
+  if (bootstrapHandoff) {
+    try {
+      const confirmedHandoff = await confirmSetupHandoffDelivery({ handoff: bootstrapHandoff });
+      if (confirmedHandoff) {
+        broadcastSetupHandoffCompletion({
+          handoff: confirmedHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      } else {
+        broadcastSetupHandoffDeliveryUncertain({
+          handoff: bootstrapHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      }
+    } catch (err) {
+      logGateway.warn(
+        `setup completion confirmation failed device=${device?.id ?? "unknown"}: ${formatForLog(err)}`,
+      );
+      try {
+        broadcastSetupHandoffDeliveryUncertain({
+          handoff: bootstrapHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      } catch {
+        // The durable uncertain row remains the status-reconciliation path.
+      }
+    }
   }
   let authProvided = authMethod;
   if (authMethod !== "device-token" && authMethod !== "bootstrap-token") {
@@ -198,7 +280,7 @@ export async function sendGatewayHello(
     authMethod,
     authProvided,
     role,
-    scopes: helloOkAuthScopes,
+    scopes,
     clientMode: connectParams.client.mode,
     deviceId: device?.id,
   });

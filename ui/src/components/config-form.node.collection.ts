@@ -2,7 +2,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
-import { removePathValue, setPathValue } from "../lib/config-form-utils.ts";
+import {
+  containsRedactedSentinel,
+  removePathValue,
+  setPathValue,
+} from "../lib/config-form-utils.ts";
 import { arrayAddCandidates } from "./config-form-array-candidates.ts";
 import {
   appendArrayRowIdentities,
@@ -16,9 +20,9 @@ import {
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.ts";
 import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
+import { arrayItemSchema } from "./config-form.array-items.ts";
 import {
   arrayInputConstraints,
-  arrayItemSchema,
   canApplyArrayCandidate,
   canApplyObjectCandidate,
   configValuesEqual,
@@ -628,8 +632,17 @@ function renderMapField(
                             return;
                           }
                           const nextValue = { ...value };
-                          if (nextKey in nextValue) {
+                          // Renaming a key that still holds server-redacted secrets would
+                          // submit the sentinel under a new key: the gateway fails closed
+                          // (dead-end draft), and a delete+rename fold in one autosave
+                          // window silently binds the deleted entry's old credential.
+                          if (nextKey in nextValue || containsRedactedSentinel(nextValue[key])) {
                             target.value = key;
+                            if (!(nextKey in nextValue)) {
+                              target.setCustomValidity(t("configForm.renameRedactedBlocked"));
+                              target.reportValidity();
+                              target.setCustomValidity("");
+                            }
                             return;
                           }
                           nextValue[nextKey] = nextValue[key];

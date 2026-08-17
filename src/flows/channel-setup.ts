@@ -1,5 +1,5 @@
 // Channel setup flow configures channels, auth, and workspace bindings.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
@@ -13,6 +13,7 @@ import type {
   SetupChannelsOptions,
 } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { normalizeExternalChannelSetupConfig } from "../commands/channel-setup/config-compatibility.js";
 import {
   resolveChannelSetupEntries,
   shouldShowChannelInSetup,
@@ -50,20 +51,40 @@ import {
   resolveCatalogChannelSelectionHint,
   resolveChannelSelectionNoteLines,
   resolveChannelSetupSelectionContributions,
+  resolveChannelSetupWorkspaceDir,
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
 
-export function createChannelOnboardingPostWriteHookCollector() {
+export function createChannelSetupTransaction(params: {
+  runtime: RuntimeEnv;
+  beforePersistentEffect?: () => Promise<void>;
+}) {
   const hooks = new Map<string, ChannelOnboardingPostWriteHook>();
+  const runPostWriteHooks = async (cfg: OpenClawConfig) => {
+    await runCollectedChannelOnboardingPostWriteHooks({
+      hooks: [...hooks.values()],
+      cfg,
+      runtime: params.runtime,
+      ...(params.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
+    });
+    hooks.clear();
+  };
   return {
-    collect(hook: ChannelOnboardingPostWriteHook) {
+    onPostWriteHook(hook: ChannelOnboardingPostWriteHook) {
       hooks.set(`${hook.channel}:${hook.accountId}`, hook);
     },
-    drain(): ChannelOnboardingPostWriteHook[] {
-      const next = [...hooks.values()];
-      hooks.clear();
-      return next;
+    async commit(
+      nextConfig: OpenClawConfig,
+      write: (config: OpenClawConfig) => Promise<OpenClawConfig>,
+    ): Promise<OpenClawConfig> {
+      await params.beforePersistentEffect?.();
+      const committedConfig = await write(nextConfig);
+      await runPostWriteHooks(committedConfig);
+      return committedConfig;
     },
+    runPostWriteHooks,
   };
 }
 
@@ -123,7 +144,7 @@ export async function setupChannels(
     ...options?.accountIds,
   };
   const scopedPluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
-  const resolveWorkspaceDir = () => resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
+  const resolveWorkspaceDir = () => resolveChannelSetupWorkspaceDir(next);
   const rememberScopedPlugin = (plugin: ChannelSetupPlugin) => {
     const channel = plugin.id;
     scopedPluginsById.set(channel, plugin);
@@ -429,7 +450,7 @@ export async function setupChannels(
 
   const applySetupResult = async (channel: ChannelChoice, result: ChannelSetupResult) => {
     const previousCfg = next;
-    next = result.cfg;
+    next = normalizeExternalChannelSetupConfig({ cfg: result.cfg, channel });
     if (result.completion === "paused") {
       // Persist partial setup state, but do not run configured-account hooks,
       // routing, or DM policy prompts until setup actually completes.
@@ -457,7 +478,21 @@ export async function setupChannels(
     if (channel === targetedChannel) {
       finishSetupRequested = true;
     }
-    await refreshStatus(channel);
+    try {
+      await refreshStatus(channel);
+    } catch (error) {
+      const detail = sanitizeTerminalText(formatErrorMessage(error));
+      statusByChannel.set(channel, {
+        channel,
+        configured: isChannelConfigured(next, channel),
+        statusLines: [],
+        selectionHint: "status unavailable",
+      });
+      await prompter.note(
+        `Status unavailable (${detail}).\nRetry: ${formatCliCommand(`openclaw channels status --channel ${channel}`)}`,
+        t("wizard.channels.statusTitle"),
+      );
+    }
   };
 
   const applyCustomSetupResult = async (

@@ -58,7 +58,135 @@ function createHarness(request: GatewayBrowserClient["request"]) {
   return { sessions, emitEvent: (event: GatewayEventFrame) => eventListener?.(event) };
 }
 
+function installPageLifecycle() {
+  const documentEvents = new EventTarget();
+  const pageEvents = new EventTarget();
+  let visibilityState: DocumentVisibilityState = "visible";
+  Object.defineProperty(documentEvents, "visibilityState", {
+    configurable: true,
+    get: () => visibilityState,
+  });
+  vi.stubGlobal("document", documentEvents);
+  vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
+  vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
+  return {
+    setVisibility(next: DocumentVisibilityState) {
+      visibilityState = next;
+      documentEvents.dispatchEvent(new Event("visibilitychange"));
+    },
+    pageHide() {
+      pageEvents.dispatchEvent(new Event("pagehide"));
+    },
+    pageShow() {
+      pageEvents.dispatchEvent(new Event("pageshow"));
+    },
+  };
+}
+
 describe("event-driven session list refresh", () => {
+  it("refreshes exact managed queries by agent and retains appended dashboard windows", async () => {
+    vi.useFakeTimers();
+    const dashboardRows = Array.from({ length: 4 }, (_, index) => ({
+      key: `agent:main:dashboard-${index}`,
+      kind: "direct" as const,
+      boardFace: "dashboard" as const,
+      updatedAt: index + 1,
+    }));
+    const request = vi.fn(
+      async (
+        method: string,
+        params?: {
+          agentId?: string;
+          archived?: "all";
+          boardFace?: "dashboard";
+          includeDerivedTitles?: boolean;
+          includeLastMessage?: boolean;
+          limit?: number;
+          offset?: number;
+        },
+      ) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        if (params?.boardFace !== "dashboard") {
+          return sessionsResult(1);
+        }
+        const rows = params.agentId
+          ? [{ ...dashboardRows[0]!, key: `agent:${params.agentId}:dashboard` }]
+          : dashboardRows;
+        const offset = params.offset ?? 0;
+        const page = rows.slice(offset, offset + (params.limit ?? 50));
+        return {
+          ...sessionsResult(1, page),
+          totalCount: rows.length,
+          hasMore: offset + page.length < rows.length,
+          nextOffset: offset + page.length < rows.length ? offset + page.length : null,
+        };
+      },
+    );
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const allAgentsQuery = {
+      boardFace: "dashboard" as const,
+      archivedFilter: "all" as const,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      limit: 2,
+    };
+    const writerQuery = { ...allAgentsQuery, agentId: "writer" };
+    const stopAll = sessions.subscribeList(allAgentsQuery, () => undefined);
+    const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
+
+    try {
+      await sessions.refreshList({ ...allAgentsQuery, force: true });
+      await sessions.refreshList({ ...allAgentsQuery, offset: 2, append: true, force: true });
+      await sessions.refreshList({ ...writerQuery, force: true });
+      expect(sessions.listSnapshot(allAgentsQuery).result?.sessions).toHaveLength(4);
+      request.mockClear();
+
+      emitEvent(sessionChangedEvent("agent:research:changed"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      const researchDashboardRequests = request.mock.calls.filter(
+        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+      );
+      expect(researchDashboardRequests).toHaveLength(1);
+      expect(researchDashboardRequests[0]?.[1]).toEqual({
+        includeGlobal: true,
+        includeUnknown: true,
+        configuredAgentsOnly: true,
+        limit: 4,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+        archived: "all",
+        boardFace: "dashboard",
+      });
+      expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("offset");
+      expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("agentId");
+      expect(sessions.listSnapshot(allAgentsQuery).result?.sessions).toHaveLength(4);
+      request.mockClear();
+
+      emitEvent(sessionChangedEvent("agent:writer:changed"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      const writerDashboardRequests = request.mock.calls.filter(
+        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+      );
+      expect(writerDashboardRequests).toHaveLength(2);
+      expect(
+        writerDashboardRequests.map(
+          ([, params]) => (params as { agentId?: string } | undefined)?.agentId ?? null,
+        ),
+      ).toEqual([null, "writer"]);
+    } finally {
+      stopAll();
+      stopWriter();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("retains every loaded page when a session event replaces the canonical list", async () => {
     vi.useFakeTimers();
     const rows = Array.from({ length: 120 }, (_, index) => ({
@@ -424,29 +552,110 @@ describe("event-driven session list refresh", () => {
     }
   });
 
-  it("flushes a pending event refresh synchronously on dispose", async () => {
+  it("defers a queued filtered refresh when the page hides during its active request", async () => {
     vi.useFakeTimers();
-    const request = vi.fn(async (method: string) => {
+    const page = installPageLifecycle();
+    const activeRefresh = deferred<SessionsListResult>();
+    let filteredCalls = 0;
+    const request = vi.fn(async (method: string, params?: { archived?: string }) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(1);
+      if (params?.archived !== "all") {
+        return sessionsResult(0);
+      }
+      filteredCalls += 1;
+      return filteredCalls === 2 ? await activeRefresh.promise : sessionsResult(filteredCalls);
     });
     const { sessions, emitEvent } = createHarness(
       request as unknown as GatewayBrowserClient["request"],
     );
+    const unsubscribe = sessions.subscribeList({ agentId: "main", archivedFilter: "all" }, vi.fn());
 
     try {
-      await sessions.refresh({ force: true });
-      emitEvent(sessionChangedEvent("agent:main:pending"));
-      sessions.dispose();
+      await sessions.refreshList({ agentId: "main", archivedFilter: "all", force: true });
+      emitEvent(sessionChangedEvent("agent:main:first"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      expect(filteredCalls).toBe(2);
 
-      expect(request).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS * 2);
-      expect(request).toHaveBeenCalledTimes(2);
+      emitEvent(sessionChangedEvent("agent:main:queued"));
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      page.setVisibility("hidden");
+      activeRefresh.resolve(sessionsResult(2));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(filteredCalls).toBe(2);
+
+      page.setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(filteredCalls).toBe(3);
     } finally {
+      activeRefresh.resolve(sessionsResult(2));
+      unsubscribe();
       sessions.dispose();
       vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("holds canonical and filtered event refreshes while hidden and catches up once", async () => {
+    vi.useFakeTimers();
+    const page = installPageLifecycle();
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(1, [{ key: "agent:main:pending", kind: "direct", updatedAt: 0 }]);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const unsubscribe = sessions.subscribeList({ agentId: "main", archivedFilter: "all" }, vi.fn());
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      await sessions.refreshList({ agentId: "main", archivedFilter: "all", force: true });
+      emitEvent(sessionChangedEvent("agent:main:pending"));
+
+      page.setVisibility("hidden");
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          sessionKey: "agent:main:pending",
+          reason: "update",
+          key: "agent:main:pending",
+          kind: "direct",
+          updatedAt: 2,
+          archived: true,
+          archivedAt: 2,
+        },
+      });
+      expect(sessions.state.result?.sessions).toEqual([]);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_MAX_WAIT_MS * 2);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      page.setVisibility("visible");
+      page.pageShow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(4);
+
+      page.setVisibility("hidden");
+      page.pageHide();
+      page.pageShow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(4);
+      page.setVisibility("visible");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(6);
+
+      sessions.dispose();
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS * 2);
+      expect(request).toHaveBeenCalledTimes(6);
+    } finally {
+      unsubscribe();
+      sessions.dispose();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
     }
   });
 });

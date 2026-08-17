@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
@@ -12,8 +13,7 @@ import {
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
-import { claimDeliveryPlatformSendAttempt } from "./delivery-queue-storage.js";
-import { enqueueDeliveryOnce } from "./delivery-queue.js";
+import { claimDeliveryPlatformSendAttempt, enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
   installDeliveryQueueTmpDirHooks,
   readQueuedEntry,
@@ -21,14 +21,6 @@ import {
 } from "./delivery-queue.test-helpers.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
-
-function createDeferred<Value = void>() {
-  let resolve!: (value: Value) => void;
-  const promise = new Promise<Value>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 async function startBlockedFreshDelivery(params: { tmpDir: string }) {
   process.env.OPENCLAW_STATE_DIR = params.tmpDir;
@@ -499,7 +491,7 @@ describe("delivery producer lease integration", () => {
     vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
     const tmpDir = fixtures.tmpDir();
     const deliveryIntentId = "cron-direct-delivery:v1:expire-owner-after-dispatch";
-    const auditEvents: unknown[] = [];
+    const auditEvents: Array<{ outcome: string }> = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     let blocked: Awaited<ReturnType<typeof startBlockedProviderStableDelivery>> | undefined;
     try {
@@ -527,7 +519,7 @@ describe("delivery producer lease integration", () => {
 
       expect(blocked.sendText).toHaveBeenCalledOnce();
       expect(blocked.onDeliveryResult).not.toHaveBeenCalled();
-      expect(auditEvents).toEqual([]);
+      expect(auditEvents.map((event) => event.outcome)).toEqual(["queued", "platform_started"]);
       expect(
         getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
       ).toBe("pending");

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -15,7 +16,6 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
   type GatewayRestartSignalAdmissionLease,
 } from "../process/gateway-work-admission.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { formatErrorMessage } from "./errors.js";
 import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
 import { cleanStaleGatewayProcessesSync } from "./restart-stale-pids.js";

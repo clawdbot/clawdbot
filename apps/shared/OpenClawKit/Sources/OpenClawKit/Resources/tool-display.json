@@ -74,6 +74,17 @@
         "cwd"
       ]
     },
+    "portal": {
+      "emoji": "🌐",
+      "title": "Portal",
+      "detailKeys": [
+        "action",
+        "port",
+        "id",
+        "title",
+        "path"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
@@ -477,7 +488,7 @@
         "questions.0.question"
       ]
     },
-    "spawn_task": {
+    "suggest_task": {
       "emoji": "✨",
       "title": "Suggest Task",
       "detailKeys": [

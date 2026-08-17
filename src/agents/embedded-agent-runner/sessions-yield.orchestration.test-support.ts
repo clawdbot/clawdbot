@@ -10,7 +10,7 @@ import {
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 describe("sessions_yield orchestration", () => {
   beforeAll(async () => {
@@ -133,6 +133,26 @@ describe("sessions_yield orchestration", () => {
       expect(result.payloads).toBeUndefined();
       expect(result.meta.stopReason).toBe("end_turn");
       expect(result.meta.yielded).toBe(true);
+    });
+
+    it("yield with runtime continuation — diagnostic suppressed", async () => {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          yieldDetected: true,
+          assistantTexts: [],
+          runtimeContinuationStarted: true,
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        runId: "run-yield-runtime-continuation-suppressed",
+      });
+
+      expect(result.payloads).toBeUndefined();
+      expect(result.meta.stopReason).toBe("end_turn");
+      expect(result.meta.yielded).toBe(true);
+      expect(result.meta.replayInvalid).toBe(true);
     });
   });
 

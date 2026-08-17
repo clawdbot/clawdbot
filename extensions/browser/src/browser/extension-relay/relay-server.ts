@@ -3,9 +3,9 @@ import crypto from "node:crypto";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { isLoopbackHost } from "../../gateway/net.js";
-import { rawDataToString } from "../../infra/ws.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   BROWSER_RELAY_AUTH_CHALLENGE_PATH,
@@ -29,7 +29,7 @@ import {
 } from "./preauth-websocket-guard.js";
 import { readExtensionRelayToken } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
-import { parseExtensionMessage, type PageSharePayload } from "./relay-protocol.js";
+import { parseExtensionMessage } from "./relay-protocol.js";
 import {
   firstHeader,
   isAllowedExtensionOrigin,
@@ -344,17 +344,13 @@ export async function startExtensionRelayServer(params: {
   token: string;
   allowLegacyAuth?: boolean;
   onStateChange?: () => void;
-  onPageShare?: (payload: PageSharePayload) => Promise<void>;
 }): Promise<ExtensionRelayHandle> {
   const allowLegacyAuth = params.allowLegacyAuth ?? true;
   const internalToken = crypto.randomBytes(32).toString("base64url");
   if (readExtensionRelayToken() === params.token) {
     getBrowserRelayAuthV2Authority(params.token);
   }
-  const bridge = new ExtensionRelayBridge({
-    onStateChange: params.onStateChange,
-    onPageShare: params.onPageShare,
-  });
+  const bridge = new ExtensionRelayBridge({ onStateChange: params.onStateChange });
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,

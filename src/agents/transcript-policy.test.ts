@@ -69,8 +69,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 repairToolUseResultPairing: true,
                 validateAnthropicTurns: true,
                 allowSyntheticToolResults: true,
-                ...(modelId.includes("claude") &&
-                !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                ...(replayHelpers.shouldDropClaudeThinkingBlocks(modelId)
                   ? { dropThinkingBlocks: true }
                   : {}),
               };
@@ -92,8 +91,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                     repairToolUseResultPairing: true,
                     validateAnthropicTurns: true,
                     allowSyntheticToolResults: true,
-                    ...(modelId.includes("claude") &&
-                    !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                    ...(replayHelpers.shouldDropClaudeThinkingBlocks(modelId)
                       ? { dropThinkingBlocks: true }
                       : {}),
                   };
@@ -438,7 +436,6 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
-    // Opus 4.6 via custom proxy: should NOT drop thinking blocks
     const opus46 = resolveTranscriptPolicy({
       provider: "custom-anthropic-proxy",
       modelId: "claude-opus-4-6",
@@ -446,21 +443,77 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(opus46.dropThinkingBlocks).toBe(false);
 
-    // Sonnet 4.5 via custom proxy: should NOT drop
+    const opus5 = resolveTranscriptPolicy({
+      provider: "custom-anthropic-proxy",
+      modelId: "claude-opus-5",
+      modelApi: "anthropic-messages",
+    });
+    expect(opus5.dropThinkingBlocks).toBe(false);
+
     const sonnet45 = resolveTranscriptPolicy({
       provider: "custom-anthropic-proxy",
       modelId: "claude-sonnet-4-5-20250929",
       modelApi: "anthropic-messages",
     });
-    expect(sonnet45.dropThinkingBlocks).toBe(false);
+    expect(sonnet45.dropThinkingBlocks).toBe(true);
 
-    // Legacy Sonnet 3.7 via custom proxy: SHOULD drop
     const sonnet37 = resolveTranscriptPolicy({
       provider: "custom-anthropic-proxy",
       modelId: "claude-3-7-sonnet-20250219",
       modelApi: "anthropic-messages",
     });
     expect(sonnet37.dropThinkingBlocks).toBe(true);
+  });
+
+  it("uses canonical deployment metadata in unowned Anthropic transport fallback", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-anthropic-proxy",
+      modelId: "prod-opus",
+      modelApi: "anthropic-messages",
+      model: makeOpenAiCompatibleReasoningModel({
+        id: "prod-opus",
+        name: "Production Opus",
+        provider: "custom-anthropic-proxy",
+        api: "anthropic-messages",
+        params: { canonicalModelId: "claude-opus-5" },
+      }),
+    });
+
+    expect(policy.dropThinkingBlocks).toBe(false);
+  });
+
+  it("does not reuse cached Anthropic policies across canonical model identities", () => {
+    const config = {} as OpenClawConfig;
+    const model = makeOpenAiCompatibleReasoningModel({
+      id: "production-claude",
+      name: "Production Claude",
+      provider: "custom-anthropic-proxy",
+      api: "anthropic-messages",
+    });
+
+    const sonnet45 = resolveTranscriptPolicy({
+      config,
+      provider: "custom-anthropic-proxy",
+      modelId: model.id,
+      modelApi: model.api,
+      model: {
+        ...model,
+        params: { canonicalModelId: "claude-sonnet-4-5-20250929" },
+      },
+    });
+    const opus5 = resolveTranscriptPolicy({
+      config,
+      provider: "custom-anthropic-proxy",
+      modelId: model.id,
+      modelApi: model.api,
+      model: {
+        ...model,
+        params: { canonicalModelId: "claude-opus-5" },
+      },
+    });
+
+    expect(sonnet45.dropThinkingBlocks).toBe(true);
+    expect(opus5.dropThinkingBlocks).toBe(false);
   });
 
   it("strips thinking blocks for unowned Anthropic-compatible models that opt out of reasoning", () => {

@@ -78,6 +78,7 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
   return {
     registry,
     registryParams,
+    allowProcessHomeSessionCatalogs: registryParams.allowProcessHomeSessionCatalogs ?? true,
     coreGatewayMethods: new Set(coreGatewayMethodNames),
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),

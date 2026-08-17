@@ -1799,6 +1799,76 @@ describe("legacy diagnostics OTel protocol migrate", () => {
   });
 });
 
+describe("retired gateway Tailscale cleanup config migrate", () => {
+  it.each([
+    [true, "managed Tailscale routes now end automatically"],
+    [false, "Removed retired gateway.tailscale.resetOnExit"],
+  ])("removes resetOnExit=%s while preserving sibling settings", (resetOnExit, message) => {
+    const raw = {
+      gateway: {
+        bind: "loopback",
+        tailscale: {
+          mode: "serve",
+          resetOnExit,
+          preserveFunnel: true,
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain(
+      "gateway.tailscale.resetOnExit",
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.tailscale).toEqual({
+      mode: "serve",
+      preserveFunnel: true,
+    });
+    expect(res.changes).toEqual([expect.stringContaining(message)]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("removes a managed Service and disables ingress until the operator chooses a device route", () => {
+    const raw = {
+      gateway: {
+        bind: "loopback",
+        tailscale: {
+          mode: "serve",
+          serviceName: "svc:openclaw",
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain(
+      "gateway.tailscale.serviceName",
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.tailscale).toEqual({ mode: "off" });
+    expect(res.changes).toEqual([
+      expect.stringMatching(/serviceName.*mode=off.*tailscale serve clear/s),
+    ]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("removes an ignored Service name without disabling Funnel", () => {
+    const raw = {
+      gateway: {
+        tailscale: {
+          mode: "funnel",
+          serviceName: "svc:ignored",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.tailscale).toEqual({ mode: "funnel" });
+    expect(res.changes).toEqual([expect.stringContaining("current Tailscale mode is unchanged")]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+});
+
 describe("legacy WebChat channel config migrate", () => {
   it("removes retired WebChat channel config", () => {
     const raw = {
@@ -2299,7 +2369,10 @@ describe("legacy migrate sandbox scope aliases", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
           },
           models: {
-            "anthropic/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": {
+              alias: "Opus",
+              agentRuntime: { id: "auto", mode: "strict" },
+            },
           },
         },
         list: [
@@ -2327,7 +2400,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       models: {
         "anthropic/claude-opus-4-7": {
           alias: "Opus",
-          agentRuntime: { id: "claude-cli" },
+          agentRuntime: { id: "claude-cli", mode: "strict" },
         },
         "anthropic/claude-sonnet-4-6": {
           agentRuntime: { id: "claude-cli" },
@@ -3661,6 +3734,40 @@ describe("legacy model compat migrate", () => {
     expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
     expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
     expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
+  });
+
+  it("canonicalizes persisted OpenAI GPT-5.6 aliases without affecting GitHub Copilot", () => {
+    const copilot = "github-copilot/gpt-5.6";
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6@openai:work" },
+          modelPolicy: { allow: ["openai/gpt-5.6", copilot] },
+          models: {
+            "openai/gpt-5.6": { alias: "GPT" },
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            [copilot]: { alias: "Copilot GPT" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: { models: [{ id: "gpt-5.6", name: "GPT alias" }] },
+          "github-copilot": { models: [{ id: "gpt-5.6", name: "Copilot GPT" }] },
+        },
+      },
+    });
+    const defaults = res.config?.agents?.defaults;
+    expect(defaults).toMatchObject({
+      model: { primary: "openai/gpt-5.6-sol@openai:work" },
+      modelPolicy: { allow: ["openai/gpt-5.6-sol", copilot] },
+    });
+    expect(defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": { alias: "GPT", agentRuntime: { id: "openclaw" } },
+      [copilot]: { alias: "Copilot GPT" },
+    });
+    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.6-sol");
+    expect(res.config?.models?.providers?.["github-copilot"]?.models?.[0]?.id).toBe("gpt-5.6");
   });
 
   it("merges provider catalog rows that normalize to an explicitly canonical id", () => {

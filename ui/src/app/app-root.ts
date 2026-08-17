@@ -9,37 +9,40 @@ import "../components/login-gate.ts";
 import "../components/openclaw-mascot.ts";
 import "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { resolveControlUiBasePath } from "./browser.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
+import { desktopDocumentOptions, isDesktopOnlyView } from "./desktop-document-mode.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
+  DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
   preloadOptionalElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
-
-/**
- * Terminal-only document mode (`?view=terminal`): the mobile apps embed the
- * terminal as a full-screen WebView page instead of the whole Control UI.
- * Fixed per document load — the apps construct the URL, users never toggle it.
- */
-function isTerminalOnlyView(): boolean {
-  return new URLSearchParams(globalThis.location?.search ?? "").get("view") === "terminal";
-}
+import { isTerminalOnlyView } from "./terminal-document-mode.ts";
 
 export function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
 
-function renderConnectingSplash() {
+function renderConnectingSplash(status?: string) {
   return html`
-    <main class="connect-splash" role="status" aria-live="polite" aria-label=${t("common.loading")}>
+    <main
+      class="connect-splash"
+      role="status"
+      aria-live="polite"
+      aria-label=${status ?? t("common.loading")}
+    >
       <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
+      ${status ? html`<span class="connect-splash__status">${status}</span>` : nothing}
     </main>
   `;
 }
@@ -75,7 +78,15 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private pendingGatewayUrl: string | null = null;
   @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
 
-  private readonly terminalOnly = isTerminalOnlyView();
+  private readonly terminalOnly = isTerminalOnlyView(
+    globalThis.location,
+    resolveControlUiBasePath(globalThis.location?.pathname ?? "/"),
+  );
+  private readonly desktopOnly = isDesktopOnlyView(
+    globalThis.location,
+    resolveControlUiBasePath(globalThis.location?.pathname ?? "/"),
+  );
+  private readonly desktopOptions = desktopDocumentOptions(globalThis.location);
   private runtime: ApplicationRuntime | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
@@ -99,6 +110,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
       .watch(
         () => (this.terminalOnly ? this.context?.config : undefined),
         (config, notify) => config.subscribe(notify),
+      )
+      .watch(
+        () => (this.terminalOnly ? this.context?.agentSelection : undefined),
+        (selection, notify) => selection.subscribe(notify),
       );
   }
 
@@ -109,6 +124,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.runtime = bootstrapApplication();
     if (this.terminalOnly) {
       preloadOptionalElement(this, TERMINAL_PANEL_ELEMENT);
+    }
+    if (this.desktopOnly) {
+      preloadOptionalElement(this, DESKTOP_PANEL_ELEMENT);
     }
     if (this.runtime.documentMode?.kind === "approval") {
       preloadOptionalElement(this, APPROVAL_PAGE_ELEMENT);
@@ -137,6 +155,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.pendingGatewayUrl = null;
     this.resetLoginSensitivePresentation();
     super.disconnectedCallback();
+  }
+
+  protected override firstUpdated(): void {
+    if (this.runtime) {
+      globalThis.dispatchEvent(new Event("openclaw-control-ui-rendered"));
+    }
   }
 
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
@@ -183,6 +207,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     const gatewaySnapshot = context.gateway.snapshot;
     const gatewayConnected = gatewaySnapshot.phase === "connected";
+    const gatewayStartupStatus =
+      gatewaySnapshot.phase === "starting" ? t("common.gatewayStarting") : undefined;
     const gatewayUrlConfirmation = this.pendingGatewayUrl
       ? html`
           <openclaw-gateway-url-confirmation
@@ -200,26 +226,65 @@ export class OpenClawApp extends OpenClawLightDomElement {
           ></openclaw-gateway-url-confirmation>
         `
       : nothing;
-    // Embedded mobile terminals own the whole document. Keep the generic login
-    // gate out of this path or a connecting native session exposes Web UI chrome.
+    // Full-screen terminals own the whole document. Keep the generic login gate
+    // out of this path or a connecting native session exposes Web UI chrome.
     if (this.terminalOnly) {
       const terminalAvailable = isTerminalAvailable(
         gatewaySnapshot,
         context.config.current.terminalEnabled ?? false,
       );
+      const terminalOwner =
+        context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId;
+      const terminalAgentId = terminalOwner ? normalizeAgentId(terminalOwner) : null;
       // Embedded clients query this host immediately; keep it stable while the chunk loads.
       return html`
         <openclaw-terminal-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${terminalAvailable}
+          .agentId=${terminalAgentId}
           .themeMode=${resolveTerminalThemeMode()}
           fullscreen
         ></openclaw-terminal-panel>
+        ${!gatewayConnected && gatewaySnapshot.lastError === null
+          ? renderConnectingSplash(gatewayStartupStatus)
+          : nothing}
         ${!isOptionalElementDefined(TERMINAL_PANEL_ELEMENT) && terminalAvailable
-          ? renderConnectingSplash()
+          ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
         ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
+          : nothing}
+      `;
+    }
+    // Desktop documents share the panel's connection owner but none of its
+    // dock or shell chrome. Native clients can therefore load this route as a
+    // standalone, mobile-shaped surface without changing the observe contract.
+    if (this.desktopOnly) {
+      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+      return html`
+        <openclaw-desktop-panel
+          .client=${gatewayConnected ? gatewaySnapshot.client : null}
+          .available=${desktopAvailable}
+          .documentMode=${true}
+          .documentSource=${this.desktopOptions.source}
+          .documentSession=${this.desktopOptions.session}
+          .documentControl=${this.desktopOptions.control}
+          .onDocumentClose=${() => {
+            if (globalThis.history.length > 1) {
+              globalThis.history.back();
+            } else {
+              globalThis.location.assign(context.basePath || "/");
+            }
+          }}
+        ></openclaw-desktop-panel>
+        ${!gatewayConnected && gatewaySnapshot.lastError === null
+          ? renderConnectingSplash(gatewayStartupStatus)
+          : nothing}
+        ${!isOptionalElementDefined(DESKTOP_PANEL_ELEMENT) && desktopAvailable
+          ? renderConnectingSplash(gatewayStartupStatus)
+          : nothing}
+        ${!desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
+          ? html`<div class="desktop-view-unavailable">${t("desktop.unavailable")}</div>`
           : nothing}
       `;
     }
@@ -229,18 +294,19 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // loginGatePinned protects manual submissions.
     const initialConnectPending =
       runtime.documentMode === null &&
-      gatewaySnapshot.phase === "connecting" &&
-      !this.loginGatePinned &&
-      gatewaySnapshot.lastError === null;
+      gatewaySnapshot.lastError === null &&
+      (gatewaySnapshot.phase === "starting" ||
+        (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>
-          ${renderConnectingSplash()} ${gatewayUrlConfirmation}
+          ${renderConnectingSplash(gatewayStartupStatus)} ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
       `;
     }
-    const showLoginGate =
-      !gatewayConnected && (this.loginGatePinned || gatewaySnapshot.phase !== "reconnecting");
+    const shellOwnsRecovery =
+      gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
+    const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
     if (showLoginGate) {
       return html`
         <openclaw-tooltip-provider>

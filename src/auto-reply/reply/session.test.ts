@@ -15,6 +15,7 @@ import {
   appendTranscriptEvent,
   loadSessionEntry,
   loadTranscriptEvents,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
@@ -36,6 +37,10 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
@@ -111,29 +116,8 @@ vi.mock("../../infra/channel-summary.js", () => ({
   buildChannelSummary: channelSummaryMocks.buildChannelSummary,
 }));
 
-// Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
-vi.mock("../../agents/session-write-lock.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
-    "../../agents/session-write-lock.js",
-  );
-  return {
-    ...actual,
-    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(
-      ({
-        timeoutMs,
-        graceMs = 2 * 60 * 1000,
-        minMs = 5 * 60 * 1000,
-      }: {
-        timeoutMs: number;
-        graceMs?: number;
-        minMs?: number;
-      }) => Math.max(minMs, timeoutMs + graceMs),
-    ),
-  };
-});
-
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: vi.fn(async () => [
     { provider: "minimax", id: "m2.7", name: "M2.7" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
@@ -449,6 +433,47 @@ afterEach(async () => {
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState guarded initialization", () => {
+  it("pins an admitted non-default-agent incognito session to its process-local store", async () => {
+    const stateDir = await makeCaseDir("openclaw-session-incognito-init-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const agentId = "work";
+      const sessionId = "incognito-work-session";
+      const sessionKey = "agent:work:dashboard:incognito-work-session";
+      const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
+      await upsertSessionEntryCore(
+        { agentId, sessionKey, storePath },
+        { sessionId, incognito: true, updatedAt: Date.now() },
+      );
+
+      try {
+        await expect(
+          initSessionState({
+            cfg: {
+              agents: { list: [{ id: "main", default: true }, { id: agentId }] },
+              session: { store: path.join(stateDir, "durable", "{agentId}", "sessions.json") },
+            } as OpenClawConfig,
+            ctx: {
+              Body: "hello from incognito webchat",
+              Provider: "webchat",
+              SessionKey: sessionKey,
+              Surface: "webchat",
+            },
+            expectedExistingSessionId: sessionId,
+            pinExpectedExistingSession: true,
+            requestedSessionId: sessionId,
+            resumeRequestedSession: true,
+          }),
+        ).resolves.toMatchObject({
+          sessionId,
+          sessionKey,
+          storePath,
+        });
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+      }
+    });
+  });
+
   it("rejects inbound work for an archived session", async () => {
     const storePath = await createStorePath("openclaw-session-init-archived-");
     const sessionKey = "agent:main:telegram:chat:archived";
@@ -1291,6 +1316,7 @@ describe("initSessionState RawBody", () => {
     await expect(
       drainFormattedSystemEvents({
         cfg,
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: true,
@@ -1358,6 +1384,53 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
+  it.each(["owed", "unresolved"] as const)(
+    "preserves %s delivery-notice debt across an implicit daily stale rollover",
+    async (noticeState) => {
+      const root = await makeCaseDir("openclaw-daily-rollover-notice-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:telegram:notice-rollover";
+      const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+      const pendingDeliveryNotice = {
+        createdAt: staleStartedAt,
+        context: { channel: "telegram", to: "chat-1", accountId: "default" },
+        intentId: "intent-rollover",
+        state: noticeState,
+      };
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: "session-before-notice-rollover",
+          updatedAt: staleStartedAt,
+          sessionStartedAt: staleStartedAt,
+          lastInteractionAt: staleStartedAt,
+          systemSent: true,
+          pendingDeliveryNotice,
+        },
+      });
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: "hello again",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+        },
+        cfg: {
+          session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+        } as OpenClawConfig,
+      });
+
+      // Erasing the debt at rollover would recreate the silent ambiguous loss.
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.pendingDeliveryNotice).toEqual(pendingDeliveryNotice);
+      const store = readSessionStoreFast(storePath) as Record<
+        string,
+        { pendingDeliveryNotice?: unknown }
+      >;
+      expect(store[sessionKey]?.pendingDeliveryNotice).toEqual(pendingDeliveryNotice);
+    },
+  );
+
   it("stamps trusted creation provenance when initializing a missing session", async () => {
     const root = await makeCaseDir("openclaw-session-creation-provenance-");
     const storePath = path.join(root, "sessions.json");
@@ -1406,6 +1479,7 @@ describe("initSessionState RawBody", () => {
       spawnedWorkspaceDir: "/tmp/child-workspace",
       spawnedCwd: "/tmp/task-repo",
       parentSessionKey: "agent:main:main",
+      parentSessionId: "parent-session",
       forkedFromParent: true,
       forkSource: {
         sessionKey: "agent:main:root",
@@ -2141,6 +2215,7 @@ describe("initSessionState reset policy", () => {
     await expect(
       drainFormattedSystemEvents({
         cfg,
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: true,
@@ -3402,6 +3477,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       spawnedWorkspaceDir: "/tmp/child-workspace",
       spawnedCwd: "/tmp/task-repo",
       parentSessionKey: "agent:main:main",
+      parentSessionId: "parent-session",
       forkedFromParent: true,
       spawnDepth: 2,
       subagentRole: "orchestrator",
@@ -4326,6 +4402,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4346,6 +4423,7 @@ describe("drainFormattedSystemEvents", () => {
 
     const result = await drainFormattedSystemEvents({
       cfg: { channels: {} } as OpenClawConfig,
+      agentId: "main",
       sessionKey: "agent:main:main",
       isMainSession: true,
       isNewSession: true,
@@ -4371,6 +4449,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4395,6 +4474,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4771,13 +4851,14 @@ describe("persistSessionUsageUpdate", () => {
       expected: {
         totalTokens: 12_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         inputTokens: 180_000,
         outputTokens: 10_000,
       },
     },
     {
-      name: "clears the prior total when last-call context is unavailable",
-      seed: { totalTokens: 148_874, totalTokensFresh: true },
+      name: "marks the prior total stale when last-call context is unavailable",
+      seed: { totalTokens: 148_874, totalTokensFresh: true, totalTokensVersion: 1 },
       update: {
         usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
         lastCallUsage: {
@@ -4790,8 +4871,9 @@ describe("persistSessionUsageUpdate", () => {
         },
       },
       expected: {
-        totalTokens: undefined,
+        totalTokens: 148_874,
         totalTokensFresh: false,
+        totalTokensVersion: undefined,
         inputTokens: 12,
         cacheRead: 819_661,
       },
@@ -4839,10 +4921,14 @@ describe("persistSessionUsageUpdate", () => {
       expected: { totalTokens: 42_000, totalTokensFresh: true },
     },
     {
-      name: "clears older totalTokens when no compaction preservation is requested",
-      seed: { totalTokens: 42_000, totalTokensFresh: true },
+      name: "marks older totalTokens stale when no context snapshot is available",
+      seed: { totalTokens: 42_000, totalTokensFresh: true, totalTokensVersion: 1 },
       update: { usage: { input: 50_000, output: 5_000, total: 55_000 } },
-      expected: { totalTokens: undefined, totalTokensFresh: false },
+      expected: {
+        totalTokens: 42_000,
+        totalTokensFresh: false,
+        totalTokensVersion: undefined,
+      },
     },
     {
       name: "uses promptTokens when available without lastCallUsage",
@@ -4884,6 +4970,10 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, other: {} },
+      },
       models: {
         providers: {
           openai: {
@@ -4910,6 +5000,7 @@ describe("persistSessionUsageUpdate", () => {
       storePath,
       sessionKey,
       cfg,
+      agentDir: "/tmp/openclaw-main-agent",
       usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
       lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
       providerUsed: "openai",
@@ -4929,6 +5020,7 @@ describe("persistSessionUsageUpdate", () => {
       storePath,
       sessionKey,
       cfg,
+      agentDir: "/tmp/openclaw-main-agent",
       usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
       lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
       providerUsed: "openai",
@@ -5108,6 +5200,75 @@ describe("initSessionState stale threadId fallback", () => {
 
     expect(result.sessionEntry.lastThreadId).toBe("650.000");
     expect(result.sessionEntry.deliveryContext?.threadId).toBe("650.000");
+  });
+
+  it("preserves external thread routing for internal turns and clears it for external non-thread turns", async () => {
+    const storePath = await createStorePath("internal-thread-route-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "session-internal-thread-route",
+        updatedAt: Date.now(),
+        delivery: {
+          kind: "external",
+          route: {
+            channel: "imessage",
+            accountId: "imessage-default",
+            target: { to: "+15551234567", chatType: "direct" },
+            thread: { id: "thread-42", kind: "thread", source: "session" },
+          },
+          context: {
+            channel: "imessage",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+          },
+          origin: {
+            provider: "webchat",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+            chatType: "direct",
+            surface: "webchat",
+          },
+        },
+      },
+    });
+
+    const internal = await initSessionState({
+      ctx: {
+        Body: "internal control-ui turn",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+      },
+      cfg,
+    });
+    expect(internal.sessionEntry.lastThreadId).toBe("thread-42");
+    expect(internal.sessionEntry.deliveryContext).toEqual({
+      channel: "imessage",
+      to: "+15551234567",
+      accountId: "imessage-default",
+      threadId: "thread-42",
+    });
+
+    const plainExternal = await initSessionState({
+      ctx: {
+        Body: "plain external turn",
+        SessionKey: sessionKey,
+        OriginatingChannel: "imessage",
+        OriginatingTo: "+15551234567",
+        AccountId: "imessage-default",
+      },
+      cfg,
+    });
+    expect(plainExternal.sessionEntry.lastThreadId).toBeUndefined();
+    expect(plainExternal.sessionEntry.deliveryContext).toEqual({
+      channel: "imessage",
+      to: "+15551234567",
+      accountId: "imessage-default",
+    });
   });
 
   it("preserves lastThreadId within the same thread session", async () => {

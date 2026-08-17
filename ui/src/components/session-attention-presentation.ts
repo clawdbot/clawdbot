@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { resolveSessionAttentionIcon } from "./session-icon-registry.ts";
+import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
 
 export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
   if (attention.kind === "none") {
@@ -12,7 +12,7 @@ export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
     attention.kind === "question"
       ? icons.hand
       : attention.kind === "approval"
-        ? icons.key
+        ? icons.shieldQuestion
         : attention.kind === "agent"
           ? resolveSessionAttentionIcon(attention.icon)
           : icons.alertTriangle;
@@ -51,14 +51,18 @@ export function renderSessionUnreadState(session: SidebarRecentSession) {
     : nothing;
 }
 
+export function renderSessionRunSpinner(showTitle = true) {
+  return html`<span
+    class="session-run-spinner sidebar-recent-session__state"
+    role="img"
+    aria-label=${t("sessionsView.activeRun")}
+    title=${showTitle ? t("sessionsView.activeRun") : nothing}
+  ></span>`;
+}
+
 export function renderSessionState(session: SidebarRecentSession, showTitle = true) {
   if (session.hasActiveRun) {
-    return html`<span
-      class="session-run-spinner sidebar-recent-session__state"
-      role="img"
-      aria-label=${t("sessionsView.activeRun")}
-      title=${showTitle ? t("sessionsView.activeRun") : nothing}
-    ></span>`;
+    return renderSessionRunSpinner(showTitle);
   }
   if (!session.isChild) {
     return renderSessionUnreadState(session);

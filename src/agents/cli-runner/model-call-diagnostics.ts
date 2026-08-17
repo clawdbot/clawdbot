@@ -22,7 +22,7 @@ import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
-import type { CliOutput, CliUsage } from "../cli-output.js";
+import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { isFailoverError } from "../failover-error.js";
 import type { PreparedCliRunContext } from "./types.js";
 

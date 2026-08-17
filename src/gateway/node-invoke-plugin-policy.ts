@@ -3,6 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalWarningText,
+} from "../infra/exec-approval-command-display.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -24,6 +28,11 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-m
 
 // Plugin node.invoke policies are the last gateway-side guard before a
 // plugin-declared dangerous node command reaches the node transport.
+function sanitizeOptionalMeta(value?: string | null): string | null {
+  const normalized = normalizeOptionalString(value);
+  return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
+}
+
 function parseScopes(client: GatewayClient | null): string[] {
   return Array.isArray(client?.connect?.scopes)
     ? client.connect.scopes.filter((scope): scope is string => typeof scope === "string")
@@ -84,6 +93,20 @@ function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command
   );
 }
 
+function validateRiskClassification(
+  value: NonNullable<OpenClawPluginNodeInvokePolicyContext["risk"]>,
+): NonNullable<OpenClawPluginNodeInvokePolicyContext["risk"]> | null {
+  const family = normalizeOptionalString(value?.family);
+  if (
+    (value?.level !== "ordinary" && value?.level !== "high") ||
+    !family ||
+    !/^[a-z0-9][a-z0-9._-]{0,63}$/u.test(family)
+  ) {
+    return null;
+  }
+  return { level: value.level, family };
+}
+
 function createApprovalRuntime(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -99,21 +122,46 @@ function createApprovalRuntime(params: {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
       const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
+      if (
+        callerIdentity &&
+        params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
+      ) {
+        throw new Error("agent runtime approval authority is no longer active");
+      }
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        title: truncateUtf16Safe(input.title, 80),
-        description: truncateUtf16Safe(input.description, 256),
+        // Same creation-boundary sanitize as the RPC ingress: this record
+        // feeds the identical broadcast/forwarder/push paths. Normalize first
+        // so a whitespace-only title still fails closed at register (escaping
+        // the whitespace would make an unrenderable prompt look renderable).
+        title: truncateUtf16Safe(
+          sanitizeExecApprovalDisplayText(normalizeOptionalString(input.title) ?? ""),
+          80,
+        ),
+        description: truncateUtf16Safe(
+          sanitizeExecApprovalWarningText(normalizeOptionalString(input.description) ?? ""),
+          256,
+        ),
         severity: input.severity ?? "warning",
-        toolName: normalizeOptionalString(input.toolName) ?? null,
+        // toolName/agentId are interpolated into channel approval text; only
+        // host-minted runtime identity values skip the display escape.
+        toolName: sanitizeOptionalMeta(input.toolName),
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
-        agentId: callerIdentity?.agentId ?? normalizeOptionalString(input.agentId) ?? null,
+        agentId: callerIdentity?.agentId ?? sanitizeOptionalMeta(input.agentId),
         sessionKey: callerIdentity?.sessionKey ?? normalizeOptionalString(input.sessionKey) ?? null,
+        runId: callerIdentity?.operationalRunInstance.runId ?? null,
         turnSourceChannel: turnSource.turnSourceChannel,
         turnSourceTo: turnSource.turnSourceTo,
         turnSourceAccountId: turnSource.turnSourceAccountId,
         turnSourceThreadId: turnSource.turnSourceThreadId,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+      if (callerIdentity) {
+        record.agentRuntimeDelegatedAuthority = callerIdentity.delegatedAuthority;
+        if (callerIdentity.executionIdentity) {
+          record.executionIdentityToken = callerIdentity.executionIdentity;
+        }
+      }
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
       // Register directly: persistence and presentation-validation failures
@@ -161,7 +209,7 @@ function createApprovalRuntime(params: {
         },
         afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
       });
-      const decision = await decisionPromise;
+      let decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
       // This return hands execution authority to the plugin policy. Claim a
       // one-shot decision here so observation or retry cannot replay it.
       if (
@@ -170,6 +218,7 @@ function createApprovalRuntime(params: {
       ) {
         return { id: record.id, decision: null };
       }
+      decision = manager.projectDecisionIfActive(record.id, decision);
       return { id: record.id, decision };
     },
   };
@@ -194,6 +243,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   onNodeCommandDispatched?: () => void;
   idempotencyKey?: string;
   isInvocationCurrent?: () => boolean | Promise<boolean>;
+  isApprovalAuthorityActive?: () => boolean;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
   // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
@@ -216,10 +266,42 @@ export async function applyPluginNodeInvokePolicy(params: {
     return null;
   }
 
+  let risk: OpenClawPluginNodeInvokePolicyContext["risk"];
+  if (entry.policy.classifyRisk) {
+    try {
+      risk =
+        validateRiskClassification(
+          entry.policy.classifyRisk({ command: params.command, params: params.params }),
+        ) ?? undefined;
+    } catch {
+      // Argument classifiers run before the policy handler and transport. Do
+      // not expose rejected arguments or plugin exception text to the caller.
+    }
+    if (!risk) {
+      return {
+        ok: false,
+        code: "PLUGIN_POLICY_RISK_CLASSIFICATION_FAILED",
+        message: `node.invoke ${params.command} arguments could not be classified by plugin ${entry.pluginId}`,
+        details: { nodeCommandDispatched: false },
+      };
+    }
+  }
+
   let nodeCommandDispatched = false;
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
+    const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
+    if (
+      callerIdentity &&
+      params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
+    ) {
+      return {
+        ok: false,
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "agent runtime approval authority closed before node dispatch",
+      };
+    }
     // Policies invoke the real node through this narrowed transport wrapper so
     // they can retry/override params without getting direct registry access.
     if (params.isInvocationCurrent && !(await params.isInvocationCurrent())) {
@@ -282,6 +364,25 @@ export async function applyPluginNodeInvokePolicy(params: {
           ? Math.min(requestedTimeoutMs, remainingTimeoutMs)
           : remainingTimeoutMs
         : requestedTimeoutMs;
+    // Pairing and policy checks above may await. Revalidate the exact runtime
+    // capability at the final transport handoff so closure wins that race.
+    if (
+      callerIdentity &&
+      params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
+    ) {
+      return {
+        ok: false,
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "agent runtime approval authority closed before node dispatch",
+      };
+    }
+    if (params.isApprovalAuthorityActive?.() === false) {
+      return {
+        ok: false,
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "approved runtime authority closed before node dispatch",
+      };
+    }
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
@@ -293,6 +394,10 @@ export async function applyPluginNodeInvokePolicy(params: {
       timeoutMs,
       ...(params.signal ? { signal: params.signal } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
+      isDispatchAuthorized: () =>
+        (!callerIdentity ||
+          params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true) &&
+        params.isApprovalAuthorityActive?.() !== false,
       onDispatchReady: () => {
         // Only the registry knows that the transport send succeeded. Preserve
         // pre-send failures as retry-safe while making later failures ambiguous.
@@ -336,6 +441,7 @@ export async function applyPluginNodeInvokePolicy(params: {
           scopes: parseScopes(params.client),
         }
       : null,
+    ...(risk ? { risk } : {}),
     approvals: createApprovalRuntime({
       context: params.context,
       client: params.client,

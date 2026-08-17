@@ -1,4 +1,3 @@
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
@@ -8,6 +7,7 @@ import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-appro
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
+import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
 
 export type LegacyRescuePendingDetection = {
@@ -44,10 +44,6 @@ export type LegacyStateDetection = {
     targetDir: string;
     hasLegacy: boolean;
   };
-  channelPlans: {
-    hasLegacy: boolean;
-    plans: ChannelLegacyStateMigrationPlan[];
-  };
   pluginPlans?: {
     hasLegacy: boolean;
     plans: DetectedPluginDoctorStateMigrationPlan[];
@@ -69,6 +65,7 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     preview: string[];
   };
+  sharedAuthStore: SharedAuthStoreMigrationDetection;
   worktrees: {
     hasLegacy: boolean;
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
@@ -105,10 +102,6 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
   };
   tuiLastSessions: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  commitments: {
     sourcePath: string;
     hasLegacy: boolean;
   };

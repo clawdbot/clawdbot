@@ -221,6 +221,12 @@ until their tool policy is explicitly edited or the job is recreated.
 
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
+Pick the model for the job's difficulty, not the agent's default. Routine
+automation - summaries, triage, classification, status checks - runs well on a
+lighter model, which is cheaper and faster per run and adds up across a
+schedule. Keep your default model for jobs that need deep reasoning, and use
+`--fallbacks` when a light primary should escalate on failure.
+
 Model-selection precedence for isolated jobs, highest first:
 
 1. Per-job payload `model` (explicit config; a disallowed model fails the run)
@@ -282,6 +288,18 @@ The script may return an object with these optional fields:
 Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal automation run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
 
 ## Execution styles
+
+### Codex apps in scheduled automations
+
+Codex-created automations can retain the app IDs and permission ceiling
+available to the authenticated creator thread. At execution, OpenClaw requires
+the same prepared Codex profile and account, then narrows the stored cap against
+current app policy. Revoked apps, account/runtime changes, and interactive
+approval requirements fail closed with a recovery message; they never fall
+back to broader or different credentials. Older jobs without a captured app
+envelope continue their ordinary non-app behavior; recreate or reauthorize one
+only when it needs Codex app access. See
+[Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
 
 | Style           | `--session` value   | Runs in                   | Best for                        |
 | --------------- | ------------------- | ------------------------- | ------------------------------- |
@@ -371,8 +389,9 @@ Failure notifications follow a separate destination path:
 - `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
 
 Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field.
+Chat notifications show the normalized failure cause when one is available and keep raw commands, paths, and provider errors in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
 
-Failure alerts are opt-in, but the scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with the last error and recovery command. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
+Failure alerts are opt-in, but the scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with a safe cause and recovery command. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
 
 ### Output language
 
@@ -489,7 +508,7 @@ openclaw automations create "0 6 * * *" "Check ops queue" --name "Ops sweep" --s
 openclaw automations edit <jobId> --clear-agent
 ```
 
-Archiving a session (Control UI, or `sessions.patch { archived: true }` from an operator-admin caller) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
+Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` for status `ok`, non-zero for `error`, `skipped`, or a wait timeout.
 
@@ -538,13 +557,13 @@ Query-string tokens are rejected.
 
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">
-    Enqueue a system event for the main session:
+    Enqueue a system event for the selected agent's main session:
 
     ```bash
     curl -X POST http://127.0.0.1:18789/hooks/wake \
       -H 'Authorization: Bearer SECRET' \
       -H 'Content-Type: application/json' \
-      -d '{"text":"New email received","mode":"now"}'
+      -d '{"text":"New email received","mode":"now","agentId":"main"}'
     ```
 
     <ParamField path="text" type="string" required>
@@ -552,6 +571,9 @@ Query-string tokens are rejected.
     </ParamField>
     <ParamField path="mode" type="string" default="now">
       `now` or `next-heartbeat`.
+    </ParamField>
+    <ParamField path="agentId" type="string">
+      Target agent. Required when the configured agent fleet has no implicit or retained legacy owner.
     </ParamField>
 
   </Accordion>
@@ -616,15 +638,16 @@ Wire Gmail inbox triggers to OpenClaw via Google PubSub.
 
 ### Configure a restricted Gmail reader (recommended)
 
-Before connecting Gmail transport, merge a dedicated reader and hook policy into your existing config. Preserve the real settings on your existing default agent; the `main` entry below only shows the required roster shape.
+Before connecting Gmail transport, merge a dedicated reader and hook policy into your existing config. Preserve the real settings on your existing agent; the `main` entry below only shows the required roster shape.
+
+<Warning>Adding `mail_reader` creates an explicit fleet. Keep existing bindings and add one channel-wide binding per enabled channel that `main` still owns; there is no cross-channel wildcard.</Warning>
 
 ```json5
 {
   agents: {
+    ownership: "explicit",
     entries: {
-      main: {
-        default: true,
-      },
+      main: {},
       mail_reader: {
         workspace: "~/.openclaw/workspace-mail-reader",
         model: "openai/gpt-5.6-sol",
@@ -641,6 +664,7 @@ Before connecting Gmail transport, merge a dedicated reader and hook policy into
       },
     },
   },
+  bindings: [{ agentId: "main", match: { channel: "<channel-id>", accountId: "*" } }],
   hooks: {
     defaultSessionKey: "hook:gmail:ingress",
     allowRequestSessionKey: true,
@@ -663,13 +687,16 @@ Before connecting Gmail transport, merge a dedicated reader and hook policy into
 }
 ```
 
+Before restart, run `openclaw agents list --bindings`; replace every placeholder and verify each channel owner.
+
 Why this shape is safer:
 
-- `agentId: "mail_reader"` keeps Gmail off the default agent.
+- The explicit `main` binding preserves existing channel ownership instead of leaving non-Gmail traffic ownerless. Use a specific `accountId` instead of `"*"` when only one account belongs to `main`.
+- `agentId: "mail_reader"` keeps Gmail off the `main` agent.
 - `allowedAgentIds` prevents this hook endpoint from selecting another agent. If the Gateway serves other hook workflows, include only their intended agent ids too.
 - `scope: "session"` gives each Gmail message its own sandbox; `workspaceAccess: "none"` keeps the host agent workspace out of that sandbox.
 - `allow: ["session_status"]` is an absolute per-agent clamp, so global `tools.alsoAllow` additions cannot leak into the reader. The minimal profile and explicit deny list make the intended boundary auditable.
-- `deliver: false` keeps completion inside the hook flow. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Keep agent-to-agent handoff disabled unless you deliberately expose the exact coordination tool and pair it with a narrow [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent) policy.
+- `deliver: false` keeps completion inside the hook flow. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Keep agent-to-agent handoff disabled unless you deliberately expose the exact coordination tool and pair it with a narrow [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent) policy.
 
 Tool policies can only become more restrictive as global, provider, agent, and sandbox rules are combined. The per-agent allowlist cannot restore `session_status` if an earlier policy removed it. Ensure inherited policies retain `session_status`; an empty effective tool set aborts before the model sees the email.
 
@@ -698,7 +725,7 @@ This writes `hooks.gmail` transport settings, enables the Gmail preset, preserve
 <Warning>
 The built-in Gmail preset's per-message session separates conversation context; it does not restrict the target agent's tools or workspace. Without a custom mapping that sets `agentId`, Gmail hooks run as the default agent.
 
-For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent`. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#toolsagenttoagent).
+For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent`. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
 </Warning>
 
 ### Verify the reader boundary

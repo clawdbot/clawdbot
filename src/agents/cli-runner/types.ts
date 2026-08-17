@@ -19,20 +19,21 @@ import type {
   SessionEntry,
   SessionToolOverrides,
 } from "../../config/sessions.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
-import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
+import type { CliBackendConfig, CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
@@ -63,6 +64,8 @@ type CliSessionRetryParams = {
 
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
+  admittedRunContext?: AdmittedRunContext;
+  preparedRunAdmission?: PreparedAgentRunAdmission;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   sessionId: string;
@@ -97,10 +100,16 @@ export type RunCliAgentParams = {
   executionMode?: CliBackendExecutionMode;
   /** Internal one-shot inference path: suppress transcript, hook, context-engine, and delivery work. */
   isolatedCompletion?: true;
+  /** Internal backend control command: reuse the native session without recording a conversation turn. */
+  controlOperation?: "compact";
   /** Persist the successful CLI assistant reply into the OpenClaw session transcript. */
   persistAssistantTranscript?: boolean;
   /** Session store path used when assistant transcript persistence is enabled. */
   storePath?: string;
+  /** Admission-time lifecycle half of the durable transcript writer fence. */
+  expectedLifecycleRevision?: string;
+  /** Exact admitted run allowed to append to the durable transcript. */
+  expectedWriterRunId?: string;
   /** Canonical user-turn recorder shared with gateway/queue dispatch. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Context engine resolved once by the outer logical-turn owner. */
@@ -116,6 +125,8 @@ export type RunCliAgentParams = {
   inputProvenance?: InputProvenance;
   /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
   modelProvider?: string;
+  /** Vision capability resolved by the run owner from its prepared model catalog. */
+  modelHasVision?: boolean;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -135,6 +146,8 @@ export type RunCliAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Exact attempt authority attached to the active steering backend. */
+  toolAuthorityFingerprint?: string;
   /** Immutable lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   lane?: string;
@@ -221,6 +234,8 @@ export type RunCliAgentParams = {
   toolsAllow?: string[];
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Server-authored origin for fresh automation mutations from this CLI run. */
+  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
   /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */
   cliToolAvailability?: {
     native: string[];
@@ -293,7 +308,7 @@ export type CliSessionBindingFacts = {
 
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
-  params: RunCliAgentParams;
+  params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
   effectiveAuthProfileId?: string;
   /** Selected profile snapshot used only for terminal health settlement. */
   authProfileStore?: AuthProfileStore;

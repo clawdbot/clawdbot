@@ -1,5 +1,5 @@
 /** Runtime persistence helper for clearing abort-cutoff state from sessions. */
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyAbortCutoffToSessionEntry, hasAbortCutoff } from "./abort-cutoff.js";
 
@@ -21,7 +21,7 @@ export async function clearAbortCutoffInSessionRuntime(params: {
   sessionStore[sessionKey] = sessionEntry;
 
   if (storePath) {
-    await patchSessionEntry(
+    await patchSessionEntryCore(
       { storePath, sessionKey },
       () => ({
         abortCutoffMessageSid: undefined,

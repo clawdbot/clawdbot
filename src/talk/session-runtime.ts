@@ -9,6 +9,7 @@ import type {
   RealtimeVoiceCloseReason,
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceResponseOutcome,
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
@@ -69,6 +70,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   tools?: RealtimeVoiceTool[];
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
+  onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (
     event: RealtimeVoiceToolCallEvent,
     session: RealtimeVoiceBridgeSession,
@@ -195,6 +197,7 @@ export function createRealtimeVoiceBridgeSession(
     },
     onTranscript: params.onTranscript,
     onEvent: params.onEvent,
+    onResponseDone: params.onResponseDone,
     onToolCall: (event) => {
       if (!bridgeRef.current || !isAdmitting()) {
         return;

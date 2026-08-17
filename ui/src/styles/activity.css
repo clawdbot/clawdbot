@@ -2,6 +2,30 @@
    design language; only the stream (entries, previews) keeps bespoke styles
    as the in-group escape hatch. */
 
+/* The route host must hand the bounded shell height to the fill-height
+   workspace; otherwise a populated stream expands the main page and defeats
+   its own scroll/auto-follow owner. */
+.content:has(openclaw-activity-page) {
+  overflow: hidden;
+}
+
+.content:has(openclaw-activity-page) > openclaw-router-outlet {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin-top: 0;
+}
+
+openclaw-activity-page {
+  display: contents;
+}
+
+.content:has(openclaw-activity-page) .content-header {
+  flex: 0 0 auto;
+}
+
 /* Fill-height chain: the section, group, and stream absorb the remaining
    viewport height inside .settings-workspace--fill-height (settings.css). */
 .settings-workspace--fill-height .activity-page {
@@ -44,7 +68,7 @@
   gap: var(--space-1);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .activity-status-filter input {
@@ -191,19 +215,16 @@
   font-size: var(--control-ui-text-sm);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .activity-entry__meta {
     white-space: normal;
+    grid-column: 2;
+    justify-content: flex-start;
   }
 
   .activity-entry__summary {
     grid-template-columns: 18px minmax(0, 1fr);
     gap: var(--space-2);
-  }
-
-  .activity-entry__meta {
-    grid-column: 2;
-    justify-content: flex-start;
   }
 
   .activity-entry__body {
@@ -212,5 +233,17 @@
 
   .activity-stream {
     max-height: calc(100vh - 360px);
+  }
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .content:has(openclaw-activity-page) {
+    overflow-y: auto;
+  }
+
+  .content:has(openclaw-activity-page) > openclaw-router-outlet {
+    display: block;
+    width: auto;
+    height: auto;
   }
 }

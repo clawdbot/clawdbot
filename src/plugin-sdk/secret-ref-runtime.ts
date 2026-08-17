@@ -15,7 +15,7 @@ import {
   parsePluginSecretTargetSpecifier,
 } from "../secrets/plugin-setup-plan.js";
 import { createPrivateWindowsPlanFile } from "../secrets/private-plan-file.js";
-import { resolveSecretPlanTargetByPath as resolveSecretPlanTargetByPathInternal } from "../secrets/target-registry-query.js";
+import { resolveSecretPlanTargetByPathCore } from "../secrets/target-registry-query.js";
 import {
   resolveTrustedExecutablePath,
   resolveTrustedPlanDirectoryPath,
@@ -454,7 +454,7 @@ export function resolveSecretPlanTargetByPath(params: {
   configFile: "openclaw.json" | "auth-profiles.json";
   pathSegments: string[];
 }): ResolvedSecretPlanTarget | null {
-  const resolved = resolveSecretPlanTargetByPathInternal(params);
+  const resolved = resolveSecretPlanTargetByPathCore(params);
   if (!resolved) {
     return null;
   }

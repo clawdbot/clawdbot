@@ -1,3 +1,4 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 // Proxy stream wrapper applies provider-specific wrappers around base stream functions.
 import {
   normalizeOptionalLowercaseString,
@@ -7,8 +8,8 @@ import { resolveProviderRequestPolicy } from "../../../agents/provider-attributi
 import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { parseStrictFiniteNumber } from "../../../infra/parse-finite-number.js";
 import { normalizeOpenAICompatibleReasoningPayload } from "../../../plugin-sdk/provider-stream-shared.js";
+import { parseBooleanValue } from "../../../utils/boolean.js";
 import { streamSimple } from "../../stream.js";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
@@ -19,6 +20,10 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
 const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
+const BOOLEAN_PARAM_PARSE_OPTIONS = {
+  truthy: ["1", "true", "yes", "on", "enable", "enabled"],
+  falsy: ["0", "false", "no", "off", "disable", "disabled"],
+};
 
 function resolveKilocodeAppHeaders(): Record<string, string> {
   const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
@@ -36,26 +41,6 @@ function readExtraParam(
     if (Object.hasOwn(extraParams, key)) {
       return extraParams[key];
     }
-  }
-  return undefined;
-}
-
-function resolveBooleanParam(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  if (["1", "true", "yes", "on", "enable", "enabled"].includes(normalized)) {
-    return true;
-  }
-  if (["0", "false", "no", "off", "disable", "disabled"].includes(normalized)) {
-    return false;
   }
   return undefined;
 }
@@ -95,11 +80,13 @@ function resolveOpenRouterResponseCacheHeaders(
   if (!shouldApplyOpenRouterResponseCacheHeaders(model)) {
     return undefined;
   }
-  const configuredCache = resolveBooleanParam(
+  const configuredCache = parseBooleanValue(
     readExtraParam(extraParams, ["responseCache", "response_cache"]),
+    BOOLEAN_PARAM_PARSE_OPTIONS,
   );
-  const clearCache = resolveBooleanParam(
+  const clearCache = parseBooleanValue(
     readExtraParam(extraParams, ["responseCacheClear", "response_cache_clear"]),
+    BOOLEAN_PARAM_PARSE_OPTIONS,
   );
   const cacheEnabled = configuredCache ?? (clearCache ? true : undefined);
   if (cacheEnabled === undefined) {

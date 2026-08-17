@@ -1,4 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import {
   GATEWAY_NATIVE_APPROVAL_METHODS,
@@ -12,6 +13,7 @@ import type {
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
@@ -19,6 +21,7 @@ import type {
   GatewayInstanceRuntime,
   GatewayRecoveryRuntime,
 } from "./server-instance-runtime.types.js";
+import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { registerGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
@@ -48,6 +51,12 @@ export function createGatewayInstanceRuntime(
   const routeCoordinator = createApprovalNativeRouteCoordinator();
   let closed = false;
 
+  const assertDispatchAvailable = (method: string) => {
+    if (closed || !options.isDispatchAvailable()) {
+      throw new Error(`Gateway instance dispatch unavailable for ${method}`);
+    }
+  };
+
   const dispatch = async <T>(params: {
     allowedMethods: ReadonlySet<string>;
     client: ReturnType<typeof createSyntheticPluginRuntimeClient>;
@@ -55,9 +64,7 @@ export function createGatewayInstanceRuntime(
     payload: Record<string, unknown>;
     timeoutMs?: number;
   }): Promise<T> => {
-    if (closed || !options.isDispatchAvailable()) {
-      throw new Error(`Gateway instance dispatch unavailable for ${params.method}`);
-    }
+    assertDispatchAvailable(params.method);
     if (!params.allowedMethods.has(params.method)) {
       throw new Error(`Gateway internal principal cannot dispatch ${params.method}`);
     }
@@ -71,29 +78,39 @@ export function createGatewayInstanceRuntime(
   };
 
   const recoveryClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
-  const recoveryMethods = new Set(["agent", "agent.wait"]);
+  const recoveryAgentTurns = createInternalAgentTurnFacade({
+    client: recoveryClient,
+    getContext: options.getContext,
+    getMethodRegistry: options.getMethodRegistry,
+  });
   const approvalClient = createSyntheticPluginRuntimeClient({ scopes: [APPROVALS_SCOPE] });
   const approvalMethods = new Set<GatewayNativeApprovalMethod>(GATEWAY_NATIVE_APPROVAL_METHODS);
   const approvalRouteClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
   const approvalRouteMethods = new Set(["send"]);
 
   const recovery: GatewayRecoveryRuntime = {
-    dispatchAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
-      await dispatch<T>({
-        allowedMethods: recoveryMethods,
-        client: recoveryClient,
-        method: "agent",
-        payload,
-        timeoutMs,
-      }),
-    waitForAgent: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
-      await dispatch<T>({
-        allowedMethods: recoveryMethods,
-        client: recoveryClient,
-        method: "agent.wait",
-        payload,
-        timeoutMs,
-      }),
+    dispatchAgent: async <T>(
+      payload: AgentRunRequest,
+      timeoutMs?: number,
+      dispatchOptions?: { allowModelOverride?: boolean; scopes?: string[] },
+    ) => {
+      assertDispatchAvailable("agent");
+      const agentTurns = dispatchOptions
+        ? createInternalAgentTurnFacade({
+            client: createSyntheticPluginRuntimeClient({
+              allowModelOverride: dispatchOptions.allowModelOverride,
+              scopes: dispatchOptions.scopes,
+            }),
+            getContext: options.getContext,
+            getMethodRegistry: options.getMethodRegistry,
+          })
+        : recoveryAgentTurns;
+      return await agentTurns.dispatch<T>(payload, timeoutMs);
+    },
+    waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number) => {
+      assertDispatchAvailable("agent.wait");
+      return await recoveryAgentTurns.wait<T>(payload, timeoutMs);
+    },
     sendRecoveryNotice: async (payload) => {
       if (closed || !options.isDispatchAvailable()) {
         throw new Error("Gateway instance dispatch unavailable for recovery notice");
@@ -119,6 +136,7 @@ export function createGatewayInstanceRuntime(
       if (result.deliveryStatus === "failed" || result.deliveryStatus === "partial_failed") {
         throw new Error(result.error ?? "recovery notice delivery failed");
       }
+      return { suppressed: result.deliveryStatus === "suppressed" };
     },
   };
   const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);

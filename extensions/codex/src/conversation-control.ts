@@ -1,12 +1,10 @@
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 // Codex plugin module implements conversation control behavior.
 import {
-  applyModelOverrideToSessionEntry,
+  applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
-import {
-  resolveStorePath,
-  updateSessionStoreEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import {
@@ -230,18 +228,24 @@ export async function setCodexConversationModel(params: {
         }
       : undefined);
   if (session) {
-    const updated = await updateSessionStoreEntry({
+    const updated = await patchSessionEntry({
+      agentId: session.agentId,
       storePath: resolveStorePath(params.config?.session?.store, { agentId: session.agentId }),
       sessionKey: session.sessionKey,
       requireWriteSuccess: true,
+      // Model override helpers delete stale credentials and model metadata;
+      // replacing the snapshot is required because partial patches merge fields.
+      replaceEntry: true,
       update: (entry) => {
         if (entry.sessionId !== session.sessionId) {
-          return null;
+          throw new Error("Codex session changed while applying the model selection.");
         }
-        applyModelOverrideToSessionEntry({
+        applyModelOverrideWithAuthProfileCompatibility({
+          cfg: params.config ?? {},
+          agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, session.agentId),
           entry,
+          currentProvider: binding.modelProvider ?? "openai",
           selection: { provider: nextModelProvider ?? "openai", model: nextModel },
-          preserveAuthProfileOverride: true,
           markLiveSwitchPending: true,
         });
         return entry;

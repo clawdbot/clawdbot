@@ -1,4 +1,8 @@
-import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  createChannelInboundEnvelopeBuilder,
+  recordChannelBotPairLoopAndCheckSuppression,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { deriveDurableFinalDeliveryRequirements } from "openclaw/plugin-sdk/channel-outbound";
 /**
  * Converts authorized ClickClack messages into OpenClaw agent/model replies and
@@ -45,6 +49,7 @@ async function dispatchModelReply(params: {
   route: { agentId: string };
   target: string;
   correlationId?: string;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getClickClackRuntime();
   const result = await runtime.llm.complete({
@@ -87,6 +92,7 @@ export async function handleClickClackInbound(params: {
   message: ClickClackMessage;
   access?: ClickClackInboundAccess;
   correlationId?: string;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getClickClackRuntime();
   const message = params.message;
@@ -97,7 +103,7 @@ export async function handleClickClackInbound(params: {
       config: params.config,
       message,
     }));
-  if (!access.shouldDispatch) {
+  if (!access.shouldDispatch || !access.channelIngress) {
     return;
   }
   const conversationId = message.channel_id || message.direct_conversation_id;
@@ -129,6 +135,20 @@ export async function handleClickClackInbound(params: {
       })
     : undefined;
   if (params.account.replyMode === "model" && !discussionRoute) {
+    if (access.botLoopProtection) {
+      const loopResult = recordChannelBotPairLoopAndCheckSuppression(access.botLoopProtection);
+      if (loopResult.suppressed) {
+        runtime.logging
+          .getChildLogger({ plugin: "clickclack", feature: "bot-loop-protection" })
+          .warn(
+            `[${params.account.accountId}] ClickClack bot-pair loop suppressed for ${Math.max(
+              0,
+              Math.ceil((loopResult.cooldownUntilMs - Date.now()) / 1000),
+            )}s`,
+          );
+        return;
+      }
+    }
     progress?.start();
     try {
       await dispatchModelReply({
@@ -182,7 +202,8 @@ export async function handleClickClackInbound(params: {
     timestamp: new Date(message.created_at),
     body: message.body,
   });
-  const ctxPayload = runtime.channel.inbound.buildContext({
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
+    channelIngress: access.channelIngress,
     channel: CHANNEL_ID,
     accountId: route.accountId ?? params.account.accountId,
     messageId: message.id,
@@ -257,6 +278,7 @@ export async function handleClickClackInbound(params: {
       accountId: params.account.accountId,
       route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
       ctxPayload,
+      botLoopProtection: access.botLoopProtection,
       toolsAllow: params.account.toolsAllow,
       replyOptions: {
         ...(runId ? { runId } : {}),

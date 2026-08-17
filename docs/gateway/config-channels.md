@@ -114,11 +114,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 ```json5
 {
-  web: {
-    enabled: true,
-  },
   channels: {
     whatsapp: {
+      enabled: true,
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "+447700900123"],
       textChunkLimit: 4000,
@@ -197,12 +195,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 100,
-      retry: {
-        attempts: 3,
-        minDelayMs: 400,
-        maxDelayMs: 30000,
-        jitter: 0.1,
-      },
       network: {
         autoSelectFamily: true,
         dnsResultOrder: "ipv4first",
@@ -473,20 +465,25 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - **User identity** (`identity: "user"`) posts and reads as the authorizing human. It requires `userToken` plus `appToken` in Socket Mode, or `userToken` plus `signingSecret` in HTTP mode. No bot token or bot user is required. See [User identity](/channels/slack#user-identity-post-as-a-real-person) for user scopes and event subscriptions.
-- `enterpriseOrgInstall: true` opts an account into the Slack Enterprise Grid
-  org-wide event path. Startup verifies the bot token with `auth.test` and
-  fails when the configured mode does not match Slack's installation identity.
-  Enterprise DMs must be disabled or use `dmPolicy: "open"` with an effective
-  `allowFrom: ["*"]`. Channel and user policies must use stable Slack IDs;
-  mutable names and unsupported channel prefixes fail startup. V1 handles only
-  direct Socket Mode or HTTP `message` and `app_mention` events with immediate
-  replies; relay, commands, interactions, App Home, reaction event listeners,
-  pins, action tools, native approvals, bindings, deferred delivery, and
-  proactive sends are unavailable. Listener-owned acknowledgment, typing, and
-  status reactions remain available with `reactions:write`; inbound reaction
-  notifications and reaction action tools are unavailable. See
+- Slack detects Enterprise Grid org-wide installations automatically from the
+  bot token with `auth.test`; no installation-mode setting is required.
+  Enterprise DMs support `disabled`, `open`, `allowlist`, and workspace-scoped
+  `pairing`. Channel policies require `team:<team-id>:channel:<channel-id>`.
+  User policies accept either an org-wide stable user ID or
+  `team:<team-id>:user:<user-id>` for workspace scope. Mutable names and
+  unsupported channel prefixes fail startup.
+  Mention-pattern channel scopes and static route-binding peers use
+  workspace-qualified Slack targets.
+  Direct Socket Mode or HTTP messages, mentions, workspace-qualified actions,
+  deferred delivery, proactive sends, supported event listeners and
+  interactions, static route bindings, and Slack-native approvals from
+  workspace-qualified turns are supported. Relay, channel-ID-change events,
+  App Home, Agent and Assistant lifecycle events, configured ACP bindings, and
+  runtime current-conversation bindings remain unavailable. See
   [Enterprise Grid org-wide installs](/channels/slack#enterprise-grid-org-wide-installs)
   for the least-privilege manifest, setup workflow, and complete restrictions.
+- The retired `enterpriseOrgInstall` key is removed by `openclaw doctor --fix`
+  at the Slack root and account levels.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as
@@ -498,7 +495,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `configWrites: false` blocks Slack-initiated config writes.
 - Optional `channels.slack.defaultAccount` overrides default account selection when it matches a configured account id.
 - `dm.groupEnabled` and `dm.groupChannels` only filter Slack group DMs (MPDMs) the app is already a member of. They cannot make the app see an existing group DM it never joined; convert the group DM to a private channel and invite the app, or have the app open a new MPDM with `conversations.open`. See [Group DMs (MPDMs) and bots](/channels/slack#group-dms-mpdms-and-bots).
-- `channels.slack.streaming.mode` is the canonical Slack stream mode key (default `"partial"`). `channels.slack.streaming.nativeTransport` controls Slack's native streaming transport (default `true`). Legacy `streamMode`, boolean `streaming`, `chunkMode`, `blockStreaming`, `blockStreamingCoalesce`, and `nativeStreaming` values are no longer read at runtime; run `openclaw doctor --fix` to migrate persisted config to `streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}`.
+- `channels.slack.streaming.mode` is the canonical Slack stream mode key (default `"progress"`). `channels.slack.streaming.nativeTransport` controls Slack's native streaming transport (default `true`). Legacy `streamMode`, boolean `streaming`, `chunkMode`, `blockStreaming`, `blockStreamingCoalesce`, and `nativeStreaming` values are no longer read at runtime; run `openclaw doctor --fix` to migrate persisted config to `streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}`.
 - `unfurlLinks` and `unfurlMedia` pass Slack's `chat.postMessage` link and media unfurl booleans through for bot replies. `unfurlLinks` defaults to `false` so outbound bot links do not expand inline unless enabled; `unfurlMedia` is omitted unless configured. Set either value at `channels.slack.accounts.<accountId>` to override the top-level value for one account.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
@@ -605,7 +602,7 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required. Th
 
 BlueBubbles support was removed. `channels.bluebubbles` is not a supported runtime config surface on current OpenClaw. Migrate old configs to `channels.imessage`; use [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short version and [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full translation table.
 
-If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg "$@"` on that Mac. The default local `imsg` path is macOS-only.
+If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to the absolute path of a Gateway-local SSH wrapper that runs `imsg "$@"` on that Mac. Set `remoteHost` to the Messages Mac, not the Gateway host. OpenClaw auto-detects simple transparent SSH wrappers for compatibility, but complex wrappers require explicit `remoteHost`. The default local `imsg` path is macOS-only.
 
 Before relying on an SSH wrapper for production sends, verify an outbound `imsg send` through that exact wrapper. Some macOS TCC states assign Messages Automation to `/usr/libexec/sshd-keygen-wrapper`, which can make reads and probes work while sends fail with AppleEvents `-1743`; see the SSH wrapper troubleshooting section on [iMessage](/channels/imessage).
 
@@ -614,9 +611,9 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
   channels: {
     imessage: {
       enabled: true,
-      cliPath: "imsg",
-      dbPath: "~/Library/Messages/chat.db",
-      remoteHost: "user@gateway-host",
+      cliPath: "/home/openclaw/.openclaw/scripts/imsg-ssh",
+      dbPath: "/Users/user/Library/Messages/chat.db",
+      remoteHost: "user@messages-mac",
       dmPolicy: "pairing",
       allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
       historyLimit: 50,
@@ -643,9 +640,10 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
 - Optional `channels.imessage.defaultAccount` overrides default account selection when it matches a configured account id.
 - Requires Full Disk Access to the Messages DB.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
-- `cliPath` can point to an SSH wrapper; set `remoteHost` (`host` or `user@host`) for SCP attachment fetching.
+- For SSH setups, `cliPath` is an absolute path on the Gateway host. `remoteHost` (`host` or `user@host`) is the Messages Mac, and `dbPath` is interpreted on that Mac. Use an absolute remote database path rather than expanding it from the Gateway user's home.
+- A configured or auto-detected `remoteHost` enables inbound attachment fetches and outbound file staging over the existing strict SSH/SCP transport. Outbound files use an owner-only remote temporary path with best-effort cleanup after success, failure, or timeout; cleanup failure warns and can leave owner-only residue.
 - `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
-- SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
+- SCP uses strict host-key checking, so ensure the Messages Mac host key already exists in `~/.ssh/known_hosts`.
 - `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
 - `channels.imessage.sendTransport`: preferred `imsg` RPC send transport for normal outbound replies. `auto` (default) uses the IMCore bridge for existing chats when it is running, then falls back to AppleScript; `bridge` requires private-API delivery; `applescript` forces the public Messages automation path.
 - `channels.imessage.actions.*`: enable private API actions that are also gated by `imsg status` / `openclaw channels status --probe`.
@@ -658,8 +656,10 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
 
 ```bash
 #!/usr/bin/env bash
-exec ssh -T gateway-host imsg "$@"
+exec ssh -T messages-mac imsg "$@"
 ```
+
+With remote `imsg` v0.13.4, poll votes must use `pollOptionId`; its `poll.vote` RPC method does not resolve index or text selectors. Attachment replies to nonzero part indices are also unavailable remotely. These limits do not change local `imsg` behavior.
 
 </Accordion>
 
@@ -833,7 +833,12 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
     },
   },
   agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
+    entries: {
+      main: {
+        default: true,
+        groupChat: { mentionPatterns: ["@openclaw", "openclaw"] },
+      },
+    },
   },
 }
 ```
@@ -876,12 +881,12 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         groupChat: { mentionPatterns: ["reisponde", "@openclaw"] },
       },
-    ],
+    },
   },
 }
 ```
@@ -902,13 +907,10 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     debug: false, // allow /debug
     restart: true, // allow /restart + external SIGUSR1 restart requests
     ownerAllowFrom: ["discord:123456789012345678"],
-    ownerDisplay: "raw", // raw | hash
-    ownerDisplaySecret: "${OWNER_ID_HASH_SECRET}",
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
     },
-    useAccessGroups: true,
   },
 }
 ```
@@ -931,9 +933,8 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
 - `restart: false` disables `/restart` and external `SIGUSR1` restart requests. Default: `true`.
 - `ownerAllowFrom` is the explicit owner allowlist for owner-only commands and owner-gated channel actions. It is separate from `allowFrom`.
-- `ownerDisplay: "hash"` hashes owner ids in the system prompt. Set `ownerDisplaySecret` to control hashing.
-- `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
-- `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
+- `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives.
+- When `allowFrom` is unset, command authorization follows channel allowlists and pairing state. Access-group entries in channel allowlists are resolved automatically.
 - Command docs map:
   - built-in + bundled catalog: [Slash Commands](/tools/slash-commands)
   - channel-specific command surfaces: [Channels](/channels)

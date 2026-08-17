@@ -1,4 +1,4 @@
-/** Resolves SecretRef values from env, file, and exec secret providers. */
+/** Resolves SecretRef values from env, file, exec, and store secret providers. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -16,7 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -46,6 +46,7 @@ import {
   providerResolutionError,
   refResolutionError,
 } from "./resolve-errors.js";
+import { resolveStoreRefs } from "./resolve-store.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
 import {
   isNonEmptyString,
@@ -156,10 +157,14 @@ function resolveConfiguredProvider(params: {
 }): SecretProviderConfig {
   const { ref, config } = params;
   const providerConfig = config.secrets?.providers?.[ref.provider];
+  if (
+    providerConfig?.source !== ref.source &&
+    (ref.source === "env" || ref.source === "store") &&
+    ref.provider === resolveDefaultSecretProviderAlias(config, ref.source)
+  ) {
+    return { source: ref.source };
+  }
   if (!providerConfig) {
-    if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
-      return { source: "env" };
-    }
     throw providerResolutionError({
       code: "SECRET_PROVIDER_NOT_CONFIGURED",
       source: ref.source,
@@ -183,7 +188,7 @@ function resolveConfiguredProvider(params: {
         env: params.env,
         allowWorkspaceScopedSnapshot: true,
       })?.manifestRegistry ??
-      loadPluginManifestRegistry({
+      loadPluginManifestRegistryCore({
         config,
         env: params.env,
       });
@@ -675,6 +680,13 @@ async function resolveProviderRefs(params: {
         cache: params.options.cache,
       });
     }
+    if (params.providerConfig.source === "store") {
+      return resolveStoreRefs({
+        refs: params.refs,
+        providerName: params.providerName,
+        database: { env: params.options.env ?? process.env },
+      });
+    }
     if (params.providerConfig.source === "exec") {
       if (isPluginIntegrationSecretProviderConfig(params.providerConfig)) {
         throw providerResolutionError({
@@ -728,6 +740,11 @@ function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup[] {
     if (ref.source === "file" && !isValidFileSecretRefId(id)) {
       throw new Error(
         `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "store" && !isValidEnvSecretRefId(id)) {
+      throw new Error(
+        `Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
     if (ref.source === "exec" && !isValidExecSecretRefId(id)) {

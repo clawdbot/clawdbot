@@ -14,6 +14,7 @@ import {
   type ResolvedRealtimeVoiceProvider,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
@@ -23,7 +24,6 @@ import {
   resolveVoiceCallConfig,
   validateProviderConfig,
 } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
@@ -257,7 +257,7 @@ function listRealtimeAgentIds(config: VoiceCallConfig, coreConfig: OpenClawConfi
 async function createRealtimeInstructionsResolver(params: {
   config: VoiceCallConfig & { agentId: string };
   coreConfig: OpenClawConfig;
-  agentRuntime: CoreAgentDeps;
+  agentRuntime: OpenClawPluginApi["runtime"]["agent"];
 }): Promise<(call: CallRecord) => string> {
   const genericConfig: VoiceCallConfig = {
     ...params.config,
@@ -297,9 +297,9 @@ async function createRealtimeInstructionsResolver(params: {
 
 export async function createVoiceCallRuntime(params: {
   config: VoiceCallConfig;
-  coreConfig: CoreConfig;
+  coreConfig: OpenClawConfig;
   fullConfig?: OpenClawConfig;
-  agentRuntime: CoreAgentDeps;
+  agentRuntime: OpenClawPluginApi["runtime"]["agent"];
   stateRuntime?: VoiceCallStateRuntime["state"];
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: Logger;

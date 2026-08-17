@@ -37,6 +37,7 @@ vi.mock("../../system-agent/greeting.js", () => ({
 
 type FakeEngine = {
   answerWizard: ReturnType<typeof vi.fn>;
+  cancelWizard: ReturnType<typeof vi.fn>;
   handle: ReturnType<typeof vi.fn>;
   seedHistory: ReturnType<typeof vi.fn>;
   historyLength: ReturnType<typeof vi.fn>;
@@ -53,6 +54,9 @@ function makeEngine(): FakeEngine {
     answerWizard: vi.fn(async () => {
       throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting an answer.");
     }),
+    cancelWizard: vi.fn(async () => {
+      throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting cancellation.");
+    }),
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
     seedHistory: vi.fn(),
     historyLength: vi.fn(() => 0),
@@ -66,14 +70,19 @@ function makeEngine(): FakeEngine {
 }
 
 const createdEngines = vi.hoisted(() => [] as FakeEngine[]);
+const createdEngineOptions = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
 vi.mock("../../system-agent/chat-engine.js", () => {
   class FakeSystemAgentWizardAnswerError extends Error {}
   return {
     SystemAgentWizardAnswerError: FakeSystemAgentWizardAnswerError,
-    SystemAgentChatEngine: function FakeSystemAgentChatEngine(this: FakeEngine) {
+    SystemAgentChatEngine: function FakeSystemAgentChatEngine(
+      this: FakeEngine,
+      options: Record<string, unknown>,
+    ) {
       const engine = makeEngine();
       createdEngines.push(engine);
+      createdEngineOptions.push(options);
       Object.assign(this, engine);
     },
   };
@@ -138,6 +147,7 @@ async function callChat(
 
 beforeEach(() => {
   createdEngines.length = 0;
+  createdEngineOptions.length = 0;
   inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
     ok: true,
     binding: {},
@@ -181,6 +191,11 @@ describe("openclaw.chat session ownership", () => {
       attacker,
     );
     const reset = await callChat(context, { sessionId: "owned-session", reset: true }, attacker);
+    const cancel = await callChat(
+      context,
+      { sessionId: "owned-session", wizardCancel: { stepId: "channel" } },
+      attacker,
+    );
 
     expect(turn).toMatchObject({
       ok: false,
@@ -197,7 +212,15 @@ describe("openclaw.chat session ownership", () => {
       payload: undefined,
       error: { code: "INVALID_REQUEST" },
     });
+    expect(cancel).toMatchObject({
+      ok: false,
+      payload: undefined,
+      error: { code: "INVALID_REQUEST" },
+    });
     expect(handle).not.toHaveBeenCalled();
+    expect(
+      expectDefined(createdEngines[0], "created system-agent engine").cancelWizard,
+    ).not.toHaveBeenCalled();
     expect(
       expectDefined(createdEngines[0], "created system-agent engine").dispose,
     ).not.toHaveBeenCalled();
@@ -299,6 +322,11 @@ describe("openclaw.chat session ownership", () => {
       requestingAgentId: "main",
       runtime: expect.anything(),
     });
+    expect(createdEngineOptions[0]).toMatchObject({
+      operatorApprovalOnly: true,
+      requesterAgentId: "main",
+      surface: "gateway",
+    });
     const handle = expectDefined(createdEngines[0], "created delegated engine").handle;
 
     const resumed = await callChat(
@@ -368,6 +396,36 @@ describe("openclaw.chat session responses", () => {
       },
     });
     expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).not.toHaveBeenCalled();
+  });
+
+  it("rejects a structured cancel without an active chat session", async () => {
+    const call = await callChat(makeContext(new Map()), {
+      sessionId: "missing",
+      wizardCancel: { stepId: "channel" },
+    });
+
+    expect(call).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        details: { code: "system_agent_session_invalidated" },
+      },
+    });
+    expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).not.toHaveBeenCalled();
+  });
+
+  it("routes a structured cancel through its bound session", async () => {
+    const engine = makeEngine();
+    engine.cancelWizard.mockResolvedValue({ text: "Setup cancelled.", action: "none" });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      wizardCancel: { stepId: "channel" },
+    });
+
+    expect(engine.cancelWizard).toHaveBeenCalledWith({ stepId: "channel" });
+    expect(call.payload).toMatchObject({ reply: "Setup cancelled.", action: "none" });
   });
 
   it("rejects a structured answer when the active session has no hosted wizard", async () => {

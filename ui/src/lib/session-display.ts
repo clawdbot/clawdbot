@@ -1,7 +1,10 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 // Control UI module implements session display behavior.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
   imessage: "iMessage",
@@ -34,8 +37,14 @@ function shortenOpaqueIdRuns(text: string): string {
 
 const WORKTREE_BRANCH_PREFIX = "openclaw/";
 
-const CHANNEL_SESSION_KEY_RE = /^agent:[^:]+:([^:]+)(?::[^:]+)?:(?:direct|group|channel|thread):/;
-const PEER_SESSION_KEY_RE = /:(?:direct|group|channel|thread):/;
+// `dm` is the pre-#11881 spelling of `direct`; those keys still persist and the
+// canonical parser still accepts both (src/sessions/session-key-utils.ts).
+// Only direct chats take an account segment (src/routing/session-key.ts), so an
+// account-qualified group or channel key is not a shape any producer emits and
+// must not name a channel here either.
+const CHANNEL_SESSION_KEY_RE =
+  /^agent:[^:]+:([^:]+)(?:(?::[^:]+)?:(?:direct|dm)|:(?:group|channel|thread)):/;
+const PEER_SESSION_KEY_RE = /:(?:direct|dm|group|channel|thread):/;
 
 /**
  * Classifies channel-originated sessions for the sidebar's built-in channel
@@ -50,9 +59,7 @@ export function resolveChannelSessionInfo(
     return { channelSession: false };
   }
   const keyChannel = key.match(CHANNEL_SESSION_KEY_RE)?.[1];
-  const channel =
-    normalizeOptionalString(keyChannel && keyChannel !== "direct" ? keyChannel : undefined) ??
-    normalizeOptionalString(rowChannel);
+  const channel = normalizeOptionalString(keyChannel) ?? normalizeOptionalString(rowChannel);
   return { channel, channelSession: Boolean(channel) };
 }
 
@@ -61,6 +68,11 @@ type SessionWorktreeDisplayRow = {
   execNode?: string;
 };
 
+/** Basename shown for a repository path on every Control UI surface. */
+export function repoName(repoRoot: string): string {
+  return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
+}
+
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
   const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
@@ -68,11 +80,11 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
-  const repoName = repoRoot ? (repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot) : undefined;
+  const repo = repoRoot ? repoName(repoRoot) : undefined;
   const shortBranch = branch?.startsWith(WORKTREE_BRANCH_PREFIX)
     ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
     : branch;
-  const checkout = repoName ? (shortBranch ? `${repoName} ⎇ ${shortBranch}` : repoName) : undefined;
+  const checkout = repo ? (shortBranch ? `${repo} ⎇ ${shortBranch}` : repo) : undefined;
   if (checkout && node) {
     // Checkout first: it names the work; the node is routing detail.
     return `${checkout} · ${node}`;
@@ -91,7 +103,27 @@ type SessionKeyInfo = {
   prefix: string;
   /** Human-readable fallback when no label / displayName is available. */
   fallbackName: string;
+  /** Raw account segment; only a fallback, Gateway rows carry the real one. */
+  accountId?: string;
 };
+
+/**
+ * Two DMs from different accounts routinely share a name, so the account is the
+ * only discriminator; `default` is what key builders write for absence and says
+ * nothing. Which account to show comes from the recorded fact alone, never from
+ * the rendered name. The suffix check is idempotence, not inference: the chat
+ * pane's inline rename seeds its input with the rendered title
+ * (`beginHeaderRename`), so a partially edited submit can persist a label that
+ * already ends in this suffix, and appending twice would render
+ * `Alice · cards · cards`.
+ */
+function withAccountDisambiguator(name: string, accountId: string | undefined): string {
+  if (!accountId || accountId === "default") {
+    return name;
+  }
+  const suffix = ` · ${accountId}`;
+  return name.endsWith(suffix) ? name : `${name}${suffix}`;
+}
 
 /** Typed-session prefixes come from the i18n catalog (RFC 0026). */
 function typedSessionPrefix(kind: SessionTypedKind): string {
@@ -104,6 +136,8 @@ type SessionDisplayRow = {
   label?: string;
   displayName?: string;
   derivedTitle?: string;
+  /** Canonical account projected from the delivery route by the Gateway. */
+  accountId?: string;
 } & SessionWorktreeDisplayRow;
 
 type SessionDisplayOptions = {
@@ -139,20 +173,28 @@ function parseSessionKey(key: string): SessionKeyInfo {
     return { kind: "automation", prefix, fallbackName: prefix };
   }
 
-  // Direct chat: agent:<x>:<channel>:direct:<id>. Never render the raw peer
-  // id; the gateway sends origin-derived names, so this is a last resort.
-  const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
+  // Direct chat: agent:<x>:<channel>[:<account>]:(direct|dm):<id>. Never render
+  // the raw peer id; the gateway sends origin-derived names, so this is a last
+  // resort.
+  const directMatch = key.match(/^agent:[^:]+:([^:]+)(?::([^:]+))?:(?:direct|dm):(.+)$/);
   if (directMatch) {
     const channel = directMatch[1];
-    const identifier = directMatch[2];
+    const accountId = directMatch[2];
+    const identifier = directMatch[3];
     if (!channel || !identifier) {
-      return { prefix: "", fallbackName: key };
+      return { prefix: "", fallbackName: key, accountId };
     }
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}` };
+    return {
+      prefix: "",
+      fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}`,
+      accountId,
+    };
   }
 
-  // Group chat: agent:<x>:<channel>:group:<id>.
+  // Group chat: agent:<x>:<channel>:group:<id>. buildAgentPeerSessionKey scopes
+  // accounts to DMs (src/routing/session-key.ts), so an account-looking segment
+  // here belongs to a custom key and must not be read as one.
   const groupMatch = key.match(/^agent:[^:]+:([^:]+):group:(.+)$/);
   if (groupMatch) {
     const channel = groupMatch[1];
@@ -198,7 +240,10 @@ export function resolveSessionDisplayName(
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
   const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
-  const { kind, prefix, fallbackName } = parseSessionKey(key);
+  const { kind, prefix, fallbackName, accountId: keyAccountId } = parseSessionKey(key);
+  // The Gateway records the account on the row (src/gateway/session-classification.ts);
+  // the key is parsed only for panes rendered before their row arrives.
+  const accountId = normalizeOptionalString(row?.accountId) ?? keyAccountId;
 
   const applyTypedPrefix = (rawName: string): string => {
     if (!kind || !prefix) {
@@ -218,21 +263,25 @@ export function resolveSessionDisplayName(
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
-  if (label && label !== key) {
-    return applyTypedPrefix(label);
-  }
-  if (displayName && displayName !== key) {
-    return applyTypedPrefix(displayName);
-  }
-  // Unnamed work sessions read as their checkout instead of an opaque key.
-  const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
-  if (workSubtitle && row?.worktree) {
-    return applyTypedPrefix(workSubtitle);
-  }
-  if (derivedTitle && derivedTitle !== key) {
-    return applyTypedPrefix(derivedTitle);
-  }
-  return fallbackName;
+  const resolveNamedOrFallback = (): string => {
+    if (label && label !== key) {
+      return applyTypedPrefix(label);
+    }
+    if (displayName && displayName !== key) {
+      return applyTypedPrefix(displayName);
+    }
+    // Unnamed work sessions read as their checkout instead of an opaque key.
+    const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
+    if (workSubtitle && row?.worktree) {
+      return applyTypedPrefix(workSubtitle);
+    }
+    if (derivedTitle && derivedTitle !== key) {
+      return applyTypedPrefix(derivedTitle);
+    }
+    return fallbackName;
+  };
+
+  return withAccountDisambiguator(resolveNamedOrFallback(), accountId);
 }
 
 export function isCronSessionKey(key: string): boolean {

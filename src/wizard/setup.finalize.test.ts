@@ -15,7 +15,7 @@ type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
 
-const launchTuiCli = vi.hoisted(() => vi.fn(async () => {}));
+const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const probeGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
@@ -256,8 +256,8 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState,
 }));
 
-vi.mock("../tui/tui-launch.js", () => ({
-  launchTuiCli,
+vi.mock("../tui/tui.js", () => ({
+  runTui,
 }));
 
 vi.mock("../commands/auth-choice.js", () => ({
@@ -269,6 +269,7 @@ vi.mock("../commands/auth-choice.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
     return { entries, routeVariants: entries };
@@ -355,7 +356,6 @@ function createModelAuthFinalizeArgs(params: {
       authMode: "token" as const,
       gatewayToken: undefined,
       tailscaleMode: "off" as const,
-      tailscaleResetOnExit: false,
     },
     prompter: params.prompter,
     runtime: createRuntime(),
@@ -401,7 +401,6 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
       authMode: "token" as const,
       gatewayToken: undefined,
       tailscaleMode: "off" as const,
-      tailscaleResetOnExit: false,
     },
     prompter: params.prompter ?? createLaterPrompter(),
     runtime: params.runtime ?? createRuntime(),
@@ -456,7 +455,7 @@ async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>):
 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
-    launchTuiCli.mockClear();
+    runTui.mockClear();
     restoreTerminalState.mockClear();
     probeGatewayReachable.mockReset();
     probeGatewayReachable.mockResolvedValue({ ok: false, detail: "offline" });
@@ -580,7 +579,6 @@ describe("finalizeSetupWizard", () => {
           authMode: "password",
           gatewayToken: undefined,
           tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime,
@@ -599,15 +597,13 @@ describe("finalizeSetupWizard", () => {
     };
     expect(probeParams.url).toBe("ws://127.0.0.1:18789");
     expect(probeParams.password).toBe("resolved-gateway-password"); // pragma: allowlist secret
-    expect(launchTuiCli).toHaveBeenCalledWith(
-      {
-        local: true,
-        deliver: false,
-        message: undefined,
-        timeoutMs: 300_000,
-      },
-      {},
-    );
+    expect(runTui).toHaveBeenCalledWith({
+      local: true,
+      deliver: false,
+      forceProcessExitOnReturn: true,
+      message: undefined,
+      timeoutMs: 300_000,
+    });
   });
 
   it("waits for the served dashboard before announcing its URL", async () => {
@@ -659,10 +655,19 @@ describe("finalizeSetupWizard", () => {
     expect(prompter.outro).toHaveBeenCalledWith(
       "OpenClaw is ready. When you're ready: openclaw dashboard",
     );
-    expect(launchTuiCli).toHaveBeenCalledWith(
-      expect.not.objectContaining({ local: true }),
-      expect.objectContaining({ authSource: "config" }),
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: args.nextConfig,
+        forceProcessExitOnReturn: true,
+        boundGateway: {
+          url: "ws://127.0.0.1:18789",
+          token: gatewayToken,
+        },
+      }),
     );
+    const tuiOptions = runTui.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(tuiOptions).not.toHaveProperty("url");
+    expect(tuiOptions).not.toHaveProperty("token");
   });
 
   it.each([
@@ -852,21 +857,18 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
     });
 
-    expect(launchTuiCli).toHaveBeenCalledWith(
-      {
-        local: true,
-        deliver: false,
-        message: "Wake up, my friend!",
-        timeoutMs: 300_000,
-      },
-      {},
-    );
+    expect(runTui).toHaveBeenCalledWith({
+      local: true,
+      deliver: false,
+      forceProcessExitOnReturn: true,
+      message: "Wake up, my friend!",
+      timeoutMs: 300_000,
+    });
   });
 
   it("passes physical catalog routes into the bootstrap auth decision", async () => {
@@ -932,7 +934,7 @@ describe("finalizeSetupWizard", () => {
       }),
     );
 
-    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }), {});
+    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }));
     expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         agents: {
@@ -962,7 +964,7 @@ describe("finalizeSetupWizard", () => {
 
     await finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter }));
 
-    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }), {});
+    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }));
     expectNoteTitleNotCalled(prompter, "Model auth missing");
     expectNoteNotContains(prompter, "No credentials are configured");
     expectNoteNotContains(prompter, "openclaw configure --section model");
@@ -984,7 +986,7 @@ describe("finalizeSetupWizard", () => {
 
     await finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter }));
 
-    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }), {});
+    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }));
     expectNoteTitleNotCalled(prompter, "Model auth missing");
     expectNoteNotContains(prompter, "No credentials are configured");
     expectNoteNotContains(prompter, "openclaw configure --section model");
@@ -1015,21 +1017,18 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
     });
 
-    expect(launchTuiCli).toHaveBeenCalledWith(
-      {
-        local: true,
-        deliver: false,
-        message: undefined,
-        timeoutMs: 300_000,
-      },
-      {},
-    );
+    expect(runTui).toHaveBeenCalledWith({
+      local: true,
+      deliver: false,
+      forceProcessExitOnReturn: true,
+      message: undefined,
+      timeoutMs: 300_000,
+    });
   });
 
   it("localizes the bootstrap hatch TUI seed message", async () => {
@@ -1066,21 +1065,18 @@ describe("finalizeSetupWizard", () => {
           authMode: "token",
           gatewayToken: undefined,
           tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime: createRuntime(),
       });
 
-      expect(launchTuiCli).toHaveBeenCalledWith(
-        {
-          local: true,
-          deliver: false,
-          message: "醒醒，我的朋友！",
-          timeoutMs: 300_000,
-        },
-        {},
-      );
+      expect(runTui).toHaveBeenCalledWith({
+        local: true,
+        deliver: false,
+        forceProcessExitOnReturn: true,
+        message: "醒醒，我的朋友！",
+        timeoutMs: 300_000,
+      });
     } finally {
       if (previousLocale === undefined) {
         delete process.env.OPENCLAW_LOCALE;
@@ -1112,7 +1108,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1121,17 +1116,17 @@ describe("finalizeSetupWizard", () => {
     expect(prompter.outro).toHaveBeenCalledWith(
       "Onboarding complete. Use the dashboard link above to control OpenClaw.",
     );
-    expect(launchTuiCli).toHaveBeenCalledOnce();
+    expect(runTui).toHaveBeenCalledOnce();
     expect(vi.mocked(prompter.outro).mock.invocationCallOrder[0]).toBeLessThan(
       expectDefined(
-        launchTuiCli.mock.invocationCallOrder[0],
-        "launchTuiCli.mock.invocationCallOrder[0] test invariant",
+        runTui.mock.invocationCallOrder[0],
+        "runTui.mock.invocationCallOrder[0] test invariant",
       ),
     );
   });
 
   it("restores terminal state after failed TUI hatch", async () => {
-    launchTuiCli.mockRejectedValueOnce(new Error("TUI exited with code 1"));
+    runTui.mockRejectedValueOnce(new Error("TUI exited with code 1"));
     const select = vi.fn(async (params: { message: string }) => {
       if (params.message === "How do you want to hatch your agent?") {
         return "tui";
@@ -1159,7 +1154,6 @@ describe("finalizeSetupWizard", () => {
           authMode: "token",
           gatewayToken: "test-token",
           tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime: createRuntime(),
@@ -1220,7 +1214,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: "session-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime,
@@ -1536,7 +1529,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: "session-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1585,7 +1577,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1830,7 +1821,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: "session-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -1903,7 +1893,6 @@ describe("finalizeSetupWizard", () => {
           authMode: "token",
           gatewayToken: "test-token",
           tailscaleMode: "off",
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime: createRuntime(),
@@ -1919,13 +1908,16 @@ describe("finalizeSetupWizard", () => {
           }),
         }),
       );
-      expect(launchTuiCli).toHaveBeenCalledWith(
-        {
+      expect(runTui).toHaveBeenCalledWith(
+        expect.objectContaining({
+          boundGateway: {
+            url: "ws://127.0.0.1:18789",
+            token: "test-token",
+          },
           deliver: false,
           message: undefined,
           timeoutMs: 300_000,
-        },
-        { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
+        }),
       );
       expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding tui exited" });
     });
@@ -1966,14 +1958,13 @@ describe("finalizeSetupWizard", () => {
             authMode: "token",
             gatewayToken: "test-token",
             tailscaleMode: "off",
-            tailscaleResetOnExit: false,
           },
           prompter,
           runtime: createRuntime(),
         }),
       ).rejects.toThrow("probe failed");
 
-      expect(launchTuiCli).not.toHaveBeenCalled();
+      expect(runTui).not.toHaveBeenCalled();
       expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding finalize exited" });
     });
   });
@@ -2012,7 +2003,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "password",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),
@@ -2071,7 +2061,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: "test-token",
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime,
@@ -2123,7 +2112,6 @@ describe("finalizeSetupWizard", () => {
         authMode: "token",
         gatewayToken: undefined,
         tailscaleMode: "off",
-        tailscaleResetOnExit: false,
       },
       prompter,
       runtime: createRuntime(),

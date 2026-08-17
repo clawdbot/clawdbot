@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { TERMINAL_PANEL_DOCK_BOTTOM_EVENT } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
@@ -46,17 +47,65 @@ describe("OpenClawTerminalPanel accessibility", () => {
     await i18n.setLocale("en");
   });
 
-  it("labels the terminal placement switcher and all three modes", async () => {
+  it("labels the placement switcher with the alternative destinations only", async () => {
     const panel = createPanel(createPickerClient());
     await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
 
+    // The occupied dock (bottom by default) has nowhere to move to, so its
+    // button drops out of the cluster instead of rendering a pressed state.
     const switcher = panel.renderRoot.querySelector('[role="group"]');
     expect(switcher?.getAttribute("aria-label")).toBe("Terminal panel position");
     expect(
-      ["Dock to bottom", "Dock to right", "Fill main content area"].every((label) =>
+      ["Dock to right", "Fill main content area"].every((label) =>
         switcher?.querySelector(`[aria-label="${label}"]`),
       ),
     ).toBe(true);
+    expect(switcher?.querySelector('[aria-label="Dock to bottom"]')).toBeNull();
+  });
+
+  it("offers bottom docking from an embedded terminal", async () => {
+    const event = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, event);
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = createPickerClient();
+    panel.available = true;
+    panel.agentId = "main";
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Dock to bottom"]')?.click();
+
+    expect(event).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: { agentId: "main", dock: "bottom", open: true } }),
+    );
+    window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, event);
+  });
+
+  it("opens the base-mounted full-screen terminal in an isolated tab", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const panel = createPanel(createPickerClient());
+    panel.basePath = "/openclaw";
+    await waitForFast(() =>
+      expect(
+        panel.renderRoot.querySelector('[aria-label="Open full-screen terminal"]'),
+      ).not.toBeNull(),
+    );
+
+    panel.renderRoot
+      .querySelector<HTMLButtonElement>('[aria-label="Open full-screen terminal"]')
+      ?.click();
+
+    expect(open).toHaveBeenCalledWith(
+      "http://localhost:3000/openclaw/terminal",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    panel.fullscreen = true;
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector('[aria-label="Open full-screen terminal"]')).toBeNull();
+    open.mockRestore();
   });
 
   afterEach(async () => {

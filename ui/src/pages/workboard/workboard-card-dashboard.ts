@@ -13,7 +13,6 @@ import {
   type BoardProviderLease,
   type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
-import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
 function ensureBoardViewElement(): Promise<void> {
@@ -125,7 +124,6 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
           refreshWidgetAppView: (name, revision) => provider.refreshWidgetAppView(name, revision),
         } satisfies BoardViewCallbacks)
       : null;
-    const boardSnapshot = snapshot as BoardViewSnapshot | undefined;
 
     return html`
       <section class="workboard-detail__section workboard-card-dashboard">
@@ -146,10 +144,11 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
           >
         </button>
         <div class="workboard-card-dashboard__body" ?hidden=${!this.expanded}>
-          ${hasBoard && provider && boardSnapshot && callbacks
+          ${hasBoard && provider && snapshot && callbacks
             ? html`
                 <openclaw-board-view
-                  .snapshot=${boardSnapshot}
+                  .active=${this.expanded}
+                  .snapshot=${snapshot}
                   .activeTabId=${this.activeTabId}
                   .widgetFrameUrl=${(name: string, revision: number) =>
                     provider.widgetFrameUrl(name, revision)}
@@ -157,7 +156,6 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
                   .sessions=${[]}
                   .canMutate=${this.canMutate}
                   .canGrant=${this.canGrant}
-                  .ticketRefreshEnabled=${this.expanded}
                 ></openclaw-board-view>
               `
             : html`<p class="workboard-card-dashboard__empty">${t("workboard.dashboardEmpty")}</p>`}

@@ -3,6 +3,11 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./app-host.ts";
+import {
+  installDialogPolyfill,
+  nextFrame,
+  waitForRenderedModalDialog,
+} from "../test-helpers/modal-dialog.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
@@ -392,7 +397,7 @@ describe("OpenClaw shell update affordance", () => {
         latestVersion: "2026.7.2",
         channel: "stable" as const,
       },
-      updateRunning: false,
+      updateBusy: false,
       canUpdate: true,
       onUpdate: vi.fn(),
       refreshRequired: false,
@@ -416,7 +421,14 @@ describe("OpenClaw shell update affordance", () => {
     expect(card).not.toBeNull();
     await card?.updateComplete;
     expect(card?.canUpdate).toBe(true);
+    const restoreDialogPolyfill = installDialogPolyfill();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    [...modal.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Update and restart")
+      ?.click();
+    await nextFrame();
+    restoreDialogPolyfill();
     expect(shared.onUpdate).toHaveBeenCalledOnce();
 
     render(
@@ -475,7 +487,7 @@ describe("OpenClaw shell update affordance", () => {
     const shared = {
       onboarding: true,
       updateAvailable: null,
-      updateRunning: false,
+      updateBusy: false,
       onUpdate: vi.fn(),
       refreshRequired: true,
       onRefresh: vi.fn(),

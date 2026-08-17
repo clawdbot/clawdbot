@@ -1,8 +1,12 @@
 // Structural formatting stays policy-free. Core and memory-host adapters intentionally inject
 // owner-specific redactors; bypassing them would weaken redaction and break one-argument APIs.
 export type FormatErrorMessageOptions = {
+  includeCode?: boolean;
   redact: (text: string) => string;
 };
+
+const STRUCTURED_ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
+const STRUCTURED_ERROR_PROTOTYPE_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
 
 function readProperty(value: object, key: "cause" | "code" | "status"): unknown {
   try {
@@ -83,6 +87,12 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       formatted += ` | ${message}`;
       seenMessages.add(message);
     };
+    if (options.includeCode) {
+      const code = readProperty(value, "code");
+      if (typeof code === "string" || typeof code === "number") {
+        appendCauseMessage(String(code));
+      }
+    }
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {
@@ -123,6 +133,52 @@ export function toErrorObject(value: unknown, fallbackMessage: string): Error {
     Object.assign(error, value);
   }
   return error;
+}
+
+/** Preserves structured details while isolating hostile object field access. */
+export function toStructuredErrorObject(value: unknown): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  const message = String(value);
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    return toErrorObject(value, message);
+  }
+  const error = new Error(message, { cause: value });
+  try {
+    const detailKeys = Reflect.ownKeys(value).filter(
+      (key) =>
+        (typeof key !== "string" ||
+          (!STRUCTURED_ERROR_OWNED_FIELDS.has(key) &&
+            !STRUCTURED_ERROR_PROTOTYPE_FIELDS.has(key))) &&
+        Reflect.getOwnPropertyDescriptor(value, key)?.enumerable,
+    );
+    for (const key of detailKeys) {
+      try {
+        Object.defineProperty(error, key, {
+          value: Reflect.get(value, key),
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+      } catch {
+        // Skip fields whose getters or property definitions reject access.
+      }
+    }
+  } catch {
+    // Opaque proxies may reject enumeration; preserve the original failure as the cause.
+  }
+  return error;
+}
+
+/** Preserves Error values and stringifies every other value into a new Error. */
+export function toStringifiedError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
+/** Reads Error messages unchanged and stringifies every other value. */
+export function coerceErrorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
 }
 
 /** Renders a non-Error cause as useful text without throwing. */

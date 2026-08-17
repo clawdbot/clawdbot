@@ -1774,6 +1774,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
+      expect(applied.rejectedCandidates[0]?.reason).toContain("signal threshold");
     });
   });
 
@@ -1979,6 +1980,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
+      expect(applied.rejectedCandidates[0]?.reason).toContain("age threshold");
       await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
@@ -2023,6 +2025,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
+      expect(applied.rejectedCandidates[0]?.reason).toBe("contamination filter");
       await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
@@ -2151,6 +2154,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
       });
       expect(applied.applied).toBe(0);
+      expect(applied.rejectedCandidates[0]?.reason).toBe("origin filter (untrusted)");
       await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
@@ -3177,7 +3181,7 @@ describe("short-term promotion", () => {
   it("audits and repairs invalid store metadata plus stale locks", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
-        "Gateway host uses qmd vector search for router notes.",
+        "Gateway host uses vector search for router notes.",
       ]);
       await testing.writeRawRecallStore(workspaceDir, {
         version: 1,
@@ -3189,7 +3193,7 @@ describe("short-term promotion", () => {
             startLine: 1,
             endLine: 2,
             source: "memory",
-            snippet: "Gateway host uses qmd vector search for router notes.",
+            snippet: "Gateway host uses vector search for router notes.",
             recallCount: 2,
             totalScore: 1.8,
             maxScore: 0.95,
@@ -3635,7 +3639,7 @@ describe("short-term promotion", () => {
 
   it("does not rewrite an already normalized healthy recall store", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const snippet = "Gateway host uses qmd vector search for router notes.";
+      const snippet = "Gateway host uses vector search for router notes.";
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [snippet]);
       const raw = {
         version: 1,

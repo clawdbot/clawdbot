@@ -1,5 +1,6 @@
 // skill_workshop review-mode tests cover the proposal-only reviewer surface:
 // mutation budgets, read receipts, and patch/update drafting for live skills.
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -115,6 +116,14 @@ describe("skill_workshop review mode", () => {
       updateProposals: true,
       proposalMutationBudget,
     });
+    await expect(
+      reviewTool.execute("update-without-read", {
+        action: "update",
+        skill_name: "weather-planner",
+        proposal_content: "# Weather Planner\n\nCheck alerts and timing.\n",
+      }),
+    ).rejects.toThrow("read the live skill first");
+    await reviewTool.execute("review-read", { action: "read", skill_name: "weather-planner" });
     const update = await reviewTool.execute("review-update", {
       action: "update",
       skill_name: "weather-planner",
@@ -183,7 +192,6 @@ describe("skill_workshop review mode", () => {
       kind: "update",
       skillKey: "weather-planner",
     });
-    expect(proposalMutationBudget.patchProposalIds?.size).toBe(1);
     expect((extended.details as { description?: string }).description ?? "").not.toContain(
       "Replacement",
     );
@@ -234,6 +242,66 @@ describe("skill_workshop review mode", () => {
     expect(proposalMutationBudget.remaining).toBe(1);
   });
 
+  it("refunds a stale update race so the reviewer can re-read and retry", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-stale-update-race-");
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-planner",
+      "Plan around the weather forecast",
+      "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+    );
+
+    const liveSkillFile = path.join(workspaceDir, "skills", "weather-planner", "SKILL.md");
+    const operatorEditedSkill = (await fs.readFile(liveSkillFile, "utf8")).replace(
+      "Check weather before outdoor recommendations.",
+      "Operator-edited steps during proposal creation.",
+    );
+    let remaining = 1;
+    let mutateOnReserve = false;
+    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = {
+      get remaining() {
+        return remaining;
+      },
+      set remaining(value) {
+        remaining = value;
+        if (mutateOnReserve && value === 0) {
+          mutateOnReserve = false;
+          writeFileSync(liveSkillFile, operatorEditedSkill, "utf8");
+        }
+      },
+    };
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget,
+    });
+    await reviewTool.execute("review-read", { action: "read", skill_name: "weather-planner" });
+
+    mutateOnReserve = true;
+    await expect(
+      reviewTool.execute("stale-update-race", {
+        action: "update",
+        skill_name: "weather-planner",
+        proposal_content: "# Weather Planner\n\nCheck alerts and timing.\n",
+      }),
+    ).rejects.toThrow("Skill changed since the reviewer's read");
+    expect(proposalMutationBudget.remaining).toBe(1);
+
+    await reviewTool.execute("review-read-again", {
+      action: "read",
+      skill_name: "weather-planner",
+    });
+    const update = await reviewTool.execute("review-update-retry", {
+      action: "update",
+      skill_name: "weather-planner",
+      proposal_content:
+        "# Weather Planner\n\nOperator-edited steps during proposal creation.\nCheck alerts and timing.\n",
+    });
+    expect(update.details).toMatchObject({ status: "pending", kind: "update" });
+    expect(proposalMutationBudget.remaining).toBe(0);
+  });
+
   it("caps reviewer live-skill reads at the read budget", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-read-cap-");
     await seedLiveSkill(
@@ -256,7 +324,7 @@ describe("skill_workshop review mode", () => {
     const text = (read.content[0] as { text: string }).text;
     expect(read.details).toMatchObject({ skillKey: "big-skill", truncated: true });
     expect(text.length).toBeLessThanOrEqual(20_000 + 100);
-    expect(text).toContain("[truncated: skill exceeds the reviewer read budget]");
+    expect(text).toContain("[truncated: skill exceeds the Workshop read budget]");
 
     await expect(
       reviewTool.execute("oversized-patch", {
@@ -265,7 +333,7 @@ describe("skill_workshop review mode", () => {
         old_string: "A detailed operational line.",
         new_string: "A rewritten operational line.",
       }),
-    ).rejects.toThrow("cannot be patched autonomously");
+    ).rejects.toThrow("cannot be updated autonomously");
   });
 
   it("does not refund the review mutation budget after a failed mutation", async () => {

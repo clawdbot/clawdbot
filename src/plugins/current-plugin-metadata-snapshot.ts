@@ -13,6 +13,7 @@ import {
   resolvePluginControlPlaneFingerprint,
   type ResolvePluginControlPlaneContextParams,
 } from "./plugin-control-plane-context.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
@@ -29,6 +30,8 @@ type CurrentPluginMetadataSnapshotOptions = {
   config?: OpenClawConfig;
   compatibleConfigs?: readonly OpenClawConfig[];
   env?: NodeJS.ProcessEnv;
+  /** Only immutable runtime generations may trust identity across policy drift. */
+  trustConfigIdentity?: boolean;
   workspaceDir?: string;
 };
 
@@ -279,7 +282,11 @@ export function withPluginMetadataSnapshotScope<T>(
   const configIdentities = new WeakSet<OpenClawConfig>();
   if (options.config) {
     const policyHash = resolveInstalledPluginIndexPolicyHash(options.config);
-    if (policyHash === snapshot.policyHash || compatiblePolicyHashes?.includes(policyHash)) {
+    if (
+      options.trustConfigIdentity === true ||
+      policyHash === snapshot.policyHash ||
+      compatiblePolicyHashes?.includes(policyHash)
+    ) {
       configIdentities.add(options.config);
     }
   }
@@ -328,7 +335,9 @@ function resolveCompatiblePluginMetadataSnapshot(
   }
   const requestedWorkspaceDir =
     params.workspaceDir ??
-    (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);
+    (params.allowWorkspaceScopedSnapshot === true || options.scopedOwnerContext === true
+      ? snapshot.workspaceDir
+      : undefined);
   if (snapshot.workspaceDir !== undefined && requestedWorkspaceDir === undefined) {
     return undefined;
   }
@@ -416,3 +425,8 @@ export function getCurrentPluginMetadataSnapshot(
     params,
   );
 }
+
+// Light bridges (plugin-metadata-snapshot.runtime.ts) serve reads through this
+// instance whenever the metadata system is loaded; the require fallback only
+// covers cold processes.
+registerPluginMetadataSnapshotReaders({ getCurrentPluginMetadataSnapshot });

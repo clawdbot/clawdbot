@@ -1,11 +1,11 @@
 import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 type ToolMessageRef = {
   id: string;

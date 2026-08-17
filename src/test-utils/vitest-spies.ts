@@ -12,6 +12,7 @@ function restoreMocks(mocks: readonly RestorableMock[]): void {
   }
 }
 
+// This guard requires concrete Promise.finally narrowing for synchronous cleanup overloads.
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return (
     typeof value === "object" &&
@@ -67,7 +68,6 @@ const WINDOWS_ACL_ENV_KEYS = new Set([
   "systemroot",
   "windir",
 ]);
-const NODE_OPTIONS_ENV_KEY = "node_options";
 
 function takeWindowsAclEnvSnapshot(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
@@ -104,22 +104,6 @@ function forceWindowsAclVerificationUnavailable(
   forceFsSafeNativeFallback(env);
   env.SystemRoot = missingSystemRoot;
   env.WINDIR = missingSystemRoot;
-}
-
-export function forceNativeWindowsAclToolsUnavailable(
-  env: NodeJS.ProcessEnv,
-  preloadUrl: string,
-): void {
-  forceFsSafeNativeFallback(env);
-  let existingNodeOptions: string | undefined;
-  for (const key of Object.keys(env)) {
-    if (key.toLowerCase() !== NODE_OPTIONS_ENV_KEY) {
-      continue;
-    }
-    existingNodeOptions ??= env[key];
-    delete env[key];
-  }
-  env.NODE_OPTIONS = [existingNodeOptions, `--import=${preloadUrl}`].filter(Boolean).join(" ");
 }
 
 export function withMockedWindowsAclVerificationUnavailable<T>(

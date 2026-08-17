@@ -13,7 +13,8 @@ import {
 } from "../../../components/confirm-dialog.ts";
 import { renderSettingsDefaultState } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
-import { currentConfigObject } from "../../../lib/config/index.ts";
+import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -411,8 +412,10 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       return saved;
     } catch (error) {
       if (this.isTaskScopeCurrent(scope) && this.context.runtimeConfig === runtimeConfig) {
-        this.dreaming.dreamingStatusError =
-          error instanceof Error ? error.message : t("dreaming.actions.updateFailed");
+        this.dreaming.dreamingStatusError = formatUiError(
+          error,
+          t("dreaming.actions.updateFailed"),
+        );
       }
       return false;
     } finally {

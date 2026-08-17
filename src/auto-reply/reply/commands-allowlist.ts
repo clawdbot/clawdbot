@@ -8,7 +8,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import { normalizeChannelId } from "../../channels/registry.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -284,9 +284,9 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   }
 
   const channelId =
-    normalizeChannelId(parsed.channel) ??
+    normalizeChatChannelId(parsed.channel) ??
     params.command.channelId ??
-    normalizeChannelId(params.command.channel);
+    normalizeChatChannelId(params.command.channel);
   if (!channelId) {
     return commandReply("⚠️ Unknown channel. Add channel=<id> to the command.");
   }
@@ -302,7 +302,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     ctxAccountId: params.ctx.AccountId,
   });
   const originChannelId =
-    params.command.channelId ?? normalizeChannelId(resolveCommandSurfaceChannel(params));
+    params.command.channelId ?? normalizeChatChannelId(resolveCommandSurfaceChannel(params));
   const originAccountId = resolveChannelAccountId({
     cfg: params.cfg,
     ctx: params.ctx,

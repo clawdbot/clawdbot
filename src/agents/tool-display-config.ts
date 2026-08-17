@@ -70,6 +70,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Terminal",
       detailKeys: ["action", "sessionId", "command", "cwd"],
     },
+    portal: {
+      emoji: "🌐",
+      title: "Portal",
+      detailKeys: ["action", "port", "id", "title", "path"],
+    },
     process: {
       emoji: "🧰",
       title: "Process",
@@ -320,7 +325,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Ask User",
       detailKeys: ["questions.0.question"],
     },
-    spawn_task: {
+    suggest_task: {
       emoji: "✨",
       title: "Suggest Task",
       detailKeys: ["title", "tldr", "cwd"],

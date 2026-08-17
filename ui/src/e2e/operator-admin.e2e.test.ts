@@ -240,7 +240,7 @@ suite.define(() => {
         gateway.waitForRequest("exec.approvals.get"),
       ]);
       await expect.poll(() => page.getByText("Build Node", { exact: true }).isVisible()).toBe(true);
-      await expect.poll(() => page.getByText("connected", { exact: true }).isVisible()).toBe(true);
+      await expect.poll(() => page.getByText("connected", { exact: true }).count()).toBe(0);
       await page.getByText("Details", { exact: true }).click();
       await expect
         .poll(() => page.getByText(/Capabilities: browser, filesystem/).isVisible())

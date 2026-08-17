@@ -21,8 +21,7 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
-      "configPromotion": true,
-      "legacyStateMigrations": true
+      "configPromotion": true
     },
     "channel": {
       "id": "telegram",
@@ -75,7 +74,8 @@
             "cli": {
               "flags": "--use-env",
               "description": "Use TELEGRAM_BOT_TOKEN"
-            }
+            },
+            "envVars": ["TELEGRAM_BOT_TOKEN"]
           }
         ]
       },

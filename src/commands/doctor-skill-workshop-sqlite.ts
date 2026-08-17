@@ -1,16 +1,12 @@
 /** Doctor-owned migration of Skill Workshop proposal metadata into shared SQLite. */
 import path from "node:path";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   hashSkillProposalContent,
   importLegacySkillProposal,
@@ -51,9 +47,7 @@ function proposalWorkspace(record: SkillProposalRecord): string {
 }
 
 function configuredAgentIds(config: OpenClawConfig): string[] {
-  return [
-    ...new Set([resolveDefaultAgentId(config), ...listAgentIds(config)].map(normalizeAgentId)),
-  ];
+  return listAgentIds(config);
 }
 
 function inferOwnerAgentId(params: {
@@ -66,13 +60,9 @@ function inferOwnerAgentId(params: {
     return normalizeAgentId(params.record.origin.agentId);
   }
   if (params.record.origin?.sessionKey) {
-    try {
-      return resolveAgentIdFromSessionKey(
-        params.record.origin.sessionKey,
-        resolveDefaultAgentId(params.config),
-      );
-    } catch {
-      // Fall through to the workspace and single-agent evidence below.
+    const sessionAgentId = parseAgentSessionKey(params.record.origin.sessionKey)?.agentId;
+    if (sessionAgentId) {
+      return normalizeAgentId(sessionAgentId);
     }
   }
   const agentIds = configuredAgentIds(params.config);

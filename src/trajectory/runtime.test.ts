@@ -1,9 +1,9 @@
 // Trajectory runtime tests cover event recording and runtime file handling.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -14,21 +14,13 @@ import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./
 
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-runtime-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTempDirTracker();
 
 afterEach(() => {
   vi.useRealTimers();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 function expectTrajectoryRuntimeRecorder(
@@ -91,7 +83,7 @@ describe("trajectory runtime", () => {
   });
 
   it("records SQLite marker runtime events without active JSONL sidecars", async () => {
-    const tempDir = makeTempDir();
+    const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:main";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
@@ -134,7 +126,7 @@ describe("trajectory runtime", () => {
     // Attempt dispatch stopped passing legacy `sqlite:` markers and now hands
     // the canonical session key plus a complete target. Recording must not
     // depend on the marker, or every harness capture silently disappears.
-    const tempDir = makeTempDir();
+    const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:main";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
@@ -159,7 +151,7 @@ describe("trajectory runtime", () => {
   });
 
   it("rejects a legacy SQLite marker for another session", () => {
-    const storePath = path.join(makeTempDir(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-trajectory-runtime-"), "sessions.json");
 
     expect(
       createTrajectoryRuntimeRecorder({
@@ -179,7 +171,7 @@ describe("trajectory runtime", () => {
   ])(
     "rejects a complete target that conflicts with the %s",
     (_label, sessionKey, agentId, targetKey) => {
-      const storePath = path.join(makeTempDir(), "sessions.json");
+      const storePath = path.join(tempDirs.make("openclaw-trajectory-runtime-"), "sessions.json");
 
       expect(
         createTrajectoryRuntimeRecorder({
@@ -197,7 +189,7 @@ describe("trajectory runtime", () => {
   );
 
   it("rejects a complete target whose key maps to another session", async () => {
-    const storePath = path.join(makeTempDir(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-trajectory-runtime-"), "sessions.json");
     const sessionKey = "agent:main:stored-session";
     await replaceSessionEntry(
       { agentId: "main", sessionKey, storePath },
@@ -222,7 +214,7 @@ describe("trajectory runtime", () => {
   });
 
   it("stores bounded oversized runtime events in SQLite", async () => {
-    const tempDir = makeTempDir();
+    const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:main";
     const usage = {

@@ -45,7 +45,6 @@ import {
 } from "./run-termination.js";
 import { toSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import { resolveSessionSuspensionReason } from "./session-suspension.js";
-import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 const emptyManifestPlugins = [] as const;
@@ -1452,36 +1451,6 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("does not prepare agent harness plugins for forced OpenClaw runtime candidates", async () => {
-    const cfg = makeCfg({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
-      },
-    });
-    const prepareAgentHarnessRuntime = vi.fn(() => {
-      throw new Error("OpenClaw candidates should not prepare plugin harnesses");
-    });
-    const run = vi.fn().mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openai",
-      model: "gpt-5.5",
-      prepareAgentHarnessRuntime,
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(prepareAgentHarnessRuntime).not.toHaveBeenCalled();
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
   it("does not prepare agent harness plugins for implicit Codex candidates", async () => {
     const cfg = makeCfg();
     const prepareAgentHarnessRuntime = vi.fn(() => {
@@ -1968,7 +1937,7 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("aborts the fallback chain on embedded session takeover instead of trying every model (#83510)", async () => {
+  it("aborts the fallback chain when the transcript writer claim rebounds", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1979,11 +1948,9 @@ describe("runWithModelFallback", () => {
         },
       },
     });
-    const takeoverError = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
-    );
-    takeoverError.name = "EmbeddedAttemptSessionTakeoverError";
-    const run = vi.fn().mockRejectedValue(takeoverError);
+    const reboundError = new Error("session writer claim changed before transcript persistence");
+    reboundError.name = "SessionTranscriptWriterClaimReboundError";
+    const run = vi.fn().mockRejectedValue(reboundError);
 
     await expect(
       runWithModelFallback({
@@ -1992,7 +1959,7 @@ describe("runWithModelFallback", () => {
         model: "gpt-5.4",
         run,
       }),
-    ).rejects.toBe(takeoverError);
+    ).rejects.toBe(reboundError);
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -2184,7 +2151,7 @@ describe("runWithModelFallback", () => {
     expect(onFallbackStep).not.toHaveBeenCalled();
   });
 
-  it("aborts fallback when a provider prompt error carries cleanup session takeover", async () => {
+  it("aborts fallback when a provider-looking wrapper carries writer claim rebound", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -2195,14 +2162,13 @@ describe("runWithModelFallback", () => {
         },
       },
     });
-    const cleanupTakeover = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    const writerClaimRebound = new Error(
+      "session writer claim changed before transcript persistence",
     );
-    cleanupTakeover.name = "EmbeddedAttemptSessionTakeoverError";
+    writerClaimRebound.name = "SessionTranscriptWriterClaimReboundError";
     const providerFacingError = new Error("provider rejected request: rate limit", {
-      cause: cleanupTakeover,
+      cause: writerClaimRebound,
     });
-    providerFacingError.name = "EmbeddedAttemptSessionTakeoverError";
     const run = vi.fn().mockRejectedValue(providerFacingError);
 
     await expect(
@@ -2213,35 +2179,6 @@ describe("runWithModelFallback", () => {
         run,
       }),
     ).rejects.toBe(providerFacingError);
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
-  it("aborts the fallback chain on session write-lock timeout instead of trying every model (#83510)", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
-          },
-        },
-      },
-    });
-    const lockError = new SessionWriteLockTimeoutError({
-      timeoutMs: 10_000,
-      owner: "pid=37121",
-      lockPath: "/tmp/openclaw/session.jsonl.lock",
-    });
-    const run = vi.fn().mockRejectedValue(lockError);
-
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-5.4",
-        run,
-      }),
-    ).rejects.toBe(lockError);
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -2289,6 +2226,46 @@ describe("runWithModelFallback", () => {
         ),
     ],
   ])("aborts fallback on %s gateway drain failures", async (_label, makeError) => {
+    const error = makeError();
+    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        fallbacksOverride: ["openai/gpt-5.4-mini"],
+        skipAuthProfileRuntime: true,
+        run,
+        onError,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onFallbackStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "direct",
+      () =>
+        Object.assign(new Error("device worker capacity remained full"), {
+          name: "WorkerRunnerCapacityError",
+        }),
+    ],
+    [
+      "wrapped",
+      () =>
+        new Error("worker turn failed", {
+          cause: Object.assign(new Error("device worker capacity remained full"), {
+            name: "WorkerRunnerCapacityError",
+          }),
+        }),
+    ],
+  ])("aborts fallback on %s device capacity failures", async (_label, makeError) => {
     const error = makeError();
     const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
     const onError = vi.fn();
@@ -2423,49 +2400,6 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps provider failover metadata authoritative over nested session locks", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
-    const lockError = new SessionWriteLockTimeoutError({
-      timeoutMs: 10_000,
-      owner: "pid=37121",
-      lockPath: "/tmp/openclaw/session.jsonl.lock",
-    });
-    const providerError = {
-      status: 429,
-      code: "RESOURCE_EXHAUSTED",
-      message: "upstream quota pressure",
-      cause: lockError,
-    };
-    const run = vi.fn().mockRejectedValueOnce(providerError).mockResolvedValueOnce("fallback ok");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openai",
-      model: "gpt-5.4",
-      run,
-    });
-
-    expect(result.result).toBe("fallback ok");
-    expect(result.provider).toBe("anthropic");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(result.attempts[0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.4",
-      reason: "rate_limit",
-      status: 429,
-      code: "RESOURCE_EXHAUSTED",
-    });
-  });
-
   it("keeps raw provider schema errors in fallback summaries", async () => {
     const cfg = makeCfg({
       agents: {
@@ -2499,7 +2433,7 @@ describe("runWithModelFallback", () => {
         }),
       ),
     );
-    expect(error.name).toBe("FallbackSummaryError");
+    expect(error.name).toBe("FailoverError");
     expect(error.message).toContain(rawError);
     const attempt = error.attempts.find((candidate) => candidate.error === rawError);
     if (!attempt) {
@@ -2607,7 +2541,7 @@ describe("runWithModelFallback", () => {
       }),
     );
     const summary = requireFallbackSummaryError(err);
-    expect(summary.name).toBe("FallbackSummaryError");
+    expect(summary.name).toBe("FailoverError");
     expect(summary.sessionId).toBe("session:browser-42713");
     expect(summary.lane).toBe("answer");
     const cause = requireFailoverError(summary.cause);
@@ -3379,43 +3313,6 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.authMode).toBe("oauth");
   });
 
-  it("falls back on OpenRouter API-key budget limit errors", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openrouter/xiaomi/mimo-v2-pro",
-            fallbacks: ["openai/gpt-4.1-mini"],
-          },
-        },
-      },
-    });
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        Object.assign(
-          new Error("403 API key budget limit exceeded (monthly limit). Contact your org admin."),
-          { status: 403 },
-        ),
-      )
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openrouter",
-      model: "xiaomi/mimo-v2-pro",
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(run.mock.calls).toEqual([
-      ["openrouter", "xiaomi/mimo-v2-pro", { isFinalFallbackAttempt: false }],
-      ["openai", "gpt-4.1-mini", { isFinalFallbackAttempt: true }],
-    ]);
-    expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0]?.reason).toBe("billing");
-  });
-
   it("falls back on model-not-found error shapes", async () => {
     const cases: Array<{
       name: string;
@@ -3573,6 +3470,36 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
     expect(store.order?.[provider]).toEqual(orderedProfileIds);
+  });
+
+  it("does not skip a provider when only its user-pinned profile is cooling down", async () => {
+    const provider = `pinned-cooldown-${crypto.randomUUID()}`;
+    const pinnedProfileId = `${provider}:pinned`;
+    const backupProfileId = `${provider}:backup`;
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [pinnedProfileId]: { type: "api_key", provider, key: "pinned-key" },
+        [backupProfileId]: { type: "api_key", provider, key: "backup-key" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [backupProfileId] },
+      usageStats: {
+        [pinnedProfileId]: { cooldownUntil: Date.now() + 60_000 },
+      },
+    };
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store,
+      provider,
+      run,
+      userLockedAuthProfileId: pinnedProfileId,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
   });
 
   it("discovers an exact external CLI user lock before cooldown admission", async () => {
@@ -3900,7 +3827,7 @@ describe("runWithModelFallback", () => {
           }),
         ),
       );
-      expect(error.name).toBe("FallbackSummaryError");
+      expect(error.name).toBe("FailoverError");
       expect(error.soonestCooldownExpiry).toBe(expiry);
     });
   });
@@ -3957,7 +3884,7 @@ describe("runWithModelFallback", () => {
           }),
         ),
       );
-      expect(error.name).toBe("FallbackSummaryError");
+      expect(error.name).toBe("FailoverError");
       expect(error.soonestCooldownExpiry).toBe(relevantExpiry);
     });
   });
@@ -5358,90 +5285,4 @@ describe("runWithImageModelFallback", () => {
   });
 });
 
-describe("runWithModelFallback preserved prompt errors", () => {
-  it.each([
-    {
-      label: "timeout",
-      promptError: Object.assign(new Error("request timed out"), { name: "TimeoutError" }),
-      expected: { message: "request timed out", reason: "timeout", status: 408 },
-    },
-    {
-      label: "rate limit",
-      promptError: { status: 429, code: "RATE_LIMITED", message: "too many requests" },
-      expected: {
-        message: "too many requests",
-        reason: "rate_limit",
-        status: 429,
-        code: "RATE_LIMITED",
-      },
-    },
-  ])(
-    "falls back with the preserved $label prompt error (#99963)",
-    async ({ promptError, expected }) => {
-      const cfg = makeCfg({
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.5",
-              fallbacks: ["anthropic/claude-sonnet-4-6"],
-            },
-          },
-        },
-      });
-      const takeoverError = Object.assign(new Error("cleanup takeover"), {
-        name: "EmbeddedAttemptSessionTakeoverError",
-        promptError,
-      });
-      const run = vi.fn().mockRejectedValueOnce(takeoverError).mockResolvedValueOnce("ok");
-      const onError = vi.fn();
-
-      const result = await runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-5.5",
-        run,
-        onError,
-      });
-
-      expect(result.result).toBe("ok");
-      expect(run).toHaveBeenCalledTimes(2);
-      expect(result.attempts[0]).toMatchObject({
-        error: expected.message,
-        reason: expected.reason,
-      });
-      const observedError = onError.mock.calls[0]?.[0]?.error;
-      expect(observedError).toMatchObject({ name: "FailoverError", ...expected });
-      expect(observedError).toHaveProperty("cause", takeoverError);
-    },
-  );
-
-  it("still aborts fallback for a pure takeover error without promptError (regression)", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
-
-    const pureTakeoverError = Object.assign(
-      new Error("session file changed while embedded prompt lock was released"),
-      { name: "EmbeddedAttemptSessionTakeoverError" },
-    );
-    const run = vi.fn().mockRejectedValue(pureTakeoverError);
-
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-5.5",
-        run,
-      }),
-    ).rejects.toBe(pureTakeoverError);
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

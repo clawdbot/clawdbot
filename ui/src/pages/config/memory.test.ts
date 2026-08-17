@@ -8,8 +8,6 @@ import {
   memoryTabForRoute,
   memoryVisibleSchemaKeys,
   narrowMemorySchema,
-  resolveMemoryBackend,
-  resolveMemoryBackendSelection,
 } from "./memory-schema.ts";
 import { renderMemory } from "./memory.ts";
 
@@ -30,10 +28,6 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     engineOutcome: null,
     onEngineChange: vi.fn(),
     onEngineReset: vi.fn(),
-    backendSelection: { kind: "default", backend: "builtin" },
-    backendBusy: false,
-    onBackendChange: vi.fn(),
-    onBackendReset: vi.fn(),
     addons: [
       {
         id: "active-memory",
@@ -80,6 +74,22 @@ function renderInto(props: MemoryViewProps): HTMLElement {
 }
 
 describe("renderMemory", () => {
+  it("renders the agent scope only for multiple configured agents", () => {
+    const emptyRoster = renderInto(createProps({ activeTab: "overview", agents: [] }));
+    expect(emptyRoster.querySelector(".agent-scope-control")).toBeNull();
+
+    const singleAgent = renderInto(
+      createProps({
+        activeTab: "overview",
+        agents: [{ value: "main", label: "Main" }],
+      }),
+    );
+    expect(singleAgent.querySelector(".agent-scope-control")).toBeNull();
+
+    const multipleAgents = renderInto(createProps({ activeTab: "overview" }));
+    expect(multipleAgents.querySelector(".agent-scope-control")).not.toBeNull();
+  });
+
   it.each(["overview", "memories", "dreams"] as const)(
     "renders the shared header and agent scope on %s",
     (activeTab) => {
@@ -221,73 +231,6 @@ describe("renderMemory", () => {
     expect(active?.getAttribute("value")).toBe("");
     expect(container.textContent).toContain("switched off");
     expect(container.textContent).not.toContain("pinned in config");
-  });
-
-  it("hides the retrieval backend row for an engine that owns its own retrieval", () => {
-    expect(
-      renderInto(createProps({ backendSelection: { kind: "default", backend: "builtin" } }))
-        .textContent,
-    ).toContain("Retrieval backend");
-    expect(renderInto(createProps({ backendSelection: null })).textContent).not.toContain(
-      "Retrieval backend",
-    );
-  });
-
-  it("shows backend provenance and only offers reset for an explicit value", () => {
-    const inherited = renderInto(createProps());
-    expect(inherited.textContent).toContain("Using default: Built-in");
-
-    const pinned = renderInto(
-      createProps({ backendSelection: { kind: "pinned", backend: "builtin" } }),
-    );
-    const backendRow = [...pinned.querySelectorAll(".settings-row")].find((row) =>
-      row.textContent?.includes("Retrieval backend"),
-    );
-    expect(backendRow?.textContent).toContain("Default: Built-in");
-    expect(backendRow?.querySelector('button[aria-label="Reset to default"]')).not.toBeNull();
-  });
-
-  it("keeps a malformed explicit backend visible and repairable", () => {
-    const onBackendReset = vi.fn();
-    const container = renderInto(
-      createProps({
-        backendSelection: { kind: "invalid", backend: null, value: "retired-backend" },
-        onBackendReset,
-      }),
-    );
-    const backendRow = [...container.querySelectorAll(".settings-row")].find((row) =>
-      row.textContent?.includes("Retrieval backend"),
-    );
-    const active = backendRow?.querySelector("wa-radio.settings-segmented__btn--active");
-
-    expect(backendRow?.textContent).toContain("Invalid configured value");
-    expect(backendRow?.textContent).toContain("Default: Built-in");
-    expect(backendRow?.textContent).not.toContain("Using default: Built-in");
-    expect(active?.getAttribute("value")).toBe("__invalid__");
-    backendRow?.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    expect(onBackendReset).toHaveBeenCalledOnce();
-  });
-
-  it("routes engine and backend restore actions to their reset callbacks", () => {
-    const onEngineReset = vi.fn();
-    const onBackendReset = vi.fn();
-    const container = renderInto(
-      createProps({
-        engineSelection: { kind: "pinned", engineId: "memory-core" },
-        backendSelection: { kind: "pinned", backend: "qmd" },
-        onEngineReset,
-        onBackendReset,
-      }),
-    );
-    const resets = container.querySelectorAll<HTMLButtonElement>(
-      'button[aria-label="Reset to default"]',
-    );
-
-    resets[0]?.click();
-    resets[1]?.click();
-
-    expect(onEngineReset).toHaveBeenCalledOnce();
-    expect(onBackendReset).toHaveBeenCalledOnce();
   });
 
   it("renders enabled and disabled add-ons as accessible toggles", () => {
@@ -445,7 +388,7 @@ describe("memoryTabForRoute", () => {
   });
 
   it("routes old tabless schema links to Settings without changing the plain landing", () => {
-    expect(memoryTabForRoute({ section: "memory", targetBlockId: "memory-backend" })).toBe(
+    expect(memoryTabForRoute({ section: "memory", targetBlockId: "config-section-memory" })).toBe(
       "settings",
     );
     expect(memoryTabForRoute({ targetBlockId: "config-section-memory" })).toBe("settings");
@@ -458,7 +401,7 @@ describe("memoryTabForRoute", () => {
         pathname: "/settings/memory/dreams",
         tab: "settings",
         section: "memory",
-        targetBlockId: "memory-backend",
+        targetBlockId: "config-section-memory",
       }),
     ).toBe("dreams");
     expect(memoryTabForRoute({ pathname: "/settings/memory" })).toBe("overview");
@@ -466,66 +409,17 @@ describe("memoryTabForRoute", () => {
 });
 
 describe("memorySchemaKeysForTab", () => {
-  it("reveals qmd sub-config only when qmd is the selected backend", () => {
-    expect(memorySchemaKeysForTab("overview", "builtin")).toEqual([]);
-    expect(memorySchemaKeysForTab("memories", "builtin")).toEqual([]);
-    expect(memorySchemaKeysForTab("dreams", "qmd")).toEqual([]);
-    expect(memorySchemaKeysForTab("settings", "builtin")).toEqual(["citations", "search"]);
-    expect(memorySchemaKeysForTab("settings", "qmd")).toEqual(["citations", "qmd", "search"]);
-    // No applicable backend: qmd's sub-config belongs to a backend nothing reads.
-    expect(memorySchemaKeysForTab("settings", null)).toEqual(["citations", "search"]);
+  it("shows builtin memory settings only on Settings", () => {
+    expect(memorySchemaKeysForTab("overview")).toEqual([]);
+    expect(memorySchemaKeysForTab("memories")).toEqual([]);
+    expect(memorySchemaKeysForTab("dreams")).toEqual([]);
+    expect(memorySchemaKeysForTab("settings")).toEqual(["citations", "search"]);
   });
 });
 
 describe("memoryVisibleSchemaKeys", () => {
-  it("hides qmd until qmd is the selected backend and backend when no engine reads it", () => {
-    expect([...memoryVisibleSchemaKeys("builtin")].toSorted()).toEqual([
-      "backend",
-      "citations",
-      "search",
-    ]);
-    expect([...memoryVisibleSchemaKeys("qmd")].toSorted()).toEqual([
-      "backend",
-      "citations",
-      "qmd",
-      "search",
-    ]);
-    expect([...memoryVisibleSchemaKeys(null)].toSorted()).toEqual(["citations", "search"]);
-  });
-});
-
-describe("resolveMemoryBackend", () => {
-  it("reports a backend only for the memory-core slot owner", () => {
-    expect(resolveMemoryBackend({})).toBe("builtin");
-    expect(resolveMemoryBackend({ memory: { backend: "qmd" } })).toBe("qmd");
-    // Another engine owns the slot, so nothing reads memory.backend.
-    expect(
-      resolveMemoryBackend({
-        memory: { backend: "qmd" },
-        plugins: { slots: { memory: "memory-lancedb" } },
-      }),
-    ).toBeNull();
-    expect(resolveMemoryBackend({ plugins: { slots: { memory: "none" } } })).toBeNull();
-  });
-
-  it("preserves whether the effective backend is inherited or pinned", () => {
-    expect(resolveMemoryBackendSelection({})).toEqual({ kind: "default", backend: "builtin" });
-    expect(resolveMemoryBackendSelection({ memory: { backend: "builtin" } })).toEqual({
-      kind: "pinned",
-      backend: "builtin",
-    });
-    expect(resolveMemoryBackendSelection({ memory: { backend: "qmd" } })).toEqual({
-      kind: "pinned",
-      backend: "qmd",
-    });
-    for (const value of ["retired-backend", null, { name: "qmd" }]) {
-      expect(resolveMemoryBackendSelection({ memory: { backend: value } })).toEqual({
-        kind: "invalid",
-        backend: null,
-        value,
-      });
-    }
-    expect(resolveMemoryBackend({ memory: { backend: "retired-backend" } })).toBeNull();
+  it("matches the builtin Settings editor", () => {
+    expect(memoryVisibleSchemaKeys()).toEqual(["citations", "search"]);
   });
 });
 
@@ -536,10 +430,8 @@ describe("narrowMemorySchema", () => {
       memory: {
         type: "object",
         properties: {
-          backend: { type: "string" },
           citations: { type: "string" },
           search: { type: "object" },
-          qmd: { type: "object" },
         },
       },
       tools: { type: "object" },

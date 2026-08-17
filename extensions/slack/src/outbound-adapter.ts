@@ -39,6 +39,7 @@ import {
   type SlackReplyBlockSegment,
 } from "./reply-blocks.js";
 import type { SlackSendIdentity, SlackSendResult } from "./send.js";
+import { parseSlackTarget } from "./target-parsing.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
 type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
@@ -181,6 +182,7 @@ async function sendSlackOutboundMessage(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  forceDocument?: boolean;
   mediaAccess?: {
     localRoots?: readonly string[];
     readFile?: (filePath: string) => Promise<Buffer>;
@@ -226,6 +228,7 @@ async function sendSlackOutboundMessage(params: {
           mediaAccess: params.mediaAccess,
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
+          ...(params.forceDocument ? { forceDocument: true } : {}),
         }
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
@@ -315,9 +318,6 @@ export const slackOutbound: ChannelOutboundAdapter = {
             text,
             mediaUrl,
             deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
-            onPlatformSendDispatch: useSingleDeliveryMarker
-              ? ctx.onPlatformSendDispatch
-              : undefined,
           }),
         finalize: async () => {
           let lastResult: Awaited<ReturnType<SlackSendFn>> | undefined;
@@ -334,9 +334,6 @@ export const slackOutbound: ChannelOutboundAdapter = {
                 : {}),
               ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
               deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
-              onPlatformSendDispatch: useSingleDeliveryMarker
-                ? ctx.onPlatformSendDispatch
-                : undefined,
             });
           }
           if (!lastResult) {
@@ -384,6 +381,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
     if (!channelId) {
       return;
     }
+    const teamId = parseSlackTarget(target.to, { defaultKind: "channel" })?.teamId;
     // Aggregate fallback receipts retain their last platform id separately
     // from the actual card whose question controls need finalization.
     const questionMessageId =
@@ -404,6 +402,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
           cfg,
           accountId: target.accountId ?? undefined,
           channelId,
+          teamId,
           messageTs: questionMessageId,
           text: `${deliveryMessage.text}\n\n${escapedStatusLine}`,
           blocks,

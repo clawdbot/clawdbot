@@ -2,7 +2,7 @@ import type { WorkerInferenceTerminalOutcome } from "../../../packages/gateway-p
 import type { AssistantMessage } from "../../llm/types.js";
 import {
   projectWorkerProviderReplay,
-  type WorkerProviderReplayOmission,
+  type WorkerMessageProjection,
 } from "../../worker/transcript-message.js";
 
 export type WorkerInferenceModelIdentity = {
@@ -15,8 +15,7 @@ export function projectWorkerInferenceTerminalMessage(params: {
   message: AssistantMessage;
   modelIdentity: WorkerInferenceModelIdentity;
   stopReason: Extract<AssistantMessage["stopReason"], "stop" | "length" | "toolUse">;
-  onProviderReplayOmitted?: (omission: WorkerProviderReplayOmission) => void;
-}): Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"] {
+}): WorkerMessageProjection<Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"]> {
   const content = params.message.content.map((part) => {
     switch (part.type) {
       case "text":
@@ -88,6 +87,6 @@ export function projectWorkerInferenceTerminalMessage(params: {
   return projectWorkerProviderReplay({
     message: projected,
     providerReplay: params.message.providerReplay,
-    onOmitted: params.onProviderReplayOmitted,
+    purpose: "transcript",
   });
 }

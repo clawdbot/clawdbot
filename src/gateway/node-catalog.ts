@@ -5,12 +5,13 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { NodePairingPendingRequest, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
+import { filterPublicNodeCommands } from "../infra/node-commands.js";
 import {
   sameNodeApprovalSurfaceSet,
   sameNodePermissionSurface,
 } from "../infra/node-pairing-surface.js";
-import type { NodePairingPairedNode, NodePairingPendingRequest } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -41,6 +42,7 @@ type KnownNodeApprovedSource = {
   permissions?: Record<string, boolean>;
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
   lastSeenAtMs?: number;
   lastSeenReason?: string;
 };
@@ -116,7 +118,7 @@ function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSo
   };
 }
 
-function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprovedSource {
+function buildApprovedNodeSource(entry: PairedDeviceNode): KnownNodeApprovedSource {
   return {
     nodeId: entry.nodeId,
     displayName: entry.displayName,
@@ -128,10 +130,11 @@ function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprove
     deviceFamily: entry.deviceFamily,
     modelIdentifier: entry.modelIdentifier,
     caps: entry.caps ?? [],
-    commands: entry.commands ?? [],
+    commands: filterPublicNodeCommands(entry.commands ?? []),
     permissions: entry.permissions,
     approvedAtMs: entry.approvedAtMs,
     lastConnectedAtMs: entry.lastConnectedAtMs,
+    lastDisconnectedAtMs: entry.lastDisconnectedAtMs,
     lastSeenAtMs: entry.lastSeenAtMs,
     lastSeenReason: entry.lastSeenReason,
   };
@@ -152,7 +155,7 @@ function buildPendingNodeSource(entry: NodePairingPendingRequest): KnownNodePend
     deviceFamily: entry.deviceFamily,
     modelIdentifier: entry.modelIdentifier,
     caps: uniqueSortedStrings(entry.caps),
-    commands: uniqueSortedStrings(entry.commands),
+    commands: filterPublicNodeCommands(uniqueSortedStrings(entry.commands)),
     permissions: entry.permissions,
   };
 }
@@ -175,6 +178,11 @@ function resolveCurrentPendingNodePairing(params: {
     sameNodePermissionSurface(pending.permissions, declaredPermissions)
     ? pending
     : undefined;
+}
+
+function maxDefinedTimestamp(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => value !== undefined);
+  return defined.length > 0 ? Math.max(...defined) : undefined;
 }
 
 function resolveEffectiveLastSeen(params: {
@@ -217,9 +225,26 @@ function buildEffectiveKnownNode(entry: {
   nodePairing?: KnownNodeApprovedSource;
   pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
+  sessionHost: boolean;
+  workerBundle?: NodeListNode["workerBundle"];
+  issues?: NodeListNode["issues"];
 }): NodeListNode {
-  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live } = entry;
+  const {
+    nodeId,
+    devicePairing,
+    nodePairing,
+    pendingNodePairing,
+    live,
+    sessionHost,
+    workerBundle,
+    issues,
+  } = entry;
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
+  const lastConnectedAtMs = maxDefinedTimestamp(
+    nodePairing?.lastConnectedAtMs,
+    live?.connectedAtMs,
+  );
+  const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
   return {
     nodeId,
     displayName: firstNormalizedString(
@@ -278,9 +303,13 @@ function buildEffectiveKnownNode(entry: {
       pendingNodePairing?.remoteIp,
     ),
     caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
-    commands: live
-      ? uniqueSortedStrings(live.commands)
-      : uniqueSortedStrings(nodePairing?.commands),
+    commands: filterPublicNodeCommands(
+      live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(nodePairing?.commands),
+    ),
+    computerUse: live?.computerUse,
+    sessionHost,
+    ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
+    ...(issues?.length ? { issues: [...issues] } : {}),
     nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
@@ -296,6 +325,8 @@ function buildEffectiveKnownNode(entry: {
     pendingDeclaredCommands: pendingNodePairing?.commands,
     pendingDeclaredPermissions: pendingNodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastConnectedAtMs,
+    lastDisconnectedAtMs,
     lastActiveAtMs: live?.lastActiveAtMs,
     presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
     lastSeenAtMs: lastSeen.lastSeenAtMs,
@@ -324,9 +355,12 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
 /** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
-  pairedNodes?: readonly NodePairingPairedNode[];
+  pairedNodes?: readonly PairedDeviceNode[];
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
+  sessionHostNodeIds?: ReadonlySet<string>;
+  workerBundleByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerBundle"]>>;
+  issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
@@ -379,6 +413,9 @@ export function createKnownNodeCatalog(params: {
         nodePairing,
         pendingNodePairing,
         live,
+        sessionHost: params.sessionHostNodeIds?.has(nodeId) === true,
+        workerBundle: params.workerBundleByNodeId?.get(nodeId),
+        issues: params.issuesByNodeId?.get(nodeId),
       }),
     });
   }

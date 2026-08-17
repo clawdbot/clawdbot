@@ -1,7 +1,7 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { resolveStorePath } from "../../config/sessions/inbound.runtime.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/inbound.runtime.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   NormalizedOutboundPayload,
@@ -15,6 +15,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import {
   appendAdmittedDirectCronDeliveryTranscriptMirror,
   buildDirectCronTranscriptMirrorPayloads,
@@ -26,16 +27,12 @@ import {
   resolveCronAwarenessMainSessionKey,
   resolveCronAwarenessText,
   resolveDirectCronDeliverySessionKey,
-  resolveDirectCronFallbackSourceIndex,
-  resolveDirectCronSummaryFallbackText,
   resolveDirectCronTranscriptMirrorText,
-  shouldAttachDirectCronFallbackText,
   isSameSessionKey,
   shouldQueueCronAwareness,
 } from "./delivery-dispatch-awareness.js";
 import {
   buildDirectCronDeliveryIdempotencyKey,
-  cleanupDirectCronSession,
   DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
   isCompletedDirectCronDelivery,
   isStaleCronDelivery,
@@ -56,6 +53,7 @@ import type {
   DispatchCronDeliveryState,
   SuccessfulCronDeliveryTarget,
 } from "./delivery-dispatch-types.js";
+import { normalizeDirectCronDeliveryPayloads } from "./delivery-payload-normalization.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import {
@@ -70,23 +68,7 @@ const deliveryOutboundRuntimeLoader = createLazyImportLoader(
 const subagentFollowupRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-followup.runtime.js"),
 );
-async function loadDeliveryOutboundRuntime(): Promise<
-  typeof import("./delivery-outbound.runtime.js")
-> {
-  return await deliveryOutboundRuntimeLoader.load();
-}
-
-async function loadSubagentFollowupRuntime(): Promise<
-  typeof import("./subagent-followup.runtime.js")
-> {
-  return await subagentFollowupRuntimeLoader.load();
-}
-
-export {
-  cleanupDirectCronSession,
-  queueCronMessageToolDeliveryAwareness,
-  resolveCronDeliveryBestEffort,
-};
+export { queueCronMessageToolDeliveryAwareness, resolveCronDeliveryBestEffort };
 /** Dispatches cron run output through verified message-tool or direct delivery paths. */
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
@@ -101,6 +83,7 @@ export async function dispatchCronDelivery(
   let delivered = verifiedMessageToolDelivery;
   let deliveryAttempted = verifiedMessageToolDelivery;
   let deliveryError: string | undefined;
+  let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let directCronSessionCleanupAttempted = false;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = (result?: RunCronAgentTurnResult): DispatchCronDeliveryState => ({
@@ -108,6 +91,7 @@ export async function dispatchCronDelivery(
     delivered,
     deliveryAttempted,
     ...(deliveryError ? { deliveryError } : {}),
+    ...(deliverySuppressionReason ? { deliverySuppressionReason } : {}),
     cronRunSessionCleanupAttempted: directCronSessionCleanupAttempted,
     summary,
     outputText,
@@ -155,8 +139,11 @@ export async function dispatchCronDelivery(
     }
     return cleanupOutcome;
   };
-  const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
+  const finishSilentReplyDelivery = async (
+    reason?: NormalizeReplySkipReason,
+  ): Promise<RunCronAgentTurnResult> => {
     deliveryAttempted = true;
+    deliverySuppressionReason = reason;
     await cleanupDirectCronSessionIfNeeded();
     return params.withRunSession({
       status: "ok",
@@ -164,6 +151,7 @@ export async function dispatchCronDelivery(
       outputText,
       delivered: false,
       deliveryAttempted: true,
+      ...(reason ? { deliverySuppressionReason: reason } : {}),
       ...params.telemetry,
     });
   };
@@ -172,6 +160,29 @@ export async function dispatchCronDelivery(
     delivery: SuccessfulCronDeliveryTarget,
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
+    const {
+      buildOutboundSessionContext,
+      createOutboundSendDeps,
+      durableMessageBatchMayHaveReachedRecipient,
+      resolveAgentOutboundIdentity,
+      resolveCronChannelReplyTransform,
+      sendDurableMessageBatchCore,
+    } = await deliveryOutboundRuntimeLoader.load();
+    const payloadNormalization = normalizeDirectCronDeliveryPayloads({
+      deliveryPayloads,
+      outputText,
+      summary,
+      synthesizedText,
+      channelTransform: resolveCronChannelReplyTransform({
+        channel: delivery.channel,
+        cfg: params.cfgWithAgentDefaults,
+        accountId: delivery.accountId,
+      }),
+    });
+    if (payloadNormalization.kind === "suppress") {
+      return await finishSilentReplyDelivery(payloadNormalization.reason);
+    }
+    const normalizedPayloads = payloadNormalization.payload;
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       jobId: params.job.id,
       runStartedAt: params.runStartedAt,
@@ -196,72 +207,8 @@ export async function dispatchCronDelivery(
       deliveryAttempted = true;
       return null;
     }
-    const {
-      buildOutboundSessionContext,
-      createOutboundSendDeps,
-      resolveAgentOutboundIdentity,
-      sendDurableMessageBatch,
-    } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     try {
-      const summaryFallbackText = resolveDirectCronSummaryFallbackText({
-        outputText,
-        summary,
-        synthesizedText,
-      });
-      const normalizedSummaryFallback = summaryFallbackText
-        ? normalizeSilentReplyText(summaryFallbackText)
-        : undefined;
-      const normalizedSummaryFallbackText =
-        normalizedSummaryFallback?.strippedTrailingSilentToken === true
-          ? undefined
-          : normalizedSummaryFallback?.text;
-      const normalizeDirectPayload = (payload: ReplyPayload): ReplyPayload => {
-        const normalized = payload.text ? normalizeSilentReplyText(payload.text) : undefined;
-        return normalized
-          ? {
-              ...payload,
-              text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-            }
-          : payload;
-      };
-      const normalizedDeliveryPayloads = deliveryPayloads
-        .map(normalizeDirectPayload)
-        .filter((payload) => hasReplyPayloadContent(payload, { trimText: true }));
-      const existingFallbackSourceIndex = resolveDirectCronFallbackSourceIndex(
-        normalizedDeliveryPayloads,
-        normalizedSummaryFallbackText,
-      );
-      const needsFallbackSource =
-        Boolean(normalizedSummaryFallbackText) &&
-        normalizedDeliveryPayloads.some(shouldAttachDirectCronFallbackText) &&
-        existingFallbackSourceIndex === undefined;
-      const fallbackSourceIndex = needsFallbackSource ? 0 : existingFallbackSourceIndex;
-      const directPayloads = needsFallbackSource
-        ? [{ text: normalizedSummaryFallbackText }, ...normalizedDeliveryPayloads]
-        : normalizedDeliveryPayloads;
-      let normalizedPayloads: ReplyPayload[] = [];
-      for (const payload of directPayloads) {
-        normalizedPayloads.push(
-          shouldAttachDirectCronFallbackText(payload) && normalizedSummaryFallbackText
-            ? {
-                ...payload,
-                fallbackText: {
-                  text: normalizedSummaryFallbackText,
-                  ...(fallbackSourceIndex !== undefined
-                    ? { replacesPayloadIndex: fallbackSourceIndex }
-                    : {}),
-                },
-              }
-            : payload,
-        );
-      }
-      if (normalizedPayloads.length === 0 && normalizedSummaryFallbackText) {
-        normalizedPayloads = [{ text: normalizedSummaryFallbackText }];
-      }
-      if (normalizedPayloads.length === 0) {
-        return await finishSilentReplyDelivery();
-      }
       if (params.isAborted()) {
         return params.withRunSession({
           status: "error",
@@ -356,7 +303,7 @@ export async function dispatchCronDelivery(
         : undefined;
       const runDelivery = async () => {
         attemptedPayloadsForMirror.length = 0;
-        const send = await sendDurableMessageBatch({
+        const send = await sendDurableMessageBatchCore({
           cfg: params.cfgWithAgentDefaults,
           channel: delivery.channel,
           to: delivery.to,
@@ -377,15 +324,8 @@ export async function dispatchCronDelivery(
             attemptedPayloadsForMirror.push(payload);
           },
         });
-        // No durable id is still ambiguous: the adapter was already invoked.
         payloadMayHaveReachedRecipientBeforeFailure ||=
-          send.payloadOutcomes?.some(
-            (outcome) =>
-              outcome.status === "sent" ||
-              (outcome.status === "failed" && outcome.sentBeforeError) ||
-              (outcome.status === "suppressed" &&
-                outcome.reason === "adapter_returned_no_identity"),
-          ) ?? false;
+          durableMessageBatchMayHaveReachedRecipient(send);
         if (
           send.status === "failed" &&
           (await waitForCompletedDirectCronDelivery({
@@ -426,7 +366,6 @@ export async function dispatchCronDelivery(
           channel: delivery.channel,
           to: delivery.to,
           threadId: stringifyRouteThreadId(delivery.threadId),
-          error: err,
           partialDelivered: payloadMayHaveReachedRecipientBeforeFailure,
         });
         await queueCronAwarenessSystemEvent({
@@ -504,7 +443,7 @@ export async function dispatchCronDelivery(
           // Keep cron delivery mirrors text-first: non-audio attachment names
           // are folded into mirrorText so media does not replace delivered text.
           mediaUrls: undefined,
-          storePath: resolveStorePath(params.cfgWithAgentDefaults.session?.store, {
+          storePath: resolveSessionStorePathCore(params.cfgWithAgentDefaults.session?.store, {
             // This mirror already carries the admitted run owner. Re-parsing a
             // route alias can reject legacy keys or select a different store.
             agentId: params.agentId,
@@ -546,7 +485,7 @@ export async function dispatchCronDelivery(
           status: "error",
           summary,
           outputText,
-          error: String(err),
+          error: normalizeCronRunErrorText(err),
           deliveryAttempted,
           ...params.telemetry,
         });
@@ -590,7 +529,7 @@ export async function dispatchCronDelivery(
     const needsSubagentFollowupRuntime =
       shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
     const subagentFollowupRuntime = needsSubagentFollowupRuntime
-      ? await loadSubagentFollowupRuntime()
+      ? await subagentFollowupRuntimeLoader.load()
       : undefined;
     // Also check for already-completed descendants. If the subagent finished
     // before delivery-dispatch runs, activeSubagentRuns is 0 and
@@ -712,7 +651,7 @@ export async function dispatchCronDelivery(
       // inherited shared-bucket target was refused). We never send here, so a
       // deleteAfterRun cron must still retire its session/transcript before
       // returning — otherwise the one-shot session leaks. Safe no-op for
-      // non-deleteAfterRun / non-cron sessions (see cleanupDirectCronSession).
+      // Cleanup is a no-op for non-deleteAfterRun or non-cron sessions.
       await cleanupDirectCronSessionIfNeeded();
       if (!params.deliveryBestEffort) {
         return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));

@@ -3,10 +3,10 @@ import { readFile } from "node:fs/promises";
 import { expect } from "vitest";
 import * as ansiSequences from "../../packages/terminal-core/src/ansi-sequences.js";
 import * as ansi from "../../packages/terminal-core/src/ansi.js";
+import { sleep } from "../utils/sleep.js";
 import { formatTuiFooter, sanitizeRenderableLine } from "./tui-formatters.js";
 import {
   PtyTestScreen,
-  sleep,
   type PtyRun,
   type PtyTerminalDimensions,
   waitFor,

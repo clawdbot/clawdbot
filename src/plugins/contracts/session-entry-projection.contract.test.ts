@@ -8,7 +8,10 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { listSessionEntries, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -46,7 +49,7 @@ function loadSessionStore(
   _options?: { skipCache?: boolean },
 ): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -312,6 +315,11 @@ describe("plugin session extension SessionEntry projection", () => {
           sessionEntrySlotKey: "transcriptPath",
         });
         api.registerSessionExtension({
+          namespace: "custom-icon",
+          description: "reserved custom icon",
+          sessionEntrySlotKey: "icon",
+        });
+        api.registerSessionExtension({
           namespace: "pending-final-text",
           description: "retired pending-final field",
           sessionEntrySlotKey: "pendingFinalDeliveryText",
@@ -342,6 +350,10 @@ describe("plugin session extension SessionEntry projection", () => {
       {
         pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: transcriptPath",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: icon",
       },
       {
         pluginId: "slot-collision",

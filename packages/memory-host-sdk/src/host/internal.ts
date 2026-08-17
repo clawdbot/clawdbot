@@ -4,11 +4,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { normalizeStringEntries, uniqueStrings } from "@openclaw/normalization-core";
 import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
-import { MEMORY_HOST_ROOT_FILENAME } from "./config-utils.js";
+import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
+import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   isFileMissingError,
   readRegularFile,
@@ -16,6 +16,7 @@ import {
   walkDirectory,
   type WalkDirectoryEntry,
 } from "./fs-utils.js";
+import { hashText } from "./hash.js";
 import {
   buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
@@ -33,10 +34,9 @@ import {
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
-import type { MemoryEntryProvenance } from "./types.js";
+import type { MemoryEntryProvenance, MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-import { hashText } from "./hash.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -63,7 +63,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 2;
+export const MEMORY_CHUNKING_VERSION = 3;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -98,16 +98,52 @@ function expandHomePath(value: string): string {
   return value;
 }
 
-export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: string[]): string[] {
-  if (!extraPaths?.length) {
-    return [];
+export type NormalizedExtraMemoryPath = { path: string; pattern?: string };
+
+export function normalizeExtraMemoryPathEntries(
+  workspaceDir: string,
+  extraPaths?: MemoryExtraPath[],
+): NormalizedExtraMemoryPath[] {
+  return normalizeConfiguredMemoryExtraPaths(extraPaths).map((entry) => {
+    const configuredPath = typeof entry === "string" ? entry : entry.path;
+    const normalized: NormalizedExtraMemoryPath = {
+      path: path.resolve(workspaceDir, expandHomePath(configuredPath)),
+    };
+    if (typeof entry !== "string") {
+      normalized.pattern = entry.pattern?.replaceAll("\\", "/");
+    }
+    return normalized;
+  });
+}
+
+export function normalizeExtraMemoryPaths(
+  workspaceDir: string,
+  extraPaths?: MemoryExtraPath[],
+): string[] {
+  return Array.from(
+    new Set(normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => entry.path)),
+  );
+}
+
+export function matchesExtraMemoryPathEntry(
+  entry: NormalizedExtraMemoryPath,
+  candidatePath: string,
+): boolean {
+  if (!entry.pattern) {
+    return true;
   }
-  const resolved = normalizeStringEntries(extraPaths)
-    .map((value) => expandHomePath(value))
-    .map((value) =>
-      path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),
-    );
-  return uniqueStrings(resolved);
+  const relativePath = path.relative(entry.path, candidatePath);
+  if (!relativePath) {
+    return true;
+  }
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return false;
+  }
+  try {
+    return path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern);
+  } catch {
+    return false;
+  }
 }
 
 export function isMemoryPath(relPath: string): boolean {
@@ -149,6 +185,7 @@ async function collectMemoryFilesFromDir(
   files: string[],
   multimodal?: MemoryMultimodalSettings,
   shouldSkipPath?: (absPath: string) => boolean,
+  extraPathEntry?: NormalizedExtraMemoryPath,
 ): Promise<void> {
   const scan = await walkDirectory(dir, {
     symlinks: "skip",
@@ -156,14 +193,15 @@ async function collectMemoryFilesFromDir(
     include: (entry) =>
       !shouldSkipPath?.(entry.path) &&
       entry.kind === "file" &&
-      isAllowedMemoryFilePath(entry.path, multimodal),
+      isAllowedMemoryFilePath(entry.path, multimodal) &&
+      (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
   });
   files.push(...scan.entries.map((entry) => entry.path));
 }
 
 export async function listMemoryFiles(
   workspaceDir: string,
-  extraPaths?: string[],
+  extraPaths?: MemoryExtraPath[],
   multimodal?: MemoryMultimodalSettings,
 ): Promise<string[]> {
   const result: string[] = [];
@@ -193,13 +231,15 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await collectMemoryFilesFromDir(memoryDir, result, multimodal, shouldSkipWorkspaceMemoryPath);
+      // Default memory roots stay Markdown-only; multimodal discovery is an extraPaths opt-in.
+      await collectMemoryFilesFromDir(memoryDir, result, undefined, shouldSkipWorkspaceMemoryPath);
     }
   } catch {}
 
-  const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
+  const normalizedExtraPaths = normalizeExtraMemoryPathEntries(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
-    for (const inputPath of normalizedExtraPaths) {
+    for (const entry of normalizedExtraPaths) {
+      const inputPath = entry.path;
       if (shouldSkipWorkspaceMemoryPath(inputPath)) {
         continue;
       }
@@ -214,10 +254,15 @@ export async function listMemoryFiles(
             result,
             multimodal,
             shouldSkipWorkspaceMemoryPath,
+            entry,
           );
           continue;
         }
-        if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
+        if (
+          stat.isFile() &&
+          (isExplicitExtraMarkdownFilePath(inputPath) ||
+            isAllowedMemoryFilePath(inputPath, multimodal))
+        ) {
           result.push(inputPath);
         }
       } catch {}

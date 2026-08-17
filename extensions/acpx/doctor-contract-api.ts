@@ -1,10 +1,12 @@
-// ACPX doctor contract migrates shipped plugin-owned runtime state.
+// ACPX doctor contract repairs shipped config and migrates plugin-owned runtime state.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
+  asObjectRecord,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   normalizeAcpxProcessLease,
   normalizeAcpxProcessLeaseFile,
@@ -20,6 +22,47 @@ import {
   normalizeAcpxGatewayInstanceRecord,
   type AcpxGatewayInstanceRecord,
 } from "./src/state.js";
+
+const ACPX_CONFIG_PATH = ["plugins", "entries", "acpx", "config"] as const;
+const RETIRED_ACPX_CONFIG_KEYS = ["strictWindowsCmdWrapper", "queueOwnerTtlSeconds"] as const;
+
+/** Retired ACPX config that `openclaw doctor --fix` removes before strict validation. */
+export const legacyConfigRules = RETIRED_ACPX_CONFIG_KEYS.map((key) => ({
+  path: [...ACPX_CONFIG_PATH, key],
+  message: `${[...ACPX_CONFIG_PATH, key].join(".")} is retired and ignored by the embedded ACPX runtime. Run "openclaw doctor --fix".`,
+}));
+
+/** Removes retired plugin-owned config without keeping runtime compatibility keys. */
+export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const entry = asObjectRecord(cfg.plugins?.entries?.acpx);
+  const pluginConfig = asObjectRecord(entry?.config);
+  const retiredKeys = RETIRED_ACPX_CONFIG_KEYS.filter((key) =>
+    Object.hasOwn(pluginConfig ?? {}, key),
+  );
+  if (!pluginConfig || retiredKeys.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const nextConfig = structuredClone(cfg);
+  const nextEntry = asObjectRecord(nextConfig.plugins?.entries?.acpx);
+  const nextPluginConfig = asObjectRecord(nextEntry?.config);
+  if (!nextPluginConfig) {
+    return { config: cfg, changes: [] };
+  }
+  for (const key of retiredKeys) {
+    delete nextPluginConfig[key];
+  }
+
+  return {
+    config: nextConfig,
+    changes: [
+      `Removed retired ACPX plugin config: ${retiredKeys.map((key) => [...ACPX_CONFIG_PATH, key].join(".")).join(", ")}.`,
+    ],
+  };
+}
 
 function resolveLegacyGatewayInstancePath(stateDir: string): string {
   return path.join(stateDir, ACPX_LEGACY_GATEWAY_INSTANCE_FILE);

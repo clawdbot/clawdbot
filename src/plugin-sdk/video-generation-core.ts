@@ -34,7 +34,7 @@ export {
 export {
   getVideoGenerationProvider,
   listVideoGenerationProviders,
-} from "../video-generation/provider-registry.js";
-export { parseVideoGenerationModelRef } from "../video-generation/model-ref.js";
+} from "../media-generation/registry.js";
+export { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { getProviderEnvVars } from "../secrets/provider-env-vars.js";

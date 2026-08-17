@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { request, type IncomingMessage } from "node:http";
+import { createServer, request, type IncomingMessage } from "node:http";
 import os from "node:os";
 import nodePath from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { Update } from "grammy/types";
 import { DEFAULT_INGRESS_ADOPTION_STALL_MS } from "openclaw/plugin-sdk/channel-outbound";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -25,8 +26,8 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
-import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 import {
+  writeTelegramSpooledUpdate,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
 } from "./telegram-ingress-spool.test-support.js";
@@ -73,6 +74,23 @@ const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
 const WEBHOOK_DRAIN_GUARD_MS = 5;
 const TELEGRAM_WEBHOOK_RATE_LIMIT_BURST = WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests + 10;
+
+type TestTelegramMessageUpdate = Update & {
+  message: NonNullable<Update["message"]> & { text: string };
+};
+
+function telegramMessageUpdate(updateId: number, text: string): TestTelegramMessageUpdate {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      date: 1_736_380_800,
+      from: { id: 111, is_bot: false, first_name: "Ada" },
+      chat: { id: 111, type: "private", first_name: "Ada" },
+      text,
+    },
+  };
+}
 
 async function waitForWebhookState<T>(
   assertion: () => T | Promise<T>,
@@ -165,13 +183,21 @@ let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
 let webhookStateDir: string | undefined;
 let webhookSpoolDir: string | undefined;
 
-function installTelegramIngressQueueRuntime(resolveStateDir: () => string): void {
+function installTelegramIngressQueueRuntime(
+  resolveStateDir: () => string,
+  queueOpenError?: Error,
+): void {
   setTelegramRuntime({
     state: {
       resolveStateDir,
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
+      ) => {
+        if (queueOpenError) {
+          throw queueOpenError;
+        }
+        return createChannelIngressQueue({ ...options, channelId: "telegram" });
+      },
     },
   } as TelegramRuntime);
 }
@@ -232,6 +258,18 @@ function requireMockCall(mock: unknown, index: number, label: string): unknown[]
     throw new Error(`expected ${label} call ${index}`);
   }
   return call;
+}
+
+function expectWebhookBotScopesAborted(): void {
+  const botParams = requireRecord(
+    requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
+    "createTelegramBot params",
+  );
+  for (const key of ["fetchAbortSignal", "accountAbortSignal"]) {
+    const signal = botParams[key];
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect((signal as AbortSignal).aborted).toBe(true);
+  }
 }
 
 function mockMessages(mock: unknown): string[] {
@@ -466,16 +504,13 @@ async function postWebhookPayloadWithChunkPlan(params: {
 function createNearLimitTelegramPayload(): { payload: string; sizeBytes: number } {
   const maxBytes = 1_024 * 1_024;
   const targetBytes = maxBytes - 4_096;
-  const shell = { update_id: 77_777, message: { text: "" } };
+  const shell = telegramMessageUpdate(77_777, "");
   const shellSize = Buffer.byteLength(JSON.stringify(shell), "utf-8");
   const textLength = Math.max(1, targetBytes - shellSize);
   const pattern = "the quick brown fox jumps over the lazy dog ";
   const repeats = Math.ceil(textLength / pattern.length);
   const text = pattern.repeat(repeats).slice(0, textLength);
-  const payload = JSON.stringify({
-    update_id: 77_777,
-    message: { text },
-  });
+  const payload = JSON.stringify(telegramMessageUpdate(77_777, text));
   return { payload, sizeBytes: Buffer.byteLength(payload, "utf-8") };
 }
 
@@ -523,8 +558,8 @@ async function withStartedWebhook<T>(
 }
 
 function expectSingleNearLimitUpdate(params: {
-  seenUpdates: Array<{ update_id: number; message: { text: string } }>;
-  expected: { update_id: number; message: { text: string } };
+  seenUpdates: TestTelegramMessageUpdate[];
+  expected: TestTelegramMessageUpdate;
 }) {
   expect(params.seenUpdates).toHaveLength(1);
   expect(params.seenUpdates[0]?.update_id).toBe(params.expected.update_id);
@@ -537,15 +572,15 @@ function expectSingleNearLimitUpdate(params: {
 async function runNearLimitPayloadTestAndExpectUpdate(
   mode: "single" | "random-chunked",
 ): Promise<void> {
-  const seenUpdates: Array<{ update_id: number; message: { text: string } }> = [];
+  const seenUpdates: TestTelegramMessageUpdate[] = [];
   handleUpdateSpy.mockImplementationOnce((update: unknown) => {
-    seenUpdates.push(update as { update_id: number; message: { text: string } });
+    seenUpdates.push(update as TestTelegramMessageUpdate);
   });
 
   const { payload, sizeBytes } = createNearLimitTelegramPayload();
   expect(sizeBytes).toBeLessThan(1_024 * 1_024);
   expect(sizeBytes).toBeGreaterThan(256 * 1_024);
-  const expected = JSON.parse(payload) as { update_id: number; message: { text: string } };
+  const expected = JSON.parse(payload) as TestTelegramMessageUpdate;
 
   await withStartedWebhook(
     {
@@ -579,6 +614,7 @@ describe("startTelegramWebhook", () => {
       {
         secret: TELEGRAM_SECRET,
         accountId: "opie",
+        ownerAgentId: "ops",
         config: cfg,
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
         setStatus,
@@ -589,6 +625,7 @@ describe("startTelegramWebhook", () => {
           "createTelegramBot params",
         );
         expect(botParams.accountId).toBe("opie");
+        expect(botParams.ownerAgentId).toBe("ops");
         expect(requireRecord(botParams.config, "telegram config").bindings).toEqual([]);
         expect(botParams.telegramTransport).toBeDefined();
         const health = await fetch(`http://127.0.0.1:${port}/healthz`);
@@ -859,6 +896,123 @@ describe("startTelegramWebhook", () => {
     });
   });
 
+  it("preserves the initialization failure when bot shutdown also fails", async () => {
+    const runtimeError = vi.fn();
+    const setStatus = vi.fn();
+    const initializationError = Object.assign(new Error("unauthorized"), { error_code: 401 });
+    initSpy.mockRejectedValueOnce(initializationError);
+    stopSpy.mockRejectedValueOnce(new Error("bot stop failed"));
+
+    await expect(
+      startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        port: 0,
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        spoolDir: requireWebhookSpoolDir(),
+        runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+        setStatus,
+      }),
+    ).rejects.toBe(initializationError);
+
+    expect(stopSpy).toHaveBeenCalledOnce();
+    expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+    expect(deleteWebhookSpy).not.toHaveBeenCalled();
+    expectWebhookBotScopesAborted();
+    expectMockMessageContains(runtimeError, "telegram webhook bot stop failed: bot stop failed");
+    expectStatusCall(setStatus, { lifecycle: "blocked", lastError: "unauthorized" });
+  });
+
+  it("releases webhook startup resources when its listener port is already occupied", async () => {
+    const blocker = createServer();
+    blocker.listen(0, "127.0.0.1");
+    await once(blocker, "listening");
+    const setStatus = vi.fn();
+
+    try {
+      await expect(
+        startTelegramWebhook({
+          token: TELEGRAM_TOKEN,
+          port: getServerPort(blocker),
+          host: "127.0.0.1",
+          secret: TELEGRAM_SECRET,
+          path: TELEGRAM_WEBHOOK_PATH,
+          spoolDir: requireWebhookSpoolDir(),
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          setStatus,
+        }),
+      ).rejects.toMatchObject({ code: "EADDRINUSE" });
+
+      expect(blocker.listening).toBe(true);
+      expect(initSpy).toHaveBeenCalledOnce();
+      expect(setWebhookSpy).not.toHaveBeenCalled();
+      expect(stopSpy).toHaveBeenCalledOnce();
+      expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+      expect(deleteWebhookSpy).not.toHaveBeenCalled();
+      expectWebhookBotScopesAborted();
+      expect(
+        setStatus.mock.calls.some(([patch]) => String(patch.lastError).includes("EADDRINUSE")),
+      ).toBe(true);
+    } finally {
+      const closed = once(blocker, "close");
+      blocker.close();
+      await closed;
+    }
+  });
+
+  it("closes an advertised listener when opening its durable ingress queue fails", async () => {
+    const abort = new AbortController();
+    const setStatus = vi.fn();
+    const queueError = new Error("state database unavailable");
+    let advertisedPort: number | undefined;
+    setWebhookSpy.mockImplementationOnce(async (publicUrl: string) => {
+      advertisedPort = Number(new URL(publicUrl).port);
+      return true;
+    });
+    installTelegramIngressQueueRuntime(() => webhookStateDir ?? os.tmpdir(), queueError);
+
+    try {
+      await expect(
+        startTelegramWebhook({
+          token: TELEGRAM_TOKEN,
+          port: 0,
+          host: "127.0.0.1",
+          secret: TELEGRAM_SECRET,
+          path: TELEGRAM_WEBHOOK_PATH,
+          spoolDir: requireWebhookSpoolDir(),
+          abortSignal: abort.signal,
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          setStatus,
+        }),
+      ).rejects.toBe(queueError);
+
+      expect(setWebhookSpy).toHaveBeenCalledOnce();
+      expect(advertisedPort).toBeGreaterThan(0);
+      expect(stopSpy).toHaveBeenCalledOnce();
+      expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+      expect(deleteWebhookSpy).not.toHaveBeenCalled();
+      expectWebhookBotScopesAborted();
+      expectStatusCall(setStatus, { lastError: "state database unavailable" });
+      expect(setStatus).toHaveBeenLastCalledWith({ mode: "webhook", connected: false });
+
+      const rebound = createServer();
+      try {
+        rebound.listen(advertisedPort, "127.0.0.1");
+        await once(rebound, "listening");
+        expect(rebound.listening).toBe(true);
+      } finally {
+        if (rebound.listening) {
+          const closed = once(rebound, "close");
+          rebound.close();
+          await closed;
+        }
+      }
+    } finally {
+      abort.abort();
+      await waitForWebhookState(() => expect(transportCloseSpies[0]).toHaveBeenCalledOnce());
+    }
+  });
+
   it("registers webhook with certificate when webhookCertPath is provided", async () => {
     setWebhookSpy.mockClear();
     await withStartedWebhook(
@@ -907,7 +1061,7 @@ describe("startTelegramWebhook", () => {
         );
         expect(botParams.accountId).toBe("opie");
         expect(requireRecord(botParams.config, "telegram config").bindings).toEqual([]);
-        const payload = JSON.stringify({ update_id: 1, message: { text: "hello" } });
+        const payload = JSON.stringify(telegramMessageUpdate(1, "hello"));
         const response = await postWebhookJson({
           url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
           payload,
@@ -921,11 +1075,12 @@ describe("startTelegramWebhook", () => {
   });
 
   it("acks before webhook update processing finishes", async () => {
+    const slowUpdate = telegramMessageUpdate(2, "slow");
     let finishWork: (() => void) | undefined;
     let workStarted = false;
     let workFinished = false;
     handleUpdateSpy.mockImplementationOnce(async (update: unknown) => {
-      expect(update).toEqual({ update_id: 2, message: { text: "slow" } });
+      expect(update).toEqual(telegramMessageUpdate(2, "slow"));
       workStarted = true;
       await new Promise<void>((resolve) => {
         finishWork = resolve;
@@ -941,7 +1096,7 @@ describe("startTelegramWebhook", () => {
       async ({ port }) => {
         const response = await postWebhookJson({
           url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-          payload: JSON.stringify({ update_id: 2, message: { text: "slow" } }),
+          payload: JSON.stringify(slowUpdate),
           secret: TELEGRAM_SECRET,
           timeoutMs: 1_000,
         });
@@ -978,7 +1133,7 @@ describe("startTelegramWebhook", () => {
     try {
       const response = await postWebhookJson({
         url: webhookUrl(getServerPort(started.server), TELEGRAM_WEBHOOK_PATH),
-        payload: JSON.stringify({ update_id: 3, message: { text: "stuck" } }),
+        payload: JSON.stringify(telegramMessageUpdate(3, "stuck")),
         secret: TELEGRAM_SECRET,
       });
       expect(response.status).toBe(200);
@@ -1058,7 +1213,7 @@ describe("startTelegramWebhook", () => {
         let responseSettled = false;
         const responseTask = postWebhookJson({
           url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-          payload: JSON.stringify({ update_id: 4, message: { text: "commit gate" } }),
+          payload: JSON.stringify(telegramMessageUpdate(4, "commit gate")),
           secret: TELEGRAM_SECRET,
         }).then((response) => {
           responseSettled = true;
@@ -1092,7 +1247,7 @@ describe("startTelegramWebhook", () => {
         throw new Error("agent turn failed");
       }
     });
-    const payload = JSON.stringify({ update_id: 3, message: { text: "boom" } });
+    const payload = JSON.stringify(telegramMessageUpdate(3, "boom"));
 
     try {
       await withStartedWebhook(
@@ -1158,7 +1313,7 @@ describe("startTelegramWebhook", () => {
     } = {};
     await writeTelegramSpooledUpdate({
       spoolDir: requireWebhookSpoolDir(),
-      update: { update_id: 39, message: { chat: { id: 123 }, text: "stalled" } },
+      update: telegramMessageUpdate(39, "stalled"),
     });
     handleUpdateSpy.mockImplementationOnce(async () => {
       active.dispatchStartedAt = Date.now();
@@ -1200,8 +1355,8 @@ describe("startTelegramWebhook", () => {
     try {
       let finishFirstUpdate: (() => void) | undefined;
       const seenUpdateIds: number[] = [];
-      const firstUpdate = { update_id: 40, message: { chat: { id: 123 }, text: "slow" } };
-      const secondUpdate = { update_id: 41, message: { chat: { id: 123 }, text: "blocked" } };
+      const firstUpdate = telegramMessageUpdate(40, "slow");
+      const secondUpdate = telegramMessageUpdate(41, "blocked");
       await writeTelegramSpooledUpdate({
         spoolDir: requireWebhookSpoolDir(),
         update: firstUpdate,
@@ -1247,7 +1402,7 @@ describe("startTelegramWebhook", () => {
   it("holds buffered timeout settlement behind durable webhook adoption", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
-      const update = { update_id: 42, message: { chat: { id: 123 }, text: "held adoption" } };
+      const update = telegramMessageUpdate(42, "held adoption");
       await writeTelegramSpooledUpdate({
         spoolDir: requireWebhookSpoolDir(),
         update,
@@ -1298,7 +1453,7 @@ describe("startTelegramWebhook", () => {
   });
 
   it("drains spooled webhook updates left by a previous process on startup", async () => {
-    const update = { update_id: 30, message: { text: "leftover" } };
+    const update = telegramMessageUpdate(30, "leftover");
     await writeTelegramSpooledUpdate({
       spoolDir: requireWebhookSpoolDir(),
       update,
@@ -2048,8 +2203,8 @@ describe("startTelegramWebhook", () => {
         },
       },
     } as TelegramRuntime);
-    const firstUpdate = { update_id: 50, message: { chat: { id: 123 }, text: "first" } };
-    const secondUpdate = { update_id: 51, message: { chat: { id: 123 }, text: "second" } };
+    const firstUpdate = telegramMessageUpdate(50, "first");
+    const secondUpdate = telegramMessageUpdate(51, "second");
     await writeTelegramSpooledUpdate({
       spoolDir: requireWebhookSpoolDir(),
       update: firstUpdate,
@@ -2127,7 +2282,7 @@ describe("startTelegramWebhook", () => {
     } as unknown as TelegramRuntime);
     await writeTelegramSpooledUpdate({
       spoolDir: requireWebhookSpoolDir(),
-      update: { update_id: 52, message: { chat: { id: 123 }, text: "stop retry" } },
+      update: telegramMessageUpdate(52, "stop retry"),
     });
     const runtimeLog = vi.fn();
     const started = await startTelegramWebhook({
@@ -2157,7 +2312,7 @@ describe("startTelegramWebhook", () => {
     try {
       vi.setSystemTime(10_000_000);
       const runtimeLog = vi.fn();
-      const update = { update_id: 31, message: { text: "young poison" } };
+      const update = telegramMessageUpdate(31, "young poison");
       await writeTelegramSpooledUpdate({
         spoolDir: requireWebhookSpoolDir(),
         update,
@@ -2197,7 +2352,7 @@ describe("startTelegramWebhook", () => {
     try {
       vi.setSystemTime(10_000_000);
       const runtimeLog = vi.fn();
-      const update = { update_id: 32, message: { text: "old poison" } };
+      const update = telegramMessageUpdate(32, "old poison");
       await writeTelegramSpooledUpdate({
         spoolDir: requireWebhookSpoolDir(),
         update,
@@ -2309,7 +2464,7 @@ describe("startTelegramWebhook", () => {
 
         const validResponse = await postWebhookJson({
           url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-          payload: JSON.stringify({ update_id: 999, message: { text: "hello" } }),
+          payload: JSON.stringify(telegramMessageUpdate(999, "hello")),
           secret: TELEGRAM_SECRET,
         });
         expect(validResponse.status).toBe(200);
@@ -2331,7 +2486,7 @@ describe("startTelegramWebhook", () => {
         for (let i = 0; i < TELEGRAM_WEBHOOK_RATE_LIMIT_BURST; i += 1) {
           const response = await postWebhookJson({
             url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-            payload: JSON.stringify({ update_id: 10_000 + i, message: { text: `valid ${i}` } }),
+            payload: JSON.stringify(telegramMessageUpdate(10_000 + i, `valid ${i}`)),
             secret: TELEGRAM_SECRET,
           });
           expect(response.status).toBe(200);
@@ -2383,7 +2538,7 @@ describe("startTelegramWebhook", () => {
               "x-forwarded-for": "203.0.113.20",
               "x-telegram-bot-api-secret-token": TELEGRAM_SECRET,
             },
-            body: JSON.stringify({ update_id: 201, message: { text: "hello" } }),
+            body: JSON.stringify(telegramMessageUpdate(201, "hello")),
           },
           5_000,
         );
@@ -2432,7 +2587,7 @@ describe("startTelegramWebhook", () => {
 
       const secondResponse = await postWebhookJson({
         url: webhookUrl(secondPort, TELEGRAM_WEBHOOK_PATH),
-        payload: JSON.stringify({ update_id: 301, message: { text: "hello" } }),
+        payload: JSON.stringify(telegramMessageUpdate(301, "hello")),
         secret: TELEGRAM_SECRET,
       });
 
@@ -2452,6 +2607,13 @@ describe("startTelegramWebhook", () => {
         token: "tok",
       }),
     ).rejects.toThrow(/requires a non-empty secret token/i);
+  });
+
+  it("rejects startup when the webhook path collides with the health path", async () => {
+    await expect(
+      withStartedWebhook({ secret: TELEGRAM_SECRET, path: "/healthz" }, async () => undefined),
+    ).rejects.toThrow(/webhook path.*conflicts with.*health/i);
+    expect(setWebhookSpy).not.toHaveBeenCalled();
   });
 
   it("registers webhook using the bound listening port when port is 0", async () => {
@@ -2491,7 +2653,7 @@ describe("startTelegramWebhook", () => {
         path: TELEGRAM_WEBHOOK_PATH,
       },
       async ({ port }) => {
-        const payload = JSON.stringify({ update_id: 1, message: { text: "hello" } });
+        const payload = JSON.stringify(telegramMessageUpdate(1, "hello"));
         const res = await postWebhookJson({
           url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
           payload,
@@ -2596,8 +2758,8 @@ describe("startTelegramWebhook", () => {
       },
       async ({ port }) => {
         const payloads = [
-          JSON.stringify({ update_id: 1, message: { text: "first" } }),
-          JSON.stringify({ update_id: 2, message: { text: "second" } }),
+          JSON.stringify(telegramMessageUpdate(1, "first")),
+          JSON.stringify(telegramMessageUpdate(2, "second")),
         ];
 
         for (const payload of payloads) {
@@ -2631,8 +2793,8 @@ describe("startTelegramWebhook", () => {
         path: TELEGRAM_WEBHOOK_PATH,
       },
       async ({ port }) => {
-        const firstPayload = JSON.stringify({ update_id: 100, message: { text: "first" } });
-        const secondPayload = JSON.stringify({ update_id: 101, message: { text: "second" } });
+        const firstPayload = JSON.stringify(telegramMessageUpdate(100, "first"));
+        const secondPayload = JSON.stringify(telegramMessageUpdate(101, "second"));
         const firstResponse = await postWebhookPayloadWithChunkPlan({
           port,
           path: TELEGRAM_WEBHOOK_PATH,

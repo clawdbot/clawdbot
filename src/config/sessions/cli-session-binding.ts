@@ -5,6 +5,10 @@ import type { CliSessionBinding, CliSessionReseedReceipt, SessionEntry } from ".
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+type CliSessionBindingEntry = Pick<
+  SessionEntry,
+  "claudeCliSessionId" | "cliSessionBindings" | "cliSessionIds"
+>;
 
 export function normalizeCliSessionReseedReceipt(
   value: CliSessionReseedReceipt | undefined,
@@ -63,7 +67,7 @@ export function rebindCliSessionReseedReceiptsForReset(
 
 /** Read the stored CLI session binding for a provider, including legacy Claude state. */
 export function getCliSessionBinding(
-  entry: SessionEntry | undefined,
+  entry: CliSessionBindingEntry | undefined,
   provider: string,
 ): CliSessionBinding | undefined {
   if (!entry) {
@@ -107,8 +111,16 @@ export function getCliSessionBinding(
 
 /** Read just the reusable CLI session ID for a provider. */
 export function getCliSessionId(
-  entry: SessionEntry | undefined,
+  entry: CliSessionBindingEntry | undefined,
   provider: string,
 ): string | undefined {
   return getCliSessionBinding(entry, provider)?.sessionId;
+}
+
+export function clearAllCliSessions(
+  entry: Partial<Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId">>,
+): void {
+  entry.cliSessionBindings = undefined;
+  entry.cliSessionIds = undefined;
+  entry.claudeCliSessionId = undefined;
 }

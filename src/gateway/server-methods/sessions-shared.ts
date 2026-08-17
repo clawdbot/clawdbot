@@ -4,106 +4,39 @@ import {
   ErrorCodes,
   errorShape,
   type SessionOperationEvent,
-  type SessionPlacement,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listConfiguredSessionStoreAgentIds, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   resolvePluginSessionOwnershipError,
   type PluginSessionOwnershipAction,
 } from "../session-plugin-ownership.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import {
-  isWorkerPlacementSessionRuntimeSupported,
+  resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
-import type { WorkerSessionPlacementRetirement } from "../worker-environments/placement-store.js";
+import { isWorkerPlacementSafeForArchive } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+export {
+  resolveSessionWorkerPlacementMutationError,
+  retireSessionWorkerPlacementBeforeMutation,
+  SessionWorkerPlacementMutationError,
+} from "../worker-environments/session-placement-lifecycle.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
 
-export class SessionWorkerPlacementMutationError extends Error {
-  constructor(
-    readonly placementState: SessionPlacement["state"],
-    action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch",
-    key: string,
-  ) {
-    super(`Session ${key} cannot ${action} while cloud worker placement is ${placementState}.`);
-  }
-}
-
-type SessionWorkerPlacementMutationGuard = {
-  error?: SessionWorkerPlacementMutationError;
-  retirement?: WorkerSessionPlacementRetirement;
-};
-
-export function resolveSessionWorkerPlacementMutationGuard(params: {
-  action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch";
-  context: GatewayRequestContext;
-  key: string;
-  sessionId: string | undefined;
-}): SessionWorkerPlacementMutationGuard {
-  if (!params.sessionId) {
-    return {};
-  }
-  const placement = params.context.workerSessionPlacementService
-    ?.getMany([params.sessionId])
-    .get(params.sessionId);
-  const environment = placement?.environmentId
-    ? params.context.workerEnvironmentService?.get(placement.environmentId)
-    : undefined;
-  // finishProvenDestroy clears leaseId only after provider teardown succeeds. Failed environments
-  // that retain a lease stay fenced because their teardown is pending or indeterminate.
-  const failedPlacementCanDelete =
-    params.action === "delete" &&
-    placement?.state === "failed" &&
-    (placement.environmentId === null ||
-      environment?.state === "destroyed" ||
-      (environment?.state === "failed" && environment.leaseId === null));
-  const placementCanMutate =
-    !placement ||
-    placement.state === "local" ||
-    (params.action === "delete" && placement.state === "reclaimed") ||
-    failedPlacementCanDelete;
-  if (!placementCanMutate) {
-    return {
-      error: new SessionWorkerPlacementMutationError(placement.state, params.action, params.key),
-    };
-  }
-  if (
-    params.action === "delete" &&
-    placement &&
-    (placement.state === "local" || placement.state === "reclaimed" || placement.state === "failed")
-  ) {
-    return {
-      retirement: {
-        sessionId: placement.sessionId,
-        expectedState: placement.state,
-        expectedGeneration: placement.generation,
-      },
-    };
-  }
-  return {};
-}
-
-export function resolveSessionWorkerPlacementMutationError(
-  params: Parameters<typeof resolveSessionWorkerPlacementMutationGuard>[0],
-): SessionWorkerPlacementMutationError | undefined {
-  return resolveSessionWorkerPlacementMutationGuard(params).error;
-}
-
 export function respondSessionWorkerPlacementMutationError(
-  error: SessionWorkerPlacementMutationError,
+  error: { message: string },
   respond: RespondFn,
 ): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
@@ -127,8 +60,10 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   if (!placement || placement.state === "local") {
     return undefined;
   }
-  if (params.patch.archived !== undefined) {
-    return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+  if (params.patch.archived === false) {
+    if (!isWorkerPlacementSafeForArchive(params.context, placement)) {
+      return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+    }
   }
   if (!params.validateModelRuntime || params.patch.model === undefined || !params.entry) {
     return undefined;
@@ -139,40 +74,13 @@ export function resolveSessionWorkerPlacementPatchError(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  if (isWorkerPlacementSessionRuntimeSupported(runtime)) {
+  const executionMode = resolveWorkerPlacementExecutionMode(runtime);
+  if (executionMode === placement.executionMode) {
     return undefined;
   }
-  return `Session ${params.key} cannot select the ${runtime} runtime while cloud worker placement is ${placement.state}.`;
-}
-
-export function filterSessionStoreToConfiguredAgents(
-  cfg: OpenClawConfig,
-  store: Record<string, SessionEntry>,
-): Record<string, SessionEntry> {
-  const configuredAgentIds = new Set(listConfiguredSessionStoreAgentIds(cfg));
-  const isConfiguredSessionKey = (key: string | undefined) => {
-    const normalizedKey = normalizeOptionalString(key);
-    if (!normalizedKey) {
-      return false;
-    }
-    const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: normalizedKey });
-    const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-    return configuredAgentIds.has(normalizeAgentId(agentId));
-  };
-  return Object.fromEntries(
-    Object.entries(store).filter(([key, entry]) => {
-      if (key === "global" || key === "unknown") {
-        return true;
-      }
-      if (isConfiguredSessionKey(key)) {
-        return true;
-      }
-      // Keep spawned child sessions visible when their parent belongs to a configured agent.
-      return (
-        isConfiguredSessionKey(entry?.spawnedBy) || isConfiguredSessionKey(entry?.parentSessionKey)
-      );
-    }),
-  );
+  return executionMode
+    ? `Session ${params.key} cannot change cloud placement execution mode while placement is ${placement.state}.`
+    : `Session ${params.key} cannot select the ${runtime} runtime while cloud worker placement is ${placement.state}.`;
 }
 
 export const loadSessionsRuntimeModule = createLazyRuntimeModule(

@@ -1,8 +1,7 @@
 {
   "id": "slack",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true
+    "configRepair": true
   },
   "name": "Slack",
   "description": "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",

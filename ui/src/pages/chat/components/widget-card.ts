@@ -41,32 +41,45 @@ type WidgetCardOptions = {
   boardProvider?: BoardProvider;
 };
 
+async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  button.disabled = true;
+  const pendingLabel = t("chat.toolCards.pinToDashboardPending");
+  button.title = button.ariaLabel = pendingLabel;
+  try {
+    await pin();
+    const pinnedLabel = t("chat.toolCards.pinnedToDashboard");
+    button.title = button.ariaLabel = pinnedLabel;
+    button.dataset.pinned = "true";
+  } catch {
+    button.disabled = false;
+    button.ariaLabel = t("chat.toolCards.pinToDashboard");
+    const failureLabel = t("chat.toolCards.pinToDashboardFailed");
+    button.title = failureLabel;
+    showToast({ message: failureLabel });
+  }
+}
+
 async function pinCanvasWidget(
   event: Event,
   preview: ToolPreview,
   provider: BoardProvider,
   name: string,
 ): Promise<void> {
-  const button = event.currentTarget;
   const docId = preview.viewId?.trim();
-  if (!(button instanceof HTMLButtonElement) || !docId) {
+  if (!docId) {
     return;
   }
-  button.disabled = true;
-  button.textContent = t("chat.toolCards.pinToDashboardPending");
-  try {
-    await provider.pinWidget({
+  return pinWidget(event, () =>
+    provider.pinWidget({
       docId,
       name,
       ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
-    });
-    button.textContent = t("chat.toolCards.pinnedToDashboard");
-    button.dataset.pinned = "true";
-  } catch (error) {
-    button.disabled = false;
-    button.textContent = t("chat.toolCards.pinToDashboard");
-    button.title = error instanceof Error ? error.message : String(error);
-  }
+    }),
+  );
 }
 
 async function pinMcpAppWidget(
@@ -76,25 +89,13 @@ async function pinMcpAppWidget(
   name: string,
   viewId: string,
 ): Promise<void> {
-  const button = event.currentTarget;
-  if (!(button instanceof HTMLButtonElement)) {
-    return;
-  }
-  button.disabled = true;
-  button.textContent = t("chat.toolCards.pinToDashboardPending");
-  try {
-    await provider.pinMcpApp({
+  return pinWidget(event, () =>
+    provider.pinMcpApp({
       viewId,
       name,
       ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
-    });
-    button.textContent = t("chat.toolCards.pinnedToDashboard");
-    button.dataset.pinned = "true";
-  } catch (error) {
-    button.disabled = false;
-    button.textContent = t("chat.toolCards.pinToDashboard");
-    button.title = error instanceof Error ? error.message : String(error);
-  }
+    }),
+  );
 }
 
 function canvasWidgetName(preview: ToolPreview): string | undefined {
@@ -136,7 +137,7 @@ const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
 const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
 const WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE = "openclaw:widget-prompt-host-ready";
-const WIDGET_FRAME_MIN_HEIGHT = 160;
+const WIDGET_FRAME_MIN_HEIGHT = 48;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
 // find them; frames register themselves on load and are dropped once detached.
@@ -199,7 +200,7 @@ const adoptedWidgetPromptFrames = new WeakSet<HTMLIFrameElement>();
 const widgetPromptOfferListenerWindows = new WeakSet<Window>();
 
 function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
-  const source = frame.contentWindow as unknown as object | null;
+  const source = frame.contentWindow;
   if (adoptedWidgetPromptFrames.has(frame) || !promptEligibleFrames.has(frame) || !source) {
     return;
   }
@@ -235,14 +236,14 @@ function installWidgetPromptOfferListener() {
     if (!source || !port || event.origin !== "null") {
       return;
     }
-    if (offeredWidgetPromptSources.has(source as unknown as object)) {
+    if (offeredWidgetPromptSources.has(source)) {
       // Only the first offer per content window can win; a replacement
       // document's offer must never displace the genuine bridge's.
       port.close();
       return;
     }
-    offeredWidgetPromptSources.add(source as unknown as object);
-    pendingWidgetPromptPorts.set(source as unknown as object, port);
+    offeredWidgetPromptSources.add(source);
+    pendingWidgetPromptPorts.set(source, port);
     // Posted-message and iframe-load tasks have no guaranteed cross-source
     // ordering, so the offer may arrive after the eligible frame's load;
     // adopt for it now instead of stranding the widget without a channel.
@@ -493,7 +494,6 @@ function renderWidgetCard(
   if (preview.surface !== "assistant_message") {
     return nothing;
   }
-  const label = preview.title?.trim() || t("chat.toolCards.canvas");
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
   const provider = options?.boardProvider;
   const mcpAppViewId = preview.mcpApp?.viewId?.trim();
@@ -506,9 +506,7 @@ function renderWidgetCard(
     ? provider?.snapshot$.value.widgets.find((widget) => widget.name === pinName)
     : undefined;
   const pinned = Boolean(pinnedWidget);
-  // Chat keeps its labeled card shell, but the inner inset follows the pinned
-  // widget's presentation so authored edge-to-edge content matches the board.
-  const bleed = pinned && (pinnedWidget?.presentation ?? "card") !== "card";
+  const pinLabel = t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard");
   const pinAction =
     provider &&
     (contentKind === "mcp-app" ? provider.canPinMcpApps : provider.canPinWidgets) &&
@@ -518,38 +516,38 @@ function renderWidgetCard(
       isManagedCanvasDocumentPreview(preview)) ||
       (contentKind === "mcp-app" && mcpAppViewId))
       ? html`<button
-          class="chat-tool-card__widget-action"
+          class="btn btn--ghost btn--icon chat-tool-card__widget-action"
           type="button"
           data-pin-widget
           ?disabled=${pinned}
           ?data-pinned=${pinned}
-          title=${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
-          aria-label=${t(
-            pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard",
-          )}
+          title=${pinLabel}
+          aria-label=${pinLabel}
           @click=${(event: Event) =>
             contentKind === "mcp-app" && mcpAppViewId
               ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId)
               : void pinCanvasWidget(event, preview, provider, pinName)}
         >
-          ${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
+          ${icons.pin}
         </button>`
       : nothing;
+  const widgetActions = renderWidgetActions(preview);
+  const actions =
+    pinAction === nothing && widgetActions === nothing
+      ? nothing
+      : html`<div class="chat-tool-card__preview-actions" data-widget-actions>
+          ${pinAction} ${widgetActions}
+        </div>`;
   return html`
     <div
       class="chat-tool-card__preview"
       data-content-kind=${contentKind}
+      ?data-has-widget-actions=${actions !== nothing}
       data-kind="canvas"
       data-surface=${surface}
     >
-      <div class="chat-tool-card__preview-header">
-        <span class="chat-tool-card__preview-label">${label}</span>
-        <div class="chat-tool-card__preview-actions">
-          <div data-widget-actions ?hidden=${pinAction === nothing}>${pinAction}</div>
-          ${renderWidgetActions(preview)}
-        </div>
-      </div>
-      <div class="chat-tool-card__preview-panel" data-side="canvas" ?data-bleed=${bleed}>
+      ${actions}
+      <div class="chat-tool-card__preview-panel" data-side="canvas">
         ${renderWidgetContent(contentKind, preview, options)}
       </div>
     </div>

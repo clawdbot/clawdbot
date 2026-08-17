@@ -4,6 +4,38 @@ import { describe, expect, it } from "vitest";
 import { resolveGoogleMeetConfig, resolveGoogleMeetGatewayOperationTimeoutMs } from "./config.js";
 
 describe("google meet gateway operation timeout", () => {
+  it("keeps sparse and legacy audio config compatible", () => {
+    const sparse = resolveGoogleMeetConfig({});
+    expect(sparse.chrome.audioBackend).toBe("auto");
+    expect(sparse.chrome.audioInputCommandOverride).toBeUndefined();
+    expect(sparse.chrome.audioOutputCommandOverride).toBeUndefined();
+
+    const legacy = resolveGoogleMeetConfig({
+      chrome: { audioBackend: "blackhole-2ch" },
+    });
+    expect(legacy.chrome.audioBackend).toBe("blackhole-2ch");
+    expect(legacy.chrome.audioInputCommand).toContain("BlackHole 2ch");
+    expect(legacy.chrome.audioOutputCommand).toContain("BlackHole 2ch");
+  });
+
+  it("builds PipeWire-Pulse commands and retains explicit overrides", () => {
+    const linux = resolveGoogleMeetConfig({
+      chrome: { audioBackend: "pipewire-pulse" },
+    });
+    expect(linux.chrome.audioInputCommand).toContain("parec");
+    expect(linux.chrome.audioOutputCommand).toContain("pacat");
+
+    const custom = resolveGoogleMeetConfig({
+      chrome: { audioInputCommand: ["capture"], audioOutputCommand: ["play"] },
+    });
+    expect(custom.chrome).toMatchObject({
+      audioInputCommand: ["capture"],
+      audioOutputCommand: ["play"],
+      audioInputCommandOverride: ["capture"],
+      audioOutputCommandOverride: ["play"],
+    });
+  });
+
   it("caps timer config fields before runtime polling uses them", () => {
     const config = resolveGoogleMeetConfig({
       chrome: {

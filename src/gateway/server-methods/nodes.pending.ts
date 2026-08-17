@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
-} from "../../infra/node-pairing-state.js";
+} from "../../infra/device-pairing-node-state.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import {
   acknowledgePendingNodeActions,
@@ -98,7 +98,7 @@ export function toPendingParamsJSON(params: unknown): string | undefined {
   }
 }
 
-export const nodePendingHandlers: GatewayRequestHandlers = {
+export const nodePendingActionHandlers: GatewayRequestHandlers = {
   "node.pending.pull": async ({ params, respond, client, context }) => {
     if (!validateNodeListParams(params)) {
       respondInvalidParams({

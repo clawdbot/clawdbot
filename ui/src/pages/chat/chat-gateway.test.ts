@@ -3,6 +3,7 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // Control UI tests cover chat behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatState } from "./chat-history.ts";
@@ -18,6 +19,7 @@ import {
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
+    chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
@@ -37,19 +39,6 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     sessionKey: "main",
     ...overrides,
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 type HistoryResult = {
@@ -384,6 +373,27 @@ describe("handleChatGatewayEvent", () => {
         sessionKey: "other",
       }),
     ).toEqual([payload.message]);
+  });
+
+  it("caches one background final when three retained panes receive the same event", () => {
+    const cache = new Map();
+    const states = ["one", "two", "three"].map((sessionKey) =>
+      createState({ chatMessagesBySession: cache, sessionKey }),
+    );
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "background",
+      state: "final",
+      message: createTextChatMessage("assistant", "background final"),
+    };
+
+    for (const state of states) {
+      expect(handleChatGatewayEvent(state, payload)).toBeNull();
+    }
+
+    expect(readChatMessagesFromCache(cache, states[0]!, { sessionKey: "background" })).toEqual([
+      payload.message,
+    ]);
   });
 
   it.each([
@@ -909,6 +919,45 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({
       summary: "Error: active run changed; review and retry",
     });
+  });
+
+  it("keeps a pending steer chip when an unrelated request run finishes", () => {
+    const chip = {
+      id: "pending-steer-chip",
+      text: "Keep waiting for this steer",
+      createdAt: 3,
+      kind: "steered" as const,
+      pendingRunId: "active-run",
+      sendRunId: "steer-request-run",
+      sessionKey: "main",
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "active-run",
+      chatQueue: [
+        chip,
+        {
+          id: "unrelated-pending-row",
+          text: "Keep unrelated pending work",
+          createdAt: 4,
+          pendingRunId: "unrelated-run",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    handleChatGatewayEvent(state, {
+      runId: "unrelated-run",
+      sessionKey: "main",
+      state: "final",
+    });
+
+    expect(state.chatQueue).toEqual([
+      chip,
+      expect.objectContaining({ id: "unrelated-pending-row" }),
+    ]);
+    expect(state.chatRunId).toBe("active-run");
+    expect(state.chatMessages).toEqual([]);
   });
 
   it("uses an already-persisted steer to recover the active stream boundary", () => {
@@ -2641,7 +2690,42 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessagesBySession?.has("agent:main:main")).toBe(false);
   });
 
+  it("rejects a stale startup roster before mutating chat-local selection", async () => {
+    const currentRoster = {
+      agents: [{ id: "research", name: "Research" }],
+      defaultId: "research",
+      mainKey: "main",
+      scope: "per-sender" as const,
+    };
+    const onAgentsList = vi.fn(() => false);
+    const { state } = createResolvedHistoryState(
+      {
+        agentsList: {
+          agents: [{ id: "main", name: "Stale Main" }],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+        },
+        messages: [],
+      },
+      {
+        agentsError: "keep newer roster status",
+        agentsList: currentRoster,
+        agentsSelectedId: "research",
+        onAgentsList,
+      },
+    );
+
+    await loadChatHistory(state, { startup: true });
+
+    expect(onAgentsList).toHaveBeenCalledOnce();
+    expect(state.agentsError).toBe("keep newer roster status");
+    expect(state.agentsList).toBe(currentRoster);
+    expect(state.agentsSelectedId).toBe("research");
+  });
+
   it("loads startup history with agents in one request", async () => {
+    const onAgentsList = vi.fn(() => true);
     const { request, state } = createResolvedHistoryState(
       {
         messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
@@ -2652,7 +2736,11 @@ describe("loadChatHistory filtering", () => {
           scope: "agent",
         },
       },
-      { agentsError: "previous agents.list failure", sessionKey: "global" },
+      {
+        agentsError: "previous agents.list failure",
+        onAgentsList,
+        sessionKey: "global",
+      },
     );
 
     await loadChatHistory(state, { startup: true });
@@ -2667,6 +2755,7 @@ describe("loadChatHistory filtering", () => {
     expect(state.agentsError).toBeNull();
     expect(state.agentsList?.defaultId).toBe("ops");
     expect(state.agentsSelectedId).toBe("ops");
+    expect(onAgentsList).toHaveBeenCalledOnce();
   });
 
   it.each([

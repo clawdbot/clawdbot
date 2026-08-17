@@ -5,7 +5,8 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
 import { resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
-import { assertBlackHole2chAvailable } from "./transports/chrome.js";
+import { assertGoogleMeetAudioAvailable } from "./transports/chrome.js";
+import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
 import { normalizeDialInNumber } from "./transports/twilio.js";
 
 function collectChromeAudioCommands(config: GoogleMeetConfig): string[] {
@@ -62,6 +63,32 @@ export async function getGoogleMeetRuntimeSetupStatus(params: {
         ok: true,
         message: `Connected Google Meet node ready: ${label}`,
       });
+      if ((mode === "agent" || mode === "bidi") && node.nodeId) {
+        const setup = await params.runtime.nodes.invoke({
+          nodeId: node.nodeId,
+          command: GOOGLE_MEET_NODE_COMMAND,
+          params: {
+            action: "setup",
+            audioBackend: params.config.chrome.audioBackend,
+            audioFormat: params.config.chrome.audioFormat,
+            audioBufferBytes: params.config.chrome.audioBufferBytes,
+            ...(params.config.chrome.audioInputCommandOverride
+              ? { audioInputCommand: params.config.chrome.audioInputCommandOverride }
+              : {}),
+            ...(params.config.chrome.audioOutputCommandOverride
+              ? { audioOutputCommand: params.config.chrome.audioOutputCommandOverride }
+              : {}),
+          },
+          timeoutMs: 12_000,
+        });
+        status = addGoogleMeetSetupCheck(status, {
+          id: "chrome-node-audio-prerequisites",
+          ok: true,
+          message: setup
+            ? "Remote virtual audio backend and command-pair prerequisites are ready"
+            : "Remote audio setup completed",
+        });
+      }
     } catch (error) {
       status = addGoogleMeetSetupCheck(status, {
         id: "chrome-node-connected",
@@ -74,14 +101,15 @@ export async function getGoogleMeetRuntimeSetupStatus(params: {
     return status;
   }
   try {
-    await assertBlackHole2chAvailable({
+    await assertGoogleMeetAudioAvailable({
       runtime: params.runtime,
+      config: params.config,
       timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
     });
     status = addGoogleMeetSetupCheck(status, {
       id: "chrome-local-audio-device",
       ok: true,
-      message: "BlackHole 2ch audio device found",
+      message: "Virtual meeting audio backend is ready",
     });
   } catch (error) {
     status = addGoogleMeetSetupCheck(status, {

@@ -14,8 +14,11 @@ import {
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
-import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
-import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import {
   formatTuiLevelCommandUsage,
   helpText,
@@ -33,10 +36,7 @@ import {
 import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
-import {
-  TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
-  TUI_SESSION_PICKER_LIMIT,
-} from "./tui-session-list-policy.js";
+import { buildSessionChoices, loadRecentSessions } from "./tui-session-picker.js";
 import {
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
@@ -135,7 +135,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     refreshAgents,
     abortActive,
     setActivityStatus,
-    formatSessionKey,
     applySessionInfoFromPatch,
     applySessionMutationResult,
     noteLocalRunId,
@@ -261,7 +260,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     try {
       const result = await client.patchSession({
         key: selection.sessionKey,
-        ...(selection.sessionKey === "global" ? { agentId: selection.agentId } : {}),
+        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
         ...patch,
       });
       return isCurrentSessionSelection(selection) ? result : null;
@@ -305,7 +304,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   ) => {
     selector.onSelect = (item) => {
       void (async () => {
-        await onSelect(item.value);
+        try {
+          await onSelect(item.value);
+        } catch (err) {
+          // A rejected selection must not strand the overlay open with an
+          // unhandled rejection; close it and surface the cause in chat.
+          chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
+        }
         closeOverlayAndRender(overlayHandle);
       })();
     };
@@ -399,46 +404,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const openSessionSelector = async () => {
     const selection = captureSessionSelection();
     try {
-      const result = await client.listSessions({
-        limit: TUI_SESSION_PICKER_LIMIT,
-        activeMinutes: TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
-        includeGlobal: false,
-        includeUnknown: false,
-        includeDerivedTitles: true,
-        includeLastMessage: true,
-        agentId: selection.agentId,
-      });
+      const sessions = await loadRecentSessions(client, { agentId: selection.agentId });
       if (!isCurrentSessionSelection(selection)) {
         return;
       }
-      const items = result.sessions.map((session) => {
-        const title = session.derivedTitle ?? session.displayName;
-        const formattedKey = formatSessionKey(session.key);
-        // Avoid redundant "title (key)" when title matches key
-        const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
-        // Build description: time + message preview
-        const timePart = session.updatedAt
-          ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
-          : "";
-        const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
-        const description =
-          timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
-        return {
-          value: session.key,
-          label,
-          description,
-          searchText: [
-            session.displayName,
-            session.label,
-            session.subject,
-            session.sessionId,
-            session.key,
-            session.lastMessagePreview,
-          ]
-            .filter(Boolean)
-            .join(" "),
-        };
-      });
+      const items = buildSessionChoices(sessions);
       const selector = createFilterableSelectList(items, 9);
       openSelector(selector, async (value) => {
         await setSession(value);
@@ -774,12 +744,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       const finishSessionTransition = beginSessionTransition("new");
       try {
-        // Clear token counts immediately to avoid stale display (#1523)
-        state.sessionInfo.inputTokens = null;
-        state.sessionInfo.outputTokens = null;
-        state.sessionInfo.totalTokens = null;
-        tui.requestRender();
-
         const uniqueKey = `tui-${randomUUID()}`;
         const result = await client.createSession({
           key: uniqueKey,
@@ -791,6 +755,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (!result.key) {
           throw new Error("sessions.create returned no session key");
         }
+        state.sessionInfo.inputTokens = null;
+        state.sessionInfo.outputTokens = null;
+        state.sessionInfo.totalTokens = null;
+        tui.requestRender();
         await setSession(result.key);
         chatLog.addSystem(`new session: ${result.key}`);
       } catch (err) {
@@ -807,20 +775,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       let resetResultSelection = resetSelection;
       const finishSessionTransition = beginSessionTransition("reset");
       try {
-        // Clear token counts immediately to avoid stale display (#1523)
-        state.sessionInfo.inputTokens = null;
-        state.sessionInfo.outputTokens = null;
-        state.sessionInfo.totalTokens = null;
-        tui.requestRender();
-
         const result = await client.resetSession(
           resetSelection.sessionKey,
           "reset",
-          resetSelection.sessionKey === "global" ? { agentId: resetSelection.agentId } : undefined,
+          !parseAgentSessionKey(resetSelection.sessionKey)
+            ? { agentId: resetSelection.agentId }
+            : undefined,
         );
         if (!isCurrentSessionSelection(resetSelection)) {
           return;
         }
+        state.sessionInfo.inputTokens = null;
+        state.sessionInfo.outputTokens = null;
+        state.sessionInfo.totalTokens = null;
+        tui.requestRender();
         if (applySessionMutationResult(result, resetSelection)) {
           resetResultSelection = captureSessionSelection();
           await refreshSessionInfo();
@@ -924,7 +892,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       const sendResult = await client.sendChat({
         sessionKey: sendSelection.sessionKey,
-        ...(sendSelection.sessionKey === "global" ? { agentId: sendSelection.agentId } : {}),
+        ...(!parseAgentSessionKey(sendSelection.sessionKey)
+          ? { agentId: sendSelection.agentId }
+          : {}),
         sessionId: sendSessionId,
         message: text,
         thinking: opts.thinking,

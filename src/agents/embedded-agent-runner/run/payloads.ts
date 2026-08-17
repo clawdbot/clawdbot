@@ -1,10 +1,7 @@
 /**
  * Builds embedded-agent payload objects from attempt inputs and outcomes.
  */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
@@ -12,6 +9,8 @@ import {
   type HeartbeatToolResponse,
 } from "../../../auto-reply/heartbeat-tool-response.js";
 import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
@@ -24,21 +23,17 @@ import {
   isSilentReplyPayloadText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
-import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { isCronSessionKey } from "../../../routing/session-key.js";
 import {
   extractAssistantTextForPhase,
   parseAssistantTextSignature,
 } from "../../../shared/chat-message-content.js";
-import { formatInlineCodeSpan } from "../../../shared/markdown-code.js";
 import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
 } from "../../../shared/text/assistant-visible-text.js";
-import { parseInlineDirectives } from "../../../utils/directive-tags.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -58,40 +53,15 @@ import {
   extractAssistantVisibleText,
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
-import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
-import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
+import { buildFailureWarning } from "./tool-error-warning.js";
 import { hasExplicitMutatingToolFailureAcknowledgement } from "./tool-failure-acknowledgement.js";
-
-type ToolMetaEntry = { toolName: string; meta?: string };
-type ToolErrorWarningPolicy = {
-  showWarning: boolean;
-  includeDetails: boolean;
-};
-
-const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
-  "required",
-  "missing",
-  "invalid",
-  "must be",
-  "must have",
-  "needs",
-  "requires",
-] as const;
-
-function isRecoverableToolError(error: string | undefined): boolean {
-  const errorLower = normalizeOptionalLowercaseString(error) ?? "";
-  return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
-}
-
-function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
-  return level === "full";
-}
 
 function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
-
 function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
   if (!lastAssistant) {
     return "";
@@ -152,344 +122,6 @@ function normalizeReplyTextForComparison(text: string): string {
   return normalizeTextForComparison(parseReplyDirectives(text).text ?? "");
 }
 
-function shouldIncludeToolErrorDetails(params: {
-  lastToolError: ToolErrorSummary;
-  isCronTrigger?: boolean;
-  isHeartbeatTrigger?: boolean;
-  sessionKey: string;
-  verboseLevel?: VerboseLevel;
-}): boolean {
-  if (isVerboseToolDetailEnabled(params.verboseLevel)) {
-    return true;
-  }
-  if (!isExecLikeToolName(params.lastToolError.toolName)) {
-    return false;
-  }
-  // Heartbeat runs usually have no assistant reply to carry the command
-  // output, so keep exec details in the warning instead of a generic label.
-  if (params.isHeartbeatTrigger === true) {
-    return true;
-  }
-  return (
-    params.lastToolError.timedOut === true &&
-    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
-  );
-}
-
-function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
-  return lastToolError.middlewareError === true;
-}
-
-function formatToolErrorWarningText(params: {
-  lastToolError: ToolErrorSummary;
-  includeDetails: boolean;
-  useMarkdown: boolean;
-}): string {
-  if (isExecLikeToolName(params.lastToolError.toolName)) {
-    const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
-      markdown: params.useMarkdown,
-    });
-    const subject = formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown);
-    const conciseExitSuffix = params.includeDetails
-      ? ""
-      : formatConciseExecExitSuffix(params.lastToolError.error);
-    const errorSuffix =
-      params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-    return subject
-      ? `⚠️ ${toolLabel} failed: ${subject}${conciseExitSuffix}${errorSuffix}`
-      : `⚠️ ${toolLabel} failed${conciseExitSuffix}${errorSuffix}`;
-  }
-
-  const toolSummary = formatToolAggregate(
-    params.lastToolError.toolName,
-    params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
-    { markdown: params.useMarkdown },
-  );
-  const errorSuffix =
-    params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-  return `⚠️ ${toolSummary} failed${errorSuffix}`;
-}
-
-function formatExecLikeFailureSubject(meta: string | undefined, markdown: boolean): string {
-  const normalized = normalizeOptionalString(meta);
-  if (!normalized) {
-    return "";
-  }
-
-  const { flags, body } = splitExecLikeFailureMeta(normalized);
-  if (!body) {
-    return flags.join(" · ");
-  }
-
-  const { text, suffix } = splitDisplayContextSuffix(body);
-  const literalCommand = extractLiteralExecCommand(text);
-  const subject = `${maybeWrapInlineCode(literalCommand ?? text, markdown)}${suffix}`;
-  return flags.length > 0 ? `${flags.join(" · ")} · ${subject}` : subject;
-}
-
-function splitExecLikeFailureMeta(meta: string): { flags: string[]; body: string } {
-  const flags: string[] = [];
-  const bodyParts: string[] = [];
-  for (const part of meta
-    .split(" · ")
-    .map((candidate) => candidate.trim())
-    .filter(Boolean)) {
-    if (part === "elevated" || part === "pty") {
-      flags.push(part);
-      continue;
-    }
-    bodyParts.push(part);
-  }
-  return { flags, body: bodyParts.join(" · ") };
-}
-
-const SEMANTIC_RUN_SUMMARIES = new Set(["tests", "build", "lint", "script", "command"]);
-const LITERAL_RUN_SUMMARY_PREFIXES = new Set([
-  "python",
-  "python3",
-  "ruby",
-  "php",
-  "git",
-  "npm",
-  "pnpm",
-  "yarn",
-  "bun",
-  "openclaw",
-  "make",
-  "cargo",
-  "go",
-  "docker",
-  "npx",
-  "uv",
-  "poetry",
-  "pytest",
-  "vitest",
-  "jest",
-  "deno",
-]);
-
-function extractLiteralExecCommand(body: string): string | undefined {
-  const rawCommand = extractRawExecCommand(body);
-  if (rawCommand) {
-    return rawCommand;
-  }
-
-  const nodeScript = body.match(/^run node script (.+)$/u);
-  if (nodeScript?.[1]) {
-    return `node ${nodeScript[1]}`;
-  }
-
-  const runSubject = body.match(/^run (.+)$/u)?.[1];
-  if (runSubject && isKnownLiteralRunSummary(runSubject)) {
-    return runSubject;
-  }
-
-  return undefined;
-}
-
-type RawExecContext = {
-  leading: string[];
-  trailing: string[];
-};
-
-function extractRawExecCommand(body: string): string | undefined {
-  const codeSpan = extractTrailingMarkdownCodeSpan(body);
-  if (!codeSpan) {
-    return undefined;
-  }
-  const context = extractRawExecContext(codeSpan.prefix, codeSpan.value);
-  const command = context.trailing.reduce((value, suffix) => `${value} ${suffix}`, codeSpan.value);
-  return context.leading.length > 0 ? `${context.leading.join(" · ")} · ${command}` : command;
-}
-
-function extractTrailingMarkdownCodeSpan(
-  body: string,
-): { prefix: string | undefined; value: string } | undefined {
-  const trimmed = body.trimEnd();
-  if (!trimmed.endsWith("`")) {
-    return undefined;
-  }
-  let delimiterLength = 0;
-  for (let index = trimmed.length - 1; index >= 0 && trimmed[index] === "`"; index -= 1) {
-    delimiterLength += 1;
-  }
-  const delimiter = "`".repeat(delimiterLength);
-  const valueEnd = trimmed.length - delimiterLength;
-  let searchIndex = 0;
-  while (searchIndex < valueEnd) {
-    const openIndex = trimmed.indexOf(delimiter, searchIndex);
-    if (openIndex < 0 || openIndex >= valueEnd) {
-      return undefined;
-    }
-    const prefixMatch = trimmed.slice(0, openIndex).match(/^(?:(.*)(?:,\s*| · ))?$/u);
-    if (prefixMatch) {
-      return {
-        prefix: prefixMatch[1],
-        value: unwrapMarkdownInlineCodePadding(
-          trimmed.slice(openIndex + delimiterLength, valueEnd),
-        ),
-      };
-    }
-    searchIndex = openIndex + delimiterLength;
-  }
-  return undefined;
-}
-
-function unwrapMarkdownInlineCodePadding(value: string): string {
-  if (value.length < 2 || !value.startsWith(" ") || !value.endsWith(" ")) {
-    return value;
-  }
-  const unwrapped = value.slice(1, -1);
-  return /\S/u.test(unwrapped) ? unwrapped : value;
-}
-function extractRawExecContext(prefix: string | undefined, inlineCode: string): RawExecContext {
-  const value = prefix ?? "";
-  const leading = [...value.matchAll(/(?:^|,\s*| · )(node:\s*[^,·]+)(?=,\s*| · |$)/gu)]
-    .map((match) => match[1]?.trim())
-    .filter((part): part is string => Boolean(part));
-  const trailing = [
-    ...value.matchAll(
-      /(\((?:agent|repo|sandbox|workspace)\)|\(in [^)\r\n]+\))(?=\s*(?:,\s*| · |$))/gu,
-    ),
-  ]
-    .filter((match) => shouldKeepRawExecTrailingContext(value, match, inlineCode))
-    .map((match) => match[1]?.trim())
-    .filter((part): part is string => Boolean(part));
-  return { leading, trailing };
-}
-function shouldKeepRawExecTrailingContext(
-  prefix: string,
-  match: RegExpMatchArray,
-  inlineCode: string,
-): boolean {
-  const suffix = match[1]?.trim();
-  if (!suffix || inlineCode.includes(suffix)) {
-    return false;
-  }
-  const segment = prefix
-    .slice(0, match.index ?? 0)
-    .trimEnd()
-    .split(/,\s*| · /u)
-    .at(-1)
-    ?.trim();
-  const segmentCommand = segment ? extractLiteralExecCommand(segment) : undefined;
-  if (segmentCommand === inlineCode || segment === inlineCode) {
-    return true;
-  }
-  if (isCompactCwdSuffix(suffix)) {
-    return true;
-  }
-  return isPathLikeCwdSuffix(suffix);
-}
-function isCompactCwdSuffix(suffix: string): boolean {
-  return /^\((?:agent|repo|workspace)\)$/u.test(suffix);
-}
-function isPathLikeCwdSuffix(suffix: string): boolean {
-  const cwd = suffix.match(/^\(in ([^)\r\n]+)\)$/u)?.[1]?.trim();
-  return Boolean(
-    cwd && (/^(?:\/|~|\.{1,2}(?:\/|$)|[A-Za-z]:[\\/]|\\\\)/u.test(cwd) || cwd.includes("/")),
-  );
-}
-function isKnownLiteralRunSummary(subject: string): boolean {
-  if (
-    SEMANTIC_RUN_SUMMARIES.has(subject) ||
-    subject.includes("→") ||
-    subject.includes("->") ||
-    /^(?:node|python3?|ruby|php) inline script(?: \(heredoc\))?$/u.test(subject)
-  ) {
-    return false;
-  }
-  const match = subject.match(/^(\S+)\s+(.+)$/u);
-  const command = match?.[1];
-  const remainder = match?.[2];
-  if (!command || !remainder || remainder === "command") {
-    return false;
-  }
-  return LITERAL_RUN_SUMMARY_PREFIXES.has(command);
-}
-function splitDisplayContextSuffix(value: string): { text: string; suffix: string } {
-  const match = /^(.*?)( \((?:agent|repo|workspace|sandbox)\))$/u.exec(value);
-  if (!match) {
-    return { text: value, suffix: "" };
-  }
-  return { text: match[1] ?? value, suffix: match[2] ?? "" };
-}
-function formatConciseExecExitSuffix(error: string | undefined): string {
-  const normalized = normalizeOptionalString(error);
-  const code = normalized?.match(
-    /\b(?:command\s+)?(?:failed\s+with\s+exit\s+code|exited\s+with\s+code|exit(?:ed)?\s+code|exit\s+status)\s+(-?\d+)\b/iu,
-  )?.[1];
-  return code ? ` (exit ${code})` : "";
-}
-function maybeWrapInlineCode(value: string, markdown: boolean): string {
-  return markdown ? formatInlineCodeSpan(value) : value;
-}
-/**
- * Chooses whether a tool failure needs a separate user-visible warning and
- * whether to include raw details. Mutating failures are stricter because a
- * silent failed write/send/delete can make the assistant look successful.
- */
-function resolveToolErrorWarningPolicy(params: {
-  lastToolError: ToolErrorSummary;
-  hasUserFacingReply: boolean;
-  hasUserFacingErrorReply: boolean;
-  hasUserFacingFailureAcknowledgement: boolean;
-  suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
-  isCronTrigger?: boolean;
-  isHeartbeatTrigger?: boolean;
-  sessionKey: string;
-  verboseLevel?: VerboseLevel;
-}): ToolErrorWarningPolicy {
-  const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
-  let toolErrorWarningOverride: boolean | undefined;
-  let dynamicToolErrorWarningsDisabled = false;
-  if (typeof params.suppressToolErrorWarnings === "function") {
-    toolErrorWarningOverride = params.suppressToolErrorWarnings();
-    dynamicToolErrorWarningsDisabled = toolErrorWarningOverride === false;
-  } else {
-    toolErrorWarningOverride = params.suppressToolErrorWarnings;
-  }
-  const includeDetails = shouldIncludeToolErrorDetails({
-    ...params,
-    verboseLevel: dynamicToolErrorWarningsDisabled ? "off" : params.verboseLevel,
-  });
-  const suppressToolErrorWarnings = toolErrorWarningOverride === true;
-  if (suppressToolErrorWarnings) {
-    return { showWarning: false, includeDetails };
-  }
-  // sessions_send timeouts and errors are transient inter-session communication
-  // issues — the message may still have been delivered. Suppress warnings to
-  // prevent raw error text from leaking into the chat surface (#23989).
-  if (normalizedToolName === "sessions_send") {
-    return { showWarning: false, includeDetails };
-  }
-  if (params.suppressToolErrors) {
-    return { showWarning: false, includeDetails };
-  }
-  // Mutating branch protects "assistant claims success while a user-visible mutation
-  // silently failed". Shell/exec are the agent's own workspace actions: the model sees
-  // the exit code in-context, and a successful final reply is recovery proof (#103574).
-  // Deliberately ignores mutatingAction for exec: codex marks every commandExecution
-  // mutating fail-closed (replay metadata, not display signal).
-  if (isExecLikeToolName(params.lastToolError.toolName)) {
-    // No recoverable-keyword suppression here: with no reply at all, the exec
-    // warning may be the run's only failure signal.
-    return { showWarning: !params.hasUserFacingReply, includeDetails };
-  }
-  const isMutatingToolError =
-    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
-  if (isMutatingToolError) {
-    return {
-      showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
-      includeDetails,
-    };
-  }
-  return {
-    showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
-    includeDetails,
-  };
-}
 /**
  * Converts a completed embedded attempt into reply payloads for channels. This
  * is the boundary that suppresses duplicate source replies, filters raw API
@@ -501,7 +133,6 @@ export function buildEmbeddedRunPayloads(params: {
   assistantMessageIndex?: number;
   assistantTranscriptOwned?: boolean;
   assistantTranscriptIdempotencyKey?: string;
-  toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
@@ -510,6 +141,7 @@ export function buildEmbeddedRunPayloads(params: {
   isHeartbeatTrigger?: boolean;
   sessionKey: string;
   provider?: string;
+  providerOwner?: PreparedProviderFailoverOwner;
   model?: string;
   /** Credential auth mode for billing copy (#80877). */
   authMode?: string;
@@ -518,7 +150,6 @@ export function buildEmbeddedRunPayloads(params: {
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
-  inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTargets?: MessagingToolSend[];
@@ -576,6 +207,9 @@ export function buildEmbeddedRunPayloads(params: {
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =
     currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : params.lastAssistant);
+  // Pre-upgrade recovered messages have no stored facts, and recovery intentionally does not
+  // reparse text; one in-flight reply can lose delivery or speech intent across this boundary.
+  const storedDelivery = assistantForPayload?.openclawDelivery;
   const lastAssistantStopReason = assistantForPayload?.stopReason;
   const lastAssistantErrored = lastAssistantStopReason === "error";
   const lastAssistantAborted = lastAssistantStopReason === "aborted";
@@ -593,6 +227,7 @@ export function buildEmbeddedRunPayloads(params: {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
+              providerOwner: params.providerOwner,
               model: params.model,
               authMode: params.authMode,
             })
@@ -600,6 +235,7 @@ export function buildEmbeddedRunPayloads(params: {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
+              providerOwner: params.providerOwner,
               model: params.model,
               authMode: params.authMode,
             })
@@ -621,29 +257,6 @@ export function buildEmbeddedRunPayloads(params: {
   const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) {
     replyItems.push({ text: errorText, isError: true });
-  }
-  const inlineToolResults =
-    params.inlineToolResultsAllowed && params.verboseLevel !== "off" && params.toolMetas.length > 0;
-  if (inlineToolResults) {
-    for (const { toolName, meta } of params.toolMetas) {
-      const agg = formatToolAggregate(toolName, meta ? [meta] : [], {
-        markdown: useMarkdown,
-      });
-      const parsedAggregate = parseInlineDirectives(agg, {
-        stripAudioTag: true,
-        stripReplyTags: true,
-      });
-      const cleanedText = parsedAggregate.text;
-      if (cleanedText) {
-        replyItems.push({
-          text: cleanedText,
-          audioAsVoice: parsedAggregate.audioAsVoice,
-          replyToId: parsedAggregate.replyToId,
-          replyToTag: parsedAggregate.hasReplyTag,
-          replyToCurrent: parsedAggregate.replyToCurrent,
-        });
-      }
-    }
   }
   const reasoningText =
     suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
@@ -768,44 +381,51 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+    const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
+    const delivery = shouldUseCanonicalFinalAnswer
+      ? {
+          audioAsVoice: storedDelivery?.audioAsVoice,
+          replyToCurrent: storedDelivery?.replyToCurrent,
+          replyToId: storedDelivery?.replyToId,
+          replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
+        }
+      : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
+    if (
+      !cleanedText &&
+      (!mediaUrls || mediaUrls.length === 0) &&
+      !delivery.audioAsVoice &&
+      !ttsFacts
+    ) {
       continue;
     }
-    replyItems.push({
+    const replyPayload = {
       text: cleanedText,
       media: mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    });
+      ...delivery,
+    };
+    replyItems.push(
+      ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
+    );
     hasUserFacingAssistantReply = true;
     if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
       hasUserFacingFailureAcknowledgement = true;
     }
   }
   if (params.lastToolError) {
-    const warningPolicy = resolveToolErrorWarningPolicy({
+    // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
+    // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
+    const failureWarning = buildFailureWarning({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
       hasUserFacingErrorReply,
       hasUserFacingFailureAcknowledgement,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
-      isCronTrigger: params.isCronTrigger,
-      isHeartbeatTrigger: params.isHeartbeatTrigger,
-      sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
+      useMarkdown,
     });
-    // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
-    // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
-    if (warningPolicy.showWarning) {
-      const warningText = formatToolErrorWarningText({
-        lastToolError: params.lastToolError,
-        includeDetails: warningPolicy.includeDetails,
-        useMarkdown,
-      });
-      const normalizedWarning = normalizeTextForComparison(warningText);
+    if (failureWarning) {
+      const normalizedWarning = normalizeTextForComparison(failureWarning.text);
       const duplicateWarning = normalizedWarning
         ? replyItems.some((item) => {
             if (!item.text) {
@@ -817,11 +437,10 @@ export function buildEmbeddedRunPayloads(params: {
         : false;
       if (!duplicateWarning) {
         replyItems.push({
-          text: warningText,
+          text: failureWarning.text,
           isError: true,
           nonTerminalToolErrorWarning:
-            hasUserFacingAssistantReply &&
-            shouldMarkNonTerminalToolErrorWarning(params.lastToolError),
+            hasUserFacingAssistantReply && failureWarning.nonTerminalToolErrorWarning,
         });
       }
     }
@@ -832,9 +451,9 @@ export function buildEmbeddedRunPayloads(params: {
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => {
-      const payload: ReplyPayload = {
+      const payload: ReplyPayload = copyReplyPayloadMetadata(item, {
         text: normalizeOptionalString(item.text),
-      };
+      });
       const mediaUrl = item.mediaUrl ?? item.media?.[0];
       if (mediaUrl) {
         payload.mediaUrl = mediaUrl;
@@ -941,7 +560,7 @@ export function buildEmbeddedRunPayloads(params: {
       return payload;
     })
     .filter((p) => {
-      if (!hasReplyPayloadContent(p)) {
+      if (!hasReplyPayloadContent(p) && !getReplyPayloadMetadata(p)?.tts) {
         return false;
       }
       if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {
@@ -950,4 +569,3 @@ export function buildEmbeddedRunPayloads(params: {
       return true;
     });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

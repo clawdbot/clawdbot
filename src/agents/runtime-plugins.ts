@@ -1,8 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { adoptRuntimeContextEngineRegistrations } from "../context-engine/registry.js";
+import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
@@ -56,7 +59,6 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
       : undefined;
   if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
     return {
-      requiredPluginIds: [],
       loadOptions: {
         config: params.config,
         activationSourceConfig: params.config,
@@ -69,14 +71,17 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
       },
     };
   }
+  const requestPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const startupPluginIds =
     params.basePluginIds !== undefined
       ? [...params.basePluginIds]
-      : resolveStartupPluginIdsFromCurrentSnapshot({
-          config: params.config,
-          env: params.env,
-          workspaceDir,
-        });
+      : requestPluginRegistry
+        ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
+        : resolveStartupPluginIdsFromCurrentSnapshot({
+            config: params.config,
+            env: params.env,
+            workspaceDir,
+          });
   const plan = resolveAgentRuntimePluginLoadPlan({
     config: params.config,
     workspaceDir: workspaceDir ?? process.cwd(),
@@ -91,7 +96,6 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
     ],
   });
   return {
-    requiredPluginIds: plan.pluginIds,
     loadOptions: {
       config: plan.config,
       ...(plan.config ? { activationSourceConfig: plan.config } : {}),
@@ -113,7 +117,13 @@ export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
 ): PluginRegistry {
   const load = resolveAgentRuntimePluginRegistryLoad(params);
-  return loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
+  // Discovery-only load: full mode can replace process-global sandbox backends.
+  // Copy runtime context engines from the composition-root registry instead.
+  const pluginRegistry = loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
+  const activeRegistry = getActivePluginRegistry();
+  return activeRegistry
+    ? adoptRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry)
+    : pluginRegistry;
 }
 
 /** Binds a scoped plugin generation when a direct host has no Gateway owner. */

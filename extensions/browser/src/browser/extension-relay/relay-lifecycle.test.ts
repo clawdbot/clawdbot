@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import { resolveProfile, type ResolvedBrowserConfig } from "../config.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
 import type { BrowserServerState } from "../server-context.types.js";
@@ -19,8 +20,8 @@ vi.mock("./relay-server.js", () => ({
 
 import { ensureExtensionRelayForProfile } from "./relay-lifecycle.js";
 
-const OLD_TOKEN = "a".repeat(64);
-const ROTATED_TOKEN = "b".repeat(64);
+const OLD_TOKEN = relayTestKey(1);
+const ROTATED_TOKEN = relayTestKey(2);
 
 const PROFILE_NAME = "chrome";
 const RELAY_PORT = 18_123;
@@ -101,7 +102,6 @@ describe("extension relay lifecycle", () => {
       port: RELAY_PORT,
       token: ROTATED_TOKEN,
       allowLegacyAuth: true,
-      onPageShare: expect.any(Function),
     });
     expect(handle.token).toBe(ROTATED_TOKEN);
     expect(state.resolved.extensionRelayToken).toBe(ROTATED_TOKEN);

@@ -999,10 +999,6 @@ surfaces:
         id: plugin-sdk-exports-sync
         command: pnpm plugin-sdk:check-exports
         purpose: Verify generated public SDK exports still match the checked-in entrypoint inventory.
-      - name: Plugin SDK API baseline
-        id: plugin-sdk-api-baseline
-        command: pnpm plugin-sdk:api:check
-        purpose: Detect public API drift in the packaged Plugin SDK surface.
       - name: Plugin SDK surface budget
         id: plugin-sdk-surface-budget
         command: pnpm plugin-sdk:surface:check
@@ -1538,7 +1534,7 @@ surfaces:
             description: Session worktree creation through sessions.create, persisted session worktree metadata, gc owner protection while the session is live, session-delete snapshot removal, and worktreePreserved reporting for locked checkouts.
           - name: "Managed worktrees — Workboard owner"
             coverageIds: [agent-runtime.managed-worktrees-workboard-lifecycle]
-            description: Workboard card workspace materialization as wb-<card-id> worktrees, card workspace writeback, and run-end lossless removal.
+            description: Workboard card workspace materialization as wb-<card-id> worktrees, card workspace writeback, run-end lossless removal, and dirty-checkout retention with a recorded cleanup outcome.
         docs:
           - docs/concepts/agent-loop.md
           - docs/cli/agent.md
@@ -2182,7 +2178,7 @@ surfaces:
         features:
           - name: Memory Backend Storage
             coverageIds: [session-memory.memory-backend-storage]
-            description: Covers Memory Backend Storage across memory backend config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, QMD process/query parsing, session transcript indexing for search, extra paths, and backend security boundaries.
+            description: Covers Memory Backend Storage across built-in memory config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, session transcript indexing for search, extra paths, and memory security boundaries.
           - name: "Embedding Search — QA channel"
             coverageIds: [session-memory.embedding-search-qa-channel]
             description: "Exact coverage for qa channel within Embedding Search."
@@ -2248,7 +2244,6 @@ surfaces:
             description: "Exact coverage for memory recall within Active Memory."
         docs:
           - docs/reference/memory-config.md
-          - docs/concepts/memory-qmd.md
           - docs/concepts/memory.md
           - docs/channels/discord.md
         search_anchors:
@@ -3598,37 +3593,26 @@ surfaces:
         features:
           - name: Heartbeat scheduling
             coverageIds: [automation.heartbeat-scheduling]
-            description: Covers Heartbeat scheduling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
+            description: Covers Heartbeat scheduling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
           - name: Active hours
             coverageIds: [automation.active-hours]
-            description: Covers Active hours across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
+            description: Covers Active hours across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
           - name: Wake and cooldown handling
             coverageIds: [automation.wake-and-cooldown-handling]
-            description: Covers Wake and cooldown handling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
+            description: Covers Wake and cooldown handling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
           - name: Due-only heartbeat tasks
             coverageIds: [automation.due-only-heartbeat-tasks]
-            description: Covers Due-only heartbeat tasks across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
-          - name: "Commitment check-ins — Heartbeat target none"
-            coverageIds: [automation.commitment-check-ins-heartbeat-target-none]
-            description: "Exact coverage for heartbeat target none within Commitment check-ins."
-          - name: "Commitment check-ins — Scope"
-            coverageIds: [automation.commitment-check-ins-scope]
-            description: "Exact coverage for scope within Commitment check-ins."
-          - name: "Commitment check-ins — Delivery"
-            coverageIds: [automation.commitment-check-ins-delivery]
-            description: "Exact coverage for delivery within Commitment check-ins."
+            description: Covers Due-only heartbeat tasks across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
         docs:
           - docs/automation/index.md
           - docs/gateway/heartbeat.md
-          - docs/concepts/commitments.md
         search_anchors:
           - Heartbeat scheduling
           - Active hours
           - Wake and cooldown handling
           - Due-only heartbeat tasks
-          - Commitment check-ins
           - openclaw cron
-        category_note: heartbeat-commitments.md
+        category_note: heartbeat.md
         human_lts_override: false
       - name: Polling Controls
         id: polling-controls

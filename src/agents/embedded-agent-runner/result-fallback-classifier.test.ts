@@ -1,6 +1,7 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
@@ -127,25 +128,42 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("classifies generic external runner failure text as fallback-worthy", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        meta: {
-          durationMs: 42,
-        },
+  it("advances to the configured fallback after a generic external runner failure", async () => {
+    const runs: Array<{ provider: string; model: string }> = [];
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: "external",
+      model: "primary",
+      fallbacksOverride: ["external/fallback"],
+      skipAuthProfileRuntime: true,
+      run: async (provider, model) => {
+        runs.push({ provider, model });
+        return runs.length === 1
+          ? {
+              payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+              meta: { durationMs: 1 },
+            }
+          : { payloads: [{ text: "fallback ok" }], meta: { durationMs: 1 } };
       },
+      classifyResult: ({ provider, model, result: runResult }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result: runResult,
+        }),
     });
 
-    expect(result).toEqual({
-      message:
-        "claude-cli/claude-sonnet-4-6 ended with a generic external runner failure: " +
-        GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    expect(runs).toEqual([
+      { provider: "external", model: "primary" },
+      { provider: "external", model: "fallback" },
+    ]);
+    expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "external",
+      model: "primary",
       reason: "format",
       code: "generic_external_run_failure",
-      rawError: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      error: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
     });
   });
 
@@ -195,80 +213,60 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry generic external runner failure text mixed with non-text visible content", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [
-          {
-            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-            mediaUrl: "https://example.com/failure-screenshot.png",
-            channelData: { delivered: true },
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
+  it.each([
+    {
+      name: "non-text visible content",
+      payload: {
+        text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        mediaUrl: "https://example.com/failure-screenshot.png",
+        channelData: { delivered: true },
       },
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("does not retry generic external runner failure text mixed with interactive content", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [
-          {
-            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-            interactive: { type: "button", label: "Retry" },
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
+    },
+    {
+      name: "interactive content",
+      payload: {
+        text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        interactive: { type: "button", label: "Retry" },
       },
-    });
-
-    expect(result).toBeNull();
+    },
+  ])("does not retry generic external runner failure text with $name", ({ payload }) => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "external",
+        model: "primary",
+        result: { payloads: [payload], meta: { durationMs: 42 } },
+      }),
+    ).toBeNull();
   });
 
   it("does not retry generic external runner failure text after committed delivery", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        messagingToolSentTexts: ["already delivered"],
-        meta: {
-          durationMs: 42,
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "external",
+        model: "primary",
+        result: {
+          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+          messagingToolSentTexts: ["already delivered"],
+          meta: { durationMs: 42 },
         },
-      },
-    });
-
-    expect(result).toBeNull();
+      }),
+    ).toBeNull();
   });
 
-  it("preserves hook block results with generic external runner failure text", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        meta: {
-          durationMs: 42,
-          error: {
-            kind: "hook_block",
-            message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  it("preserves hook blocks with generic external runner failure text", () => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "external",
+        model: "primary",
+        result: {
+          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+          meta: {
+            durationMs: 42,
+            error: { kind: "hook_block", message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
           },
         },
-      },
-    });
-
-    expect(result).toBeNull();
+      }),
+    ).toBeNull();
   });
 
   it("preserves hook block results with auth-like error payload text", () => {
@@ -312,31 +310,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
 
     expect(result).toBeNull();
-  });
-
-  it("uses provider-scoped failover matching for business-denial payloads", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "openrouter",
-      model: "claude-3.5-sonnet",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "Key limit exceeded",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      message: "openrouter/claude-3.5-sonnet ended with a provider error: Key limit exceeded",
-      reason: "billing",
-      code: "embedded_error_payload",
-      rawError: "Key limit exceeded",
-    });
   });
 
   it("does not retry unclassified non-GPT error payloads", () => {
@@ -420,7 +393,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("does not fallback after structured replay state records potential side effects", () => {
+  it("does not fallback after a yielded empty result records potential side effects", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",
       model: "gpt-5.5",
@@ -429,7 +402,8 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         meta: {
           durationMs: 42,
           replayInvalid: true,
-          agentHarnessResultClassification: "reasoning-only",
+          yielded: true,
+          stopReason: "end_turn",
         },
       },
     });

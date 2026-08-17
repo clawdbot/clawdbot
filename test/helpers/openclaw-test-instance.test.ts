@@ -242,9 +242,10 @@ describe("openclaw test instance", () => {
   it("force-kills Windows gateway descendants before retry cleanup settles", async () => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
+    const kill = vi.fn(() => true);
     const child = {
       exitCode: 1,
-      kill: vi.fn(() => true),
+      kill,
       pid: 12345,
       signalCode: null,
       stderr,
@@ -274,7 +275,7 @@ describe("openclaw test instance", () => {
         timeout: 10_000,
       },
     );
-    expect(child.kill).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalled();
     expect(stdout.closed).toBe(true);
     expect(stderr.closed).toBe(true);
   });
@@ -333,7 +334,14 @@ describe("openclaw test instance", () => {
   it("keeps stalled readiness probes inside the startup deadline", async () => {
     const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
       return new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = init.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error(String(reason)));
+          },
+          { once: true },
+        );
       });
     });
     const startedAt = Date.now();
@@ -350,7 +358,14 @@ describe("openclaw test instance", () => {
     const processState = createGatewayProcessState();
     const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
       return new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = init.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error(String(reason)));
+          },
+          { once: true },
+        );
       });
     });
     const startedAt = Date.now();

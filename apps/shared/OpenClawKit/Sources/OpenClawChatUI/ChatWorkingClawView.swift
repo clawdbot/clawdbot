@@ -176,6 +176,105 @@ enum ChatWorkingClawMotion {
         ChatWorkingClawKeyframe(progress: 0.86, value: -10),
         ChatWorkingClawKeyframe(progress: 1, value: -10),
     ]
+    private static let nodOffBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.10, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.35, value: 10),
+        ChatWorkingClawKeyframe(progress: 0.55, value: 14),
+        ChatWorkingClawKeyframe(progress: 0.60, value: 15),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -3),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let nodOffY = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.10, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.35, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.60, value: 1.5),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -0.5),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let nodOffJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.35, value: -16),
+        ChatWorkingClawKeyframe(progress: 0.60, value: -21),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -6),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -24),
+        ChatWorkingClawKeyframe(progress: 0.74, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.80, value: -22),
+        ChatWorkingClawKeyframe(progress: 0.84, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.90, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let curiousBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.30, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.40, value: -14),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -14),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.76, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let curiousJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.30, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.40, value: -16),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -16),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -6),
+        ChatWorkingClawKeyframe(progress: 0.76, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let omNomX = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.30, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.36, value: 2.5),
+        ChatWorkingClawKeyframe(progress: 0.40, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.46, value: 2.5),
+        ChatWorkingClawKeyframe(progress: 0.50, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.56, value: 2.5),
+        ChatWorkingClawKeyframe(progress: 0.64, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let omNomJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.26, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.30, value: -30),
+        ChatWorkingClawKeyframe(progress: 0.36, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.42, value: -30),
+        ChatWorkingClawKeyframe(progress: 0.46, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.52, value: -30),
+        ChatWorkingClawKeyframe(progress: 0.56, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let fakeOutBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.06, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.55, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.58, value: 3),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.66, value: 3),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.74, value: 3),
+        ChatWorkingClawKeyframe(progress: 0.80, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let fakeOutJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.06, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -26),
+        ChatWorkingClawKeyframe(progress: 0.55, value: -26),
+        ChatWorkingClawKeyframe(progress: 0.58, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -24),
+        ChatWorkingClawKeyframe(progress: 0.66, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -22),
+        ChatWorkingClawKeyframe(progress: 0.74, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.80, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
 
     static func pose(stance: ChatWorkingClawStance, elapsed: TimeInterval) -> ChatWorkingClawPose {
         let duration: TimeInterval = switch stance {
@@ -183,6 +282,7 @@ enum ChatWorkingClawMotion {
         case .spin: 3.6
         case .zen: 6
         case .drummer: 1.2
+        case .nodOff: 3.6
         default: 2.4
         }
         let progress = max(0, elapsed).truncatingRemainder(dividingBy: duration) / duration
@@ -228,6 +328,19 @@ enum ChatWorkingClawMotion {
             pose.yOffset = self.sample(self.peekabooY, at: progress)
             pose.bodyScale = self.sample(self.peekabooScale, at: progress)
             pose.jawRotation = self.sample(self.peekabooJaw, at: progress)
+        case .nodOff:
+            pose.bodyRotation = self.sample(self.nodOffBodyRotation, at: progress)
+            pose.yOffset = self.sample(self.nodOffY, at: progress)
+            pose.jawRotation = self.sample(self.nodOffJaw, at: progress)
+        case .curious:
+            pose.bodyRotation = self.sample(self.curiousBodyRotation, at: progress)
+            pose.jawRotation = self.sample(self.curiousJaw, at: progress)
+        case .omNom:
+            pose.xOffset = self.sample(self.omNomX, at: progress)
+            pose.jawRotation = self.sample(self.omNomJaw, at: progress)
+        case .fakeOut:
+            pose.bodyRotation = self.sample(self.fakeOutBodyRotation, at: progress)
+            pose.jawRotation = self.sample(self.fakeOutJaw, at: progress)
         }
         return pose
     }

@@ -71,6 +71,18 @@ function extractInstallE2eInstallerFunction(): string {
   return script.slice(start, end);
 }
 
+function extractNonrootInstallerStep(): string {
+  const script = readFileSync(NONROOT_RUNNER_PATH, "utf8");
+  const startMarker = 'echo "==> Run installer (non-root user)"';
+  const endMarker = "\n\n# Ensure PATH";
+  const start = script.indexOf(startMarker);
+  const end = script.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end <= start) {
+    throw new Error("non-root installer step was not found");
+  }
+  return script.slice(start, end);
+}
+
 function extractDockerTimezoneValidator(): string {
   const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
   const match = script.match(
@@ -182,6 +194,64 @@ function runInstallE2eInstallerFixture(params: {
     {
       encoding: "utf8",
       env,
+    },
+  );
+
+  return { curlArgsPath, markerPath, outputPathCapture, result };
+}
+
+function runNonrootInstallerFixture(curlExitCode: number) {
+  const root = tempDirs.make("openclaw-install-nonroot-download-");
+  const binDir = join(root, "bin");
+  const curlArgsPath = join(root, "curl-args.txt");
+  const markerPath = join(root, "installer-marker.txt");
+  const outputPathCapture = join(root, "curl-output-path.txt");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    join(binDir, "curl"),
+    [
+      "#!/bin/sh",
+      "set -eu",
+      `printf '%s\\0' "$@" >"$CURL_ARGS_PATH"`,
+      'output=""',
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = "-o" ]; then',
+      "    shift",
+      '    output="$1"',
+      "  fi",
+      "  shift",
+      "done",
+      `printf '%s\\n' 'touch "$INSTALL_MARKER"' >"$output"`,
+      'chmod +x "$output"',
+      'printf "%s" "$output" >"$OUTPUT_PATH_CAPTURE"',
+      'exit "$FAKE_CURL_EXIT"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      [
+        "set -euo pipefail",
+        'INSTALL_URL="https://installer.example.test/install.sh"',
+        extractNonrootInstallerStep(),
+      ].join("\n"),
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CURL_ARGS_PATH: curlArgsPath,
+        FAKE_CURL_EXIT: String(curlExitCode),
+        INSTALL_MARKER: markerPath,
+        OUTPUT_PATH_CAPTURE: outputPathCapture,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
     },
   );
 
@@ -1133,7 +1203,7 @@ printf 'status=%s\\n' "$status"
 
     expect(script).toContain("assert_pack_unpacked_size_budget");
     expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
-    expect(script).toContain('from "./scripts/lib/npm-pack-budget.mjs"');
+    expect(script).toContain('from "./scripts/lib/npm-pack-budget.mts"');
     expect(script).toContain("install smoke cannot verify pack budget");
   });
 
@@ -1227,8 +1297,39 @@ printf 'status=%s\\n' "$status"
       `'set -o pipefail; curl -fsSL --connect-timeout 30 --max-time 300 -- "$OPENCLAW_INSTALL_CLI_URL" | bash -s -- --set-npm-prefix --no-onboard'`,
     );
     expect(nonrootRunner).toContain(
-      'curl -fsSL --connect-timeout 30 --max-time 300 -- "$INSTALL_URL" | bash',
+      'curl -fsSL --connect-timeout 30 --max-time 300 -o "$installer" -- "$INSTALL_URL"',
     );
+    expect(nonrootRunner.indexOf('-o "$installer"')).toBeLessThan(
+      nonrootRunner.indexOf('bash "$installer"'),
+    );
+  });
+
+  it("does not execute or retain a non-root installer after curl fails", () => {
+    const fixture = runNonrootInstallerFixture(28);
+    const outputPath = readFileSync(fixture.outputPathCapture, "utf8");
+
+    expect(fixture.result.status).toBe(28);
+    expect(readNulSeparatedArgs(fixture.curlArgsPath)).toEqual([
+      "-fsSL",
+      "--connect-timeout",
+      "30",
+      "--max-time",
+      "300",
+      "-o",
+      outputPath,
+      "--",
+      "https://installer.example.test/install.sh",
+    ]);
+    expect(existsSync(fixture.markerPath)).toBe(false);
+    expect(existsSync(outputPath)).toBe(false);
+  });
+
+  it("executes and cleans the non-root installer after curl succeeds", () => {
+    const fixture = runNonrootInstallerFixture(0);
+
+    expect(fixture.result.status, fixture.result.stderr).toBe(0);
+    expect(existsSync(fixture.markerPath)).toBe(true);
+    expect(existsSync(readFileSync(fixture.outputPathCapture, "utf8"))).toBe(false);
   });
 
   it("uses public npm latest as the non-root installer expectation", () => {
@@ -1877,13 +1978,23 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
         },
       );
 
+      // The descendant's pid file can be observed created-but-empty between its
+      // open() and write(); readiness must require parseable content, not
+      // existence, or the integer assertion below flakes on loaded runners.
+      const readDescendantPid = () => {
+        if (!existsSync(descendantPidPath)) {
+          return null;
+        }
+        const pid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+        return Number.isInteger(pid) && pid > 0 ? pid : null;
+      };
       try {
         await waitForCondition(
-          () => existsSync(readyPath) && existsSync(descendantPidPath),
+          () => existsSync(readyPath) && readDescendantPid() !== null,
           "Bun global smoke descendant readiness",
         );
-        descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        descendantPid = readDescendantPid() ?? 0;
+        expect(descendantPid).toBeGreaterThan(0);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
         runner.kill("SIGTERM");

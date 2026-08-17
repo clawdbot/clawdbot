@@ -10,6 +10,7 @@ import {
   isRawCopilotModelRun,
   type resolvePoolAcquire,
 } from "./attempt-config.js";
+import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import type {
   AttemptParamsLike,
   CopilotAgentEndHookParams,
@@ -52,13 +53,19 @@ export async function createCopilotSessionSetup(params: {
     settledToolFinalization,
     signal,
   } = params;
-  const workspaceBootstrap = settledToolFinalization
-    ? { instructions: undefined }
-    : await resolveCopilotWorkspaceBootstrapContext({
-        attempt: input,
+  const ordinaryAttemptInput = settledToolFinalization
+    ? undefined
+    : (() => {
+        assertCopilotAttemptHostCapabilities(input);
+        return input;
+      })();
+  const workspaceBootstrap = ordinaryAttemptInput
+    ? await resolveCopilotWorkspaceBootstrapContext({
+        attempt: ordinaryAttemptInput,
         effectiveWorkspaceDir,
         warn: (message) => console.warn(message),
-      });
+      })
+    : { instructions: undefined };
   const originalDeveloperInstructions = settledToolFinalization
     ? ""
     : (createSystemMessageContent(input, workspaceBootstrap.instructions) ?? "");
@@ -80,8 +87,16 @@ export async function createCopilotSessionSetup(params: {
   const promptTools = filterCopilotToolsForAllowlist(
     sdkTools,
     promptBuild.toolsAllow,
-    shouldForceCopilotMessageTool(input) ? { forceToolNames: ["message"] } : undefined,
+    ordinaryAttemptInput && shouldForceCopilotMessageTool(ordinaryAttemptInput)
+      ? { forceToolNames: ["message"] }
+      : undefined,
   );
+  // Restricted turns may expose native ask_user only when its policy-filtered
+  // OpenClaw equivalent survived the canonical tool catalog.
+  const includeAskUser =
+    !ringZeroSystemAgentRun &&
+    (attemptInput.pluginHarnessToolPolicyRestricted !== true ||
+      promptTools.some((tool) => tool.name === "ask_user"));
   let promptImagesCount = 0;
   const emitLlmInput = (prompt: string, additionalContext?: string) => {
     if (settledToolFinalization) {
@@ -106,10 +121,12 @@ export async function createCopilotSessionSetup(params: {
   };
   const hasNativePromptHook =
     !settledToolFinalization && Boolean(attemptInput.hooksConfig?.onUserPromptSubmitted);
-  const userInputBridge = createCopilotUserInputBridge({
-    paramsForRun: attemptInput,
-    signal,
-  });
+  const userInputBridge = settledToolFinalization
+    ? undefined
+    : (() => {
+        assertCopilotAttemptHostCapabilities(attemptInput);
+        return createCopilotUserInputBridge({ paramsForRun: attemptInput, signal });
+      })();
   const sessionConfig = createSessionConfig(
     attemptInput,
     modelRef.id,
@@ -119,7 +136,7 @@ export async function createCopilotSessionSetup(params: {
     promptBuild.developerInstructions || undefined,
     effectiveWorkspaceDir,
     effectiveCwd,
-    settledToolFinalization ? undefined : userInputBridge.onUserInputRequest,
+    userInputBridge?.onUserInputRequest,
     {
       hooksBridgeOptions: hasNativePromptHook
         ? {
@@ -127,7 +144,7 @@ export async function createCopilotSessionSetup(params: {
               emitLlmInput(prompt, additionalContext),
           }
         : undefined,
-      includeAskUser: !ringZeroSystemAgentRun,
+      includeAskUser,
       operation: operation ?? "attempt",
     },
   );
@@ -141,7 +158,7 @@ export async function createCopilotSessionSetup(params: {
         promptBuild.developerInstructions || undefined,
         effectiveWorkspaceDir,
         effectiveCwd,
-        settledToolFinalization ? undefined : userInputBridge.onUserInputRequest,
+        userInputBridge?.onUserInputRequest,
         {
           hooksBridgeOptions: hasNativePromptHook
             ? {
@@ -149,7 +166,7 @@ export async function createCopilotSessionSetup(params: {
                   emitLlmInput(prompt, additionalContext),
               }
             : undefined,
-          includeAskUser: !ringZeroSystemAgentRun,
+          includeAskUser,
           operation: operation ?? "attempt",
         },
       )

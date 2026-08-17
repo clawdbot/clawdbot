@@ -11,6 +11,11 @@ import type {
 } from "../../app/context.ts";
 import { changedServerUiPrefs, resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { loadSettings } from "../../app/settings.ts";
+import {
+  installDialogPolyfill,
+  nextFrame,
+  waitForRenderedModalDialog,
+} from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as chatModels from "../chat/models.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
@@ -19,7 +24,6 @@ import {
   configSelectionFromSearch,
   extractQuickSettingsSecurity,
 } from "./config-page.ts";
-import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
 const switchActiveRealtimeTalkCameras =
@@ -70,14 +74,6 @@ describe("configSelectionFromSearch", () => {
   });
 
   it("keeps MCP separate from Infrastructure", () => {
-    expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
-    expect(configSectionKeysForPage("infrastructure")).toEqual([
-      "gateway",
-      "browser",
-      "nodeHost",
-      "discovery",
-      "acp",
-    ]);
     expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
       activeSection: "mcp",
       activeSubsection: null,
@@ -88,24 +84,11 @@ describe("configSelectionFromSearch", () => {
     });
   });
 
-  it("keeps Communications focused on messages and text-to-speech", () => {
-    expect(configSectionKeysForPage("communications")).toEqual(["messages", "tts"]);
-  });
-
-  it("gives Talk its own curated page", () => {
-    expect(configSectionKeysForPage("talk")).toEqual(["talk"]);
-  });
-
-  it("gives Updates ownership of the update config section", () => {
-    expect(configSectionKeysForPage("updates")).toEqual(["update"]);
+  it("keeps the Updates section off Advanced", () => {
     expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
       activeSection: null,
       activeSubsection: null,
     });
-  });
-
-  it("keeps provider models off Agent Defaults", () => {
-    expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
   });
 });
 
@@ -438,19 +421,26 @@ describe("ConfigPage session observer models", () => {
       context: ApplicationContext;
       systemInfoGatewaySource: ApplicationGateway;
       sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsUnavailable: boolean;
       sessionObserverModelsClient: GatewayBrowserClient | null;
-      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
     };
     Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = { gateway } as ApplicationContext;
+    state.context = {
+      gateway,
+      agentSelection: { state: { selectedId: "main" } },
+    } as ApplicationContext;
     state.systemInfoGatewaySource = gateway;
 
-    const firstLoad = state.ensureSessionObserverModels(firstClient);
+    const firstLoad = state.ensureSessionObserverModels(firstClient, "main");
     (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
       client: secondClient,
       phase: "connected",
     } as ApplicationGatewaySnapshot;
-    const secondLoad = state.ensureSessionObserverModels(secondClient);
+    const secondLoad = state.ensureSessionObserverModels(secondClient, "main");
     const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
     second.resolve(currentModels);
     await secondLoad;
@@ -461,6 +451,14 @@ describe("ConfigPage session observer models", () => {
     await firstLoad;
     expect(state.sessionObserverModels).toEqual(currentModels);
     expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(1, firstClient, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(2, secondClient, {
+      agentId: "main",
+      preparedOnly: true,
+    });
   });
 
   it("retries a transient catalog failure on the next status refresh", async () => {
@@ -478,20 +476,85 @@ describe("ConfigPage session observer models", () => {
       systemInfoGatewaySource: ApplicationGateway;
       sessionObserverModels: ModelCatalogEntry[];
       sessionObserverModelsUnavailable: boolean;
-      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
     };
     Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = { gateway } as ApplicationContext;
+    state.context = {
+      gateway,
+      agentSelection: { state: { selectedId: "main" } },
+    } as ApplicationContext;
     state.systemInfoGatewaySource = gateway;
 
-    await state.ensureSessionObserverModels(client);
+    await state.ensureSessionObserverModels(client, "main");
     expect(state.sessionObserverModels).toEqual([]);
     expect(state.sessionObserverModelsUnavailable).toBe(true);
 
-    await state.ensureSessionObserverModels(client);
+    await state.ensureSessionObserverModels(client, "main");
 
     expect(state.sessionObserverModels).toEqual(recoveredModels);
     expect(state.sessionObserverModelsUnavailable).toBe(false);
+    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+    expect(chatModels.loadModels).toHaveBeenLastCalledWith(client, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+  });
+
+  it("keeps a same-client agent switch from restoring stale observer models", async () => {
+    const main = deferred<ModelCatalogEntry[]>();
+    const writer = deferred<ModelCatalogEntry[]>();
+    vi.spyOn(chatModels, "loadModels").mockImplementation((_client, options) =>
+      options.agentId === "writer" ? writer.promise : main.promise,
+    );
+    const client = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client, phase: "connected" },
+    } as unknown as ApplicationGateway;
+    const selectionState = { selectedId: "main" as string | null };
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsUnavailable: boolean;
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
+    };
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = {
+      gateway,
+      agentSelection: { state: selectionState },
+    } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
+
+    const mainLoad = state.ensureSessionObserverModels(client, "main");
+    selectionState.selectedId = "writer";
+    const writerLoad = state.ensureSessionObserverModels(client, "writer");
+    const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
+    writer.resolve(writerModels);
+    await writerLoad;
+    main.resolve([{ id: "main-model", name: "Main Model", provider: "openai" }]);
+    await mainLoad;
+
+    expect(state.sessionObserverModels).toEqual(writerModels);
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(1, client, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+    expect(chatModels.loadModels).toHaveBeenNthCalledWith(2, client, {
+      agentId: "writer",
+      preparedOnly: true,
+    });
+
+    selectionState.selectedId = null;
+    await state.ensureSessionObserverModels(client, null);
+    expect(state.sessionObserverModels).toEqual([]);
+    expect(state.sessionObserverModelsUnavailable).toBe(true);
     expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
   });
 });
@@ -534,7 +597,40 @@ describe("ConfigPage curated mutation eligibility", () => {
 });
 
 describe("ConfigPage Updates integration", () => {
-  it("stages policy changes through patchForm and delegates Update now to overlays", () => {
+  it("refreshes update status once when the page becomes active", () => {
+    const refreshUpdateStatus = vi.fn(async () => {});
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      syncUpdateStatusRefresh: () => void;
+    };
+    state.context = {
+      gateway: {
+        snapshot: {
+          client: {},
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.status"] },
+          },
+        },
+      },
+      overlays: { refreshUpdateStatus },
+    } as unknown as ApplicationContext;
+
+    page.pageId = "updates";
+    state.syncUpdateStatusRefresh();
+    state.syncUpdateStatusRefresh();
+    expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+
+    page.pageId = "advanced";
+    state.syncUpdateStatusRefresh();
+    page.pageId = "updates";
+    state.syncUpdateStatusRefresh();
+    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
     const patchForm = vi.fn();
     const runUpdate = vi.fn();
     const page = new ConfigPage();
@@ -565,6 +661,8 @@ describe("ConfigPage Updates integration", () => {
             features: { methods: ["update.run"] },
           },
         },
+        // The update dialog watches both stores for the life of the install.
+        subscribe: () => () => undefined,
       },
       overlays: {
         snapshot: {
@@ -574,10 +672,13 @@ describe("ConfigPage Updates integration", () => {
           updateReconciliationPending: false,
           updateStatusBanner: null,
         },
+        subscribe: () => () => undefined,
         runUpdate,
       },
     } as unknown as ApplicationContext;
     const container = document.createElement("div");
+    document.body.append(container);
+    const restoreDialogPolyfill = installDialogPolyfill();
 
     render(page.render(), container);
 
@@ -596,10 +697,22 @@ describe("ConfigPage Updates integration", () => {
     [...container.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.includes("Update now"))
       ?.click();
+    await nextFrame();
 
     expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
     expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
+    // Settings shares the sidebar card's confirmation gate: nothing runs on the click itself.
+    expect(runUpdate).not.toHaveBeenCalled();
+
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    [...modal.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Update and restart")
+      ?.click();
+    await nextFrame();
+
     expect(runUpdate).toHaveBeenCalledOnce();
+    restoreDialogPolyfill();
+    container.remove();
   });
 });
 

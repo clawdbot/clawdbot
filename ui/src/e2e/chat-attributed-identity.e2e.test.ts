@@ -105,6 +105,24 @@ suite.define(() => {
     await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
     await captureProof(page, "after-hover.png");
 
+    // Own-message footer: the always-visible name must stay put when hover
+    // reveals the timestamp, which slots in to its left (right-aligned row).
+    const ownGroup = userGroups.first();
+    const ownName = ownGroup.locator(".chat-sender-name");
+    await page.mouse.move(0, 0);
+    await expect(ownGroup.locator(".chat-group-timestamp")).toHaveCSS("opacity", "0");
+    const restingNameBox = await ownName.boundingBox();
+    await ownGroup.hover();
+    const ownTimestamp = ownGroup.locator(".chat-group-timestamp");
+    await expect(ownTimestamp).toHaveCSS("opacity", "1");
+    await captureProof(page, "own-group-hover.png");
+    const hoveredNameBox = await ownName.boundingBox();
+    const timestampBox = await ownTimestamp.boundingBox();
+    expect(hoveredNameBox?.x).toBe(restingNameBox?.x);
+    expect((timestampBox?.x ?? 0) + (timestampBox?.width ?? 0)).toBeLessThan(
+      hoveredNameBox?.x ?? 0,
+    );
+
     const footerOrder = await userGroups
       .last()
       .locator(".chat-group-footer")

@@ -67,6 +67,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: vi.fn(),
   loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
     entries: [],
@@ -280,7 +281,7 @@ vi.mock("../agents/model-selection.js", () => {
   };
 });
 
-vi.mock("../agents/subagent-announce.js", () => ({
+vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 
@@ -296,13 +297,22 @@ vi.mock("../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
-  buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
-  loadWorkspaceSkillEntries: vi.fn(() => []),
+vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
+  buildSkillSnapshot: vi.fn(() => undefined),
+}));
+
+vi.mock("../skills/loading/workspace-skill-loader.js", () => ({
+  filterWorkspaceSkills: (entries: unknown[]) => entries,
+  loadVisibleSkills: vi.fn(() => []),
+  loadWorkspaceSkills: vi.fn(() => []),
 }));
 
 vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),
+}));
+
+vi.mock("../plugins/bundle-commands.js", () => ({
+  loadEnabledClaudeBundleCommands: vi.fn(() => []),
 }));
 
 vi.mock("../skills/discovery/agent-filter.js", () => ({

@@ -4,7 +4,6 @@ import Testing
 #if canImport(Darwin)
 import Darwin
 import Foundation
-import Subprocess
 
 struct RemotePortTunnelTests {
     @Test func `tunnel owns its SSH process instead of multiplexing`() {
@@ -36,89 +35,6 @@ struct RemotePortTunnelTests {
 
         let drained = RemotePortTunnel._testDrainStderr(handle)
         #expect(drained.isEmpty)
-    }
-
-    @Test func `process launch failures preserve the executable description`() async {
-        let executable = "/tmp/openclaw-missing-process-\(UUID().uuidString)"
-
-        do {
-            _ = try await RemotePortTunnel._testStartProcess(
-                executable: executable,
-                arguments: [])
-            Issue.record("expected the missing executable to fail")
-        } catch {
-            #expect(error.localizedDescription.contains(executable))
-        }
-    }
-
-    @Test func `termination waits for the original child to exit`() async throws {
-        let process = try await RemotePortTunnel._testStartProcess(
-            executable: "/bin/sleep",
-            arguments: ["30"])
-        defer { process.requestTermination() }
-
-        await process.terminate()
-        #expect(!process.isRunning)
-        #expect(terminatedBySignal(process.terminationStatus, SIGTERM))
-    }
-
-    @Test func `instant exits cannot outrun process monitoring`() async throws {
-        for _ in 0..<32 {
-            let process = try await RemotePortTunnel._testStartProcess(
-                executable: "/usr/bin/true",
-                arguments: [])
-            defer { process.requestTermination() }
-
-            let deadline = ContinuousClock.now + .seconds(1)
-            while process.isRunning, ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(1))
-            }
-            #expect(!process.isRunning)
-            await process.terminate()
-        }
-    }
-
-    @Test func `termination escalates for a TERM-resistant child`() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-tunnel-term-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let readyFile = directory.appendingPathComponent("ready")
-        let childPIDFile = directory.appendingPathComponent("child.pid")
-        let process = try await RemotePortTunnel._testStartProcess(
-            executable: "/bin/sh",
-            arguments: [
-                "-c",
-                """
-                /bin/sh -c 'trap "" TERM; echo $$ > "$CHILD_PID_FILE"; while :; do sleep 1; done' &
-                while [ ! -s "$CHILD_PID_FILE" ]; do sleep 0.01; done
-                echo ready > "$READY_FILE"
-                while :; do sleep 1; done
-                """,
-            ],
-            environment: [
-                "READY_FILE": readyFile.path,
-                "CHILD_PID_FILE": childPIDFile.path,
-            ])
-        defer { process.requestTermination() }
-        let readyDeadline = ContinuousClock.now + .seconds(1)
-        while !FileManager.default.fileExists(atPath: readyFile.path),
-              ContinuousClock.now < readyDeadline
-        {
-            usleep(10000)
-        }
-        #expect(FileManager.default.fileExists(atPath: readyFile.path))
-        let childPID = try #require(pid_t(
-            String(contentsOf: childPIDFile, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)))
-
-        let startedAt = ContinuousClock.now
-        await process.terminate()
-
-        #expect(ContinuousClock.now - startedAt < .seconds(2))
-        #expect(!process.isRunning)
-        #expect(terminatedBySignal(process.terminationStatus, SIGTERM))
-        #expect(awaitProcessExit(childPID))
     }
 
     @Test func `port is free detects I pv4 listener`() {
@@ -213,20 +129,4 @@ struct RemotePortTunnelTests {
     }
 }
 
-private func awaitProcessExit(_ pid: pid_t) -> Bool {
-    let deadline = ContinuousClock.now + .seconds(1)
-    while ContinuousClock.now < deadline {
-        errno = 0
-        if kill(pid, 0) == -1, errno == ESRCH {
-            return true
-        }
-        usleep(10000)
-    }
-    return false
-}
-
-private func terminatedBySignal(_ status: TerminationStatus?, _ signal: Int32) -> Bool {
-    guard case let .signaled(code) = status else { return false }
-    return code == signal
-}
 #endif

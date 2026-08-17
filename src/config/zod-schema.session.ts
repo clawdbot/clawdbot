@@ -40,19 +40,15 @@ const PositiveDurationSchema = z.union([z.string(), z.number()]).superRefine((va
   }
 });
 
-export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
+const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
     dmScope: z
-      .union([
-        z.literal("main"),
-        z.literal("per-peer"),
-        z.literal("per-channel-peer"),
-        z.literal("per-account-channel-peer"),
-      ])
+      .enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"])
       .optional(),
+    groupScope: z.enum(["main", "per-group"]).optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     reset: SessionResetConfigSchema.optional(),
@@ -91,6 +87,7 @@ export const SessionSchema = z
         mode: z.enum(["enforce", "warn"]).optional(),
         pruneAfter: PositiveDurationSchema.optional(),
         maxEntries: z.number().int().positive().optional(),
+        preserveRecent: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
         resetArchiveRetention: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),

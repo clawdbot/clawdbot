@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
-  createAutomaticSourceDeliveryContext,
   createNoQueuedDispatchResult,
   createNonTerminalToolWarningPayload,
   deliverDiscordReply,
@@ -17,9 +16,10 @@ import {
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
+  createAutomaticDraftContext,
   createBlockModeContext,
   createMockDraftStreamForTest,
-  expectFinalWithProgressReceipt,
+  expectFinalAnswerText,
   expectFreshFinalText,
   firstDispatchParams,
   firstMockArg,
@@ -31,7 +31,7 @@ import {
 
 registerDiscordProcessTestLifecycle();
 
-type AutomaticDeliveryOverrides = Parameters<typeof createAutomaticSourceDeliveryContext>[0];
+type AutomaticDeliveryOverrides = Parameters<typeof createAutomaticDraftContext>[0];
 type FinalReplyPayload = Parameters<DispatchInboundParams["dispatcher"]["sendFinalReply"]>[0];
 
 async function runFinalReplyScenario(
@@ -44,7 +44,7 @@ async function runFinalReplyScenario(
     return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
   });
 
-  const ctx = await createAutomaticSourceDeliveryContext({
+  const ctx = await createAutomaticDraftContext({
     discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     ...overrides,
   });
@@ -84,7 +84,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
       discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 120 },
       route: BASE_CHANNEL_ROUTE,
@@ -94,7 +94,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expectFinalWithProgressReceipt(fullAnswer, "🛠️ 1 tool call");
+    expectFinalAnswerText(fullAnswer);
   });
 
   it("clears partial drafts when fallback final delivery fails before completion", async () => {
@@ -110,7 +110,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 1 },
     });
 
@@ -278,7 +278,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
@@ -300,7 +300,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
@@ -320,7 +320,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
@@ -344,7 +344,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "off" } },
     });
 
@@ -367,7 +367,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
@@ -399,7 +399,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "off" } },
     });
 
@@ -467,7 +467,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -508,7 +508,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -522,7 +522,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "Checking private context before replying.\n\n🛠️ Exec",
     );
-    expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
+    expectFinalAnswerText("done");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
   });
 
@@ -542,7 +542,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: false } },
       },

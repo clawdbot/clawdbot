@@ -425,8 +425,9 @@ describe("gateway config methods", () => {
     const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
     rosterConfig.agents = {
       ...agents,
+      ownership: "explicit",
       entries: {
-        main: { default: true },
+        main: {},
         Worker: { workspace: "/srv/worker" },
       },
     };
@@ -1085,8 +1086,9 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
+      ownership: "explicit",
       entries: {
-        main: { default: true, skills: ["alpha", "beta"] },
+        main: { skills: ["alpha", "beta"] },
         worker: { skills: ["gamma"] },
       },
     };
@@ -1097,6 +1099,7 @@ describe("gateway config methods", () => {
 
     try {
       const before = await getCurrentConfigObject();
+      const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
@@ -1109,7 +1112,7 @@ describe("gateway config methods", () => {
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
       expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
-        agents.entries,
+        beforeEntries,
       );
     } finally {
       await restoreConfigFileForTest(original);
@@ -1120,8 +1123,9 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
+      ownership: "explicit",
       entries: {
-        main: { default: true, skills: ["alpha", "beta"] },
+        main: { skills: ["alpha", "beta"] },
         worker: { skills: ["gamma"] },
       },
     };
@@ -1132,6 +1136,7 @@ describe("gateway config methods", () => {
 
     try {
       const before = await getCurrentConfigObject();
+      const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
@@ -1145,7 +1150,7 @@ describe("gateway config methods", () => {
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
       expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
-        agents.entries,
+        beforeEntries,
       );
     } finally {
       await restoreConfigFileForTest(original);
@@ -1156,7 +1161,8 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
-      entries: { main: { default: true, skills: ["alpha"] }, worker: {} },
+      ownership: "explicit",
+      entries: { main: { skills: ["alpha"] }, worker: {} },
     };
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
@@ -1185,9 +1191,9 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
+      ownership: "explicit",
       entries: {
         main: {
-          default: true,
           subagents: { allowAgents: ["worker"] },
         },
         worker: {},
@@ -1220,8 +1226,9 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
+      ownership: "explicit",
       entries: {
-        main: { default: true, skills: ["alpha", "beta"] },
+        main: { skills: ["alpha", "beta"] },
         worker: { skills: ["gamma"] },
       },
     };
@@ -1232,6 +1239,7 @@ describe("gateway config methods", () => {
 
     try {
       const before = await getCurrentConfigObject();
+      const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
@@ -1241,8 +1249,11 @@ describe("gateway config methods", () => {
       expect(res.ok).toBe(true);
       const after = await getCurrentConfigObject();
       expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual({
-        main: { default: true, skills: ["alpha"] },
-        worker: { skills: ["gamma"] },
+        ...beforeEntries,
+        main: {
+          ...(beforeEntries?.main as Record<string, unknown> | undefined),
+          skills: ["alpha"],
+        },
       });
     } finally {
       await restoreConfigFileForTest(original);

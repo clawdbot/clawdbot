@@ -1,5 +1,9 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { Value } from "typebox/value";
+import {
+  SessionObserverDigestSchema,
+  type SessionObserverDigest,
+} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -536,8 +540,11 @@ export class SidebarSessionNarrationController {
     ) {
       return;
     }
+    const digest = { ...record, runId };
+    if (!Value.Check(SessionObserverDigestSchema, digest)) {
+      return;
+    }
     this.observeRun(key, runId);
-    const digest = { ...record, runId } as unknown as SessionObserverDigest;
     const previous = this.observerDigests.get(key);
     if (previous && pickFreshestObserverDigest(previous, digest) === previous) {
       return;

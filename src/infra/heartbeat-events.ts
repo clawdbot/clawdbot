@@ -5,6 +5,8 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 export type HeartbeatIndicatorType = "ok" | "alert" | "error";
 
 const TARGET_NONE_MESSAGE = "Heartbeat delivery is disabled by configuration (target: none).";
+const NO_ROUTE_MESSAGE =
+  "Heartbeat has no delivery route yet. Message your bot once, or set agents.defaults.heartbeat.target.";
 
 export type HeartbeatEventPayload = {
   ts: number;
@@ -58,9 +60,11 @@ export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
   const enriched: HeartbeatEventPayload = {
     ts: Date.now(),
     ...evt,
-    ...(evt.reason === "target-none" && evt.message === undefined
+    ...(evt.message === undefined && evt.reason === "target-none"
       ? { message: TARGET_NONE_MESSAGE }
-      : {}),
+      : evt.message === undefined && evt.reason === "no-route"
+        ? { message: NO_ROUTE_MESSAGE }
+        : {}),
   };
   state.lastHeartbeat = enriched;
   notifyListeners(state.listeners, enriched);

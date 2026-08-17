@@ -59,7 +59,7 @@ The running app gives the headless `openclaw node run` host a single Canvas WebV
 
 The Canvas plugin sources remain the source of truth for the A2UI renderer. Each native build
 generates `index.html` and `a2ui.bundle.js` into its isolated build output before compiling. Run
-`node scripts/sync-native-a2ui.mjs --check` from the repository root to verify fresh bundles are
+`node --import tsx scripts/sync-native-a2ui.mts --check` from the repository root to verify fresh bundles are
 byte-identical and every native build owner is wired.
 
 ## Quick Chat widgets

@@ -22,6 +22,11 @@ const cardboardProofDir = path.resolve(
   process.cwd(),
   ".artifacts/control-ui-e2e/workboard-cardboard",
 );
+const workboardPinProofDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard-pin");
+const workboardPinFailureProofDir = path.resolve(
+  process.cwd(),
+  ".artifacts/control-ui-e2e/workboard-pin-failure",
+);
 const pluginWidgetsProofDir = path.resolve(
   process.cwd(),
   ".artifacts/control-ui-e2e/workboard-plugin-widgets",
@@ -261,6 +266,10 @@ suite.define(() => {
   });
 
   it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {
+    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    if (recordProof) {
+      await mkdir(workboardPinProofDir, { recursive: true });
+    }
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
     const resizableBoardSnapshot = {
@@ -321,6 +330,41 @@ suite.define(() => {
 
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     await preview.hover();
+    await expect.poll(() => preview.locator(".chat-tool-card__preview-header").count()).toBe(0);
+    await expect
+      .poll(() =>
+        preview
+          .locator(".chat-tool-card__preview-panel")
+          .evaluate((element) => getComputedStyle(element).padding),
+      )
+      .toBe("0px");
+    await expect
+      .poll(() =>
+        preview.evaluate((element) => {
+          const actions = element.querySelector(".chat-tool-card__preview-actions");
+          return actions
+            ? actions.getBoundingClientRect().bottom <= element.getBoundingClientRect().top
+            : false;
+        }),
+      )
+      .toBe(true);
+    await expect
+      .poll(() =>
+        preview
+          .locator(".chat-tool-card__preview-frame")
+          .evaluate((element) => getComputedStyle(element).borderTopWidth),
+      )
+      .toBe("0px");
+    if (recordProof) {
+      await expect
+        .poll(() =>
+          preview
+            .locator("[data-widget-actions]")
+            .evaluate((element) => getComputedStyle(element).opacity),
+        )
+        .toBe("1");
+      await preview.screenshot({ path: path.join(workboardPinProofDir, "01-pin-hover.png") });
+    }
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
     expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
@@ -332,6 +376,9 @@ suite.define(() => {
     await expect
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
+    if (recordProof) {
+      await preview.screenshot({ path: path.join(workboardPinProofDir, "02-pinned.png") });
+    }
     await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
 
     await gateway.emitGatewayEvent("board.command", {
@@ -365,6 +412,87 @@ suite.define(() => {
         page.locator('.chat-tool-card__preview[data-kind="canvas"] [data-pin-widget]').isDisabled(),
       )
       .toBe(true);
+    await context.close();
+  });
+
+  it("shows a bounded visible outcome when a Canvas dashboard pin fails", async () => {
+    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    if (recordProof) {
+      await mkdir(workboardPinFailureProofDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      viewport: { height: 900, width: 1280 },
+      ...(recordProof
+        ? {
+            recordVideo: {
+              dir: workboardPinFailureProofDir,
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
+      featureMethods: [
+        "board.get",
+        "board.update",
+        "board.widget.grant",
+        "board.widget.put",
+        "chat.metadata",
+        "chat.startup",
+      ],
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "canvas",
+              preview: {
+                kind: "canvas",
+                surface: "assistant_message",
+                render: "url",
+                title: "Stale release status",
+                viewId: "cv_stale",
+                url: "/__openclaw__/canvas/documents/cv_stale/index.html",
+                preferredHeight: 240,
+                sandbox: "scripts",
+              },
+            },
+          ],
+          timestamp: 1,
+        },
+      ],
+      methodResponses: {
+        "board.get": boardSnapshot,
+        "board.widget.put": {
+          __mockError: {
+            code: "NOT_FOUND",
+            message: `internal path detail ${"x".repeat(8_000)}`,
+          },
+        },
+      },
+    });
+    await showDashboard(page);
+
+    await page.goto(`${suite.server.baseUrl}dashboard`);
+    await page.locator(".board-session-surface").waitFor();
+    const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
+    const pin = preview.getByRole("button", { name: "Pin to dashboard" });
+    await preview.hover();
+    await pin.click();
+
+    await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
+    const toast = page.locator("openclaw-toast-host .app-toast");
+    await toast.waitFor();
+    expect(await toast.textContent()).toContain("Could not pin to dashboard. Try again.");
+    expect(await pin.isEnabled()).toBe(true);
+    expect(await pin.getAttribute("title")).toBe("Could not pin to dashboard. Try again.");
+    expect(await page.getByText("internal path detail", { exact: false }).count()).toBe(0);
+    if (recordProof) {
+      await page.screenshot({ path: path.join(workboardPinFailureProofDir, "pin-failed.png") });
+    }
     await context.close();
   });
 
@@ -472,6 +600,7 @@ suite.define(() => {
         "board.get",
         "chat.metadata",
         "chat.startup",
+        "sessions.patch",
         "workboard.cards.list",
         "workboard.cards.move",
       ],
@@ -511,6 +640,55 @@ suite.define(() => {
           path: path.join(pluginWidgetsProofDir, "01-plugin-widgets-ready.png"),
         });
       }
+
+      const cardElement = page.locator("openclaw-workboard-card-widget");
+      await cardElement.evaluate((element) => {
+        Reflect.set(globalThis, "workboardPluginElementIdentity", element);
+      });
+      const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
+      const mode = (value: "chat" | "split") =>
+        page.locator(`wa-radio.settings-segmented__btn[value="${value}"]`);
+
+      await mode("chat").click();
+      await expect
+        .poll(() => page.locator(".board-session-surface").getAttribute("hidden"))
+        .not.toBeNull();
+      await expect
+        .poll(() =>
+          cardElement.evaluate(
+            (element) =>
+              element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
+              Reflect.get(element, "active") === false &&
+              element.isConnected,
+          ),
+        )
+        .toBe(true);
+      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+        epoch: "plugin-widget-e2e-hidden",
+        revision: 2,
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect(await gateway.getRequests("workboard.cards.list")).toHaveLength(listCountBeforeHide);
+
+      await mode("split").click();
+      await expect
+        .poll(async () => (await gateway.getRequests("workboard.cards.list")).length)
+        .toBe(listCountBeforeHide + 1);
+      await expect
+        .poll(() =>
+          cardElement.evaluate(
+            (element) =>
+              element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
+              Reflect.get(element, "active") === true &&
+              element.isConnected,
+          ),
+        )
+        .toBe(true);
 
       await cardWidget.getByRole("combobox").selectOption("running");
       const moveRequest = await gateway.waitForRequest("workboard.cards.move");

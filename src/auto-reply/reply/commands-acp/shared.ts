@@ -1,16 +1,16 @@
 // Shared ACP command helpers for session identity and reply formatting.
 import { randomUUID } from "node:crypto";
-import { toAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import type { Result } from "@openclaw/normalization-core/result";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
+import { type AcpRuntimeError, toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
 
@@ -84,13 +84,6 @@ type ParsedSetCommandInput = {
 
 const ACP_UNICODE_DASH_PREFIX_RE =
   /^[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]+/;
-
-export function stopWithText(text: string): CommandHandlerResult {
-  return {
-    shouldContinue: false,
-    reply: { text },
-  };
-}
 
 export function resolveAcpAction(tokens: string[]): AcpAction {
   const action = normalizeOptionalLowercaseString(tokens[0]);
@@ -525,7 +518,7 @@ export async function withAcpCommandErrorBoundary<T>(params: {
     const result = await params.run();
     return params.onSuccess(result);
   } catch (error) {
-    return stopWithText(
+    return commandReply(
       collectAcpErrorText({
         error,
         fallbackCode: params.fallbackCode,

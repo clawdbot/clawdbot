@@ -12,8 +12,6 @@ const TIER_EVAL_RETIRED_ROOT_PATHS = [
   ["logging", "redactSensitive"],
   ["commands", "useAccessGroups"],
   ["gateway", "controlUi", "allowInsecureAuth"],
-  ["memory", "qmd", "mcporter"],
-  ["memory", "qmd", "update"],
   ["memory", "search", "remote", "nonBatchConcurrency"],
   ["memory", "search", "remote", "batch", "wait"],
   ["memory", "search", "remote", "batch", "concurrency"],
@@ -45,7 +43,7 @@ const TIER_EVAL_RETIRED_AGENT_PATHS = [
   ["heartbeat", "suppressToolErrorWarnings"],
 ] as const;
 
-function visitAgentConfigScopes(
+export function visitAgentConfigScopes(
   raw: Record<string, unknown>,
   visitor: (scope: Record<string, unknown>, path: string) => void,
 ): void {

@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
@@ -14,13 +13,12 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import {
+  sessionDeliveryChannel,
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -38,13 +36,10 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { resolveOriginMessageTo } from "./origin-routing.js";
-import {
-  buildPendingFinalDeliveryText,
-  sanitizePendingFinalDeliveryText,
-} from "./pending-final-delivery.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
@@ -77,18 +72,6 @@ export function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): Rep
   return payloads.map((payload) =>
     setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
   );
-}
-
-export function resolvePendingFinalDeliveryRetryText(params: {
-  isHeartbeat: boolean;
-  payload: ReplyPayload;
-}): string {
-  const pendingText = buildPendingFinalDeliveryText([params.payload]);
-  if (!params.isHeartbeat) {
-    return pendingText;
-  }
-  const stripped = stripHeartbeatToken(pendingText, { mode: "message" });
-  return stripped.shouldSkip ? "" : stripped.text || pendingText;
 }
 
 export function buildSilentFallbackFailurePayload(params: {
@@ -211,7 +194,7 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
   );
 }
 
-export function resolveConfiguredFallbackModel(params: {
+export function resolveFallbackOriginModel(params: {
   run: FollowupRun["run"];
   fallbackStateEntry?: SessionEntry;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {
@@ -255,17 +238,6 @@ export function buildInlinePluginStatusPayload(params: {
   return { text: lines.join("\n") };
 }
 
-function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
-  return payloads
-    .filter(
-      (payload) => !payload.isError && !payload.isReasoning && !isReplyPayloadStatusNotice(payload),
-    )
-    .map((payload) => payload.text?.trim())
-    .filter((text): text is string => Boolean(text))
-    .join("\n")
-    .trim();
-}
-
 export function normalizeAssistantFinalDeliveryText(text: string): string {
   const parsed = normalizeReplyPayloadDirectives({
     payload: { text },
@@ -273,55 +245,6 @@ export function normalizeAssistantFinalDeliveryText(text: string): string {
     parseMode: "auto",
   });
   return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
-}
-
-export function enqueueCommitmentExtractionForTurn(params: {
-  cfg: OpenClawConfig;
-  commandBody: string;
-  isHeartbeat: boolean;
-  followupRun: FollowupRun;
-  sessionCtx: TemplateContext;
-  sessionKey?: string;
-  replyToChannel?: string;
-  payloads: ReplyPayload[];
-  runId: string;
-}): void {
-  if (params.isHeartbeat) {
-    return;
-  }
-  const userText = params.commandBody.trim() || params.sessionCtx.agentText?.trim() || "";
-  const assistantText = joinCommitmentAssistantText(params.payloads);
-  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
-  const channel =
-    params.replyToChannel ??
-    params.followupRun.run.messageProvider ??
-    params.sessionCtx.Surface ??
-    params.sessionCtx.Provider;
-  if (!userText || !assistantText || !sessionKey || !channel) {
-    return;
-  }
-  const to = resolveOriginMessageTo({
-    originatingTo: params.sessionCtx.OriginatingTo,
-    to: params.sessionCtx.To,
-  });
-  enqueueCommitmentExtraction({
-    cfg: params.cfg,
-    agentId: params.followupRun.run.agentId,
-    sessionKey,
-    channel,
-    ...(params.sessionCtx.AccountId ? { accountId: params.sessionCtx.AccountId } : {}),
-    ...(to ? { to } : {}),
-    ...(params.sessionCtx.MessageThreadId !== undefined
-      ? { threadId: String(params.sessionCtx.MessageThreadId) }
-      : {}),
-    ...(params.followupRun.run.senderId ? { senderId: params.followupRun.run.senderId } : {}),
-    userText,
-    assistantText,
-    ...(params.sessionCtx.MessageSidFull || params.sessionCtx.MessageSid
-      ? { sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid }
-      : {}),
-    sourceRunId: params.runId,
-  });
 }
 
 export function refreshSessionEntryFromStore(params: {
@@ -390,6 +313,9 @@ export async function handleReplyAgentRunError(
     sessionCtx,
   } = context;
 
+  if (isReplyOperationSuperseded(replyOperation)) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
@@ -538,7 +464,6 @@ export type RunReplyAgentParams = {
   runtimePolicySessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
   toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;

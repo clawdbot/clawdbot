@@ -4,7 +4,7 @@ import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js
 import type { MsgContext } from "../templating.js";
 import { buildCommandContext } from "./commands-context.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 export const baseCommandTestConfig = {
   commands: { text: true },
@@ -42,7 +42,7 @@ export function buildCommandTestParams(
     ctx,
     cfg,
     command,
-    directives: parseInlineDirectives(commandBody),
+    directives: parseInlineSessionDirectives(commandBody),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
     workspaceDir: options?.workspaceDir ?? "/tmp",

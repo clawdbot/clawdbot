@@ -25,17 +25,22 @@ describe("ModelSetupWizardRunner", () => {
       return Promise.resolve({});
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const onDone = vi.fn();
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => "research",
       onChange: () => undefined,
-      onDone,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
       sessionExpiredMessage: () => "expired",
     });
 
     await runner.start("openai-oauth");
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "openclaw.setup.auth.start",
+      { sessionId: expect.any(String), agentId: "research", authChoice: "openai-oauth" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(runner.state).toMatchObject({ phase: "step" });
     const answer = runner.answer(undefined, false);
     void runner.answer(undefined, false);
@@ -49,8 +54,7 @@ describe("ModelSetupWizardRunner", () => {
       expect.objectContaining({ timeoutMs: null, signal: expect.any(AbortSignal) }),
     );
     resolveDone!({ done: true, status: "done" });
-    await answer;
-    expect(onDone).toHaveBeenCalledOnce();
+    await expect(answer).resolves.toEqual({ startMethod: "openclaw.setup.auth.start" });
     expect(runner.state).toEqual({ phase: "done", authChoice: "openai-oauth" });
   });
 
@@ -60,22 +64,25 @@ describe("ModelSetupWizardRunner", () => {
         return Promise.resolve({ sessionId: "session-1", done: false, status: "running" });
       }
       if (method === "wizard.next") {
-        return Promise.reject(new Error("wizard unavailable"));
+        return Promise.reject(new Error("wizard unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
       }
       return Promise.resolve({ ok: true });
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => null,
       onChange: () => undefined,
-      onDone: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
       sessionExpiredMessage: () => "expired",
     });
 
     await runner.start("openai-oauth");
-    expect(runner.state).toEqual({ phase: "error", message: "wizard unavailable" });
+    expect(runner.state).toEqual({
+      phase: "error",
+      message: "wizard unavailable: OPENAI_API_KEY=sk-123...cdef",
+    });
     expect(request).toHaveBeenCalledWith(
       "wizard.cancel",
       { sessionId: expect.any(String) },
@@ -99,8 +106,8 @@ describe("ModelSetupWizardRunner", () => {
     });
     const runner = new ModelSetupWizardRunner({
       getClient: () => ({ request }) as unknown as GatewayBrowserClient,
+      getAgentId: () => null,
       onChange: () => undefined,
-      onDone: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
       sessionExpiredMessage: () => "expired",
@@ -152,8 +159,8 @@ describe("ModelSetupWizardRunner", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => null,
       onChange: () => undefined,
-      onDone: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
       sessionExpiredMessage: () => "Setup expired. Close and restart setup.",
@@ -205,28 +212,31 @@ describe("ModelSetupWizardRunner", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const seen: string[] = [];
-    const onDone = vi.fn();
     const runner = new ModelSetupWizardRunner({
       getClient: () => client,
+      getAgentId: () => null,
       onChange: (state) => {
         if (state.phase === "step" && state.step.type === "progress") {
           seen.push(state.step.message ?? "");
         }
       },
-      onDone,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
       sessionExpiredMessage: () => "expired",
     });
 
-    await runner.start("llama-cpp", "openclaw.setup.prepare.start");
-    await vi.waitFor(() => {
-      expect(onDone).toHaveBeenCalledWith(
-        "openclaw.setup.prepare.start",
-        "llama-cpp/gemma-4-e4b-it-q4_k_m",
-      );
+    await expect(runner.start("llama-cpp", "openclaw.setup.prepare.start")).resolves.toEqual({
+      startMethod: "openclaw.setup.prepare.start",
+      preparedModelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
     });
 
     expect(seen).toEqual(messages);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.setup.prepare.start",
+      "wizard.next",
+      "wizard.next",
+      "wizard.next",
+      "wizard.next",
+    ]);
   });
 });

@@ -341,15 +341,18 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
-  it("maps file:// URLs under /workspace into sandbox root", async () => {
-    await withSandboxRoot(async (sandboxDir) => {
-      const result = await resolveSandboxedMediaSource({
-        media: "file:///workspace/media/pic.png",
-        sandboxRoot: sandboxDir,
+  it.each(["file:///workspace/media/pic.png", "FILE:/workspace/media/pic.png"])(
+    "maps %s under /workspace into sandbox root",
+    async (media) => {
+      await withSandboxRoot(async (sandboxDir) => {
+        const result = await resolveSandboxedMediaSource({
+          media,
+          sandboxRoot: sandboxDir,
+        });
+        expect(result).toBe(path.join(sandboxDir, "media", "pic.png"));
       });
-      expect(result).toBe(path.join(sandboxDir, "media", "pic.png"));
-    });
-  });
+    },
+  );
 
   it("preserves remote mxc:// media sources", async () => {
     await withSandboxRoot(async (sandboxDir) => {

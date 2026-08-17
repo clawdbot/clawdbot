@@ -20,7 +20,7 @@ export type OpenClawExecApprovalFloorsForCodexAppServer = {
   ask?: OpenClawExecAsk;
 };
 export type OpenClawExecPolicyForCodexAppServer = {
-  mode?: OpenClawExecMode;
+  mode: OpenClawExecMode;
   security: OpenClawExecSecurity;
   ask: OpenClawExecAsk;
   touched: boolean;
@@ -47,9 +47,8 @@ export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "as
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 export const CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME = "workspace-directory";
-export type CodexPluginMarketplaceName =
-  | typeof CODEX_PLUGINS_MARKETPLACE_NAME
-  | typeof CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME;
+export const CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+export type CodexPluginMarketplaceName = string;
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;

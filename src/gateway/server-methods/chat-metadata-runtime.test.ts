@@ -1,58 +1,108 @@
 import fs from "node:fs/promises";
 import { describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  resolveUsableAgentCredentialModes,
+  type AgentCredentialMap,
+} from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
 import type { GatewayRequestContext } from "./types.js";
 
-function createOwner(config: OpenClawConfig, id: string): PreparedModelRuntimeSnapshot {
-  return {
+function createOwner(
+  config: OpenClawConfig,
+  id: string,
+  credentials: AgentCredentialMap = {},
+  provider = "test",
+  api?: ModelCatalogEntry["api"],
+): PreparedModelRuntimeSnapshot {
+  const model = { id, name: id, provider, ...(api ? { api } : {}) };
+  const authStore: AuthProfileStore = {
+    version: 1,
+    profiles: Object.fromEntries(
+      Object.entries(credentials).map(([credentialProvider, credential]) => [
+        `${credentialProvider}:prepared`,
+        { ...credential, provider: credentialProvider },
+      ]),
+    ),
+  };
+  const owner: PreparedModelRuntimeSnapshot = {
     agentId: "main",
     agentDir: `/tmp/${id}/agent`,
     workspaceDir: `/tmp/${id}/workspace`,
     activeProjectKeys: [],
     config,
-    metadataSnapshot: { id } as never,
+    authModes: resolveUsableAgentCredentialModes(credentials),
+    metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
     allowGatewaySubagentBinding: false,
     modelCatalog: {
-      entries: [{ id, name: id, provider: "test" }],
-      routeVariants: [],
+      entries: [model],
+      routeVariants: api ? [model] : [],
     },
     configuredRuntimeModels: [],
     inlineProviderModels: [],
     createStores: () => ({
-      authStorage: { getAll: () => ({}) } as never,
+      authStorage: { getAll: () => credentials } as never,
       modelRegistry: {} as never,
     }),
   };
+  setPreparedModelRuntimeAuthStore(owner, authStore);
+  return owner;
 }
 
 function createHarness(
   initialConfig: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } },
+  runtimeOptions: {
+    beforeRefresh?: () => Promise<void>;
+    refreshOnRead?: boolean;
+    useDefaultProjection?: boolean;
+  } = {},
 ) {
+  const { useDefaultProjection = false, ...gatewayRuntimeOptions } = runtimeOptions;
   let config = initialConfig;
   let owner = createOwner(config, "first");
   let skillsVersion = 1;
   let pluginRegistryVersion = 1;
-  const authStore: AuthProfileStore = { version: 1, profiles: {} };
+  let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
+  let authStoreRevision = 1;
   const getPreparedOwner = vi.fn(() => owner);
   const getPreparedAuthStore = vi.fn(() => authStore);
+  const getAuthStoreRevision = vi.fn(() => authStoreRevision);
   const getSkillsVersion = vi.fn(() => skillsVersion);
   const getPluginRegistryVersion = vi.fn(() => pluginRegistryVersion);
   const buildCommands = vi.fn(async () => ({
     commands: [{ name: `command-${skillsVersion}-${pluginRegistryVersion}` }],
   }));
   const buildProjection = vi.fn(
-    async ({ facts }: { facts: { owner: PreparedModelRuntimeSnapshot } }) => ({
+    async ({
+      facts,
+    }: {
+      facts: { authStore: AuthProfileStore; owner: PreparedModelRuntimeSnapshot };
+    }) => ({
       modelCatalog: facts.owner.modelCatalog.entries,
       models: facts.owner.modelCatalog.entries,
     }),
   );
   const context = {
     getRuntimeConfig: () => config,
+    loadGatewayModelCatalogSnapshot: async (params?: { readOnly?: boolean }) => {
+      const modelCatalog =
+        params?.readOnly === false && owner.loadFullModelCatalog
+          ? await owner.loadFullModelCatalog()
+          : owner.modelCatalog;
+      return {
+        ...modelCatalog,
+        agentId: owner.agentId,
+        agentDir: owner.agentDir,
+        workspaceDir: owner.workspaceDir,
+        config: owner.config,
+      };
+    },
     logGateway: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -64,25 +114,34 @@ function createHarness(
     getConfig: () => config,
     getContext: () => context,
     log: context.logGateway,
+    ...gatewayRuntimeOptions,
     deps: {
       getPreparedOwner,
       getPreparedAuthStore,
+      getAuthStoreRevision,
       getSkillsVersion,
       getPluginRegistryVersion,
       buildCommands,
-      buildProjection: buildProjection as never,
+      ...(useDefaultProjection ? {} : { buildProjection: buildProjection as never }),
     },
   });
   return {
     buildCommands,
     buildProjection,
     getPluginRegistryVersion,
+    getAuthStoreRevision,
     getPreparedAuthStore,
     getPreparedOwner,
     getSkillsVersion,
     runtime,
     setConfig(next: OpenClawConfig) {
       config = next;
+    },
+    setAuthStore(next: AuthProfileStore | undefined) {
+      authStore = next;
+    },
+    setAuthStoreRevision(next: number) {
+      authStoreRevision = next;
     },
     setOwner(next: PreparedModelRuntimeSnapshot) {
       owner = next;
@@ -97,6 +156,19 @@ function createHarness(
 }
 
 describe("gateway chat metadata runtime", () => {
+  test("refreshes lazily on the first read when configured", async () => {
+    const beforeRefresh = vi.fn(async () => {});
+    const harness = createHarness(undefined, { beforeRefresh, refreshOnRead: true });
+
+    expect(harness.buildProjection).not.toHaveBeenCalled();
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "first" })],
+    });
+
+    expect(beforeRefresh).toHaveBeenCalledOnce();
+    expect(harness.buildProjection).toHaveBeenCalledOnce();
+  });
+
   test("single-flights equivalent refreshes and reads", async () => {
     const harness = createHarness();
     const releaseModels = createDeferred();
@@ -130,6 +202,7 @@ describe("gateway chat metadata runtime", () => {
     await harness.runtime.refresh();
     harness.getPreparedOwner.mockClear();
     harness.getPreparedAuthStore.mockClear();
+    harness.getAuthStoreRevision.mockClear();
     harness.getSkillsVersion.mockClear();
     harness.getPluginRegistryVersion.mockClear();
 
@@ -139,6 +212,7 @@ describe("gateway chat metadata runtime", () => {
     expect(first).toBe(second);
     expect(harness.getPreparedOwner).not.toHaveBeenCalled();
     expect(harness.getPreparedAuthStore).not.toHaveBeenCalled();
+    expect(harness.getAuthStoreRevision).not.toHaveBeenCalled();
     expect(harness.getSkillsVersion).not.toHaveBeenCalled();
     expect(harness.getPluginRegistryVersion).not.toHaveBeenCalled();
   });
@@ -148,6 +222,7 @@ describe("gateway chat metadata runtime", () => {
     await harness.runtime.refresh();
     harness.getPreparedOwner.mockClear();
     harness.getPreparedAuthStore.mockClear();
+    harness.getAuthStoreRevision.mockClear();
     harness.getSkillsVersion.mockClear();
     harness.getPluginRegistryVersion.mockClear();
 
@@ -169,6 +244,7 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
     expect(harness.getPreparedOwner).not.toHaveBeenCalled();
     expect(harness.getPreparedAuthStore).not.toHaveBeenCalled();
+    expect(harness.getAuthStoreRevision).not.toHaveBeenCalled();
     expect(harness.getSkillsVersion).not.toHaveBeenCalled();
     expect(harness.getPluginRegistryVersion).not.toHaveBeenCalled();
   });
@@ -320,6 +396,143 @@ describe("gateway chat metadata runtime", () => {
     expect(second).toBe(first);
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
+  });
+
+  test("rebuilds after an auth store publishes a newer revision", async () => {
+    const harness = createHarness();
+    harness.setAuthStore(undefined);
+    harness.buildProjection.mockImplementation(async ({ facts }) => ({
+      modelCatalog: facts.owner.modelCatalog.entries,
+      models: facts.owner.modelCatalog.entries.map((model) => ({
+        ...model,
+        available: Object.keys(facts.authStore.profiles).length > 0,
+      })),
+    }));
+
+    await harness.runtime.refresh();
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ available: false })],
+    });
+
+    harness.setAuthStore({
+      version: 1,
+      profiles: { "test:default": { type: "api_key", provider: "test" } },
+    });
+    harness.setAuthStoreRevision(2);
+    await harness.runtime.refresh();
+
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ available: true })],
+    });
+    expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+  });
+
+  test.each(["before", "after"] as const)(
+    "converges to models.list availability when owner auth publishes %s attachment",
+    async (publicationOrder) => {
+      const harness = createHarness(undefined, { useDefaultProjection: true });
+      harness.setAuthStore({ version: 1, profiles: {} });
+      const preparedOwner = createOwner(
+        harness.getPreparedOwner().config,
+        "gpt-5.4",
+        {
+          openai: {
+            type: "oauth",
+            access: "prepared-access",
+            refresh: "prepared-refresh",
+            expires: Date.now() + 30 * 60_000,
+          },
+        },
+        "openai",
+        "openai-chatgpt-responses",
+      );
+
+      if (publicationOrder === "before") {
+        harness.setOwner(preparedOwner);
+      } else {
+        await harness.runtime.refresh();
+        await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+          models: [],
+        });
+        harness.setOwner(preparedOwner);
+      }
+
+      await harness.runtime.refresh();
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "gpt-5.4", available: true })],
+      });
+    },
+  );
+
+  test("keeps live provider discovery off chat metadata projection", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/gpt-5.6-sol": {} },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    const harness = createHarness(config, { useDefaultProjection: true });
+    const credentials: AgentCredentialMap = {
+      openai: {
+        type: "oauth",
+        access: "rejected-access-token",
+        refresh: "rejected-refresh-token",
+        expires: Date.now() + 30 * 60_000,
+      },
+    };
+    const owner = createOwner(
+      config,
+      "gpt-5.6-sol",
+      credentials,
+      "openai",
+      "openai-chatgpt-responses",
+    );
+    const fullCatalog = {
+      ...owner.modelCatalog,
+      providerOutcomes: [{ provider: "openai", status: "auth-rejected" as const }],
+    };
+    const loadFullModelCatalog = vi.fn(async () => fullCatalog);
+    harness.setOwner({
+      ...owner,
+      loadFullModelCatalog,
+    });
+    harness.setAuthStore({
+      version: 1,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth",
+          provider: "openai",
+          access: "rejected-access-token",
+          refresh: "rejected-refresh-token",
+          expires: Date.now() + 30 * 60_000,
+        },
+      },
+    });
+
+    await harness.runtime.refresh();
+
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
+    });
+    expect(loadFullModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("retains a generation while auth store revisions are unchanged", async () => {
+    const harness = createHarness();
+    harness.getPreparedAuthStore.mockImplementation(() => ({ version: 1, profiles: {} }));
+    await harness.runtime.refresh();
+    const first = await harness.runtime.read({ agentId: "main" });
+
+    await harness.runtime.refresh();
+    const second = await harness.runtime.read({ agentId: "main" });
+
+    expect(second).toBe(first);
+    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
+    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
+    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
   });
 
   test("refreshes config, catalog-auth, skills, and plugin generations", async () => {

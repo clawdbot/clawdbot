@@ -87,6 +87,7 @@ import {
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let clearSharedCodexAppServerClient: typeof import("./shared-client.js").clearSharedCodexAppServerClient;
+let clearSharedCodexAppServerClientAndWait: typeof import("./shared-client.js").clearSharedCodexAppServerClientAndWait;
 let clearSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrent;
 let clearSharedCodexAppServerClientIfCurrentAndUnclaimed: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrentAndUnclaimed;
 let clearSharedCodexAppServerClientIfCurrentAndWait: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrentAndWait;
@@ -185,11 +186,29 @@ function deferNextAuthProfileApplication(): () => void {
   return release;
 }
 
+function configureManagedDesktopFallback(): CodexAppServerStartOptions {
+  mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (startOptions) => ({
+    ...startOptions,
+    command: "/Applications/Codex.app/Contents/Resources/codex",
+    commandSource: "resolved-managed",
+    managedFallbackCommandPaths: ["/cache/openclaw/codex"],
+  }));
+  return {
+    transport: "stdio",
+    homeScope: "user",
+    command: "codex",
+    commandSource: "managed",
+    args: ["app-server", "--listen", "stdio://"],
+    headers: {},
+  };
+}
+
 describe("shared Codex app-server client", () => {
   beforeAll(async () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
     ({
       clearSharedCodexAppServerClient,
+      clearSharedCodexAppServerClientAndWait,
       clearSharedCodexAppServerClientIfCurrent,
       clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
       clearSharedCodexAppServerClientIfCurrentAndWait,
@@ -448,29 +467,32 @@ describe("shared Codex app-server client", () => {
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true));
   });
 
-  it("falls back to the next managed app-server when desktop initialize is unsupported", async () => {
+  it("reuses the successful managed fallback after desktop initialize is unsupported", async () => {
     const desktop = createClientHarness();
     const pluginLocal = createClientHarness();
     const startSpy = vi
       .spyOn(CodexAppServerClient, "start")
       .mockReturnValueOnce(desktop.client)
-      .mockReturnValueOnce(pluginLocal.client);
-    mocks.resolveManagedCodexAppServerStartOptions.mockImplementationOnce(async (startOptions) => ({
-      ...startOptions,
-      command: "/Applications/Codex.app/Contents/Resources/codex",
-      commandSource: "resolved-managed",
-      managedFallbackCommandPaths: ["/cache/openclaw/codex"],
-    }));
+      .mockReturnValueOnce(pluginLocal.client)
+      .mockImplementation(() => {
+        throw new Error("unexpected duplicate start");
+      });
+    const startOptions = configureManagedDesktopFallback();
 
-    const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
+    const firstAcquire = getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
     await sendInitializeResult(desktop, "openclaw/0.124.9 (macOS; test)");
     await sendInitializeResult(pluginLocal, "openclaw/0.147.0 (macOS; test)");
-    await sendEmptyModelList(pluginLocal);
+    const firstClient = await firstAcquire;
 
-    await expect(listPromise).resolves.toEqual({ models: [] });
+    const secondClient = await getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
+
+    expect(secondClient).toBe(firstClient);
     expect(desktop.process.stdin.destroyed).toBe(true);
     expect(pluginLocal.process.stdin.destroyed).toBe(false);
     expect(startSpy).toHaveBeenCalledTimes(2);
+    const retained = retainSharedCodexAppServerClientByInstanceId(firstClient.getInstanceId());
+    expect(retained?.client).toBe(firstClient);
+    retained?.release();
     expect(startSpy.mock.calls[0]?.[0]).toMatchObject({
       command: "/Applications/Codex.app/Contents/Resources/codex",
       commandSource: "resolved-managed",
@@ -481,6 +503,37 @@ describe("shared Codex app-server client", () => {
       commandSource: "resolved-managed",
     });
     expect(startSpy.mock.calls[1]?.[0]).not.toHaveProperty("managedFallbackCommandPaths");
+
+    await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
+    expect(pluginLocal.process.stdin.destroyed).toBe(true);
+  });
+
+  it("shares a managed fallback with a waiter that arrives during fallback initialize", async () => {
+    const desktop = createClientHarness();
+    const fallback = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(desktop.client)
+      .mockReturnValueOnce(fallback.client)
+      .mockImplementation(() => {
+        throw new Error("unexpected duplicate start");
+      });
+    const options = {
+      timeoutMs: 1_000,
+      startOptions: configureManagedDesktopFallback(),
+    };
+
+    const firstAcquire = getSharedCodexAppServerClient(options);
+    await sendInitializeResult(desktop, "openclaw/0.124.9 (macOS; test)");
+    await vi.waitFor(() => expect(fallback.writes.length).toBeGreaterThanOrEqual(1));
+    const secondAcquire = getSharedCodexAppServerClient(options);
+    await sendInitializeResult(fallback, "openclaw/0.147.0 (macOS; test)");
+
+    const [firstClient, secondClient] = await Promise.all([firstAcquire, secondAcquire]);
+    expect(secondClient).toBe(firstClient);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(desktop.process.stdin.destroyed).toBe(true);
+    expect(fallback.process.stdin.destroyed).toBe(false);
   });
 
   it("keeps capture clients separate from ordinary shared clients", async () => {
@@ -1942,6 +1995,31 @@ describe("shared Codex app-server client", () => {
 
     expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
     expect(first.process.stdin.destroyed).toBe(true);
+  });
+
+  it("globally disposes a gracefully detached client with an explicit retain", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+
+    const lease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(harness, "openclaw/0.147.0 (Linux; test)");
+    const client = await lease;
+    const releaseRetain = retainSharedCodexAppServerClientIfCurrent(client);
+    expect(releaseRetain).toBeTypeOf("function");
+
+    expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+    expect(retireSharedCodexAppServerClientIfCurrent(client)).toEqual({
+      activeLeases: 1,
+      closed: false,
+    });
+    expect(harness.process.stdin.destroyed).toBe(false);
+
+    await clearSharedCodexAppServerClientAndWait({
+      exitTimeoutMs: 25,
+      forceKillDelayMs: 5,
+    });
+    expect(harness.process.stdin.destroyed).toBe(true);
+    releaseRetain?.();
   });
 
   it("waits only for the shared client that is still current", async () => {

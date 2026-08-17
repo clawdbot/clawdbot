@@ -2,15 +2,15 @@
 import {
   appendTranscriptMessage,
   loadSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
   createAgentPatchedSessionModelFallback,
   type AgentPatchedSessionModelFallback,
 } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { resolveFailoverReasonFromError } from "./failover-error.js";
+import type { FailoverReason } from "./failover/signal.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 
 // Revert only when the chosen model is definitively unusable. Transient
@@ -47,7 +47,7 @@ async function reconcileAgentPatchedSessionModel(params: {
   let note: string | undefined;
   let sessionId: string | undefined;
   let result: "cleared" | "promoted" | "reverted" | "none" = "none";
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     {
       agentId: params.agentId,
       sessionKey: params.sessionKey,

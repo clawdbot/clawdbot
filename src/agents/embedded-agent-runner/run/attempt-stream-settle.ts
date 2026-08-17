@@ -1,56 +1,86 @@
 /**
- * Settles async tools and compaction, then snapshots the completed stream.
+ * Prepares transport before streaming and settles the completed stream afterward.
+ * It may assume session runtime ownership and provider inputs are established.
  */
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import type { AgentSession, SessionManager } from "../../sessions/index.js";
+import type { SandboxContext } from "../../sandbox/types.js";
+import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
 import { projectToolSearchTargetTranscriptMessages } from "../../tool-search.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExplicitSettingsTransport,
+  resolvePreparedExtraParams,
+} from "../extra-params.js";
 import { log } from "../logger.js";
 import {
   completePromptCacheObservation,
   type PromptCacheBreak,
   type PromptCacheChange,
 } from "../prompt-cache-observability.js";
-import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
+import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
-  flushSessionManagerTranscript,
-  normalizeCompactionRecoveryTranscriptTail,
-} from "./attempt-transcript-helpers.js";
+  type ProviderPromptState,
+  wrapStreamFnWithProviderPromptState,
+} from "../provider-prompt-state.js";
+import {
+  describeEmbeddedAgentStreamStrategy,
+  resolveEmbeddedAgentApiKey,
+  resolveEmbeddedAgentBaseStreamFn,
+  resolveEmbeddedAgentStreamFn,
+} from "../stream-resolution.js";
+import type { ProviderThinkLevel } from "../utils.js";
+import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import {
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
   type CompletionRequiredAsyncTaskWaitResult,
-} from "./attempt.async-tasks.js";
+} from "./attempt-async-tasks.js";
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
   findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
-} from "./attempt.context-engine-helpers.js";
-import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
-import { appendAttemptCacheTtlIfNeeded } from "./attempt.thread-helpers.js";
+} from "./attempt-context-engine-helpers.js";
+import {
+  resolveAttemptStreamAuthProfileId,
+  resolveAttemptToolPolicyMessageProvider,
+} from "./attempt-run-decisions.js";
+import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
+import {
+  flushSessionManagerTranscript,
+  normalizeCompactionRecoveryTranscriptTail,
+} from "./attempt-transcript-helpers.js";
 import {
   hasActiveCompactionRetryWork,
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
+import { materializeProviderContext } from "./images.js";
+import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
+/**
+ * Settles async tools and compaction, then snapshots the completed stream.
+ */
 type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSession>;
-type AttemptSessionLockController = Awaited<
-  ReturnType<typeof createEmbeddedAttemptSessionLockController>
->;
 type PromptCacheRetention = Parameters<typeof buildContextEnginePromptCacheInfo>[0]["retention"];
 type ToolSearchTargetTranscriptProjections = Parameters<
   typeof projectToolSearchTargetTranscriptMessages
 >[1];
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type StreamSettleResult = {
   promptError: unknown;
@@ -62,6 +92,7 @@ type StreamSettleResult = {
   lastAssistant: EmbeddedRunAttemptResult["lastAssistant"];
   currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
   currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
+  successfulNestedToolNames: string[];
   attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
   cacheBreak: PromptCacheBreak | null;
   lastCallUsage: NormalizedUsage | undefined;
@@ -72,8 +103,7 @@ export async function settleEmbeddedAttemptStream(input: {
   attempt: EmbeddedRunAttemptParams;
   activeSession: AgentSession;
   sessionManager: SessionManager;
-  sessionLockController: AttemptSessionLockController;
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   subscription: EmbeddedAttemptSubscription;
   state: {
     promptError: unknown;
@@ -253,7 +283,7 @@ export async function settleEmbeddedAttemptStream(input: {
   let lastCallUsage: NormalizedUsage | undefined;
   let promptCache: EmbeddedRunAttemptResult["promptCache"];
 
-  await input.withOwnedSessionWriteLock(async () => {
+  await input.withOwnedTranscriptWrite(async () => {
     const { timedOutDuringCompaction } = input.readLifecycleState();
     compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
     appendAttemptCacheTtlIfNeeded({
@@ -397,9 +427,214 @@ export async function settleEmbeddedAttemptStream(input: {
     lastAssistant,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
+    successfulNestedToolNames: [
+      ...new Set(
+        input.toolSearchTargetTranscriptProjections
+          // Receipt evidence admits only projections explicitly recorded as successful.
+          .filter((projection) => Object.is(projection.isError, false))
+          .map((projection) => projection.toolName.trim())
+          .filter(Boolean),
+      ),
+    ],
     attemptUsage,
     cacheBreak,
     lastCallUsage,
     promptCache,
+  };
+}
+
+/**
+ * Selects and configures the provider transport for one embedded attempt.
+ */
+export async function prepareEmbeddedAttemptTransport(input: {
+  attempt: EmbeddedRunAttemptParams;
+  session: AgentSession;
+  settingsManager: SettingsManager;
+  providerThinkingLevel: ProviderThinkLevel | undefined;
+  sessionAgentId: string;
+  workspaceDir: string;
+  workspaceOnly: boolean;
+  agentDir: string;
+  abortSignal: AbortSignal;
+  getProviderRuntimeHandle: () => ProviderRuntimePluginHandle;
+  sandboxSessionKey: string;
+  sandbox?: SandboxContext | null;
+  codeModeControlsEnabled: boolean;
+  providerPromptState: {
+    state: ProviderPromptState;
+    effectiveContextTokenBudget: number;
+    recordEvent?: (type: string, data?: Record<string, unknown>) => void;
+  };
+}) {
+  const attempt = input.attempt;
+  const session = input.session;
+  // Rebuild each turn from the session's original stream base so prior-turn
+  // wrappers do not pin us to stale provider/API transport behavior.
+  const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
+    session,
+  });
+  const resolvedTransport = resolveExplicitSettingsTransport({
+    settingsManager: input.settingsManager,
+    sessionTransport: session.agent.transport,
+  });
+  const streamExtraParamsOverride = {
+    ...attempt.streamParams,
+    fastMode: attempt.fastMode,
+  };
+  const preparedRuntimeExtraParams = attempt.runtimePlan?.transport.resolveExtraParams({
+    extraParamsOverride: streamExtraParamsOverride,
+    thinkingLevel: input.providerThinkingLevel,
+    agentId: input.sessionAgentId,
+    workspaceDir: input.workspaceDir,
+    model: attempt.model,
+    resolvedTransport,
+  });
+  const effectiveExtraParams =
+    preparedRuntimeExtraParams ??
+    resolvePreparedExtraParams({
+      cfg: attempt.config,
+      provider: attempt.provider,
+      modelId: attempt.modelId,
+      extraParamsOverride: streamExtraParamsOverride,
+      thinkingLevel: input.providerThinkingLevel,
+      agentId: input.sessionAgentId,
+      agentDir: input.agentDir,
+      workspaceDir: input.workspaceDir,
+      model: attempt.model,
+      resolvedTransport,
+    });
+  const providerStreamFn = registerProviderStreamForModel({
+    model: attempt.model,
+    cfg: attempt.config,
+    agentDir: input.agentDir,
+    workspaceDir: input.workspaceDir,
+  });
+  const directProviderStreamFn = providerStreamFn
+    ? wrapStreamFnWithMessageTransform(
+        providerStreamFn,
+        (messages) => messages,
+        ({ context, ...provider }) =>
+          materializeProviderContext({
+            ...provider,
+            context,
+            workspaceDir: input.workspaceDir,
+            workspaceOnly: input.workspaceOnly,
+            sandbox:
+              input.sandbox?.enabled && input.sandbox.fsBridge
+                ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
+                : undefined,
+          }),
+      )
+    : undefined;
+  const transportApiKey = await resolveEmbeddedAgentApiKey({
+    provider: attempt.model.provider,
+    resolvedApiKey: attempt.resolvedApiKey,
+    authStorage: attempt.authStorage,
+  });
+  const streamStrategy = describeEmbeddedAgentStreamStrategy({
+    currentStreamFn: defaultSessionStreamFn,
+    providerStreamFn: directProviderStreamFn,
+    model: attempt.model,
+    resolvedApiKey: transportApiKey,
+  });
+  session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+    currentStreamFn: defaultSessionStreamFn,
+    providerStreamFn: directProviderStreamFn,
+    sessionId: attempt.sessionId,
+    promptCacheKey: attempt.promptCacheKey,
+    signal: input.abortSignal,
+    model: attempt.model,
+    resolvedApiKey: attempt.resolvedApiKey,
+    transportAuthAvailable: Boolean(transportApiKey?.trim()),
+    authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+    authStorage: attempt.authStorage,
+  });
+  // Install inside provider/config wrappers so their full onPayload chain runs
+  // before admission hashes the request body that the built-in transport sends.
+  session.agent.streamFn = wrapStreamFnWithProviderPromptState({
+    streamFn: session.agent.streamFn,
+    ...input.providerPromptState,
+  });
+  const providerTextTransforms = resolveProviderTextTransforms({
+    provider: attempt.provider,
+    config: attempt.config,
+    workspaceDir: input.workspaceDir,
+    runtimeHandle: input.getProviderRuntimeHandle(),
+  });
+  if (providerTextTransforms?.input?.length) {
+    session.agent.streamFn = wrapStreamFnTextTransforms({
+      streamFn: session.agent.streamFn,
+      input: providerTextTransforms.input,
+      transformSystemPrompt: false,
+    });
+  }
+  const nativeWebSearchPolicyContext = {
+    webSearchEnabled: attempt.disableTools !== true && attempt.toolOverrides?.webSearch !== false,
+    runtimeToolAllowlist: attempt.toolsAllow,
+    sessionKey: input.sandboxSessionKey,
+    sandboxToolPolicy: input.sandbox?.tools,
+    messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
+    agentAccountId: attempt.agentAccountId,
+    groupId: attempt.groupId,
+    groupChannel: attempt.groupChannel,
+    groupSpace: attempt.groupSpace,
+    spawnedBy: attempt.spawnedBy,
+    senderId: attempt.senderId,
+    senderName: attempt.senderName,
+    senderUsername: attempt.senderUsername,
+    senderE164: attempt.senderE164,
+  };
+
+  applyExtraParamsToAgent(
+    session.agent,
+    attempt.config,
+    attempt.provider,
+    attempt.modelId,
+    streamExtraParamsOverride,
+    input.providerThinkingLevel,
+    input.sessionAgentId,
+    input.workspaceDir,
+    attempt.model,
+    input.agentDir,
+    resolvedTransport,
+    {
+      preparedExtraParams: effectiveExtraParams,
+      nativeWebSearchPolicyContext,
+    },
+  );
+  if (input.codeModeControlsEnabled) {
+    session.agent.streamFn = createCodexNativeWebSearchWrapper(session.agent.streamFn, {
+      config: attempt.config,
+      agentDir: input.agentDir,
+      agentId: input.sessionAgentId,
+      ...nativeWebSearchPolicyContext,
+      codeModeToolSurfaceEnabled: true,
+    });
+  }
+  const effectivePromptCacheRetention = resolveCacheRetention(
+    effectiveExtraParams,
+    attempt.provider,
+    attempt.model.api,
+    attempt.modelId,
+  );
+  const agentTransportOverride = resolveAgentTransportOverride({
+    settingsManager: input.settingsManager,
+    effectiveExtraParams,
+  });
+  const effectiveAgentTransport = agentTransportOverride ?? session.agent.transport;
+  if (agentTransportOverride && session.agent.transport !== agentTransportOverride) {
+    const previousTransport = session.agent.transport;
+    log.debug(
+      `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
+        `(${attempt.provider}/${attempt.modelId})`,
+    );
+  }
+  session.agent.transport = effectiveAgentTransport;
+  return {
+    effectiveAgentTransport,
+    effectiveExtraParams,
+    effectivePromptCacheRetention,
+    providerTextTransforms,
+    streamStrategy,
   };
 }

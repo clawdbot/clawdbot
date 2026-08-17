@@ -88,7 +88,7 @@ describe("cross-OS release checks workflow", () => {
     );
     expect(baselineMetadata["working-directory"]).toBe("workflow");
     expect(baselineMetadata.run).toContain(
-      'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";',
+      'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";',
     );
     expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
   });
@@ -363,7 +363,7 @@ describe("cross-OS release checks workflow", () => {
       if: "inputs.candidate_artifact_name != ''",
       run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
     });
-    expect(resolve.run).toContain("resolve-openclaw-package-candidate.mjs");
+    expect(resolve.run).toContain("resolve-openclaw-package-candidate.mts");
     expect(resolve.run).toContain("--source artifact");
     expect(resolve.run).toContain('--package-sha256 "$INPUT_CANDIDATE_SHA256"');
     expect(resolve.run).toContain('"$actual_sha256" == "$INPUT_CANDIDATE_SHA256"');
@@ -527,6 +527,10 @@ describe("cross-OS release checks workflow", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
     };
+    const windowsCiCoverage = [
+      packageJson.scripts["test:windows:ci:1"],
+      packageJson.scripts["test:windows:ci:2"],
+    ].join(" ");
 
     expect(wrapper).toContain('exec "${node_cmd}" "${script_path}" "$@"');
     expect(wrapper).not.toContain("npm");
@@ -534,9 +538,7 @@ describe("cross-OS release checks workflow", () => {
     expect(wrapper).not.toContain("--import");
     expect(script).toMatch(/^#!\/usr\/bin\/env node$/mu);
     expect(script).not.toContain("--import tsx");
-    expect(packageJson.scripts["test:windows:ci"]).toContain(
-      "test/scripts/openclaw-cross-os-release-workflow.test.ts",
-    );
+    expect(windowsCiCoverage).toContain("test/scripts/openclaw-cross-os-release-workflow.test.ts");
     const result = spawnSync(
       BASH_BIN,
       [

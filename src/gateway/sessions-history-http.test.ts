@@ -297,6 +297,20 @@ type SessionHistoryBody = {
   hasMore?: boolean;
 };
 
+function sessionHistoryRowIdentity(message: unknown): string {
+  const record = requireRecord(message, "session history row");
+  const metadata = requireRecord(record["__openclaw"], "session history row metadata");
+  const firstContent = Array.isArray(record.content)
+    ? requireRecord(record.content[0], "session history row content")
+    : undefined;
+  const label =
+    (typeof firstContent?.text === "string" ? firstContent.text : undefined) ??
+    (typeof firstContent?.id === "string" ? firstContent.id : undefined) ??
+    (typeof record.toolCallId === "string" ? record.toolCallId : "");
+  const kind = record.openclawMessageToolMirror ? "mirror" : String(record.role);
+  return `${String(metadata.seq)}:${kind}:${label}`;
+}
+
 async function readSessionHistoryBody(
   port: number,
   sessionKey: string,
@@ -681,10 +695,10 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("returns session history over direct REST", async () => {
+  test.each(["", "?cursor=", "?cursor=%20"])("returns history for query %j", async (query) => {
     await seedSession({ text: "hello from history" });
     await withGatewayHarness(async (harness) => {
-      const body = await readSessionHistoryBody(harness.port, "agent:main:main");
+      const body = await readSessionHistoryBody(harness.port, "agent:main:main", { query });
       expect(body.sessionKey).toBe("agent:main:main");
       expect(body.messages).toHaveLength(1);
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("hello from history");
@@ -1068,6 +1082,185 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("keeps same-sequence SQLite projection rows reachable over REST and SSE", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-same-sequence";
+    const sessionKey = "agent:main:main";
+    const sharedTimestamp = Date.UTC(2026, 7, 15, 9, 30, 0);
+    await writeSessionStore({
+      entries: { main: { sessionId, updatedAt: sharedTimestamp } },
+      storePath,
+    });
+    await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        id: "history-user",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "reply here" }],
+          timestamp: sharedTimestamp,
+        },
+      },
+      {
+        id: "history-tool-call",
+        message: {
+          ...makeTranscriptAssistantMessage({ text: "" }),
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-first",
+              name: "message",
+              arguments: { action: "send", message: "First visible reply." },
+            },
+            {
+              type: "toolCall",
+              id: "call-message-second",
+              name: "message",
+              arguments: { action: "send", message: "Second visible reply." },
+            },
+          ],
+          timestamp: sharedTimestamp,
+        },
+      },
+      {
+        id: "history-tool-result-first",
+        message: {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-first",
+          content: { ok: true, messageId: "same-sequence-first" },
+          timestamp: sharedTimestamp,
+        },
+      },
+      {
+        id: "history-tool-result-second",
+        message: {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-second",
+          content: { ok: true, messageId: "same-sequence-second" },
+          timestamp: sharedTimestamp,
+        },
+      },
+      {
+        id: "history-hidden-control",
+        message: {
+          ...makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
+          timestamp: sharedTimestamp,
+        },
+      },
+    ]);
+
+    await withGatewayHarness(async (harness) => {
+      const firstPage = await readSessionHistoryBody(harness.port, sessionKey, {
+        query: "?limit=1",
+      });
+      expect(firstPage.messages?.map(sessionHistoryRowIdentity)).toEqual([
+        "3:toolResult:call-message-first",
+        "4:toolResult:call-message-second",
+        "3:mirror:First visible reply.",
+        "4:mirror:Second visible reply.",
+      ]);
+      expect(firstPage.hasMore).toBe(true);
+      expect(firstPage.nextCursor).toBe("3");
+
+      const stream = await openSessionHistorySse(harness.port, sessionKey, {
+        query: "?limit=1",
+      });
+      try {
+        const event = await readSseEvent(stream.reader, stream.streamState);
+        expect(event.event).toBe("history");
+        const data = event.data as SessionHistoryBody;
+        expect(data.messages?.map(sessionHistoryRowIdentity)).toEqual(
+          firstPage.messages?.map(sessionHistoryRowIdentity),
+        );
+        expect(data).toMatchObject({ hasMore: true, nextCursor: "3" });
+      } finally {
+        await stream.reader.cancel();
+      }
+
+      const pages: SessionHistoryBody[] = [firstPage];
+      const seenCursors = new Set<string>();
+      let cursor = firstPage.nextCursor;
+      while (cursor) {
+        expect(seenCursors.has(cursor)).toBe(false);
+        seenCursors.add(cursor);
+        const page = await readSessionHistoryBody(harness.port, sessionKey, {
+          query: `?limit=1&cursor=${encodeURIComponent(cursor)}`,
+        });
+        pages.push(page);
+        cursor = page.hasMore ? page.nextCursor : undefined;
+      }
+
+      const chronologicalRows = pages.toReversed().flatMap((page) => page.messages ?? []);
+      expect(chronologicalRows.map(sessionHistoryRowIdentity)).toEqual([
+        "1:user:reply here",
+        "2:assistant:call-message-first",
+        "3:toolResult:call-message-first",
+        "4:toolResult:call-message-second",
+        "3:mirror:First visible reply.",
+        "4:mirror:Second visible reply.",
+      ]);
+      expect(
+        chronologicalRows.map((message) => requireRecord(message, "history timestamp").timestamp),
+      ).toEqual(Array.from({ length: 6 }, () => sharedTimestamp));
+      expect(
+        pages
+          .flatMap((page) => page.messages ?? [])
+          .some((message) => sessionHistoryRowIdentity(message).includes("NO_REPLY")),
+      ).toBe(false);
+      expect(seenCursors).toEqual(new Set(["3", "2"]));
+      expect(pages.at(-1)).toMatchObject({ hasMore: false });
+      expect(pages.at(-1)?.nextCursor).toBeUndefined();
+    });
+  });
+
+  test("keeps older SQLite history reachable past an all-silent bounded tail", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-silent-tail";
+    const sessionKey = "agent:main:main";
+    await writeSessionStore({
+      entries: { main: { sessionId, updatedAt: Date.now() } },
+      storePath,
+    });
+    await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "assistant", content: "reachable older history" } },
+      ...Array.from({ length: 40 }, () => ({
+        message: { role: "assistant", content: "NO_REPLY" },
+      })),
+    ]);
+
+    await withGatewayHarness(async (harness) => {
+      const firstPage = await readSessionHistoryBody(harness.port, sessionKey, {
+        query: "?limit=1",
+      });
+      expect(firstPage.messages).toEqual([]);
+      expect(firstPage.hasMore).toBe(true);
+      expect(firstPage.nextCursor).toBe("2");
+
+      const stream = await openSessionHistorySse(harness.port, sessionKey, {
+        query: "?limit=1",
+      });
+      try {
+        const event = await readSseEvent(stream.reader, stream.streamState);
+        expect(event.event).toBe("history");
+        expect(event.data).toMatchObject({ messages: [], hasMore: true, nextCursor: "2" });
+      } finally {
+        await stream.reader.cancel();
+      }
+
+      const olderPage = await readSessionHistoryBody(harness.port, sessionKey, {
+        query: "?limit=1&cursor=2",
+      });
+      expect(olderPage.messages?.map((message) => message.content)).toEqual([
+        "reachable older history",
+      ]);
+      expect(olderPage.hasMore).toBe(false);
+      expect(olderPage.nextCursor).toBeUndefined();
+    });
+  });
+
   test("caps all-digit direct REST history limits that exceed safe integer range", async () => {
     const { storePath } = await seedSession({ text: "first message" });
     await appendVisibleAssistantMessage({
@@ -1108,6 +1301,22 @@ describe("session history HTTP endpoints", () => {
         const body = await res.json();
         expect(body.error?.type).toBe("invalid_request_error");
         expect(body.error?.message).toBe("limit must be a positive integer");
+      });
+    },
+  );
+
+  test.each(["garbage", "seq:garbage", "seq:0", "seq:99999999999999999999", "0", "-1", "1.5"])(
+    "rejects invalid cursor %j with 400",
+    async (cursor) => {
+      await seedSession({ text: "first message" });
+      await withGatewayHarness(async (harness) => {
+        const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+          query: `?cursor=${encodeURIComponent(cursor)}`,
+        });
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.error?.type).toBe("invalid_request_error");
+        expect(body.error?.message).toBe("cursor must be a positive integer");
       });
     },
   );

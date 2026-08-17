@@ -25,6 +25,14 @@ export const UPDATE_EFFECTIVE_CHANNEL_ENV = "OPENCLAW_UPDATE_EFFECTIVE_CHANNEL";
 /** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
 
+/** Orders the configured Dev upstream before any detached-checkout fallbacks. */
+export function resolveDevUpstreamRefs(
+  detached: boolean,
+  fallbacks: readonly string[] = [],
+): string[] {
+  return detached ? [`${DEV_BRANCH}@{upstream}`, ...fallbacks] : ["@{upstream}"];
+}
+
 /** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -59,6 +67,21 @@ export function channelToNpmTag(channel: UpdateChannel): string {
 /** Returns whether a version/tag explicitly targets the beta stream. */
 export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
+}
+
+/** Returns whether a final monthly release belongs to the extended-stable line. */
+function isExtendedStableReleaseVersion(version: string): boolean {
+  const parsed = parseSemver(version.trim());
+  return (
+    parsed !== null &&
+    parsed.build.length === 0 &&
+    parsed.prerelease.length === 0 &&
+    parsed.major >= 1000 &&
+    parsed.major <= 9999 &&
+    parsed.minor >= 1 &&
+    parsed.minor <= 12 &&
+    parsed.patch >= 33
+  );
 }
 
 /** Detects prerelease tags, including legacy dot-beta tags and named prerelease channels. */
@@ -115,6 +138,12 @@ export function resolveEffectiveUpdateChannel(params: {
     return { channel: params.configChannel, source: "config" };
   }
 
+  if (params.installKind === "package" && params.currentVersion) {
+    if (isExtendedStableReleaseVersion(params.currentVersion)) {
+      return { channel: "extended-stable", source: "installed-version" };
+    }
+  }
+
   if (params.installKind === "git") {
     const tag = params.git?.tag;
     if (tag) {
@@ -156,7 +185,7 @@ export function formatUpdateChannelLabel(params: {
       : `${params.channel} (branch)`;
   }
   if (params.source === "installed-version") {
-    return "beta (installed version)";
+    return `${params.channel} (installed version)`;
   }
   return `${params.channel} (default)`;
 }

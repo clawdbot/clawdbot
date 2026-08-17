@@ -73,10 +73,10 @@ export function getGroupRegistry(): {
   groups: Map<string, LaneGroupState>;
   groupByLane: Map<string, string>;
 } {
-  const state = getQueueState() as unknown as {
+  const state: ReturnType<typeof getQueueState> & {
     laneGroups?: Map<string, LaneGroupState>;
     laneGroupByLane?: Map<string, string>;
-  };
+  } = getQueueState();
   // Migration: an older singleton (pre-upgrade, inherited via globalThis after
   // a SIGUSR1 in-process restart) has neither field. Active counts are derived,
   // so a late-initialized registry cannot desynchronize from lane state.

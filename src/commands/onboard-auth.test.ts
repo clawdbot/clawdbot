@@ -76,6 +76,13 @@ vi.mock("../agents/auth-profiles/profiles.js", async () => {
       upsert(params);
       return { version: 1, profiles: {} };
     },
+    upsertAuthProfileWithLockOrThrow: async (params: {
+      profileId: string;
+      credential: unknown;
+      agentDir?: string;
+    }) => {
+      upsert(params);
+    },
   };
 });
 

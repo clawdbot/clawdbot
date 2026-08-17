@@ -12,7 +12,7 @@ import {
   isGovernedSourcePath,
   main,
   parseBaseline,
-} from "../../scripts/check-max-lines-ratchet.mjs";
+} from "../../scripts/check-max-lines-ratchet.mts";
 
 const tempDirs: string[] = [];
 const nestedGitEnvKeys = [
@@ -233,7 +233,7 @@ describe("check-max-lines-ratchet", () => {
     expect(main(root)).toBe(1);
   });
 
-  it("compares divergent worktrees against their main merge base", () => {
+  it("compares an explicit moving base at the branch fork", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-diverged-"));
     tempDirs.push(root);
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
@@ -259,7 +259,7 @@ describe("check-max-lines-ratchet", () => {
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     git(root, ["checkout", "release"]);
 
-    expect(main(root)).toBe(0);
+    expect(main(root, ["--base", "origin/main"])).toBe(0);
   });
 
   it("falls back to main when no merge base is available", () => {

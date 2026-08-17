@@ -1,26 +1,14 @@
 // Tests trajectory export command approval routing.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-export-command-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function makeParams(workspaceDir = makeTempDir()): HandleCommandsParams {
+function makeParams(
+  workspaceDir = tempDirs.make("openclaw-export-command-"),
+): HandleCommandsParams {
   return {
     cfg: {
       session: {

@@ -1,6 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-icon.js";
+import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-agent-status.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
@@ -10,14 +10,10 @@ export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
 
 const SessionsPatchMutationProperties = {
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+  icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
-  icon: Type.Optional(
-    Type.Union([NonEmptyString, Type.Null()], {
-      description: "Sidebar icon: one emoji, name:<id>, or svg:<svg ...>...</svg>.",
-    }),
-  ),
   statusNote: Type.Optional(
     Type.Union([Type.String({ maxLength: 120 }), Type.Null()], {
       description: "Short expiring sidebar status note; null clears it and any declared attention.",

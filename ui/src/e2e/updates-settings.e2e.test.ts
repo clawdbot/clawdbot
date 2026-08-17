@@ -102,6 +102,7 @@ suite.define(() => {
         expect(JSON.parse(String(raw))).toMatchObject({ update: { channel: "beta" } });
 
         await content.getByRole("button", { name: "Update now", exact: true }).click();
+        await page.getByRole("button", { name: "Update and restart", exact: true }).click();
         await gateway.waitForRequest("update.run");
       },
     );

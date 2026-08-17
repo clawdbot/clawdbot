@@ -1,5 +1,5 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { normalizeToolName } from "../tool-policy.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
   JsonValue,
@@ -12,7 +12,7 @@ import type {
 import {
   isJsonObject,
   readOptionalBoolean,
-  readOptionalString,
+  readOptionalNonEmptyString,
   shellQuoteArgs,
 } from "./native-hook-relay-utils.js";
 
@@ -82,27 +82,27 @@ export function normalizeNativeHookInvocation(params: {
 function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvocationMetadata {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const metadata: NativeHookRelayInvocationMetadata = {};
-  const nativeEventName = readOptionalString(payload.hook_event_name);
+  const nativeEventName = readOptionalNonEmptyString(payload.hook_event_name);
   if (nativeEventName) {
     metadata.nativeEventName = nativeEventName;
   }
-  const cwd = readOptionalString(payload.cwd);
+  const cwd = readOptionalNonEmptyString(payload.cwd);
   if (cwd) {
     metadata.cwd = cwd;
   }
-  const model = readOptionalString(payload.model);
+  const model = readOptionalNonEmptyString(payload.model);
   if (model) {
     metadata.model = model;
   }
-  const turnId = readOptionalString(payload.turn_id);
+  const turnId = readOptionalNonEmptyString(payload.turn_id);
   if (turnId) {
     metadata.turnId = turnId;
   }
-  const transcriptPath = readOptionalString(payload.transcript_path);
+  const transcriptPath = readOptionalNonEmptyString(payload.transcript_path);
   if (transcriptPath) {
     metadata.transcriptPath = transcriptPath;
   }
-  const permissionMode = readOptionalString(payload.permission_mode);
+  const permissionMode = readOptionalNonEmptyString(payload.permission_mode);
   if (permissionMode) {
     metadata.permissionMode = permissionMode;
   }
@@ -110,15 +110,15 @@ function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvoc
   if (stopHookActive !== undefined) {
     metadata.stopHookActive = stopHookActive;
   }
-  const lastAssistantMessage = readOptionalString(payload.last_assistant_message);
+  const lastAssistantMessage = readOptionalNonEmptyString(payload.last_assistant_message);
   if (lastAssistantMessage) {
     metadata.lastAssistantMessage = lastAssistantMessage;
   }
-  const toolName = readOptionalString(payload.tool_name);
+  const toolName = readOptionalNonEmptyString(payload.tool_name);
   if (toolName) {
     metadata.toolName = toolName;
   }
-  const toolUseId = readOptionalString(payload.tool_use_id);
+  const toolUseId = readOptionalNonEmptyString(payload.tool_use_id);
   if (toolUseId) {
     metadata.toolUseId = toolUseId;
   }
@@ -129,7 +129,7 @@ function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const toolInput = payload.tool_input;
   if (isJsonObject(toolInput)) {
-    const toolName = readOptionalString(payload.tool_name);
+    const toolName = readOptionalNonEmptyString(payload.tool_name);
     return normalizeCodexToolInput(
       normalizeNativeHookToolName(toolName),
       toolInput as Record<string, JsonValue>,
@@ -186,6 +186,6 @@ export function readNativeHookRelayApprovalMode(rawPayload: JsonValue): "report"
 }
 
 export function normalizeNativeHookToolName(toolName: string | undefined): string {
-  const normalized = normalizeToolName(toolName ?? "tool");
+  const normalized = normalizeToolPolicyName(toolName ?? "tool");
   return CODEX_NATIVE_HOOK_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }

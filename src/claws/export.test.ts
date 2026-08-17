@@ -3,7 +3,6 @@ import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
@@ -12,13 +11,21 @@ import { applyClawAddPlan } from "./add.js";
 import { exportClawAgent } from "./export.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers } from "./mcp.js";
-import { persistClawPackageRef, updateClawInstallRecordStatus } from "./provenance.js";
+import {
+  persistClawPackageRef,
+  updateClawInstallRecord,
+  updateClawInstallRecordStatus,
+} from "./provenance.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
 
 const lifecycleStateTestControl = vi.hoisted(() => ({
   afterRead: undefined as (() => Promise<void>) | undefined,
+}));
+const sourceLimitsTestControl = vi.hoisted(() => ({
+  clawManifestBytes: 8 * 1024,
+  managedWorkspaceBytes: 32 * 1024,
 }));
 
 vi.mock("./lifecycle-state.js", async (importOriginal) => {
@@ -30,6 +37,14 @@ vi.mock("./lifecycle-state.js", async (importOriginal) => {
       await lifecycleStateTestControl.afterRead?.();
       return status;
     },
+  };
+});
+vi.mock("./source-limits.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./source-limits.js")>();
+  return {
+    ...actual,
+    MAX_CLAW_MANIFEST_BYTES: sourceLimitsTestControl.clawManifestBytes,
+    MAX_MANAGED_WORKSPACE_BYTES: sourceLimitsTestControl.managedWorkspaceBytes,
   };
 });
 
@@ -103,7 +118,7 @@ async function installedFixture(
     schemaVersion: 1,
     agent: {
       tools: {
-        profile: "coding",
+        profile: "minimal",
         alsoAllow: ["cron"],
         deny: ["exec"],
         fs: { workspaceOnly: true },
@@ -207,6 +222,72 @@ async function installedFixture(
 }
 
 describe("exportClawAgent", () => {
+  it("freezes a legacy named profile before exporting it", async () => {
+    const fixture = await installedFixture();
+    fixture.config.agents!.entries!.worker!.tools = {
+      profile: "minimal",
+      deny: ["exec"],
+    };
+    updateClawInstallRecord(
+      {
+        ...fixture.plan,
+        agent: {
+          ...fixture.plan.agent,
+          config: {
+            id: "worker",
+            ...fixture.config.agents!.entries!.worker!,
+            workspace: fixture.plan.agent.workspace,
+          },
+        },
+      },
+      { env: fixture.env },
+    );
+
+    const result = await exportClawAgent("worker", join(fixture.root, "legacy-profile-export"), {
+      env: fixture.env,
+      config: fixture.config,
+      packageDeps: fixture.packageDeps,
+      sourceMcpServers: fixture.sourceMcpServers,
+    });
+
+    expect(result.openClawProfile?.agent.tools).toMatchObject({
+      profile: "full",
+      allow: expect.arrayContaining(["session_status"]),
+      deny: ["exec"],
+    });
+    expect(result.openClawProfile?.agent.tools).not.toHaveProperty("alsoAllow");
+  });
+
+  it("rejects export of an unbounded legacy full profile", async () => {
+    const fixture = await installedFixture();
+    fixture.config.agents!.entries!.worker!.tools = { profile: "full" };
+    updateClawInstallRecord(
+      {
+        ...fixture.plan,
+        agent: {
+          ...fixture.plan.agent,
+          config: {
+            id: "worker",
+            ...fixture.config.agents!.entries!.worker!,
+            workspace: fixture.plan.agent.workspace,
+          },
+        },
+      },
+      { env: fixture.env },
+    );
+
+    await expect(
+      exportClawAgent("worker", join(fixture.root, "unbounded-profile-export"), {
+        env: fixture.env,
+        config: fixture.config,
+        packageDeps: fixture.packageDeps,
+        sourceMcpServers: fixture.sourceMcpServers,
+      }),
+    ).rejects.toMatchObject({
+      code: "tool_profile_consent_required",
+    });
+  });
+
   it("writes a grouped package from one installed agent", async () => {
     const fixture = await installedFixture({ withPackage: true });
     expect(fixture.plan.agent.config.memory?.search).toEqual({
@@ -276,10 +357,7 @@ describe("exportClawAgent", () => {
         schemaVersion: 1,
         agent: {
           tools: {
-            profile: "coding",
-            alsoAllow: ["cron"],
-            deny: ["exec"],
-            fs: { workspaceOnly: true },
+            ...fixture.plan.agent.config.tools,
           },
           memory: {
             search: {
@@ -309,11 +387,12 @@ describe("exportClawAgent", () => {
     expect(exported.manifest.metadata).toEqual({});
     expect(exported.openClawProfile).toMatchObject({
       schemaVersion: 1,
-      agent: { tools: { profile: "coding" } },
+      agent: { tools: fixture.plan.agent.config.tools },
     });
+    expect(exported.openClawProfile?.agent.tools).not.toHaveProperty("alsoAllow");
     expect(exported.manifest.workspace.bootstrapFiles).not.toHaveProperty("SOUL.md");
     await expect(readFile(join(out, "profiles", "openclaw.yml"), "utf8")).resolves.toContain(
-      "profile: coding",
+      "profile: full",
     );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).rejects.toThrow();
   });
@@ -641,32 +720,15 @@ describe("exportClawAgent", () => {
     );
   });
 
-  it("exports a large pending package bootstrap within the native size limit", async () => {
-    const content = Buffer.from("# First run\n\n" + "x".repeat(1024 * 1024 + 32));
-    expect(content.byteLength).toBeLessThanOrEqual(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
-    const fixture = await installedFixture({
-      packageBootstrap: true,
-      packageBootstrapContent: content,
-    });
-    const out = join(fixture.root, "exported-large-bootstrap");
-
-    const result = await exportClawAgent("worker", out, {
-      env: fixture.env,
-      config: fixture.config,
-      packageDeps: fixture.packageDeps,
-      sourceMcpServers: fixture.sourceMcpServers,
-    });
-
-    expect(result.filesWritten).toContain("BOOTSTRAP.md");
-    await expect(readFile(join(out, "BOOTSTRAP.md"))).resolves.toEqual(content);
-    await expect(stat(join(out, "BOOTSTRAP.md"))).resolves.toMatchObject({
-      size: content.byteLength,
-    });
-  });
-
   it("keeps pending package bootstrap outside the managed workspace aggregate", async () => {
-    const workspaceContent = Buffer.alloc(900 * 1024, "w");
-    const bootstrapContent = Buffer.alloc(1536 * 1024, "b");
+    const workspaceContent = Buffer.alloc(9 * 1024, "w");
+    const bootstrapContent = Buffer.alloc(6 * 1024, "b");
+    expect(workspaceContent.byteLength * 3).toBeLessThan(
+      sourceLimitsTestControl.managedWorkspaceBytes,
+    );
+    expect(workspaceContent.byteLength * 3 + bootstrapContent.byteLength).toBeGreaterThan(
+      sourceLimitsTestControl.managedWorkspaceBytes,
+    );
     const fixture = await installedFixture({
       extraWorkspaceFiles: ["one.md", "two.md", "three.md"],
       extraWorkspaceFileContent: workspaceContent,
@@ -734,7 +796,9 @@ describe("exportClawAgent", () => {
   });
 
   it("keeps SOUL.md as a sidecar when embedding would exceed the CLAW.md limit", async () => {
-    const fixture = await installedFixture({ soulContent: Buffer.alloc(1024 * 1024, 0x61) });
+    const fixture = await installedFixture({
+      soulContent: Buffer.alloc(sourceLimitsTestControl.clawManifestBytes, 0x61),
+    });
     const out = join(fixture.root, "exported-large-soul");
 
     await exportClawAgent("worker", out, {

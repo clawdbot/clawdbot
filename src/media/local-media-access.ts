@@ -32,7 +32,7 @@ export class LocalMediaAccessError extends Error {
 }
 
 /** Returns the default root allowlist for local media reads. */
-export function getDefaultLocalRoots(): readonly string[] {
+export function getDefaultLocalRootsCore(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
@@ -49,7 +49,7 @@ async function resolveCanonicalBoundaryPath(root: string): Promise<string> {
 export async function resolveLocalMediaRoots(
   localRoots?: readonly string[],
 ): Promise<readonly string[]> {
-  const roots = localRoots ?? getDefaultLocalRoots();
+  const roots = localRoots ?? getDefaultLocalRootsCore();
   return await Promise.all(
     roots.map(async (root) => {
       const resolvedRoot = await resolveCanonicalBoundaryPath(root);
@@ -142,7 +142,7 @@ async function resolveLocalMediaBoundary(
       roots: [resolvedRoot],
     };
   }
-  const roots = localRoots ?? getDefaultLocalRoots();
+  const roots = localRoots ?? getDefaultLocalRootsCore();
   const resolved = await resolveLocalMediaPathForContainment(mediaPath);
 
   if (localRoots === undefined) {

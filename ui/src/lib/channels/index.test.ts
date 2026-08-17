@@ -1,24 +1,12 @@
 // Channels domain tests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
 import {
   channelSnapshotEntryIsActive,
   channelSnapshotHasActiveChannel,
   createChannelCapability,
 } from "./index.ts";
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
   return {
@@ -338,7 +326,7 @@ describe("channels controller WhatsApp logout", () => {
 
     await channels.logoutWhatsApp();
 
-    expect(channels.state.whatsappLoginMessage).toBe("Error: credential cleanup failed");
+    expect(channels.state.whatsappLoginMessage).toBe("credential cleanup failed");
     expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
     expect(channels.state.whatsappLoginConnected).toBe(true);
     expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
@@ -469,7 +457,7 @@ describe("channels controller DM pairing", () => {
     await approval;
 
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    expect(channels.state.pairingError).toBe("Error: refresh unavailable");
+    expect(channels.state.pairingError).toBe("refresh unavailable");
     channels.dispose();
   });
 
@@ -625,7 +613,7 @@ describe("channels controller DM pairing", () => {
     await channels.refreshPairing();
 
     expect(channels.state.pairingSnapshot).toBe(emptyPairing);
-    expect(channels.state.pairingError).toBe("Error: gateway unavailable");
+    expect(channels.state.pairingError).toBe("gateway unavailable");
     channels.dispose();
   });
 });
