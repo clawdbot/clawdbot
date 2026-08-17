@@ -655,10 +655,8 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       state.channelsLoadingProbe = null;
       state.channelsRefreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
       state.channelsError = connected || !nextChannelReadAccess ? null : state.channelsError;
-      if (!nextChannelReadAccess) {
-        state.channelsSnapshot = null;
-        state.channelsLastSuccess = null;
-      }
+      state.channelsSnapshot = null;
+      state.channelsLastSuccess = null;
     }
     if (clientChanged || connectionChanged || whatsappAdminAccessChanged) {
       lifecycle.whatsappEpoch += 1;
