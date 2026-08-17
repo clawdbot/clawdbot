@@ -1029,6 +1029,10 @@
       "types": "./dist/plugin-sdk/channel-outbound.d.ts",
       "default": "./dist/plugin-sdk/channel-outbound.js"
     },
+    "./plugin-sdk/channel-outbound-fenced-media-runtime": {
+      "types": "./dist/plugin-sdk/channel-outbound-fenced-media-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-outbound-fenced-media-runtime.js"
+    },
     "./plugin-sdk/channel-pairing": {
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
       "default": "./dist/plugin-sdk/channel-pairing.js"

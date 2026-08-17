@@ -3,16 +3,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 
 const warnFencedMediaSkipsForAcceptedOutboundDelivery = vi.hoisted(() => vi.fn());
-vi.mock("./channel-outbound-fenced-media-runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./channel-outbound-fenced-media-runtime.js")>();
-  return {
-    ...actual,
-    warnFencedMediaSkipsForAcceptedOutboundDelivery: (
-      ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
-    ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
-  };
-});
+vi.mock("./channel-outbound-fenced-media-warn.js", () => ({
+  warnFencedMediaSkipsForAcceptedOutboundDelivery: (
+    ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
+  ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
+}));
 
 import {
   buildTtsSupplementMediaPayload,
