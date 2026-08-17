@@ -135,6 +135,7 @@ describe("copyPreparedMacOSPlugins", () => {
     writeJson(path.join(packageDir, "package.json"), {
       name: "@openclaw/demo",
       version: "2026.8.1",
+      peerDependencies: { openclaw: "*" },
       openclaw: { runtimeExtensions: ["./dist/index.js"] },
     });
     fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
@@ -151,6 +152,9 @@ describe("copyPreparedMacOSPlugins", () => {
     expect(
       fs.existsSync(path.join(stagedDir, "node_modules", "nested-dependency", "package.json")),
     ).toBe(true);
+    expect(fs.realpathSync(path.join(stagedDir, "node_modules", "openclaw"))).toBe(
+      fs.realpathSync(runtimeRoot),
+    );
     expect(
       fs.existsSync(path.join(runtimeRoot, "dist", "extensions", "node_modules", "openclaw")),
     ).toBe(true);

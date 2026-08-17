@@ -172,6 +172,29 @@ function packagePath(nodeModulesDir: string, packageName: string): string {
   return path.join(nodeModulesDir, ...packageName.split("/"));
 }
 
+function linkOpenClawHost(params: { pluginDir: string; runtimeRoot: string }): void {
+  const packageJson = readJsonFile(path.join(params.pluginDir, "package.json"));
+  const peerDependencies = readRecord(packageJson.peerDependencies);
+  const dependencies = readRecord(packageJson.dependencies);
+  if (
+    !normalizeOptionalString(peerDependencies.openclaw) &&
+    !normalizeOptionalString(dependencies.openclaw)
+  ) {
+    return;
+  }
+
+  const nodeModulesDir = path.join(params.pluginDir, "node_modules");
+  const linkPath = path.join(nodeModulesDir, "openclaw");
+  fs.mkdirSync(nodeModulesDir, { recursive: true });
+  if (fs.existsSync(linkPath)) {
+    throw new Error(`Refusing to replace an existing OpenClaw host dependency: ${linkPath}`);
+  }
+  fs.symlinkSync(path.relative(nodeModulesDir, params.runtimeRoot), linkPath, "dir");
+  if (fs.realpathSync(linkPath) !== fs.realpathSync(params.runtimeRoot)) {
+    throw new Error(`Staged OpenClaw host link does not resolve to ${params.runtimeRoot}`);
+  }
+}
+
 function assertStagedPlugin(params: { plugin: MacOSPrewarmedPlugin; pluginDir: string }): void {
   const manifest = readJsonFile(path.join(params.pluginDir, "openclaw.plugin.json"));
   const packageJson = readJsonFile(path.join(params.pluginDir, "package.json"));
@@ -218,6 +241,7 @@ export function copyPreparedMacOSPlugins(params: {
       throw new Error(`Refusing to replace existing bundled plugin: ${targetDir}`);
     }
     fs.cpSync(sourceDir, targetDir, { recursive: true, dereference: true });
+    linkOpenClawHost({ pluginDir: targetDir, runtimeRoot: params.runtimeRoot });
     assertStagedPlugin({ plugin, pluginDir: targetDir });
   }
 }
