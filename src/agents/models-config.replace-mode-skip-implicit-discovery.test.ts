@@ -167,4 +167,83 @@ describe("models-config plan: replace mode skips implicit discovery", () => {
       }),
     );
   });
+
+  it("preserves authored input presence through runtime materialization", async () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          bedrock: {
+            baseUrl: "https://bedrock.example.test",
+            models: [
+              {
+                id: "vision-model",
+                name: "Vision Model",
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+              {
+                id: "text-only-model",
+                name: "Text-only Model",
+                input: ["text"],
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      ...sourceConfig,
+      models: {
+        ...sourceConfig.models,
+        providers: {
+          bedrock: {
+            ...sourceConfig.models?.providers?.bedrock,
+            models: sourceConfig.models?.providers?.bedrock?.models?.map((model) => ({
+              ...model,
+              input: model.input ?? ["text"],
+            })),
+          },
+        },
+      },
+    };
+
+    const result = await resolveProvidersForModelsJsonWithDeps(
+      {
+        cfg: runtimeConfig,
+        sourceConfigForModels: sourceConfig,
+        agentDir: "/tmp/openclaw-models-config-authored-input-test",
+        env: {},
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          bedrock: {
+            baseUrl: "https://bedrock.example.test",
+            models: [
+              {
+                id: "vision-model",
+                name: "Discovered Vision Model",
+                input: ["text", "image"],
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+              {
+                id: "text-only-model",
+                name: "Discovered Text-only Model",
+                input: ["text", "image"],
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(result.bedrock?.models).toEqual([
+      expect.objectContaining({ id: "vision-model", input: ["text", "image"] }),
+      expect.objectContaining({ id: "text-only-model", input: ["text"] }),
+    ]);
+  });
 });

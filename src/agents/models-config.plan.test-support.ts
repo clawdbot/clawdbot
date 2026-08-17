@@ -22,6 +22,7 @@ type PlanResult = Awaited<
 >;
 type ResolveProvidersParams = {
   cfg: OpenClawConfig;
+  sourceConfigForModels?: OpenClawConfig;
   discoveryAuthConfig?: OpenClawConfig;
   agentDir: string;
   env: NodeJS.ProcessEnv;

@@ -104,6 +104,7 @@ function buildPluginCatalogWrites(
 async function resolveProvidersForModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
+    sourceConfigForModels?: OpenClawConfig;
     authStore?: AuthProfileStore;
     discoveryAuthConfig?: OpenClawConfig;
     agentDir: string;
@@ -121,7 +122,9 @@ async function resolveProvidersForModelsJsonWithDeps(
   },
 ): Promise<Record<string, ProviderConfig>> {
   const { agentDir, env } = params;
-  const explicitProviders = stripBlankProviderBaseUrls(params.cfg.models?.providers ?? {});
+  const explicitProviders = stripBlankProviderBaseUrls(
+    params.sourceConfigForModels?.models?.providers ?? params.cfg.models?.providers ?? {},
+  );
   const cfg = params.cfg.models?.providers
     ? { ...params.cfg, models: { ...params.cfg.models, providers: explicitProviders } }
     : params.cfg;
@@ -250,6 +253,9 @@ async function planOpenClawModelsJsonWithDeps(
   const providers = await resolveProvidersForModelsJsonWithDeps(
     {
       cfg,
+      ...(params.sourceConfigForSecrets
+        ? { sourceConfigForModels: params.sourceConfigForSecrets }
+        : {}),
       ...(params.authStore ? { authStore: params.authStore } : {}),
       ...(params.discoveryAuthConfig ? { discoveryAuthConfig: params.discoveryAuthConfig } : {}),
       agentDir,
