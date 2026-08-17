@@ -33,6 +33,31 @@ struct AppLaunchRuntimePlanTests {
         #expect(FileManager.default.fileExists(atPath: destination.path))
     }
 
+    @Test func `elevation filesystem sync is native and rejects symlinks`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-elevation-sync-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let receipt = root.appendingPathComponent("receipt.json")
+        try Data("{}\n".utf8).write(to: receipt)
+        var applicationConstructed = false
+        let fileStatus = try #require(OpenClawProcessEntrypoint.run(
+            arguments: ["OpenClaw", ElevationFilesystemSync.fileArgument, receipt.path],
+            launchApplication: { applicationConstructed = true }))
+        #expect(fileStatus == 0)
+        let directoryStatus = try #require(OpenClawProcessEntrypoint.run(
+            arguments: ["OpenClaw", ElevationFilesystemSync.directoryArgument, root.path],
+            launchApplication: { applicationConstructed = true }))
+        #expect(directoryStatus == 0)
+        let symlink = root.appendingPathComponent("receipt-link.json")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: receipt)
+        let symlinkStatus = try #require(OpenClawProcessEntrypoint.run(
+            arguments: ["OpenClaw", ElevationFilesystemSync.fileArgument, symlink.path],
+            launchApplication: { applicationConstructed = true }))
+        #expect(symlinkStatus != 0)
+        #expect(!applicationConstructed)
+    }
+
     @Test func `normal launches allow automatic presentation`() {
         let policy = AppLaunchRuntimePlan(arguments: ["OpenClaw"])
 

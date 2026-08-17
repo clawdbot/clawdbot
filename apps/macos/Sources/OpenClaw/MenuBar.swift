@@ -26,6 +26,9 @@ enum OpenClawProcessEntrypoint {
         if let status = ElevationExclusiveRename.runIfRequested(arguments: arguments) {
             return status
         }
+        if let status = ElevationFilesystemSync.runIfRequested(arguments: arguments) {
+            return status
+        }
         launchApplication()
         return nil
     }

@@ -32,6 +32,7 @@ MIGRATION_NODE_WRAPPER_PATH=""
 MIGRATION_NODE_WRAPPER_SHA=""
 MIGRATION_NODE_WRAPPER_IDENTITY=""
 MIGRATION_PLIST_SHA=""
+MIGRATION_PLIST_IDENTITY=""
 MIGRATION_CUSTODY_PATH=""
 MIGRATION_CUSTODY_IDENTITY=""
 MIGRATION_WAS_LOADED=0
@@ -80,6 +81,11 @@ PREMUTATION_BACKUPS=()
 VERIFIED_ARTIFACT_RECEIPT_SHA=""
 VERIFIED_INSTALLER_SHA=""
 INSTALL_RECEIPT_SCHEMA=""
+INSTALL_RECEIPT_TRANSACTION_STATE=""
+INSTALL_TRANSACTION_ID=""
+FINAL_RECEIPT_PATH=""
+PENDING_RECEIPT_PATH=""
+RECOVERY_PENDING_INSTALL=0
 EXPECTED_NODE_ID=""
 EXPECTED_NODE_PROFILE=""
 BEFORE_NODE_CONNECTED_AT=0
@@ -241,6 +247,10 @@ cleanup() {
     fi
   fi
   if [[ "$CUTOVER_COMMITTED" != "1" && "$CUTOVER_ACTIVE" != "1" ]]; then
+    if [[ "$COMMAND" == "install" ]]; then
+      remove_pending_receipt ||
+        printf 'ERROR: could not remove the recovered pending install receipt\n' >&2
+    fi
     local backup
     for backup in "${PREMUTATION_BACKUPS[@]:-}"; do
       [[ -n "$backup" && -e "$backup" ]] && rm -f "$backup"
@@ -268,10 +278,10 @@ case "$COMMAND" in
     required_tools=(codesign ditto file jq lipo plutil shasum spctl xcrun)
     ;;
   install)
-    required_tools=(codesign defaults ditto file jq launchctl lipo lsof open pgrep plutil shasum spctl sqlite3 xcrun)
+    required_tools=(codesign defaults df diskutil ditto file jq launchctl lipo lsof open pgrep plutil shasum spctl sqlite3 uuidgen xcrun)
     ;;
   migration-plan)
-    required_tools=(defaults jq launchctl lsof pgrep plutil sqlite3)
+    required_tools=(defaults df diskutil jq launchctl lsof pgrep plutil sqlite3)
     ;;
   status)
     required_tools=(codesign file jq launchctl lipo plutil spctl xcrun)
@@ -448,7 +458,8 @@ read_optional_receipt_xattr() {
 write_receipt_xattr() {
   local attribute="$1" value="$2"
   xattr -w "$attribute" "$value" "$RECEIPT_PATH" || return 1
-  [[ "$(xattr -p "$attribute" "$RECEIPT_PATH" 2>/dev/null)" == "$value" ]]
+  [[ "$(xattr -p "$attribute" "$RECEIPT_PATH" 2>/dev/null)" == "$value" ]] || return 1
+  fsync_file_and_parent "$RECEIPT_PATH"
 }
 
 record_recovery_app_plan() {
@@ -591,36 +602,38 @@ finish_custody_signal_deferral() {
 
 take_migration_plist_custody() {
   local source="$1" expected_sha="$2" custody_signal="" move_status=0 custody_sha=""
-  local source_identity
+  local source_identity observed_custody_identity=""
   # Keep cooperative termination pending until rollback can identify the moved path.
   # A signed same-directory exclusive rename takes the exact current plist without
   # overwriting a raced destination or unlinking a later replacement.
   trap 'custody_signal=INT' INT
   trap 'custody_signal=TERM' TERM
   trap 'custody_signal=HUP' HUP
-  source_identity="$(path_identity "$source")" ||
+  source_identity="$(durable_path_identity "$source")" ||
     fail 'could not inspect the migration LaunchAgent before custody'
-  MIGRATION_CUSTODY_PATH="$(mktemp -u "${source}.custody.XXXXXX")" ||
-    fail 'could not reserve migration LaunchAgent custody'
+  [[ "$source_identity" == "$MIGRATION_PLIST_IDENTITY" ]] ||
+    fail 'migration LaunchAgent identity changed before custody'
+  if [[ -z "$MIGRATION_CUSTODY_PATH" ]]; then
+    MIGRATION_CUSTODY_PATH="$(mktemp -u "${source}.custody.XXXXXX")" ||
+      fail 'could not reserve migration LaunchAgent custody'
+  fi
   [[ ! -e "$MIGRATION_CUSTODY_PATH" && ! -L "$MIGRATION_CUSTODY_PATH" ]] ||
     fail 'migration LaunchAgent custody path is already occupied'
   rename_app_exclusively "$source" "$MIGRATION_CUSTODY_PATH" || move_status=$?
   if [[ -f "$MIGRATION_CUSTODY_PATH" && ! -L "$MIGRATION_CUSTODY_PATH" ]]; then
     custody_sha="$(shasum -a 256 "$MIGRATION_CUSTODY_PATH" | awk '{print $1}')"
-    MIGRATION_CUSTODY_IDENTITY="$(path_identity "$MIGRATION_CUSTODY_PATH")" || true
-    if [[ "$MIGRATION_CUSTODY_IDENTITY" == "$source_identity" ]]; then
-      CUTOVER_ACTIVE=1
-      CUTOVER_MIGRATION_REMOVED=1
-    fi
-  elif [[ ! -e "$source" && ! -L "$source" ]]; then
+    observed_custody_identity="$(durable_path_identity "$MIGRATION_CUSTODY_PATH")" || true
+  fi
+  if [[ ! -e "$source" && ! -L "$source" ]]; then
     # Even a reported move failure may have removed the source. Arm rollback from the
-    # already-verified backup before propagating the failure.
+    # already-verified backup before propagating the failure. This also covers a raced
+    # source replacement that was moved into custody instead of the planned identity.
     CUTOVER_ACTIVE=1
     CUTOVER_MIGRATION_REMOVED=1
   fi
 
   if [[ "$move_status" != "0" || "$custody_sha" != "$expected_sha" ||
-    "$MIGRATION_CUSTODY_IDENTITY" != "$source_identity" || -e "$source" || -L "$source" ]]
+    "$observed_custody_identity" != "$source_identity" || -e "$source" || -L "$source" ]]
   then
     finish_custody_signal_deferral "$custody_signal"
     fail 'could not take exact custody of the migration LaunchAgent; rerun migration-plan'
@@ -806,14 +819,18 @@ prepare_current_app_rename_helper() {
   AUTHENTICATED_RENAME_HELPER_SHA="$(shasum -a 256 "$AUTHENTICATED_RENAME_HELPER" | awk '{print $1}')"
 }
 
-rename_app_exclusively() {
-  local source="$1" destination="$2" helper_sha
+run_authenticated_elevation_helper() {
+  local helper_sha
   [[ -n "$AUTHENTICATED_RENAME_HELPER" && -f "$AUTHENTICATED_RENAME_HELPER" &&
     ! -L "$AUTHENTICATED_RENAME_HELPER" && -x "$AUTHENTICATED_RENAME_HELPER" &&
     "$AUTHENTICATED_RENAME_HELPER_SHA" =~ ^[0-9a-f]{64}$ ]] || return 1
   helper_sha="$(shasum -a 256 "$AUTHENTICATED_RENAME_HELPER" | awk '{print $1}')" || return 1
   [[ "$helper_sha" == "$AUTHENTICATED_RENAME_HELPER_SHA" ]] || return 1
-  "$AUTHENTICATED_RENAME_HELPER" --elevation-rename-exclusive "$source" "$destination"
+  "$AUTHENTICATED_RENAME_HELPER" "$@"
+}
+
+rename_app_exclusively() {
+  run_authenticated_elevation_helper --elevation-rename-exclusive "$1" "$2"
 }
 
 preserve_current_app_for_recovery() {
@@ -912,7 +929,9 @@ job_pid() {
 refresh_runtime_paths() {
   PLIST_PATH="${HOME}/Library/LaunchAgents/${ELEVATION_LABEL}.plist"
   NORMAL_PLIST_PATH="${HOME}/Library/LaunchAgents/${NORMAL_LABEL}.plist"
-  RECEIPT_PATH="${STATE_DIR}/elevation-host-install.json"
+  FINAL_RECEIPT_PATH="${STATE_DIR}/elevation-host-install.json"
+  PENDING_RECEIPT_PATH="${STATE_DIR}/elevation-host-install.pending.json"
+  RECEIPT_PATH="$FINAL_RECEIPT_PATH"
 }
 
 resolve_reusable_openclaw_cli() {
@@ -937,6 +956,8 @@ resolve_migration_inputs() {
   [[ "$(basename "$MIGRATE_LAUNCH_AGENT")" == "${MIGRATION_LABEL}.plist" ]] ||
     fail 'migration LaunchAgent filename must match its Label'
   MIGRATION_PLIST_SHA="$(shasum -a 256 "$MIGRATE_LAUNCH_AGENT" | awk '{print $1}')"
+  MIGRATION_PLIST_IDENTITY="$(durable_path_identity "$MIGRATE_LAUNCH_AGENT")" ||
+    fail 'migration LaunchAgent identity could not be inspected'
 
   local args app_binary inline_state inline_config environment node_env node_paths
   args="$(plutil -extract ProgramArguments json -o - "$MIGRATE_LAUNCH_AGENT" 2>/dev/null || true)"
@@ -1001,11 +1022,11 @@ resolve_migration_inputs() {
       fail 'canonical node environment file is outside its state-owned service-env directory'
     MIGRATION_NODE_ENV_PATH="$node_env"
     MIGRATION_NODE_ENV_SHA="$(shasum -a 256 "$node_env" | awk '{print $1}')"
-    MIGRATION_NODE_ENV_IDENTITY="$(path_identity "$node_env")" ||
+    MIGRATION_NODE_ENV_IDENTITY="$(durable_path_identity "$node_env")" ||
       fail 'canonical node environment identity could not be inspected'
     MIGRATION_NODE_WRAPPER_PATH="$node_wrapper"
     MIGRATION_NODE_WRAPPER_SHA="$(shasum -a 256 "$node_wrapper" | awk '{print $1}')"
-    MIGRATION_NODE_WRAPPER_IDENTITY="$(path_identity "$node_wrapper")" ||
+    MIGRATION_NODE_WRAPPER_IDENTITY="$(durable_path_identity "$node_wrapper")" ||
       fail 'canonical node wrapper identity could not be inspected'
     resolve_reusable_openclaw_cli
   fi
@@ -1244,6 +1265,7 @@ resolve_managed_upgrade_inputs() {
   [[ "$COMMAND" == "install" && -z "$MIGRATE_LAUNCH_AGENT" && "$ADOPT_RUNNING_APP" != "1" &&
     -e "$RECEIPT_PATH" ]] || return 0
   verify_install_receipt
+  require_committed_install_receipt
   local recorded_config recorded_state
   if [[ "$INSTALL_RECEIPT_SCHEMA" == "legacy" ]]; then
     [[ -f "$PLIST_PATH" && ! -L "$PLIST_PATH" ]] ||
@@ -1515,14 +1537,28 @@ tcc_summary() {
   printf 'TCC: ready\n'
 }
 
-write_receipt() {
-  local source_commit="$1" peekaboo_commit="$2" archive_sha="$3"
-  local arm64_cdhash="$4" x86_64_cdhash="$5"
+fsync_file_and_parent() {
+  run_authenticated_elevation_helper --elevation-sync-file "$1"
+}
+
+fsync_parent() {
+  run_authenticated_elevation_helper --elevation-sync-directory "$(dirname "$1")"
+}
+
+write_install_receipt() {
+  local target="$1" transaction_state="$2" source_commit="$3" peekaboo_commit="$4" archive_sha="$5"
+  local arm64_cdhash="$6" x86_64_cdhash="$7"
+  [[ "$transaction_state" == "installing" || "$transaction_state" == "installed" ]] ||
+    fail 'internal install receipt transaction state is invalid'
+  [[ "$INSTALL_TRANSACTION_ID" =~ ^[0-9A-F-]{36}$ ]] ||
+    fail 'internal install transaction identity is invalid'
   mkdir -p "$STATE_DIR"
-  local tmp="${RECEIPT_PATH}.tmp.$$"
+  local tmp="${target}.tmp.$$"
   jq -n \
     --argjson schemaVersion 3 \
     --arg kind 'openclaw-elevation-install' \
+    --arg transactionState "$transaction_state" \
+    --arg transactionId "$INSTALL_TRANSACTION_ID" \
     --arg sourceCommit "$source_commit" \
     --arg peekabooCommit "$peekaboo_commit" \
     --arg appPath "$APP_PATH" \
@@ -1547,6 +1583,8 @@ write_receipt() {
     --arg migrationSource "$ROLLBACK_MIGRATION_SOURCE" \
     --arg migrationBackup "$ROLLBACK_MIGRATION_PLIST" \
     --arg migrationBackupSha256 "$ROLLBACK_MIGRATION_PLIST_SHA" \
+    --arg migrationCustodyPath "$MIGRATION_CUSTODY_PATH" \
+    --arg migrationSourceIdentity "$MIGRATION_CUSTODY_IDENTITY" \
     --arg migrationKind "$MIGRATION_KIND" \
     --arg migrationLabel "$ROLLBACK_MIGRATION_LABEL" \
     --arg migrationNodeEnvPath "$MIGRATION_NODE_ENV_PATH" \
@@ -1558,9 +1596,29 @@ write_receipt() {
     --argjson migrationWasLoaded "$ROLLBACK_MIGRATION_WAS_LOADED" \
     --argjson adoptedAppWasRunning "$ROLLBACK_ADOPTED_APP_WAS_RUNNING" \
     --argjson adoptedAppAttachOnly "$ROLLBACK_ADOPTED_APP_ATTACH_ONLY" \
-    '{schemaVersion:$schemaVersion,kind:$kind,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,archiveSha256:$archiveSha256,artifactReceiptSha256:$artifactReceiptSha256,installerSha256:$installerSha256,cdhashes:{arm64:$arm64CDHash,x86_64:$x8664CDHash},nodeId:$nodeId,nodeProfile:$nodeProfile,appPath:$appPath,stateDir:$stateDir,configPath:$configPath,backupPath:$backupPath,backupCDHashes:{arm64:$backupArm64CDHash,x86_64:$backupX8664CDHash},plistPath:$plistPath,previousPlist:$previousPlist,previousPlistSha256:$previousPlistSha256,previousPlistWasLoaded:($previousPlistWasLoaded == 1),previousReceipt:$previousReceipt,previousReceiptSha256:$previousReceiptSha256,migration:(if $migrationSource == "" then null else {kind:$migrationKind,sourcePlist:$migrationSource,backupPlist:$migrationBackup,backupSha256:$migrationBackupSha256,label:$migrationLabel,wasLoaded:($migrationWasLoaded == 1),nodeEnvPath:$migrationNodeEnvPath,nodeEnvSha256:$migrationNodeEnvSha256,nodeEnvIdentity:$migrationNodeEnvIdentity,nodeWrapperPath:$migrationNodeWrapperPath,nodeWrapperSha256:$migrationNodeWrapperSha256,nodeWrapperIdentity:$migrationNodeWrapperIdentity} end),adoptedApp:{wasRunning:($adoptedAppWasRunning == 1),attachOnly:($adoptedAppAttachOnly == 1)}}' >"$tmp"
+    '{schemaVersion:$schemaVersion,kind:$kind,transactionState:$transactionState,transactionId:$transactionId,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,archiveSha256:$archiveSha256,artifactReceiptSha256:$artifactReceiptSha256,installerSha256:$installerSha256,cdhashes:{arm64:$arm64CDHash,x86_64:$x8664CDHash},nodeId:$nodeId,nodeProfile:$nodeProfile,appPath:$appPath,stateDir:$stateDir,configPath:$configPath,backupPath:$backupPath,backupCDHashes:{arm64:$backupArm64CDHash,x86_64:$backupX8664CDHash},plistPath:$plistPath,previousPlist:$previousPlist,previousPlistSha256:$previousPlistSha256,previousPlistWasLoaded:($previousPlistWasLoaded == 1),previousReceipt:$previousReceipt,previousReceiptSha256:$previousReceiptSha256,migration:(if $migrationSource == "" then null else {kind:$migrationKind,sourcePlist:$migrationSource,sourceIdentity:$migrationSourceIdentity,custodyPath:$migrationCustodyPath,backupPlist:$migrationBackup,backupSha256:$migrationBackupSha256,label:$migrationLabel,wasLoaded:($migrationWasLoaded == 1),nodeEnvPath:$migrationNodeEnvPath,nodeEnvSha256:$migrationNodeEnvSha256,nodeEnvIdentity:$migrationNodeEnvIdentity,nodeWrapperPath:$migrationNodeWrapperPath,nodeWrapperSha256:$migrationNodeWrapperSha256,nodeWrapperIdentity:$migrationNodeWrapperIdentity} end),adoptedApp:{wasRunning:($adoptedAppWasRunning == 1),attachOnly:($adoptedAppAttachOnly == 1)}}' >"$tmp"
   chmod 600 "$tmp"
-  mv "$tmp" "$RECEIPT_PATH"
+  if ! fsync_file_and_parent "$tmp"; then
+    rm -f "$tmp"
+    fail 'authenticated elevation helper could not sync the install receipt'
+  fi
+  if ! mv "$tmp" "$target"; then
+    rm -f "$tmp"
+    fail 'could not atomically publish the install receipt'
+  fi
+  fsync_file_and_parent "$target" ||
+    fail 'authenticated elevation helper could not commit the install receipt'
+}
+
+write_receipt() {
+  write_install_receipt "$FINAL_RECEIPT_PATH" installed "$@"
+}
+
+remove_pending_receipt() {
+  [[ -e "$PENDING_RECEIPT_PATH" || -L "$PENDING_RECEIPT_PATH" ]] || return 0
+  [[ -f "$PENDING_RECEIPT_PATH" && ! -L "$PENDING_RECEIPT_PATH" ]] || return 1
+  rm "$PENDING_RECEIPT_PATH" || return 1
+  fsync_parent "$PENDING_RECEIPT_PATH"
 }
 
 verify_install_receipt() {
@@ -1570,6 +1628,8 @@ verify_install_receipt() {
     fail 'internal install receipt verification mode is invalid'
   local receipt_arm64_cdhash receipt_x86_64_cdhash
   INSTALL_RECEIPT_SCHEMA=""
+  INSTALL_RECEIPT_TRANSACTION_STATE=""
+  INSTALL_TRANSACTION_ID=""
   # Origin main shipped exactly this unversioned seven-key receipt. Numeric schemas 1 and 2
   # existed only on the unmerged hardening branch and intentionally have no compatibility path.
   if jq -e '
@@ -1585,14 +1645,17 @@ verify_install_receipt() {
   ' "$RECEIPT_PATH" >/dev/null 2>&1
   then
     INSTALL_RECEIPT_SCHEMA="legacy"
+    INSTALL_RECEIPT_TRANSACTION_STATE="installed"
   # Schema 3 first ships with the exact migration-sidecar binding below. Earlier
   # five-key migration objects existed only on this unmerged branch and cannot
   # safely authorize recovery, so they are intentionally not compatibility input.
   elif jq -e '
     type == "object" and
-    keys == ["adoptedApp","appPath","archiveSha256","artifactReceiptSha256","backupCDHashes","backupPath","cdhashes","configPath","installerSha256","kind","migration","nodeId","nodeProfile","peekabooCommit","plistPath","previousPlist","previousPlistSha256","previousPlistWasLoaded","previousReceipt","previousReceiptSha256","schemaVersion","sourceCommit","stateDir"] and
+    keys == ["adoptedApp","appPath","archiveSha256","artifactReceiptSha256","backupCDHashes","backupPath","cdhashes","configPath","installerSha256","kind","migration","nodeId","nodeProfile","peekabooCommit","plistPath","previousPlist","previousPlistSha256","previousPlistWasLoaded","previousReceipt","previousReceiptSha256","schemaVersion","sourceCommit","stateDir","transactionId","transactionState"] and
     .schemaVersion == 3 and
     .kind == "openclaw-elevation-install" and
+    (.transactionState == "installing" or .transactionState == "installed") and
+    (.transactionId | type == "string" and test("^[0-9A-F-]{36}$")) and
     (.sourceCommit | type == "string" and test("^[0-9a-f]{40}$")) and
     (.peekabooCommit | type == "string" and test("^[0-9a-f]{40}$")) and
     (.archiveSha256 | type == "string" and test("^[0-9a-f]{64}$")) and
@@ -1614,25 +1677,29 @@ verify_install_receipt() {
     (.previousPlistWasLoaded | type == "boolean") and
     (.migration == null or (
       .migration | type == "object" and
-      keys == ["backupPlist","backupSha256","kind","label","nodeEnvIdentity","nodeEnvPath","nodeEnvSha256","nodeWrapperIdentity","nodeWrapperPath","nodeWrapperSha256","sourcePlist","wasLoaded"] and
+      keys == ["backupPlist","backupSha256","custodyPath","kind","label","nodeEnvIdentity","nodeEnvPath","nodeEnvSha256","nodeWrapperIdentity","nodeWrapperPath","nodeWrapperSha256","sourceIdentity","sourcePlist","wasLoaded"] and
       (.kind == "app-launch-agent" or .kind == "canonical-node") and
       (.backupSha256 | type == "string") and
+      (.custodyPath | type == "string" and startswith("/")) and
+      (.sourceIdentity | type == "string" and test("^[0-9A-F-]{36}:[0-9]+:[0-9]+$")) and
       (.wasLoaded | type == "boolean") and
       (
         (.kind == "app-launch-agent" and .nodeEnvPath == "" and .nodeEnvSha256 == "" and .nodeEnvIdentity == "" and .nodeWrapperPath == "" and .nodeWrapperSha256 == "" and .nodeWrapperIdentity == "") or
         (.kind == "canonical-node" and
           (.nodeEnvPath | type == "string" and startswith("/")) and
           (.nodeEnvSha256 | type == "string" and test("^[0-9a-f]{64}$")) and
-          (.nodeEnvIdentity | type == "string" and test("^[0-9]+:[0-9]+$")) and
+          (.nodeEnvIdentity | type == "string" and test("^[0-9A-F-]{36}:[0-9]+:[0-9]+$")) and
           (.nodeWrapperPath | type == "string" and startswith("/")) and
           (.nodeWrapperSha256 | type == "string" and test("^[0-9a-f]{64}$")) and
-          (.nodeWrapperIdentity | type == "string" and test("^[0-9]+:[0-9]+$")))
+          (.nodeWrapperIdentity | type == "string" and test("^[0-9A-F-]{36}:[0-9]+:[0-9]+$")))
       )
     )) and
     (.adoptedApp | type == "object" and (.wasRunning | type == "boolean") and (.attachOnly | type == "boolean"))
   ' "$RECEIPT_PATH" >/dev/null 2>&1
   then
     INSTALL_RECEIPT_SCHEMA="3"
+    INSTALL_RECEIPT_TRANSACTION_STATE="$(jq -r '.transactionState' "$RECEIPT_PATH")"
+    INSTALL_TRANSACTION_ID="$(jq -r '.transactionId' "$RECEIPT_PATH")"
   else
     fail 'elevation install receipt schema is invalid'
   fi
@@ -1656,6 +1723,11 @@ verify_install_receipt() {
     [[ "$(jq -r '.stateDir' "$RECEIPT_PATH")" == "$STATE_DIR" ]] ||
       fail 'elevation install receipt state directory mismatch'
   fi
+}
+
+require_committed_install_receipt() {
+  [[ "$INSTALL_RECEIPT_TRANSACTION_STATE" == "installed" ]] ||
+    fail 'elevation install receipt is an incomplete install transaction; run recover'
 }
 
 package_host() {
@@ -1774,6 +1846,7 @@ install_host() {
   ensure_no_normal_owner
   local staged_app source_commit peekaboo_commit old_pid migration_pid plist_tmp staged_install_identity
   local current_migration_state elevation_state adoption_signal="" commit_signal=""
+  local planned_archive_sha planned_arm64_cdhash planned_x86_64_cdhash
   prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "${BASH_SOURCE[0]}"
   extract_archive "$AUTHENTICATED_ARCHIVE_PATH" staged_app
   verify_artifact_receipt \
@@ -1783,8 +1856,13 @@ install_host() {
     "${BASH_SOURCE[0]}"
   source_commit="$(plist_value "$staged_app" OpenClawGitCommit)"
   peekaboo_commit="$(plist_value "$staged_app" PeekabooSourceCommit)"
+  planned_archive_sha="$(shasum -a 256 "$AUTHENTICATED_ARCHIVE_PATH" | awk '{print $1}')"
+  planned_arm64_cdhash="$(receipt_string "$AUTHENTICATED_RECEIPT_PATH" '.cdhashes.arm64' cdhashes.arm64)"
+  planned_x86_64_cdhash="$(receipt_string "$AUTHENTICATED_RECEIPT_PATH" '.cdhashes.x86_64' cdhashes.x86_64)"
   stage_verified_app_for_install "$staged_app" "$source_commit" "$peekaboo_commit"
   mkdir -p "$STATE_DIR/logs" "$(dirname "$PLIST_PATH")"
+  [[ ! -e "$PENDING_RECEIPT_PATH" && ! -L "$PENDING_RECEIPT_PATH" ]] ||
+    fail 'an incomplete elevation install transaction exists; run recover before installing'
   if [[ -n "$MIGRATE_LAUNCH_AGENT" ]]; then
     [[ -d "$STATE_DIR" && ! -L "$STATE_DIR" ]] ||
       fail "migration state directory is missing or symlinked: $STATE_DIR"
@@ -1817,6 +1895,7 @@ install_host() {
     [[ -f "$RECEIPT_PATH" && ! -L "$RECEIPT_PATH" ]] ||
       fail 'existing elevation install receipt is not a regular file'
     verify_install_receipt
+    require_committed_install_receipt
     ROLLBACK_INSTALL_RECEIPT="$(mktemp "$STATE_DIR/elevation-host.previous-receipt.${source_commit}.XXXXXX")"
     cp -p "$RECEIPT_PATH" "$ROLLBACK_INSTALL_RECEIPT"
     ROLLBACK_INSTALL_RECEIPT_SHA="$(shasum -a 256 "$ROLLBACK_INSTALL_RECEIPT" | awk '{print $1}')"
@@ -1873,10 +1952,27 @@ install_host() {
       fail 'canonical node sidecars changed after migration planning; rerun migration-plan'
   fi
   ROLLBACK_FAILED_SOURCE="$source_commit"
+  INSTALL_TRANSACTION_ID="$(uuidgen)"
+  [[ "$INSTALL_TRANSACTION_ID" =~ ^[0-9A-F-]{36}$ ]] ||
+    fail 'could not create an install transaction identity'
+  if [[ -n "$MIGRATE_LAUNCH_AGENT" ]]; then
+    MIGRATION_CUSTODY_PATH="$(mktemp -u "${MIGRATE_LAUNCH_AGENT}.custody.XXXXXX")" ||
+      fail 'could not reserve migration LaunchAgent custody'
+    [[ ! -e "$MIGRATION_CUSTODY_PATH" && ! -L "$MIGRATION_CUSTODY_PATH" ]] ||
+      fail 'migration LaunchAgent custody path is already occupied'
+    MIGRATION_CUSTODY_IDENTITY="$MIGRATION_PLIST_IDENTITY"
+  fi
+  write_install_receipt \
+    "$PENDING_RECEIPT_PATH" \
+    installing \
+    "$source_commit" \
+    "$peekaboo_commit" \
+    "$planned_archive_sha" \
+    "$planned_arm64_cdhash" \
+    "$planned_x86_64_cdhash"
+  CUTOVER_ACTIVE=1
   if [[ -n "$MIGRATE_LAUNCH_AGENT" ]]; then
     take_migration_plist_custody "$MIGRATE_LAUNCH_AGENT" "$MIGRATION_PLIST_SHA"
-  else
-    CUTOVER_ACTIVE=1
   fi
   if [[ "$ROLLBACK_ELEVATION_WAS_LOADED" == "1" ]]; then
     launchctl bootout "$job_domain" >/dev/null 2>&1 || fail 'could not stop previous elevation host'
@@ -1983,7 +2079,9 @@ install_host() {
   then
     fail 'migration LaunchAgent path was recreated before cutover commit'
   fi
-  if [[ -n "$ROLLBACK_MIGRATION_LABEL" ]]; then
+  if [[ -n "$ROLLBACK_MIGRATION_LABEL" &&
+    ("$CUTOVER_MIGRATION_REMOVED" == "1" || "$CUTOVER_RECOVERY_ATTEMPTED" == "1") ]]
+  then
     [[ "$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")" == "absent" ]] ||
       fail 'migration LaunchAgent reloaded before cutover commit'
   fi
@@ -2010,9 +2108,10 @@ install_host() {
   write_receipt \
     "$source_commit" \
     "$peekaboo_commit" \
-    "$(shasum -a 256 "$AUTHENTICATED_ARCHIVE_PATH" | awk '{print $1}')" \
+    "$planned_archive_sha" \
     "$final_arm64_cdhash" \
     "$final_x86_64_cdhash"
+  remove_pending_receipt || fail 'could not retire the prepared install transaction'
   CUTOVER_COMMITTED=1
   CUTOVER_ACTIVE=0
   finish_custody_signal_deferral "$commit_signal"
@@ -2026,7 +2125,7 @@ install_host() {
 }
 
 recover_install() {
-  local recovery_failed=0 elevation_state restored_state
+  local recovery_failed=0 elevation_state restored_state prior_owner_state
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -n "$ROLLBACK_APP_PATH" ]]; then
     verify_recorded_rollback_app "$APP_PATH" ||
       verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || return 1
@@ -2042,6 +2141,29 @@ recover_install() {
   if [[ "$elevation_state" == 'loaded' ]]; then
     launchctl bootout "$job_domain" >/dev/null 2>&1 || return 1
   fi
+  if [[ -n "$ROLLBACK_MIGRATION_LABEL" ]]; then
+    prior_owner_state="$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")"
+    [[ "$prior_owner_state" != 'unknown' ]] || return 1
+    if [[ "$prior_owner_state" == 'loaded' ]]; then
+      launchctl bootout "$launch_domain/$ROLLBACK_MIGRATION_LABEL" >/dev/null 2>&1 || return 1
+    fi
+  fi
+  if [[ "$ROLLBACK_ADOPTED_APP_WAS_RUNNING" == "1" ]]; then
+    local adopted_records=() adopted_record
+    while IFS= read -r adopted_record; do
+      [[ -n "$adopted_record" ]] && adopted_records+=("$adopted_record")
+    done < <(background_app_records)
+    if [[ "${#adopted_records[@]}" == "1" &&
+      "${adopted_records[0]##* }" == "$ROLLBACK_ADOPTED_APP_ATTACH_ONLY" ]]
+    then
+      ADOPTION_PID="${adopted_records[0]%% *}"
+      kill "$ADOPTION_PID" 2>/dev/null || return 1
+    elif [[ "${#adopted_records[@]}" != "0" ]]; then
+      return 1
+    fi
+  fi
+  # Do not mutate app custody until the exact adopted PID and every other process
+  # still executing this app binary have actually exited.
   wait_for_app_binary_exit || return 1
   [[ "$(job_loaded_state "$job_domain")" == "absent" ]] || return 1
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -d "$APP_PATH" &&
@@ -2089,6 +2211,13 @@ recover_install() {
     [[ ! -f "$PLIST_PATH" ]] || rm -f "$PLIST_PATH" || recovery_failed=1
   fi
   if [[ -n "$ROLLBACK_MIGRATION_SOURCE" && -f "$ROLLBACK_MIGRATION_PLIST" ]]; then
+    if [[ "$CUTOVER_MIGRATION_REMOVED" != "1" &&
+      -z "$RECOVERY_RESTORED_MIGRATION_IDENTITY" ]] &&
+      path_matches_identity "$ROLLBACK_MIGRATION_SOURCE" "$MIGRATION_PLIST_IDENTITY" &&
+      backup_file_matches "$ROLLBACK_MIGRATION_SOURCE" "$ROLLBACK_MIGRATION_PLIST_SHA"
+    then
+      RECOVERY_RESTORED_MIGRATION_IDENTITY="$MIGRATION_PLIST_IDENTITY"
+    fi
     if [[ "$CUTOVER_MIGRATION_REMOVED" == "1" ]]; then
       if [[ -e "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE" ]]; then
         if [[ ! -f "$ROLLBACK_MIGRATION_SOURCE" || -L "$ROLLBACK_MIGRATION_SOURCE" ]] ||
@@ -2101,12 +2230,17 @@ recover_install() {
         fi
       elif [[ -n "$MIGRATION_CUSTODY_PATH" && -f "$MIGRATION_CUSTODY_PATH" &&
         ! -L "$MIGRATION_CUSTODY_PATH" &&
-        "$MIGRATION_CUSTODY_IDENTITY" =~ ^[0-9]+:[0-9]+$ ]] &&
+        "$MIGRATION_CUSTODY_IDENTITY" =~ ^[0-9A-F-]{36}:[0-9]+:[0-9]+$ ]] &&
         path_matches_identity "$MIGRATION_CUSTODY_PATH" "$MIGRATION_CUSTODY_IDENTITY" &&
         backup_file_matches "$MIGRATION_CUSTODY_PATH" "$ROLLBACK_MIGRATION_PLIST_SHA"
       then
-        rename_app_exclusively "$MIGRATION_CUSTODY_PATH" "$ROLLBACK_MIGRATION_SOURCE" ||
-          recovery_failed=1
+        if [[ "$CUTOVER_RECOVERY_ATTEMPTED" == "1" ]]; then
+          record_recovery_migration_identity "$MIGRATION_CUSTODY_IDENTITY" || recovery_failed=1
+        fi
+        if [[ "$recovery_failed" == "0" ]]; then
+          rename_app_exclusively "$MIGRATION_CUSTODY_PATH" "$ROLLBACK_MIGRATION_SOURCE" ||
+            recovery_failed=1
+        fi
         if [[ "$recovery_failed" == "0" ]] &&
           path_matches_identity "$ROLLBACK_MIGRATION_SOURCE" "$MIGRATION_CUSTODY_IDENTITY" &&
           backup_file_matches "$ROLLBACK_MIGRATION_SOURCE" "$ROLLBACK_MIGRATION_PLIST_SHA"
@@ -2158,8 +2292,14 @@ recover_install() {
     fi
   fi
   if [[ -n "$MIGRATION_CUSTODY_PATH" ]]; then
-    if [[ -f "$MIGRATION_CUSTODY_PATH" && ! -L "$MIGRATION_CUSTODY_PATH" &&
-      "$MIGRATION_CUSTODY_IDENTITY" =~ ^[0-9]+:[0-9]+$ ]] &&
+    if [[ ! -e "$MIGRATION_CUSTODY_PATH" && ! -L "$MIGRATION_CUSTODY_PATH" &&
+      -f "$ROLLBACK_MIGRATION_SOURCE" && ! -L "$ROLLBACK_MIGRATION_SOURCE" ]] &&
+      path_matches_identity "$ROLLBACK_MIGRATION_SOURCE" "$RECOVERY_RESTORED_MIGRATION_IDENTITY" &&
+      backup_file_matches "$ROLLBACK_MIGRATION_SOURCE" "$ROLLBACK_MIGRATION_PLIST_SHA"
+    then
+      MIGRATION_CUSTODY_PATH=""
+    elif [[ -f "$MIGRATION_CUSTODY_PATH" && ! -L "$MIGRATION_CUSTODY_PATH" &&
+      "$MIGRATION_CUSTODY_IDENTITY" =~ ^[0-9A-F-]{36}:[0-9]+:[0-9]+$ ]] &&
       path_matches_identity "$MIGRATION_CUSTODY_PATH" "$MIGRATION_CUSTODY_IDENTITY" &&
       backup_file_matches "$MIGRATION_CUSTODY_PATH" "$ROLLBACK_MIGRATION_PLIST_SHA"
     then
@@ -2325,9 +2465,12 @@ restore_current_generation_after_recovery_failure() {
 }
 
 status_host() {
+  [[ ! -e "$PENDING_RECEIPT_PATH" && ! -L "$PENDING_RECEIPT_PATH" ]] ||
+    fail 'an incomplete elevation install transaction exists; run recover'
   ensure_no_normal_owner
   verify_elevation_app "$APP_PATH"
   verify_install_receipt
+  require_committed_install_receipt
   [[ -f "$PLIST_PATH" ]] || fail "elevation launch agent is not installed: $PLIST_PATH"
   local args loaded_pid plist_config
   args="$(plutil -extract ProgramArguments json -o - "$PLIST_PATH")"
@@ -2361,8 +2504,33 @@ status_host() {
   tcc_summary || return $?
 }
 
+select_recovery_receipt() {
+  RECEIPT_PATH="$FINAL_RECEIPT_PATH"
+  RECOVERY_PENDING_INSTALL=0
+  [[ -e "$PENDING_RECEIPT_PATH" || -L "$PENDING_RECEIPT_PATH" ]] || return 0
+  [[ -f "$PENDING_RECEIPT_PATH" && ! -L "$PENDING_RECEIPT_PATH" ]] ||
+    fail 'pending elevation install receipt is not a regular file'
+  local current_source final_transaction_id pending_source pending_transaction_id
+  current_source="$(plist_value "$APP_PATH" OpenClawGitCommit)"
+  pending_source="$(jq -r '.sourceCommit // empty' "$PENDING_RECEIPT_PATH" 2>/dev/null || true)"
+  pending_transaction_id="$(jq -r '.transactionId // empty' "$PENDING_RECEIPT_PATH" 2>/dev/null || true)"
+  final_transaction_id="$(jq -r '.transactionId // empty' "$FINAL_RECEIPT_PATH" 2>/dev/null || true)"
+  if [[ "$pending_source" =~ ^[0-9a-f]{40}$ && "$pending_source" == "$current_source" &&
+    "$pending_transaction_id" =~ ^[0-9A-F-]{36}$ &&
+    "$pending_transaction_id" == "$final_transaction_id" &&
+    -f "$FINAL_RECEIPT_PATH" && ! -L "$FINAL_RECEIPT_PATH" ]] &&
+    (verify_install_receipt 1 && require_committed_install_receipt) >/dev/null 2>&1
+  then
+    remove_pending_receipt || fail 'could not remove a completed pending install receipt'
+    RECEIPT_PATH="$FINAL_RECEIPT_PATH"
+    return 0
+  fi
+  RECEIPT_PATH="$PENDING_RECEIPT_PATH"
+  RECOVERY_PENDING_INSTALL=1
+}
+
 recover_host() {
-  local current_app_valid=0 current_receipt_sha plan_value plan_state plan_identity
+  local current_app_valid=0 current_app_matches_receipt=0 current_receipt_sha plan_value plan_state plan_identity
   local migration_identity recovery_helper_app
   if [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]]; then
     RECOVERY_CURRENT_APP_STATE="absent"
@@ -2380,7 +2548,19 @@ recover_host() {
     path_matches_identity "$APP_PATH" "$RECOVERY_CURRENT_APP_IDENTITY" ||
       fail 'current OpenClaw app changed during recovery planning'
   fi
+  select_recovery_receipt
   verify_install_receipt 0
+  if [[ "$RECOVERY_PENDING_INSTALL" == "1" ]]; then
+    [[ "$INSTALL_RECEIPT_TRANSACTION_STATE" == "installing" ]] ||
+      fail 'pending elevation receipt is not an install transaction'
+  else
+    require_committed_install_receipt
+  fi
+  if [[ "$current_app_valid" == "1" ]] &&
+    (verify_install_receipt 1) >/dev/null 2>&1
+  then
+    current_app_matches_receipt=1
+  fi
   ROLLBACK_APP_PATH="$(jq -r '.backupPath // empty' "$RECEIPT_PATH")"
   ROLLBACK_APP_CDHASH_ARM64="$(jq -r '.backupCDHashes.arm64 // empty' "$RECEIPT_PATH")"
   ROLLBACK_APP_CDHASH_X86_64="$(jq -r '.backupCDHashes.x86_64 // empty' "$RECEIPT_PATH")"
@@ -2396,6 +2576,8 @@ recover_host() {
   MIGRATION_KIND="$(jq -r '.migration.kind // empty' "$RECEIPT_PATH")"
   ROLLBACK_MIGRATION_LABEL="$(jq -r '.migration.label // empty' "$RECEIPT_PATH")"
   ROLLBACK_MIGRATION_WAS_LOADED="$(jq -r 'if .migration.wasLoaded then 1 else 0 end' "$RECEIPT_PATH")"
+  MIGRATION_CUSTODY_PATH="$(jq -r '.migration.custodyPath // empty' "$RECEIPT_PATH")"
+  MIGRATION_CUSTODY_IDENTITY="$(jq -r '.migration.sourceIdentity // empty' "$RECEIPT_PATH")"
   MIGRATION_NODE_ENV_PATH="$(jq -r '.migration.nodeEnvPath // empty' "$RECEIPT_PATH")"
   MIGRATION_NODE_ENV_SHA="$(jq -r '.migration.nodeEnvSha256 // empty' "$RECEIPT_PATH")"
   MIGRATION_NODE_ENV_IDENTITY="$(jq -r '.migration.nodeEnvIdentity // empty' "$RECEIPT_PATH")"
@@ -2445,18 +2627,31 @@ recover_host() {
       RECOVERY_CURRENT_APP_STATE="$plan_state"
       RECOVERY_CURRENT_APP_IDENTITY="$plan_identity"
     fi
-  elif [[ "$current_app_valid" == "1" ]]; then
-    (verify_install_receipt 1) >/dev/null 2>&1 ||
+  elif [[ "$current_app_valid" == "1" && "$RECOVERY_PENDING_INSTALL" != "1" ]]; then
+    [[ "$current_app_matches_receipt" == "1" ]] ||
       fail 'installed app source does not match the elevation install receipt'
   fi
   read_optional_receipt_xattr migration_identity "$RECOVERY_MIGRATION_IDENTITY_XATTR" ||
     fail 'could not inspect the recovery migration transaction binding'
+  if [[ -z "$migration_identity" && "$RECOVERY_PENDING_INSTALL" == "1" &&
+    -n "$ROLLBACK_MIGRATION_SOURCE" ]] &&
+    backup_file_matches "$ROLLBACK_MIGRATION_SOURCE" "$ROLLBACK_MIGRATION_PLIST_SHA"
+  then
+    migration_identity="$(durable_path_identity "$ROLLBACK_MIGRATION_SOURCE")" ||
+      fail 'could not bind the unchanged migration source to the pending transaction'
+    [[ "$migration_identity" == "$MIGRATION_CUSTODY_IDENTITY" ]] ||
+      fail 'pending migration source identity no longer matches the prepared transaction'
+    record_recovery_migration_identity "$migration_identity" ||
+      fail 'could not persist the pending migration source identity'
+  fi
   if [[ -n "$migration_identity" ]]; then
     [[ "$migration_identity" =~ ^[0-9A-F-]{36}:[0-9]+:[0-9]+$ ]] ||
       fail 'recovery migration transaction binding is invalid'
     RECOVERY_RESTORED_MIGRATION_IDENTITY="$migration_identity"
   fi
-  if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' || "$RECOVERY_CURRENT_APP_STATE" != "valid" ]]; then
+  if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' || "$RECOVERY_CURRENT_APP_STATE" != "valid" ||
+    ("$RECOVERY_PENDING_INSTALL" == "1" && "$current_app_matches_receipt" != "1") ]]
+  then
     [[ -n "$ARCHIVE" && -n "$ARTIFACT_RECEIPT" && -n "$EXPECTED_ARTIFACT_RECEIPT_SHA256" ]] ||
       fail 'recovery requires the authenticated elevation archive, receipt, and receipt digest when the current app cannot supply a trusted rename helper'
     prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "${BASH_SOURCE[0]}"
@@ -2470,6 +2665,12 @@ recover_host() {
       CONFIG_PATH="$STATE_DIR/openclaw.json"
     else
       CONFIG_PATH="$(jq -r '.configPath' "$RECEIPT_PATH")"
+    fi
+    if [[ "$RECOVERY_PENDING_INSTALL" == "1" && "$current_app_valid" == "1" &&
+      "$current_app_matches_receipt" != "1" ]]
+    then
+      RECOVERY_CURRENT_APP_CDHASH_ARM64="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)"
+      RECOVERY_CURRENT_APP_CDHASH_X86_64="$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)"
     fi
   else
     [[ -z "$ARCHIVE" && -z "$ARTIFACT_RECEIPT" && -z "$EXPECTED_ARTIFACT_RECEIPT_SHA256" ]] ||
@@ -2504,6 +2705,10 @@ recover_host() {
       then
         fail 'receipt app backup does not pass strict signature and identity validation'
       fi
+    elif [[ "$RECOVERY_PENDING_INSTALL" == "1" && "$current_app_valid" == "1" ]] &&
+      verify_recorded_rollback_app "$APP_PATH"
+    then
+      : # The install transaction was persisted before the prior app moved into custody.
     elif [[ "$RECOVERY_RESUMED" == "1" ]]; then
       verify_recorded_rollback_app "$APP_PATH" ||
         fail 'resumed recovery has no authenticated prior app at the canonical path'
@@ -2548,6 +2753,9 @@ recover_host() {
       fail 'receipt migration label targets a protected LaunchAgent'
     [[ "$(basename "$ROLLBACK_MIGRATION_SOURCE")" == "${ROLLBACK_MIGRATION_LABEL}.plist" ]] ||
       fail 'receipt migration source filename does not match its label'
+    [[ "$(dirname "$MIGRATION_CUSTODY_PATH")" == "$(dirname "$ROLLBACK_MIGRATION_SOURCE")" &&
+      "$MIGRATION_CUSTODY_PATH" == "$ROLLBACK_MIGRATION_SOURCE".custody.* ]] ||
+      fail 'receipt migration custody path is outside the source LaunchAgent directory'
     state_backup_path_is_canonical \
       "$ROLLBACK_MIGRATION_PLIST" \
       '^elevation-host[.]previous-launch-agent[.][0-9a-f]{40}[.][A-Za-z0-9]{6}$' \
@@ -2573,6 +2781,8 @@ recover_host() {
     local recovery_migration_state
     recovery_migration_state="$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")"
     [[ "$recovery_migration_state" == "absent" ]] ||
+      [[ "$RECOVERY_PENDING_INSTALL" == "1" && "$ROLLBACK_MIGRATION_WAS_LOADED" == "1" &&
+        "$recovery_migration_state" == "loaded" ]] ||
       [[ "$RECOVERY_RESUMED" == "1" && "$ROLLBACK_MIGRATION_WAS_LOADED" == "1" &&
         "$recovery_migration_state" == "loaded" ]] ||
       fail 'migration LaunchAgent is already loaded before recovery'
@@ -2648,7 +2858,7 @@ recover_host() {
   fi
 
   if [[ -n "$receipt_restore_tmp" ]]; then
-    if ! mv "$receipt_restore_tmp" "$RECEIPT_PATH"; then
+    if ! mv "$receipt_restore_tmp" "$FINAL_RECEIPT_PATH"; then
       if restore_current_generation_after_recovery_failure; then
         finish_custody_signal_deferral "$recovery_signal"
         fail 'could not restore the previous elevation install receipt'
@@ -2656,13 +2866,33 @@ recover_host() {
       finish_custody_signal_deferral "$recovery_signal"
       fail 'receipt restoration failed and the current OpenClaw installation could not be restored completely'
     fi
-  elif ! rm "$RECEIPT_PATH"; then
-    if restore_current_generation_after_recovery_failure; then
+    if ! fsync_file_and_parent "$FINAL_RECEIPT_PATH"; then
+      CUTOVER_COMMITTED=1
+      CUTOVER_ACTIVE=0
       finish_custody_signal_deferral "$recovery_signal"
-      fail 'could not remove the replaced elevation install receipt'
+      fail 'previous receipt was restored but its durability sync failed; inspect status before retrying'
     fi
-    finish_custody_signal_deferral "$recovery_signal"
-    fail 'receipt removal failed and the current OpenClaw installation could not be restored completely'
+  elif [[ -e "$FINAL_RECEIPT_PATH" || -L "$FINAL_RECEIPT_PATH" ]]; then
+    if ! rm "$FINAL_RECEIPT_PATH"; then
+      if restore_current_generation_after_recovery_failure; then
+        finish_custody_signal_deferral "$recovery_signal"
+        fail 'could not remove the replaced elevation install receipt'
+      fi
+      finish_custody_signal_deferral "$recovery_signal"
+      fail 'receipt removal failed and the current OpenClaw installation could not be restored completely'
+    fi
+    if ! fsync_parent "$FINAL_RECEIPT_PATH"; then
+      CUTOVER_COMMITTED=1
+      CUTOVER_ACTIVE=0
+      finish_custody_signal_deferral "$recovery_signal"
+      fail 'replaced receipt was removed but its durability sync failed; inspect status before retrying'
+    fi
+  fi
+  if [[ "$RECOVERY_PENDING_INSTALL" == "1" ]]; then
+    remove_pending_receipt || {
+      finish_custody_signal_deferral "$recovery_signal"
+      fail 'could not remove the recovered install transaction receipt'
+    }
   fi
   CUTOVER_COMMITTED=1
   CUTOVER_ACTIVE=0
