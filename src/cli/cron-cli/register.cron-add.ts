@@ -427,7 +427,15 @@ export function registerCronAddCommand(cron: Command) {
               payload: resolvedPayload,
               ...(() => {
                 const precheckCommand = normalizeOptionalString(opts.precheckCommand);
+                const timeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
+                const precheckCwd = normalizeOptionalString(opts.precheckCwd);
+                const hasAncillary = timeoutRaw !== undefined || precheckCwd !== undefined;
                 if (!precheckCommand) {
+                  if (hasAncillary) {
+                    throw new Error(
+                      "--precheck-timeout-ms/--precheck-cwd require --precheck-command on cron add",
+                    );
+                  }
                   return {};
                 }
                 const timeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
