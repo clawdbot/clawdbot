@@ -52,6 +52,7 @@ export async function startGatewayServerCore(
                 tailscaleMode: gatewayKernel.tailscaleMode,
                 preserveFunnel: gatewayKernel.tailscaleConfig.preserveFunnel ?? false,
                 port,
+                tailscalePort: gatewayKernel.tailscaleConfig.port,
                 backend,
                 controlUiBasePath: gatewayKernel.controlUiBasePath,
                 logTailscale,
