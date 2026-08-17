@@ -186,7 +186,16 @@ export const updateHandlers: GatewayRequestHandlers = {
       }
     }
     const schedule = getUpdateSchedule();
-    const effectiveChannel = configChannel ?? getUpdateEffectiveChannel();
+    let effectiveChannel = configChannel ?? normalizeUpdateChannel(schedule?.channel);
+    if (!effectiveChannel) {
+      try {
+        effectiveChannel = await getUpdateEffectiveChannel();
+      } catch (err) {
+        context?.logGateway?.warn(
+          `update.status install identity failed: ${formatUpdateRunErrorMessage(err)}`,
+        );
+      }
+    }
     const result = {
       sentinel,
       updateAvailable: getUpdateAvailable(),

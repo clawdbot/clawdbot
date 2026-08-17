@@ -10,7 +10,10 @@ import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
-import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
+import type {
+  initializeGatewayUpdateStatus,
+  scheduleGatewayUpdateCheck,
+} from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -925,6 +928,7 @@ type GatewayPostAttachRuntimeDeps = {
   refreshLatestUpdateRestartSentinel: () => Awaitable<
     ReturnType<typeof refreshLatestUpdateRestartSentinel>
   >;
+  initializeGatewayUpdateStatus: () => ReturnType<typeof initializeGatewayUpdateStatus>;
   scheduleGatewayUpdateCheck: (
     ...args: Parameters<typeof scheduleGatewayUpdateCheck>
   ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
@@ -942,6 +946,8 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   logGatewayStartup: async (params) =>
     (await import("./server-startup-log.js")).logGatewayStartup(params),
   refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelIfPresent,
+  initializeGatewayUpdateStatus: async () =>
+    (await import("../infra/update-startup.js")).initializeGatewayUpdateStatus(),
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
@@ -1003,6 +1009,13 @@ function createDeferredGatewayUpdateCheck(params: {
       return;
     }
     started = true;
+    // Install identity is process-stable and must be ready before clients can
+    // select a channel; registry and upstream discovery stay post-ready.
+    void params.runtimeDeps.initializeGatewayUpdateStatus().catch((err: unknown) => {
+      if (!stopped) {
+        params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
+      }
+    });
     // Update checks are intentionally post-attach so startup logging, sidecars,
     // and Tailscale exposure are not serialized behind network I/O.
     void (async () => {

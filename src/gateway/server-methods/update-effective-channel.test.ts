@@ -17,7 +17,9 @@ type TestUpdateSchedule =
   | null;
 
 const getUpdateAvailableMock = vi.hoisted(() => vi.fn<() => TestUpdateAvailable>(() => null));
-const getUpdateEffectiveChannelMock = vi.hoisted(() => vi.fn<() => UpdateChannel>(() => "stable"));
+const getUpdateEffectiveChannelMock = vi.hoisted(() =>
+  vi.fn<() => Promise<UpdateChannel>>(async () => "stable"),
+);
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => TestUpdateSchedule>(() => null));
 const refreshGatewayUpdateStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 const getLatestUpdateRestartSentinelMock = vi.hoisted(() =>
@@ -47,7 +49,7 @@ beforeEach(() => {
   getUpdateAvailableMock.mockReset();
   getUpdateAvailableMock.mockReturnValue(null);
   getUpdateEffectiveChannelMock.mockReset();
-  getUpdateEffectiveChannelMock.mockReturnValue("stable");
+  getUpdateEffectiveChannelMock.mockResolvedValue("stable");
   getUpdateScheduleMock.mockReset();
   getUpdateScheduleMock.mockReturnValue(null);
   refreshGatewayUpdateStatusMock.mockReset();
@@ -60,7 +62,7 @@ beforeEach(() => {
 
 describe("update.status effective channel", () => {
   it("reports the lifecycle-owned channel before the startup schedule is ready", async () => {
-    getUpdateEffectiveChannelMock.mockReturnValueOnce("extended-stable");
+    getUpdateEffectiveChannelMock.mockResolvedValueOnce("extended-stable");
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 
@@ -100,6 +102,7 @@ describe("update.status effective channel", () => {
       true,
       expect.objectContaining({ effectiveChannel: "dev" }),
     );
+    expect(getUpdateEffectiveChannelMock).not.toHaveBeenCalled();
   });
 
   it("scopes explicit checkout refreshes to the current config identity", async () => {
@@ -147,6 +150,22 @@ describe("update.status effective channel", () => {
     expect(refreshGatewayUpdateStatusMock).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps status available when install identity initialization fails", async () => {
+    getUpdateEffectiveChannelMock.mockRejectedValueOnce(new Error("probe failed"));
+    const warn = vi.fn();
+    const { updateHandlers } = await import("./update.js");
+    const respond = vi.fn();
+
+    const handler = updateHandlers["update.status"];
+    if (!handler) {
+      throw new Error("update.status handler is unavailable");
+    }
+    await handler({ params: {}, respond, context: { logGateway: { warn } } } as never);
+
+    expect(warn).toHaveBeenCalledWith("update.status install identity failed: probe failed");
+    expect(respond).toHaveBeenCalledWith(true, { sentinel: null, updateAvailable: null });
+  });
+
   it("refreshes the latest update sentinel before responding", async () => {
     getUpdateAvailableMock.mockReturnValueOnce({
       currentVersion: "1.0.0",
@@ -184,6 +203,7 @@ describe("update.status effective channel", () => {
         schedule: expect.objectContaining({ channel: "beta" }),
       }),
     );
+    expect(getUpdateEffectiveChannelMock).not.toHaveBeenCalled();
   });
 
   it("falls back to the cached update sentinel when refresh fails", async () => {
