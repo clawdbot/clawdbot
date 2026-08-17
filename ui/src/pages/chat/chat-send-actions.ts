@@ -37,6 +37,7 @@ import {
 import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
+  activeQueuedMessageEdit,
   isQueuedMessageBeingEdited,
   isQueuedMessageRetryBlocked,
   isQueuedMessageReorderBlocked,
@@ -168,11 +169,39 @@ export function moveQueuedChatMessage(
   }
   const sessionKey = item.sessionKey ?? host.sessionKey;
   const scope = readChatQueueForScope(host, sessionKey, item.agentId);
+  // This pane already excludes its own edited row from rendered move indices,
+  // but cannot see edits owned by peers. Rebuild that exact offered index space
+  // so a peer-edit barrier is distinguishable from an ordinary no-op.
+  const localEditId = activeQueuedMessageEdit(host)?.id;
+  const offeredSegment = chatQueueMovableSegments(
+    scope,
+    (row) => isMovableChatQueueItem(row) && row.id !== localEditId,
+  ).find((rows) => rows.some((row) => row.id === id));
+  const fromIndex = offeredSegment?.findIndex((row) => row.id === id) ?? -1;
+  const requestedIndex = offeredSegment
+    ? Math.min(Math.max(toIndex, 0), offeredSegment.length - 1)
+    : -1;
+  if (fromIndex < 0 || fromIndex === requestedIndex) {
+    return "noop";
+  }
+  const crossedPeerEdit = offeredSegment!.some(
+    (row, index) =>
+      index >= Math.min(fromIndex, requestedIndex) &&
+      index <= Math.max(fromIndex, requestedIndex) &&
+      row.id !== id &&
+      isQueuedMessageBeingEdited(host, row.id),
+  );
+  if (crossedPeerEdit) {
+    setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
+    return "rejected";
+  }
   const segment = chatQueueMovableSegments(
     scope,
     (row) => isMovableChatQueueItem(row) && !isQueuedMessageBeingEdited(host, row.id),
   ).find((rows) => rows.some((row) => row.id === id));
-  const moves = reorderChatQueueItems(segment ?? [], id, toIndex);
+  const targetId = offeredSegment![requestedIndex]?.id;
+  const segmentTargetIndex = segment?.findIndex((row) => row.id === targetId) ?? -1;
+  const moves = reorderChatQueueItems(segment ?? [], id, segmentTargetIndex);
   if (moves.length === 0) {
     return "noop";
   }

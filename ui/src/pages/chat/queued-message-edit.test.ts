@@ -27,6 +27,7 @@ import {
   isQueuedMessageRemovalBlocked,
   isQueuedMessageReorderBlocked,
   isQueuedMessageRetryBlocked,
+  QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
@@ -348,6 +349,52 @@ describe("queued message edit round-trip", () => {
       expect(storedOrder(peer)).toEqual(["message 1"]);
     } finally {
       stopPeer();
+      unsubscribe();
+    }
+  });
+
+  it("reports when a peer reorder crosses the row another pane is editing", () => {
+    const { host, unsubscribe } = queueHost([{}, {}, {}]);
+    const peer = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
+    const stopPeer = subscribeChatOutboxProjection(peer as never);
+
+    try {
+      beginQueuedMessageEdit(host as never, "queued-2");
+
+      expect(moveQueuedChatMessage(peer as never, "queued-3", 0)).toBe("rejected");
+      expect(peer.chatError).toBe(QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
+      expect(storedOrder(peer)).toEqual(["message 1", "message 2", "message 3"]);
+    } finally {
+      stopPeer();
+      unsubscribe();
+    }
+  });
+
+  it("translates peer reorder indices within one side of an edited-row barrier", () => {
+    const { host, unsubscribe } = queueHost([{}, {}, {}, {}]);
+    const peer = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
+    const stopPeer = subscribeChatOutboxProjection(peer as never);
+
+    try {
+      beginQueuedMessageEdit(host as never, "queued-2");
+
+      expect(moveQueuedChatMessage(peer as never, "queued-4", 2)).toBe("moved");
+      expect(storedOrder(peer)).toEqual(["message 1", "message 2", "message 4", "message 3"]);
+    } finally {
+      stopPeer();
+      unsubscribe();
+    }
+  });
+
+  it("keeps local reorder indices within one side of its own edited-row barrier", () => {
+    const { host, unsubscribe } = queueHost([{}, {}, {}, {}]);
+
+    try {
+      beginQueuedMessageEdit(host as never, "queued-2");
+
+      expect(moveQueuedChatMessage(host as never, "queued-4", 0)).toBe("moved");
+      expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 4", "message 3"]);
+    } finally {
       unsubscribe();
     }
   });
