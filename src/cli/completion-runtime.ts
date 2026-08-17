@@ -31,10 +31,13 @@ function resolveShellBasename(
   return normalizeLowercaseStringOrEmpty(basename.replace(/\.(?:exe|cmd|bat)$/i, ""));
 }
 
-/** Resolves the active shell from environment paths, defaulting to zsh for unknown shells. */
-export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): CompletionShell {
+/** Resolves the active shell from environment paths, using the platform's native default. */
+export function resolveShellFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): CompletionShell {
   const shellPath = normalizeOptionalString(env.SHELL) ?? "";
-  const shellName = shellPath ? resolveShellBasename(shellPath) : "";
+  const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
   if (shellName === "zsh") {
     return "zsh";
   }
@@ -47,7 +50,7 @@ export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): Compl
   if (shellName === "pwsh" || shellName === "powershell") {
     return "powershell";
   }
-  return "zsh";
+  return platform === "win32" ? "powershell" : "zsh";
 }
 
 function sanitizeCompletionBasename(value: string): string {
