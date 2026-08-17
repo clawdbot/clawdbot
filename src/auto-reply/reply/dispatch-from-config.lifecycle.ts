@@ -4,7 +4,7 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
-  resolveSessionWorkerPlacementArchiveRestoreError,
+  resolveWorkerPlacementArchiveRestoreError,
   type SessionWorkerPlacementContext,
 } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
@@ -80,11 +80,16 @@ async function restoreArchivedDispatchSession(params: {
         return null;
       }
       try {
+        const placement = currentEntry.sessionId
+          ? placementContext.workerSessionPlacementService
+              ?.getMany([currentEntry.sessionId])
+              .get(currentEntry.sessionId)
+          : undefined;
         if (
-          resolveSessionWorkerPlacementArchiveRestoreError({
+          resolveWorkerPlacementArchiveRestoreError({
             context: placementContext,
             key: sessionKey,
-            sessionId: currentEntry.sessionId,
+            placement,
           })
         ) {
           return null;

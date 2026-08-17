@@ -25,7 +25,7 @@ import {
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
-import { resolveSessionWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
+import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 export {
   resolveSessionWorkerPlacementMutationError,
@@ -52,11 +52,19 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   sessionKey: string;
   validateModelRuntime: boolean;
 }): string | undefined {
+  const placement = params.entry?.sessionId
+    ? params.context.workerSessionPlacementService
+        ?.getMany([params.entry.sessionId])
+        .get(params.entry.sessionId)
+    : undefined;
+  if (!placement || placement.state === "local") {
+    return undefined;
+  }
   if (params.patch.archived === false) {
-    const restoreError = resolveSessionWorkerPlacementArchiveRestoreError({
+    const restoreError = resolveWorkerPlacementArchiveRestoreError({
       context: params.context,
       key: params.key,
-      sessionId: params.entry?.sessionId,
+      placement,
     });
     if (restoreError) {
       return restoreError;
@@ -67,12 +75,6 @@ export function resolveSessionWorkerPlacementPatchError(params: {
     params.patch.model === undefined ||
     !params.entry?.sessionId
   ) {
-    return undefined;
-  }
-  const placement = params.context.workerSessionPlacementService
-    ?.getMany([params.entry.sessionId])
-    .get(params.entry.sessionId);
-  if (!placement || placement.state === "local") {
     return undefined;
   }
   const runtime = resolveWorkerPlacementSessionRuntime({
