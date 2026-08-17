@@ -3014,7 +3014,7 @@ src/gateway/server-methods/chat.ts	2
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	7
 src/gateway/server-methods/conversations.ts	4
-src/gateway/server-methods/cron.ts	20
+src/gateway/server-methods/cron.ts	17
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	6
 src/gateway/server-methods/doctor.ts	5
