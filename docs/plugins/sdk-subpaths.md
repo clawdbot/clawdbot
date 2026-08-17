@@ -138,7 +138,7 @@ are private-local.
     | `plugin-sdk/provider-entry` | Private-local after July 2026; `defineSingleProviderPluginEntry` |
     | `plugin-sdk/provider-setup` | Private-local after July 2026; Curated local/self-hosted provider setup helpers |
     | `plugin-sdk/cli-backend` | Private-local after July 2026; CLI backend defaults + watchdog constants |
-    | `plugin-sdk/provider-auth-runtime` | Private-local after July 2026; Provider auth runtime helpers: OAuth loopback flow, token exchange, auth persistence, and API-key resolution |
+    | `plugin-sdk/provider-auth-runtime` | Private-local after July 2026; provider auth runtime helpers including `startProviderOAuthLoopbackCallbackServer`, token exchange, auth persistence, and API-key resolution |
     | `plugin-sdk/provider-oauth-runtime` | Private-local after July 2026; Generic provider OAuth callback types, callback-page rendering, PKCE/state helpers, authorization-input parsing, token-expiry helpers, and abort helpers |
     | `plugin-sdk/provider-auth-api-key` | Private-local after July 2026; API-key onboarding/profile-write helpers such as `upsertApiKeyProfile` |
     | `plugin-sdk/provider-auth-result` | Private-local after July 2026; Standard OAuth auth-result builder |

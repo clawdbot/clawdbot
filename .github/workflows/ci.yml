@@ -2332,7 +2332,7 @@ jobs:
           sparse-checkout: |
             scripts/ci-run-node-test-shard.mts
             scripts/lib/direct-run.mjs
-            scripts/lib/local-heavy-check-runtime.mts
+            scripts/lib/local-check-runtime.mts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

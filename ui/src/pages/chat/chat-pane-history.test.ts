@@ -349,6 +349,20 @@ describe("chat pane native history pagination", () => {
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
+  it("keeps a failed older load blocked across a layout-induced scroll", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("history unavailable");
+    });
+    const { pane, thread } = createNativeShowEarlierPane(request);
+    pane.transcriptScrollTop = 500;
+
+    await pane.showEarlierMessages();
+    pane.handleTranscriptScroll({ currentTarget: thread, target: thread } as unknown as Event);
+
+    expect(pane.historyAutoLoadBlocked).toBe(true);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("joins an in-flight canonical load before revealing its earlier window", async () => {
     const deferred = createDeferred<{
       messages: unknown[];

@@ -369,6 +369,10 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     } catch (error) {
       if (generation === this.olderLoadGeneration) {
         state.lastError = formatUiError(error);
+        // Loading-row removal can emit a layout scroll. Align the tracker so it
+        // cannot masquerade as renewed user intent and consume the manual retry.
+        this.transcriptScrollTop =
+          this.querySelector<HTMLElement>(".chat-thread")?.scrollTop ?? null;
       }
     } finally {
       if (generation === this.olderLoadGeneration) {

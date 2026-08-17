@@ -32,8 +32,12 @@ const hoisted = vi.hoisted(() => {
   const startupHookEvent = { type: "gateway", action: "startup", sessionKey: "gateway:startup" };
   const createInternalHookEvent = vi.fn(() => startupHookEvent);
   const triggerInternalHook = vi.fn(async () => {});
+  const initializeGatewayUpdateStatus = vi.fn(async () => ({
+    root: null,
+    status: { root: null, installKind: "unknown" as const, packageManager: "unknown" as const },
+    installReceipt: null,
+  }));
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
-  const startGatewayTailscaleExposure = vi.fn(async () => null);
   const logGatewayStartup = vi.fn();
   const scheduleSubagentRegistrySweep = vi.fn();
   const markStartupOrphanedMainSessionsForRecovery = vi.fn(async () => ({
@@ -95,8 +99,8 @@ const hoisted = vi.hoisted(() => {
     startupHookEvent,
     createInternalHookEvent,
     triggerInternalHook,
+    initializeGatewayUpdateStatus,
     scheduleGatewayUpdateCheck,
-    startGatewayTailscaleExposure,
     logGatewayStartup,
     scheduleSubagentRegistrySweep,
     markStartupOrphanedMainSessionsForRecovery,
@@ -200,6 +204,7 @@ vi.mock("./server-startup-log.js", () => ({
 }));
 
 vi.mock("../infra/update-startup.js", () => ({
+  initializeGatewayUpdateStatus: hoisted.initializeGatewayUpdateStatus,
   scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
 }));
 
@@ -256,10 +261,6 @@ vi.mock("../agents/auth-profiles.js", async () => {
 
 vi.mock("../agents/tools/transcripts-tool.js", () => ({
   createTranscriptsAutoStartService: hoisted.createTranscriptsAutoStartService,
-}));
-
-vi.mock("./server-tailscale.js", () => ({
-  startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
 }));
 
 const {
@@ -475,8 +476,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.hasInternalHookListeners.mockReturnValue(false);
     hoisted.createInternalHookEvent.mockClear();
     hoisted.triggerInternalHook.mockClear();
+    hoisted.initializeGatewayUpdateStatus.mockClear();
     hoisted.scheduleGatewayUpdateCheck.mockClear();
-    hoisted.startGatewayTailscaleExposure.mockClear();
     hoisted.logGatewayStartup.mockClear();
     hoisted.scheduleSubagentRegistrySweep.mockClear();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockReset();
@@ -914,44 +915,6 @@ describe("startGatewayPostAttachRuntime", () => {
     await waitForGatewayTestState(() => expect(sidecarsCompleted).toBe(true));
   });
 
-  it("observes deferred startup logging failure while tailscale startup is pending", async () => {
-    const startupError = new Error("startup logging failed");
-    const unhandledRejections: unknown[] = [];
-    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
-    let releaseTailscale: (() => void) | undefined;
-    const tailscaleStartup = new Promise<null>((resolve) => {
-      releaseTailscale = () => resolve(null);
-    });
-    const logGatewayStartup = vi.fn().mockRejectedValue(startupError);
-    process.on("unhandledRejection", onUnhandledRejection);
-
-    try {
-      const runtimePromise = startGatewayPostAttachRuntime(
-        createPostAttachParams({ sidecarStartup: "defer" }),
-        createPostAttachRuntimeDeps({
-          logGatewayStartup,
-          startGatewayTailscaleExposure: vi.fn(() => tailscaleStartup),
-        }),
-      );
-
-      await waitForGatewayTestState(() => {
-        expect(releaseTailscale).toBeTypeOf("function");
-        expect(logGatewayStartup).toHaveBeenCalledOnce();
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(unhandledRejections).toEqual([]);
-
-      releaseTailscale?.();
-      const runtime = await runtimePromise;
-      await expect(runtime.startupSettled).rejects.toBe(startupError);
-    } finally {
-      releaseTailscale?.();
-      process.off("unhandledRejection", onUnhandledRejection);
-    }
-  });
-
   it("retains a sidecar whose cleanup fails after startup logging rejects", async () => {
     const startupError = new Error("startup logging failed");
     const cleanupError = new Error("sidecar cleanup failed");
@@ -985,6 +948,14 @@ describe("startGatewayPostAttachRuntime", () => {
   it("starts the gateway update check after post-attach returns", async () => {
     const events: string[] = [];
     const stopUpdateCheck = vi.fn();
+    const initializeGatewayUpdateStatus = vi.fn(async () => {
+      events.push("install-identity");
+      return {
+        root: null,
+        status: { root: null, installKind: "unknown" as const, packageManager: "unknown" as const },
+        installReceipt: null,
+      };
+    });
     const scheduleGatewayUpdateCheck = vi.fn(async () => {
       events.push("update-check");
       return stopUpdateCheck;
@@ -997,6 +968,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const result = await startGatewayPostAttachRuntime(
       createPostAttachParams(),
       createPostAttachRuntimeDeps({
+        initializeGatewayUpdateStatus,
         refreshLatestUpdateRestartSentinel: vi.fn(async () => null),
         scheduleGatewayUpdateCheck,
         startGatewaySidecars: startGatewaySidecarsItem,
@@ -1004,13 +976,14 @@ describe("startGatewayPostAttachRuntime", () => {
     );
     events.push("returned");
 
+    expect(initializeGatewayUpdateStatus).toHaveBeenCalledTimes(1);
     expect(scheduleGatewayUpdateCheck).not.toHaveBeenCalled();
-    expect(events).toEqual(["sidecars", "returned"]);
+    expect(events).toEqual(["sidecars", "install-identity", "returned"]);
 
     await waitForGatewayTestState(() => {
       expect(scheduleGatewayUpdateCheck).toHaveBeenCalledTimes(1);
     });
-    expect(events).toEqual(["sidecars", "returned", "update-check"]);
+    expect(events).toEqual(["sidecars", "install-identity", "returned", "update-check"]);
 
     result.stopGatewayUpdateCheck();
     expect(stopUpdateCheck).toHaveBeenCalledTimes(1);
@@ -3480,10 +3453,10 @@ function createPostAttachRuntimeDeps(
     getGlobalHookRunner: vi.fn(() => null),
     logGatewayStartup: hoisted.logGatewayStartup,
     refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
+    initializeGatewayUpdateStatus: hoisted.initializeGatewayUpdateStatus,
     scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
     startGatewaySidecars: vi.fn(async () => ({ pluginServices: null, postReadySidecars: [] })),
     warmSystemCa: vi.fn(async () => {}),
-    startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
     loadSubagentRegistrySweep: vi.fn(async () => hoisted.scheduleSubagentRegistrySweep),
     ...overrides,
   };
@@ -3502,15 +3475,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     isNixMode: false,
     broadcastToConnIds: vi.fn(),
     getClientConnIds: () => new Set(),
-    tailscaleMode: "off",
-    resetOnExit: false,
-    preserveFunnel: false,
     controlUiBasePath: "/",
-    logTailscale: {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
     activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
     pluginManifestRecords: [],

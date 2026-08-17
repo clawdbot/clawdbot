@@ -15,6 +15,7 @@ import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
 import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
+import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
 import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
@@ -73,7 +74,6 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
 const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
-
 type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
@@ -683,9 +683,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       return;
     }
 
+    const ingressAttribution = readPreparedGatewayIngressAttribution(upgradeReq);
+    if (!ingressAttribution || ingressAttribution.kind === "unattributable-proxy") {
+      setCloseCause("missing-ingress-attribution");
+      logWsControl.warn(`gateway websocket missing prepared ingress attribution conn=${connId}`);
+      close(1008, "gateway ingress attribution required");
+      return;
+    }
+
     attachGatewayWsMessageHandlerOnDemand({
       socket,
       upgradeReq,
+      ingressAttribution,
       connId,
       remoteAddr,
       remotePort,

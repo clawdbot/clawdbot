@@ -30,11 +30,7 @@ import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-fa
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
-import {
-  acquireLocalHeavyCheckLockSync,
-  resolveLocalHeavyCheckEnv,
-  withLocalHeavyCheckLockHeld,
-} from "./lib/local-heavy-check-runtime.mts";
+import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
@@ -156,8 +152,8 @@ if (!isDirectRun()) {
   await ensureChangedCheckRuntimeDependencies(["package.json"]);
 }
 
-export function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
-  return withLocalHeavyCheckLockHeld(resolveLocalHeavyCheckEnv(baseEnv));
+function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
+  return resolveLocalCheckEnv(baseEnv);
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
@@ -1047,41 +1043,30 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
     return 0;
   }
   await ensureChangedCheckRuntimeDependencies(result.paths);
-  const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
+  const baseEnv = resolveLocalCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
   const plan = createChangedCheckPlan(result, {
     ...options,
     env: childEnv,
   });
-  const releaseLock = options.dryRun
-    ? () => {}
-    : acquireLocalHeavyCheckLockSync({
-        cwd: process.cwd(),
-        env: baseEnv,
-        toolName: "check:changed",
-      });
 
-  try {
-    printPlan(result, plan, options);
+  printPlan(result, plan, options);
 
-    if (options.dryRun) {
-      return 0;
-    }
-
-    const timings: ChangedCheckTiming[] = [];
-    for (const command of plan.commands) {
-      const status = await runPlanCommand(command, timings);
-      if (status !== 0) {
-        printSummary(timings, options);
-        return status;
-      }
-    }
-
-    printSummary(timings, options);
+  if (options.dryRun) {
     return 0;
-  } finally {
-    releaseLock();
   }
+
+  const timings: ChangedCheckTiming[] = [];
+  for (const command of plan.commands) {
+    const status = await runPlanCommand(command, timings);
+    if (status !== 0) {
+      printSummary(timings, options);
+      return status;
+    }
+  }
+
+  printSummary(timings, options);
+  return 0;
 }
 
 function sameArgs(left: string[], right: string[]) {
@@ -1132,7 +1117,7 @@ export function createPnpmManagedCommand<T extends ChangedCheckCommand>(
   command: T,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
+  const commandEnv = command.env ?? resolveLocalCheckEnv(env);
   if (isOpenEndedTruthyValue(commandEnv.CI) || isOpenEndedTruthyValue(commandEnv.GITHUB_ACTIONS)) {
     const shimmedEnv = prependCorepackPnpmShim(commandEnv);
     return {
@@ -1195,7 +1180,7 @@ async function runCommand(
     status = await runManagedCommand({
       bin: command.bin,
       args: command.args,
-      env: command.env ?? resolveLocalHeavyCheckEnv(),
+      env: command.env ?? resolveLocalCheckEnv(),
     });
   } catch (error) {
     console.error(error);

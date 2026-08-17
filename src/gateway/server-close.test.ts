@@ -1641,12 +1641,16 @@ describe("createGatewayCloseHandler", () => {
     mocks.drainRetainedEmbeddingProviders.mockImplementation(async () => {
       closeOrder.push("embedding-providers");
     });
+    const tailscaleCleanup = vi.fn(async () => {
+      closeOrder.push("tailscale");
+    });
     const lifecycleUnsub = vi.fn();
     const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
     const stopTaskRegistryMaintenance = vi.fn();
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
+        tailscaleCleanup,
         stopTaskRegistryMaintenance,
         lifecycleUnsub,
         taskUnsub,
@@ -1679,6 +1683,7 @@ describe("createGatewayCloseHandler", () => {
       "bundle-mcp",
       "bundle-lsp",
       "http-server",
+      "tailscale",
       "embedding-providers",
     ]);
   });
@@ -1884,14 +1889,17 @@ describe("createGatewayCloseHandler", () => {
   it("fails shutdown when http server close still hangs after force close", async () => {
     vi.useFakeTimers();
 
+    const closeHttpServer = vi.fn(() => undefined);
     const closeAllConnections = vi.fn();
+    const tailscaleCleanup = vi.fn(async () => undefined);
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         httpServer: {
-          close: () => undefined,
+          close: closeHttpServer,
           closeAllConnections,
           closeIdleConnections: vi.fn(),
         } as never,
+        tailscaleCleanup,
       }),
     );
 
@@ -1899,10 +1907,13 @@ describe("createGatewayCloseHandler", () => {
     const closeExpectation = expect(closePromise).rejects.toThrow(
       "http-server close still pending after forced connection shutdown (5000ms)",
     );
-    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS + HTTP_CLOSE_FORCE_WAIT_MS);
+    await vi.waitFor(() => expect(closeHttpServer).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS);
+    expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_FORCE_WAIT_MS);
     await closeExpectation;
 
-    expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(tailscaleCleanup).toHaveBeenCalledTimes(1);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("http-server close exceeded 1000ms"),

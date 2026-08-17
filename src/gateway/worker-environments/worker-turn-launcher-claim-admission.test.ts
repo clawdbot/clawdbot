@@ -245,11 +245,12 @@ describe("worker turn launcher claim admission", () => {
         timestamp: 31,
       }),
     );
+    const launchRequest = launchTurn.mock.calls[0]?.[0];
+    if (!launchRequest) {
+      throw new Error("expected worker launch request");
+    }
     createWorkerSessionPlacementGate(placements).updateAckCursors({
-      sessionId: SESSION_ID,
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      runId: "run-overlap",
+      claim: launchRequest.turnClaim,
       transcriptSeq: 2,
       liveSeq: 1,
     });
@@ -328,10 +329,7 @@ describe("worker turn launcher claim admission", () => {
               }),
             );
             createWorkerSessionPlacementGate(placements).updateAckCursors({
-              sessionId: SESSION_ID,
-              environmentId: ENVIRONMENT_ID,
-              ownerEpoch: OWNER_EPOCH,
-              runId: "run-model-failed",
+              claim: request.turnClaim,
               transcriptSeq: 2,
               liveSeq: 1,
             });
@@ -357,10 +355,7 @@ describe("worker turn launcher claim admission", () => {
             }),
           );
           createWorkerSessionPlacementGate(placements).updateAckCursors({
-            sessionId: SESSION_ID,
-            environmentId: ENVIRONMENT_ID,
-            ownerEpoch: OWNER_EPOCH,
-            runId: "run-model-recovered",
+            claim: request.turnClaim,
             transcriptSeq: 2,
             liveSeq: 1,
           });

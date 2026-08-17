@@ -182,11 +182,7 @@ async function executeWorkerTurn(params: {
     model: modelRef.model,
   });
 
-  const credential = await params.environments.acquireTurnCredential({
-    environmentId: placement.environmentId,
-    ownerEpoch: placement.activeOwnerEpoch,
-    sessionId: placement.sessionId,
-  });
+  const credential = await params.environments.acquireTurnCredential(params.turnClaim);
   const tunnel = await waitForTurnOperation({
     operation: params.environments.startTunnel({
       environmentId: placement.environmentId,
@@ -285,7 +281,7 @@ async function executeWorkerTurn(params: {
   };
   const processPromise = tunnel.launchTurn({
     plan,
-    placementGeneration: placement.generation,
+    turnClaim: params.turnClaim,
     timeoutMs: turn.timeoutMs,
     signal: turn.abortSignal
       ? AbortSignal.any([turn.abortSignal, handoffAbort.signal])

@@ -4,13 +4,15 @@ import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
-import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
-import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
+import type {
+  initializeGatewayUpdateStatus,
+  scheduleGatewayUpdateCheck,
+} from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -44,7 +46,6 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
-import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
@@ -925,14 +926,12 @@ type GatewayPostAttachRuntimeDeps = {
   refreshLatestUpdateRestartSentinel: () => Awaitable<
     ReturnType<typeof refreshLatestUpdateRestartSentinel>
   >;
+  initializeGatewayUpdateStatus: () => ReturnType<typeof initializeGatewayUpdateStatus>;
   scheduleGatewayUpdateCheck: (
     ...args: Parameters<typeof scheduleGatewayUpdateCheck>
   ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
   startGatewaySidecars: typeof startGatewaySidecars;
   warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
-  startGatewayTailscaleExposure: (
-    ...args: Parameters<typeof startGatewayTailscaleExposure>
-  ) => ReturnType<typeof startGatewayTailscaleExposure>;
   loadSubagentRegistrySweep: () => Awaitable<() => void>;
 };
 
@@ -942,12 +941,12 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   logGatewayStartup: async (params) =>
     (await import("./server-startup-log.js")).logGatewayStartup(params),
   refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelIfPresent,
+  initializeGatewayUpdateStatus: async () =>
+    (await import("../infra/update-startup.js")).initializeGatewayUpdateStatus(),
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
   warmSystemCa: warmMacOSSystemCaOffMainThread,
-  startGatewayTailscaleExposure: async (...args) =>
-    (await import("./server-tailscale.js")).startGatewayTailscaleExposure(...args),
   loadSubagentRegistrySweep: async () =>
     (await import("../agents/subagents/registry/subagent-registry.js"))
       .scheduleSubagentRegistrySweep,
@@ -1003,6 +1002,13 @@ function createDeferredGatewayUpdateCheck(params: {
       return;
     }
     started = true;
+    // Install identity is process-stable and must be ready before clients can
+    // select a channel; registry and upstream discovery stay post-ready.
+    void params.runtimeDeps.initializeGatewayUpdateStatus().catch((err: unknown) => {
+      if (!stopped) {
+        params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
+      }
+    });
     // Update checks are intentionally post-attach so startup logging, sidecars,
     // and Tailscale exposure are not serialized behind network I/O.
     void (async () => {
@@ -1086,18 +1092,8 @@ export async function startGatewayPostAttachRuntime(
     broadcastToConnIds: GatewayBroadcastToConnIdsFn;
     getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
-    tailscaleMode: GatewayTailscaleMode;
-    resetOnExit: boolean;
-    serviceName?: string;
-    preserveFunnel: boolean;
     controlUiBasePath: string;
     controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
-    logTailscale: {
-      info: (msg: string) => void;
-      warn: (msg: string) => void;
-      error: (msg: string) => void;
-      debug?: (msg: string) => void;
-    };
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
     pluginManifestRecords: readonly PluginManifestRecord[];
@@ -1282,33 +1278,6 @@ export async function startGatewayPostAttachRuntime(
     start: updateCheck.start,
     stop: updateCheck.stop,
   });
-  let tailscaleCleanupPromise!: Promise<Awaited<
-    ReturnType<typeof runtimeDeps.startGatewayTailscaleExposure>
-  > | null>;
-  const tailscaleResident = params.residentRegistry.register({
-    name: "tailscale-exposure",
-    start: () => {
-      tailscaleCleanupPromise = params.minimalTestGateway
-        ? Promise.resolve(null)
-        : params.tailscaleMode === "off" && !params.resetOnExit
-          ? Promise.resolve(null)
-          : measureStartup(params.startupTrace, "post-attach.tailscale", () =>
-              runtimeDeps.startGatewayTailscaleExposure({
-                tailscaleMode: params.tailscaleMode,
-                resetOnExit: params.resetOnExit,
-                serviceName: params.serviceName,
-                preserveFunnel: params.preserveFunnel,
-                port: params.port,
-                controlUiBasePath: params.controlUiBasePath,
-                logTailscale: params.logTailscale,
-              }),
-            );
-      return tailscaleCleanupPromise;
-    },
-    stop: async () => await (await tailscaleCleanupPromise)?.(),
-  });
-  void tailscaleResident.start();
-
   let pluginServicesReported = false;
   let reportedPluginServices: PluginServicesHandle | null = null;
   const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
@@ -1622,20 +1591,15 @@ export async function startGatewayPostAttachRuntime(
     });
 
   if (params.sidecarStartup !== "defer") {
-    const [tailscaleCleanup, sidecarsResult] = await Promise.all([
-      tailscaleCleanupPromise,
-      sidecarsPromise,
-    ]);
+    const sidecarsResult = await sidecarsPromise;
     updateCheckResident.start();
     return {
       stopGatewayUpdateCheck: updateCheckResident.stop,
-      tailscaleCleanup,
       pluginServices: sidecarsResult.pluginServices,
       startupSettled: Promise.resolve(),
     };
   }
 
-  const tailscaleCleanup = await tailscaleCleanupPromise;
   updateCheckResident.start();
   const startupSettled = Promise.all([sidecarsPromise, startupLogSettled.promise]).then(
     () => undefined,
@@ -1646,7 +1610,6 @@ export async function startGatewayPostAttachRuntime(
 
   return {
     stopGatewayUpdateCheck: updateCheckResident.stop,
-    tailscaleCleanup,
     pluginServices: reportedPluginServices,
     startupSettled,
   };

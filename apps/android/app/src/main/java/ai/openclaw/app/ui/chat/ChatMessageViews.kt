@@ -14,6 +14,7 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.image.RemoteImageResult
 import ai.openclaw.app.ui.image.safeRemoteImageStore
 import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileBorderStrong
@@ -65,8 +66,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -79,41 +80,33 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
-private data class ChatBubbleStyle(
-  val alignEnd: Boolean,
-  val containerColor: Color,
-  val borderColor: Color,
-  val roleColor: Color,
-)
-
 @Composable
 private fun ChatBubbleContainer(
-  style: ChatBubbleStyle,
-  roleLabel: String,
+  user: Boolean,
+  speaker: String,
   modifier: Modifier = Modifier,
+  borderColor: Color? = null,
   content: @Composable () -> Unit,
 ) {
   Row(
     modifier = modifier.fillMaxWidth(),
-    horizontalArrangement = if (style.alignEnd) Arrangement.End else Arrangement.Start,
+    horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
       shape = RoundedCornerShape(12.dp),
-      border = BorderStroke(1.dp, style.borderColor),
-      color = style.containerColor,
+      border = BorderStroke(1.dp, borderColor ?: if (user) mobileAccentBorderStrong else mobileBorderStrong),
+      color = if (user) mobileAccentSoft else mobileCardSurface,
       tonalElevation = 0.dp,
       shadowElevation = 0.dp,
-      modifier = Modifier.fillMaxWidth(0.90f),
+      modifier =
+        Modifier
+          .fillMaxWidth(0.90f)
+          .semantics(mergeDescendants = true) { contentDescription = speaker },
     ) {
       Column(
         modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
-        Text(
-          text = nativeString(roleLabel),
-          style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
-          color = style.roleColor,
-        )
         content()
       }
     }
@@ -261,11 +254,11 @@ fun ChatTypingIndicatorBubble(
   val phrase = workingPhraseText(seed = runKey, elapsedMs = elapsedMs)
   val tokens = outputTokens?.let { localizedChatOutputTokens(it) }
   ChatBubbleContainer(
-    style = bubbleStyle("assistant"),
-    roleLabel = nativeString("OpenClaw"),
+    user = false,
+    speaker = nativeString("OpenClaw"),
   ) {
     Row(
-      modifier = Modifier.clearAndSetSemantics { contentDescription = nativeString("Working") },
+      modifier = Modifier.semantics(mergeDescendants = true) { contentDescription = nativeString("Working") },
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -316,8 +309,9 @@ fun ChatOutboxBubble(
     }
 
   ChatBubbleContainer(
-    style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
-    roleLabel = nativeString("You"),
+    user = true,
+    speaker = nativeString("You"),
+    borderColor = statusColor.copy(alpha = 0.6f),
   ) {
     if (item.text.isNotBlank()) {
       ChatMarkdown(text = item.text, textColor = mobileText)
@@ -371,26 +365,6 @@ private fun ChatOutboxAction(
     )
   }
 }
-
-@Composable
-private fun bubbleStyle(role: String): ChatBubbleStyle =
-  when (role) {
-    "user" ->
-      ChatBubbleStyle(
-        alignEnd = true,
-        containerColor = mobileAccentSoft,
-        borderColor = mobileAccent,
-        roleColor = mobileAccent,
-      )
-
-    else ->
-      ChatBubbleStyle(
-        alignEnd = false,
-        containerColor = mobileCardSurface,
-        borderColor = mobileBorderStrong,
-        roleColor = mobileTextSecondary,
-      )
-  }
 
 @Composable
 internal fun ChatBase64Image(

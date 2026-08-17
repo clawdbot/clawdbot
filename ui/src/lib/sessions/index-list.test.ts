@@ -205,6 +205,40 @@ describe("session list requests", () => {
     sessions.dispose();
   });
 
+  it("keeps explicit unenriched page queries independent from the primary roster", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(listResult(["agent:main:primary"]))
+      .mockResolvedValueOnce(listResult(["agent:main:page"]));
+    const { sessions } = sessionHarness(request);
+    const pageQuery = {
+      agentId: "main",
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      includeDerivedTitles: false,
+      includeLastMessage: false,
+    };
+    const unsubscribe = sessions.subscribeList(pageQuery, () => undefined);
+
+    await sessions.refreshList({ agentId: "main", limit: 50, force: true });
+    const primaryResult = sessions.state.result;
+    await sessions.refreshList({ ...pageQuery, force: true });
+
+    expect(sessions.state.result).toBe(primaryResult);
+    expect(sessions.listSnapshot(pageQuery).result?.sessions[0]?.key).toBe("agent:main:page");
+    expect(request.mock.calls[1]?.[1]).toEqual({
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+    });
+    unsubscribe();
+    sessions.dispose();
+  });
+
   it("retires stale filtered snapshots across same-client reconnects without losing subscribers", async () => {
     let resolveStale!: (result: SessionsListResult) => void;
     const staleResult = new Promise<SessionsListResult>((resolve) => {

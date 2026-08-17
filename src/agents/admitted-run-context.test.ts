@@ -11,7 +11,7 @@ import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
-  retainAdmittedRunDelegatedAuthority,
+  retainAdmittedRunBeforeToolCallRecovery,
   resolvePreparedRunAdmission,
 } from "./admitted-run-context.js";
 
@@ -209,7 +209,7 @@ describe("prepared run admission", () => {
     await expect(prepared.admit(runtime.kind)).rejects.toThrow("already closed");
   });
 
-  it("keeps one private lease through foreground close and releases it exactly once", async () => {
+  it("closes generic authority while keeping a recovery-only lease active", async () => {
     const { runtime, ...admissionFacts } = facts;
     const prepared = prepareAgentRunAdmission({
       cfg: {},
@@ -218,17 +218,18 @@ describe("prepared run admission", () => {
     });
     const admitted = await prepared.admit(runtime.kind);
     const authority = getAdmittedRunDelegatedAuthority(admitted);
-    const release = retainAdmittedRunDelegatedAuthority(admitted);
+    const recovery = retainAdmittedRunBeforeToolCallRecovery(admitted);
 
     expect(authority).toBeDefined();
-    expect(release).toEqual(expect.any(Function));
+    expect(recovery).toBeDefined();
     expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
     expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-    expect(validateAgentRunDelegatedAuthority(authority!)).toBe(true);
-
-    release?.();
     expect(validateAgentRunDelegatedAuthority(authority!)).toBe(false);
-    release?.();
+    expect(() => recovery?.assertActive()).not.toThrow();
+
+    recovery?.release();
+    expect(() => recovery?.assertActive()).toThrow("no longer active");
+    recovery?.release();
   });
 
   it("closes admitted authority when the owner binding hook fails", async () => {

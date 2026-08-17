@@ -2279,7 +2279,12 @@ describe("runCodexAppServerSideQuestion", () => {
             {
               name: "wiki_status",
               description: "Check wiki status",
-              parameters: { type: "object", properties: {} },
+              parameters: {
+                type: "object",
+                properties: { topic: { type: "string" } },
+                required: ["topic"],
+                additionalProperties: false,
+              },
               execute: toolExecuteMock,
             },
           ]

@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
+  validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -26,6 +27,7 @@ import {
   type InternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   createAgentHarnessHostCapabilities,
@@ -316,13 +318,20 @@ describe("agent harness host capability", () => {
   it("keeps a private native policy lease after foreground close but fences replacement", async () => {
     const { attempt } = await admittedAttempt("run-retained-policy");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
     const retained = retainBeforeToolCallForNativeHookRelay(host.capabilities.runBeforeToolCall);
+    mockRunBefore.mockImplementationOnce(async ({ params }) => {
+      expect(getGatewayToolCallerIdentity()).toBeUndefined();
+      return { blocked: false, params };
+    });
+    expect(delegatedAuthority).toBeDefined();
     expect(retained).toBeDefined();
     if (!retained) {
       throw new Error("expected retained native policy lease");
     }
 
     expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+    expect(validateAgentRunDelegatedAuthority(delegatedAuthority!)).toBe(false);
     await expect(
       host.capabilities.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
     ).rejects.toThrow("no longer active");
@@ -331,6 +340,23 @@ describe("agent harness host capability", () => {
     ).resolves.toMatchObject({ blocked: false });
 
     await admittedAttempt("run-retained-policy");
+    await expect(
+      retained.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
+    ).rejects.toThrow("no longer active");
+    retained.release();
+  });
+
+  it("fences a retained native policy lease after lifecycle rotation", async () => {
+    const { attempt } = await admittedAttempt("run-retained-policy-lifecycle");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const retained = retainBeforeToolCallForNativeHookRelay(host.capabilities.runBeforeToolCall);
+    if (!retained) {
+      throw new Error("expected retained native policy lease");
+    }
+    expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+
+    rotateAgentRunRegistryLifecycleGeneration();
+
     await expect(
       retained.runBeforeToolCall({ toolName: "exec", params: { command: "true" } }),
     ).rejects.toThrow("no longer active");

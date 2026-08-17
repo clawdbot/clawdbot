@@ -145,7 +145,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
-  const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore);
+  const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
+    // Claims loaded before this Gateway acquired the state lock remain usable only by
+    // workspace recovery. Worker authority is minted from claims created in this lifecycle.
+    rejectExistingWorkerClaims: true,
+  });
   const workerEnvironmentLog = params.log.child("worker-environments");
   const listRetainedBundleHashes = () =>
     listRetainedWorkerBundleHashes({

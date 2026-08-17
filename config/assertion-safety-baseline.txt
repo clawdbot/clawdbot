@@ -112,7 +112,6 @@ extensions/browser/src/browser/server-context.tab-ops.ts	4
 extensions/browser/src/browser/server-middleware.ts	2
 extensions/browser/src/browser/session-tab-ephemeral-aliases.ts	4
 extensions/browser/src/browser/session-tab-process-state.ts	4
-extensions/browser/src/browser/session-tab-store.ts	2
 extensions/browser/src/browser/snapshot-delta-cache.ts	1
 extensions/browser/src/browser/system-chrome-cookies.ts	1
 extensions/browser/src/browser/system-profiles.ts	1
@@ -2866,7 +2865,7 @@ src/cron/store/quarantine.ts	1
 src/cron/store/row-codec.ts	7
 src/cron/store/state-codec.ts	3
 src/cron/store/transaction-hooks.ts	1
-src/cron/task-run-detail.ts	6
+src/cron/task-run-detail.ts	2
 src/cron/task-run-history.ts	1
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	7
@@ -3479,7 +3478,7 @@ src/meeting-bot/session-speech-readiness.ts	1
 src/meeting-bot/session-transcript-store.ts	1
 src/meeting-bot/voice-call-gateway.ts	1
 src/memory-host-sdk/dreaming.ts	3
-src/memory-host-sdk/event-store.ts	5
+src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
 src/model-catalog/remote-overlay.ts	1
@@ -3840,7 +3839,7 @@ src/skills/workshop/experience-review.ts	2
 src/skills/workshop/history-scan-transcript.ts	1
 src/skills/workshop/history-scan.ts	2
 src/skills/workshop/policy.ts	1
-src/skills/workshop/store-record.ts	6
+src/skills/workshop/store-record.ts	3
 src/skills/workshop/store-sqlite-event.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	10
@@ -3908,7 +3907,7 @@ src/talk/agent-consult-tool.ts	2
 src/talk/agent-run-control-shared.ts	4
 src/talk/client-voice-confirmation.ts	2
 src/talk/client-voice-mutation-digest-owner.ts	1
-src/talk/client-voice-session-store.ts	5
+src/talk/client-voice-session-store.ts	3
 src/talk/client-voice-session.ts	3
 src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1

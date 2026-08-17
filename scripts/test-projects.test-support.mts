@@ -4223,31 +4223,6 @@ function filterPlansForContractIncludeFile(plans: VitestRunPlan[], env: NodeJS.P
   });
 }
 
-export function shouldAcquireLocalHeavyCheckLock(
-  runSpecs: Array<Pick<VitestRunSpec, "config" | "includePatterns" | "watchMode">>,
-  env = process.env,
-) {
-  if (env.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD === "1") {
-    return false;
-  }
-
-  if (env.OPENCLAW_TEST_PROJECTS_FORCE_LOCK === "1") {
-    return true;
-  }
-
-  const runSpec = runSpecs.length === 1 ? runSpecs[0] : undefined;
-  if (!runSpec) {
-    return true;
-  }
-  return !(
-    (runSpec.config === TOOLING_VITEST_CONFIG ||
-      runSpec.config === TOOLING_ISOLATED_VITEST_CONFIG) &&
-    !runSpec.watchMode &&
-    Array.isArray(runSpec.includePatterns) &&
-    runSpec.includePatterns.length > 0
-  );
-}
-
 function expandVitestIncludePatterns(includePatterns: string[], cwd: string) {
   const candidateFiles = includePatterns.some(isGlobTarget)
     ? listExplicitTestTargetFilesForCwd(cwd)

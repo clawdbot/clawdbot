@@ -4,6 +4,7 @@
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { WebSocket } from "ws";
 import {
   BACKEND_GATEWAY_CLIENT,
   connectReq,
@@ -20,6 +21,7 @@ import {
   restoreGatewayToken,
   startTestGatewayServer,
   testState,
+  testTailscaleWhois,
   installGatewayTestHooks,
 } from "./server.auth.test-helpers.js";
 
@@ -52,6 +54,36 @@ function expectAuthErrorDetails(params: {
   if (params.recommendedNextStep !== undefined) {
     expect(details?.recommendedNextStep).toBe(params.recommendedNextStep);
   }
+}
+
+async function expectProxyUpgradeRejected(port: number, headers: Record<string, string>) {
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
+    const timer = setTimeout(() => {
+      ws.terminate();
+      reject(new Error("timed out waiting for proxy upgrade rejection"));
+    }, 5_000);
+    ws.once("open", () => {
+      clearTimeout(timer);
+      ws.terminate();
+      reject(new Error("expected proxy-shaped upgrade to be rejected"));
+    });
+    ws.once("unexpected-response", (_request, response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      response.on("end", () => {
+        clearTimeout(timer);
+        expect(response.statusCode).toBe(403);
+        expect(body).toContain("proxy_attribution_required");
+        expect(body).toContain("gateway.trustedProxies");
+        resolve();
+      });
+    });
+    ws.once("error", () => {});
+  });
 }
 
 async function expectSharedOperatorScopesCleared(
@@ -139,10 +171,10 @@ describe("gateway auth compatibility baseline", () => {
   describe("token mode", () => {
     let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port = 0;
-    let prevToken: string | undefined;
+    let previousCredential: string | undefined;
 
     beforeAll(async () => {
-      prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      previousCredential = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "token", token: "secret" };
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
       port = await getGatewayTestPort();
@@ -151,7 +183,7 @@ describe("gateway auth compatibility baseline", () => {
 
     afterAll(async () => {
       await server.close();
-      restoreGatewayToken(prevToken);
+      restoreGatewayToken(previousCredential);
     });
 
     test("keeps valid shared-token connect behavior unchanged", async () => {
@@ -296,6 +328,53 @@ describe("gateway auth compatibility baseline", () => {
       } finally {
         ws.close();
       }
+    });
+  });
+
+  describe("unattributable proxy ingress", () => {
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
+    let port = 0;
+    let prevToken: string | undefined;
+
+    beforeAll(async () => {
+      prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      testState.gatewayAuth = {
+        mode: "token",
+        token: "secret",
+        rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 },
+      };
+      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port);
+    });
+
+    afterAll(async () => {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    });
+
+    test("rejects before credentials can bypass attribution", async () => {
+      testTailscaleWhois.value = { login: "spoofed@example.com", name: "Spoofed" };
+      const headers = {
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "gateway.example.com",
+        "tailscale-user-login": "spoofed@example.com",
+      };
+      await expectProxyUpgradeRejected(port, headers);
+    });
+
+    test("rejects browser-origin upgrades before browser auth fallback", async () => {
+      await expectProxyUpgradeRejected(port, {
+        origin: "https://control.example.com",
+        "x-forwarded-for": "203.0.113.10",
+      });
+    });
+
+    test("keeps headerless loopback transport indistinguishable from direct local", async () => {
+      const ws = await openWs(port);
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
     });
   });
 

@@ -21,7 +21,7 @@ import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
-import { confirm, password, select, text } from "./configure.shared.js";
+import { password, select, text } from "./configure.shared.js";
 import {
   guardCancel,
   normalizeGatewayTokenInput,
@@ -145,17 +145,8 @@ export async function promptGatewayConfig(
     }
   }
 
-  let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
     note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
-    tailscaleResetOnExit = guardCancel(
-      await confirm({
-        message: "Reset Tailscale serve/funnel on exit?",
-        initialValue: false,
-      }),
-      runtime,
-      1,
-    );
   }
 
   if (tailscaleMode !== "off" && bind !== "loopback") {
@@ -176,7 +167,6 @@ export async function promptGatewayConfig(
       "Note",
     );
     tailscaleMode = "off";
-    tailscaleResetOnExit = false;
   }
 
   let gatewayToken: SecretInput | undefined;
@@ -354,7 +344,6 @@ export async function promptGatewayConfig(
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,
-        resetOnExit: tailscaleResetOnExit,
       },
     },
   };

@@ -19534,7 +19534,19 @@ public struct ChatErrorEvent: Codable, Sendable {
     }
 }
 
-public struct UpdateStatusParams: Codable, Sendable {}
+public struct UpdateStatusParams: Codable, Sendable {
+    public let refreshcheckout: Bool?
+
+    public init(
+        refreshcheckout: Bool? = nil)
+    {
+        self.refreshcheckout = refreshcheckout
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case refreshcheckout = "refreshCheckout"
+    }
+}
 
 public struct UpdateStatusResult: Codable, Sendable {
     public let sentinel: AnyCodable

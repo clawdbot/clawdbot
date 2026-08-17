@@ -364,6 +364,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
+    "infra/tailscale-route-owner.worker": "src/infra/tailscale-route-owner.worker.ts",
     "system-agent/setup-inference-detection.worker":
       "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",

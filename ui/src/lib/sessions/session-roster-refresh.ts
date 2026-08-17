@@ -68,6 +68,9 @@ function managedSessionListAgentId(entry: ManagedSessionList): string | undefine
 }
 
 function isPrimarySessionListQuery(options: SessionListScope): boolean {
+  if (options.includeDerivedTitles === false || options.includeLastMessage === false) {
+    return false;
+  }
   const query = normalizeManagedSessionListQuery(options);
   return (
     query.archived === undefined &&
@@ -89,6 +92,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let lastListOptions: SessionListOptions = {};
   let hasForegroundListOptions = false;
   let hasSeededListOptions = false;
+  const observesPageLifecycle =
+    typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
+  let pageActive = !observesPageLifecycle || document.visibilityState !== "hidden";
   const managedLists = new Map<string, ManagedSessionList>();
 
   const publishManagedList = (entry: ManagedSessionList, snapshot: SessionListSnapshot): void => {
@@ -111,10 +117,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       snapshot: { result: null, agentId: null, loading: false, error: null },
       listeners: new Set(),
       coordinator: createSessionEventRefreshCoordinator({
-        canRefresh: () =>
-          managedLists.get(key) === entry &&
-          entry.listeners.size > 0 &&
-          host.connection.capture() !== null,
+        active: pageActive,
         refresh: () => refreshManagedList(entry, { append: false }),
       }),
       pending: null,
@@ -189,8 +192,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         if (!isCurrent()) {
           return;
         }
-        next = entry.queued;
+        const queued = entry.queued;
         entry.queued = null;
+        next = pageActive ? queued : null;
       }
     };
     const pending = drain().finally(() => {
@@ -348,6 +352,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!eventRefreshQueued) {
       return null;
     }
+    if (!pageActive) {
+      return null;
+    }
     eventRefreshQueued = false;
     return { ...lastListOptions, force: true };
   };
@@ -405,25 +412,32 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       eventRefreshQueued = true;
       return inFlight;
     }
+    eventRefreshQueued = false;
     return startRefresh({ ...lastListOptions, force: true });
   };
 
   const eventRefreshCoordinator = createSessionEventRefreshCoordinator({
-    canRefresh: () => host.connection.capture() !== null,
+    active: pageActive,
     refresh: refreshFromEvent,
   });
-  const flushEventRefresh = () => eventRefreshCoordinator.flush();
 
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === "hidden") {
-      flushEventRefresh();
+  const handlePageLifecycle = (event: Event) => {
+    const markDirty = event.type === "pagehide";
+    pageActive = !markDirty && document.visibilityState !== "hidden";
+    eventRefreshCoordinator.setActive(pageActive, markDirty || inFlight !== null);
+    for (const entry of managedLists.values()) {
+      entry.coordinator.setActive(pageActive, markDirty || entry.pending !== null);
     }
   };
-  const observesPageLifecycle =
-    typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
+
+  const updatePageLifecycleListeners = (add: boolean) => {
+    const method = add ? "addEventListener" : "removeEventListener";
+    document[method]("visibilitychange", handlePageLifecycle);
+    globalThis[method]("pagehide", handlePageLifecycle);
+    globalThis[method]("pageshow", handlePageLifecycle);
+  };
   if (observesPageLifecycle) {
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    globalThis.addEventListener("pagehide", flushEventRefresh);
+    updatePageLifecycleListeners(true);
   }
 
   const refreshReplacement = (agentId?: string | null): Promise<void> => {
@@ -556,12 +570,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
     },
     dispose() {
-      // Flush before disposal so page-exit events start the trailing canonical list.
-      flushEventRefresh();
       eventRefreshCoordinator.dispose();
       if (observesPageLifecycle) {
-        document.removeEventListener("visibilitychange", handleVisibilityChange);
-        globalThis.removeEventListener("pagehide", flushEventRefresh);
+        updatePageLifecycleListeners(false);
       }
       inFlight = null;
       queuedExplicitRefresh = null;

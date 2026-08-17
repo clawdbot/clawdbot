@@ -8,7 +8,7 @@ import {
 import { t } from "../../../i18n/index.ts";
 import {
   handleTranscriptContextMenu,
-  handleTranscriptSelection,
+  handleTranscriptPointerUp,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import {
@@ -136,7 +136,7 @@ function renderTranscriptShell(
         }
       }}
       @contextmenu=${(event: MouseEvent) => handleTranscriptContextMenu(event, props)}
-      @pointerup=${(event: PointerEvent) => handleTranscriptSelection(event, props)}
+      @pointerup=${(event: PointerEvent) => handleTranscriptPointerUp(event, props)}
     >
       <span
         class="chat-transcript-announcement sr-only"

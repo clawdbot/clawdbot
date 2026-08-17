@@ -19058,17 +19058,6 @@
       ]
     },
     {
-      "id": "native.android.38f9916ba74e0c02",
-      "source": "assistant",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt"
-        }
-      ]
-    },
-    {
       "id": "native.android.37c430fb826c446f",
       "source": "audio",
       "surface": "android",
@@ -19363,17 +19352,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.348fed982b19bc08",
-      "source": "user",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "ui-call",
-          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt"
         }
       ]
     },

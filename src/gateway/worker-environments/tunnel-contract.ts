@@ -3,6 +3,7 @@ import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-comm
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
   WorkerWorkspaceReconciliationJournalAdapter,
@@ -100,7 +101,7 @@ export type WorkerWorkspaceQuiescence = {
 
 type WorkerTurnLaunchRequest = {
   plan: WorkerLaunchPlan;
-  placementGeneration: number;
+  turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
