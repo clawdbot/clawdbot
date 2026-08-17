@@ -196,6 +196,10 @@ async function collectMemoryFilesFromDir(
       isAllowedMemoryFilePath(entry.path, multimodal) &&
       (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
   });
+  const operationalFailure = scan.failedDirs.find((failure) => !isFileMissingError(failure.error));
+  if (operationalFailure) {
+    throw operationalFailure.error;
+  }
   files.push(...scan.entries.map((entry) => entry.path));
 }
 

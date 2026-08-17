@@ -270,6 +270,22 @@ describe("memory host SDK package internals", () => {
     await expect(listMemoryFiles(workspaceDir)).rejects.toBe(scanError);
   });
 
+  it("propagates operational failures while traversing a memory directory", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir);
+    const scanError = Object.assign(new Error(`I/O failure: ${memoryDir}`), { code: "EIO" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === memoryDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toBe(scanError);
+  });
+
   it("filters extra directories by glob while preserving symlink skips", async () => {
     const tmpDir = getTmpDir();
     const extraDir = path.join(tmpDir, "extra");
