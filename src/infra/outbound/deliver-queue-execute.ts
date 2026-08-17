@@ -25,6 +25,7 @@ import {
 } from "./deliver-types.js";
 import { runOutboundDeliveryCommitHooks } from "./delivery-commit-hooks.js";
 import { rejectDurableDelivery, settleDurableDelivery } from "./delivery-completion.js";
+import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   failDelivery,
   failDeliveryAfterPlatformSend,
@@ -343,16 +344,34 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           (partialSendEvidence ? await persistOwnedPostSendState() : undefined);
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
-          if (!partialSendEvidence && partialFailuresAreProvenNotSent) {
-            // Proven-not-sent partial failures must not be recovered by the queue drain.
-            // The caller has already received the error and owns the retry.
-            await moveToFailed(queueId, platformQueueStateDir, producerClaimId ?? null).catch(
-              (err: unknown) => {
-                log.warn(
-                  `failed to remove queued delivery ${queueId} after proven-not-sent partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
-                );
-              },
-            );
+          if (
+            !partialSendEvidence &&
+            partialFailuresAreProvenNotSent &&
+            !params.reusePendingDeliveryIntent
+          ) {
+            // Proven-not-sent partial failures on caller-owned intents must not be
+            // recovered by the queue drain. The caller has already received the
+            // error and owns the retry. Reusable delivery intents (gateway recovery
+            // notices) stay recoverable — they have no independent retry owner.
+            const spoolPaths = await moveToFailed(
+              queueId,
+              platformQueueStateDir,
+              producerClaimId ?? null,
+            ).catch((err: unknown) => {
+              log.warn(
+                `failed to remove queued delivery ${queueId} after proven-not-sent partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+              );
+              return [] as string[];
+            });
+            if (spoolPaths.length > 0) {
+              await releaseSpoolArtifacts(spoolPaths, platformQueueStateDir).catch(
+                (err: unknown) => {
+                  log.warn(
+                    `failed to release spool artifacts for ${queueId}: ${formatErrorMessage(err)}`,
+                  );
+                },
+              );
+            }
           } else {
             await recordOwnedQueueFailure(failDelivery, error).catch((err: unknown) => {
               log.warn(
