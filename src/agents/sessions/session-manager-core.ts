@@ -1,5 +1,5 @@
 import {
-  loadTranscriptEventsSync,
+  loadTranscriptEventsWithSnapshotSync,
   readTranscriptSnapshotSync,
   replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
@@ -55,22 +55,29 @@ export class SessionManagerCore {
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    loadedSnapshot?: SqliteTranscriptSnapshotRow[],
   ) {
     this.cwd = cwd;
     this.persistenceTarget = persistenceTarget;
     if (persistenceTarget || loadedEntries) {
-      this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? []);
+      this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? [], loadedSnapshot);
     } else {
       this.newSession();
     }
   }
 
   setSessionTarget(target: SessionManagerPersistenceTarget): void {
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    // Entries and the row snapshot must come from the same SQLite read transaction:
+    // reading them separately would leave a gap in which a foreign process's commit
+    // lands after the entries read but before the snapshot read, so it is absent from
+    // `entries` yet present in the "expected" snapshot -- and a later rewrite would
+    // validate against that snapshot and silently delete the foreign row.
+    const { events, snapshot } = loadTranscriptEventsWithSnapshotSync(target);
+    const entries = events as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    this.setLoadedSessionTarget(target, entries);
+    this.setLoadedSessionTarget(target, entries, snapshot);
     if (header?.cwd) {
       this.cwd = header.cwd;
     }
@@ -79,6 +86,7 @@ export class SessionManagerCore {
   protected setLoadedSessionTarget(
     target: SessionManagerPersistenceTarget | undefined,
     entries: FileEntry[],
+    loadedSnapshot?: SqliteTranscriptSnapshotRow[],
   ): void {
     const partitioned = partitionSessionFileEntries(entries);
     // Only a physically empty transcript may initialize lazily. Opaque persisted rows still need
@@ -87,7 +95,7 @@ export class SessionManagerCore {
       this.persistenceTarget = target ? { ...target } : undefined;
       this.initializeSession({ id: target?.sessionId });
       this.persistenceHeaderPending = target !== undefined;
-      this.refreshTranscriptSnapshot();
+      this.installTranscriptSnapshot(loadedSnapshot);
       return;
     }
     const header = partitioned.fileEntries.find((entry) => entry.type === "session");
@@ -106,6 +114,20 @@ export class SessionManagerCore {
       partitioned.fileEntriesByOriginalIndex,
     );
     this.buildIndex();
+    this.installTranscriptSnapshot(loadedSnapshot);
+  }
+
+  /**
+   * Installs a transcript row snapshot already captured atomically alongside `entries`
+   * (by {@link setSessionTarget}). Only falls back to a fresh, separately-read snapshot
+   * for the legacy constructor path where `entries` were supplied by the caller rather
+   * than just loaded here, so there was never a shared transaction to draw both from.
+   */
+  private installTranscriptSnapshot(loadedSnapshot?: SqliteTranscriptSnapshotRow[]): void {
+    if (loadedSnapshot !== undefined) {
+      this.transcriptSnapshot = loadedSnapshot;
+      return;
+    }
     this.refreshTranscriptSnapshot();
   }
 

@@ -6,9 +6,10 @@
  */
 import {
   appendTranscriptMessageSync,
-  loadTranscriptEventsSync,
+  loadTranscriptEventsWithSnapshotSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import type { SqliteTranscriptSnapshotRow } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -51,8 +52,9 @@ export class SessionManager extends SessionManagerBranching {
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    loadedSnapshot?: SqliteTranscriptSnapshotRow[],
   ) {
-    super(cwd, persistenceTarget, loadedEntries);
+    super(cwd, persistenceTarget, loadedEntries, loadedSnapshot);
   }
 
   /** Makes pending append-oriented persistence durable without rewriting committed entries. */
@@ -76,11 +78,21 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   static open(target: SessionTranscriptRuntimeTarget, cwdOverride?: string): SessionManager {
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    // Load events and the row snapshot from one SQLite read transaction: reading them
+    // separately would leave a gap in which a foreign commit lands after the entries
+    // read but before the snapshot read, so it is absent from `entries` yet present in
+    // the "expected" snapshot -- and a later rewrite would silently delete it.
+    const { events, snapshot } = loadTranscriptEventsWithSnapshotSync(target);
+    const entries = events as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
+    return new SessionManager(
+      cwdOverride ?? header?.cwd ?? process.cwd(),
+      target,
+      entries,
+      snapshot,
+    );
   }
 
   /** Appends to the current transcript leaf without hydrating its history. */

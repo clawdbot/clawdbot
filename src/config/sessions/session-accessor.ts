@@ -236,6 +236,7 @@ export {
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptEventsWithSnapshotSync,
   loadTranscriptHeaderSync,
   loadTranscriptTailEventsSync,
   preflightSessionTranscriptForManualCompact,

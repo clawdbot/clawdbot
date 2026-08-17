@@ -137,4 +137,51 @@ describe("SessionManager transcript snapshot race regression (#124393)", () => {
     // instead of pretending it never happened.
     expect(manager.getLeafId()).toBe(foreignAppend.messageId);
   });
+
+  it("captures the load snapshot atomically with loaded events on open (#124393 follow-up)", async () => {
+    // setSessionTarget()/SessionManager.open() used to load entries via
+    // loadTranscriptEventsSync and then separately refresh the row snapshot via
+    // readTranscriptSnapshotSync. A foreign process's commit landing in that gap was
+    // absent from the loaded entries but present in the "expected" snapshot, so a
+    // later rewrite would validate against it and silently delete the foreign row.
+    // The fix loads both from a single loadTranscriptEventsWithSnapshotSync read
+    // transaction; this asserts that combined path is what actually runs.
+    const dir = tempDirs.make("openclaw-session-manager-snapshot-race-");
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "snapshot-race-atomic-load";
+    const sessionKey = "agent:main:dashboard:snapshot-race-atomic-load";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await sessionAccessor.upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question" },
+    });
+
+    const target = parseSqliteSessionFileMarker(marker);
+    if (!target) {
+      throw new Error("expected SQLite transcript marker fixture");
+    }
+
+    const combinedReadSpy = vi.spyOn(sessionAccessor, "loadTranscriptEventsWithSnapshotSync");
+    const separateEntriesReadSpy = vi.spyOn(sessionAccessor, "loadTranscriptEventsSync");
+    const separateSnapshotReadSpy = vi.spyOn(sessionAccessor, "readTranscriptSnapshotSync");
+
+    SessionManager.open({ ...target, sessionKey }, dir);
+
+    // Entries and the row snapshot must both come from the one combined read; the old
+    // separate-call helpers must never run during open(), or the load-boundary race
+    // this test guards against would be reintroduced.
+    expect(combinedReadSpy).toHaveBeenCalledTimes(1);
+    expect(separateEntriesReadSpy).not.toHaveBeenCalled();
+    expect(separateSnapshotReadSpy).not.toHaveBeenCalled();
+
+    combinedReadSpy.mockRestore();
+    separateEntriesReadSpy.mockRestore();
+    separateSnapshotReadSpy.mockRestore();
+  });
 });

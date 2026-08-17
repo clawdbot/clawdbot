@@ -60,6 +60,33 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
   );
 }
 
+/**
+ * Loads transcript events and their raw row snapshot together from one SQLite read
+ * transaction, so a caller installing both as its "last known good" state can never
+ * observe a foreign commit that landed between two otherwise-separate reads.
+ */
+export function loadTranscriptEventsWithSnapshotSync(scope: SessionTranscriptReadScope): {
+  events: TranscriptEvent[];
+  snapshot: SqliteTranscriptSnapshotRow[];
+} {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
+      return {
+        events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, fence?.beforeRawSeq),
+        snapshot: readTranscriptEventRows(database, resolved.sessionId),
+      };
+    },
+    {
+      databaseLabel: database.path,
+      operationLabel: "session transcript fenced read with snapshot",
+    },
+  );
+}
+
 /** Reads a complete transcript and its lifecycle snapshot from one SQLite read transaction. */
 export function inspectTranscriptEventsSync(scope: SessionTranscriptReadScope): {
   events: TranscriptEvent[];
