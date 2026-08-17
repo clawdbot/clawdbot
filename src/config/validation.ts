@@ -259,7 +259,7 @@ function validateConfigObjectWithPluginsBase(
       }
       const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
       const sourceHint =
-        diag.source && diag.message.includes("duplicate plugin id")
+        diag.code === "duplicate-plugin-id" && diag.source
           ? ` — overridden copy at ${diag.source}`
           : "";
       const issue = { path: issuePath, message: `${pluginLabel}: ${diag.message}${sourceHint}` };

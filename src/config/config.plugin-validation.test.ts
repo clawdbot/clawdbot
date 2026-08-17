@@ -1655,6 +1655,7 @@ describe("config plugin validation", () => {
                 level: "warn",
                 pluginId: "ekho-adapter",
                 source: loserPath,
+                code: "duplicate-plugin-id",
                 message:
                   "duplicate plugin id detected; global plugin will be overridden by global plugin (/winner/path/index.js)",
               },

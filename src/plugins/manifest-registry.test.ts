@@ -652,6 +652,11 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(registry)).toBe(1);
     expect(registry.plugins).toHaveLength(1);
     expect(registry.plugins[0]?.origin).toBe("bundled");
+    const duplicateWarning = registry.diagnostics.find(
+      (diag) => diag.pluginId === "test-plugin" && diag.level === "warn",
+    );
+    expect(duplicateWarning?.code).toBe("duplicate-plugin-id");
+    expect(duplicateWarning?.source).toBe(path.join(dirB, "index.ts"));
     expectRegistryDiagnosticContains(
       registry,
       "global plugin will be overridden by bundled plugin",
@@ -752,6 +757,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins).toHaveLength(1);
     expect(registry.plugins[0]?.origin).toBe("config");
     const warning = registry.diagnostics.find((diag) => diag.pluginId === "config-shadow");
+    expect(warning?.code).toBe("duplicate-plugin-id");
     expect(warning?.source).toBe(path.join(bundledDir, "index.ts"));
     expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });

@@ -31,6 +31,7 @@ export type PluginDiagnosticCode =
   | "backup-resource-declaration-invalid"
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
+  | "duplicate-plugin-id"
   | "plugin-verification"
   | "workspace-scope-omitted";
 
