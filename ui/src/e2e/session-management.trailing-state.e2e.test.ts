@@ -118,7 +118,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps a long non-running state clear of always-visible touch actions", async () => {
+  it("keeps fork provenance in the title above always-visible touch actions", async () => {
     const context = await suite.browser.newContext({
       hasTouch: true,
       locale: "en-US",
@@ -149,25 +149,25 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator('[data-session-key="agent:main:touch-forked"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".session-row-state");
+      const fork = row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
-      await expect.poll(() => state.locator(".session-row-fork-indicator").isVisible()).toBe(true);
-      await expect.poll(() => state.locator(".session-run-spinner").count()).toBe(0);
+      await expect.poll(() => fork.isVisible()).toBe(true);
+      await expect.poll(() => row.locator(".session-row-state").count()).toBe(0);
 
-      const [nameBounds, stateBounds, pinBounds, menuBounds] = await Promise.all([
+      const [nameBounds, forkBounds, pinBounds, menuBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__name").boundingBox(),
-        state.boundingBox(),
+        fork.boundingBox(),
         pin.boundingBox(),
         menu.boundingBox(),
       ]);
-      if (!nameBounds || !stateBounds || !pinBounds || !menuBounds) {
-        throw new Error("Expected visible non-running touch state geometry");
+      if (!nameBounds || !forkBounds || !pinBounds || !menuBounds) {
+        throw new Error("Expected visible fork and touch action geometry");
       }
-      expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(
-        stateBounds.y + stateBounds.height / 2,
-      );
-      expect(stateBounds.x + stateBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      expect(
+        Math.abs(forkBounds.y + forkBounds.height / 2 - (nameBounds.y + nameBounds.height / 2)),
+      ).toBeLessThanOrEqual(2);
+      expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(pinBounds.y + pinBounds.height / 2);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
     } finally {
       await context.close();
@@ -295,12 +295,32 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:combined-state"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const state = row.locator(".session-row-state");
-      await expect.poll(() => state.locator(".session-row-fork-indicator").isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator").isVisible(),
+        )
+        .toBe(true);
+      await expect.poll(() => state.locator('[aria-label="Forked session"]').count()).toBe(0);
       await expect
         .poll(() => state.locator("[data-session-pr-state='open']").isVisible())
         .toBe(true);
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
       await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
+      const [endcapBounds, openPullRequestBounds, spinnerBounds, unreadBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__details-endcap").boundingBox(),
+        state.locator("[data-session-pr-state='open'] svg").boundingBox(),
+        state.locator(".session-run-spinner").boundingBox(),
+        state.locator(".session-unread-dot").boundingBox(),
+      ]);
+      if (!endcapBounds || !openPullRequestBounds || !spinnerBounds || !unreadBounds) {
+        throw new Error("Expected visible combined session state geometry");
+      }
+      for (const iconBounds of [openPullRequestBounds, spinnerBounds, unreadBounds]) {
+        expect(iconBounds.x).toBeGreaterThanOrEqual(endcapBounds.x);
+        expect(iconBounds.x + iconBounds.width).toBeLessThanOrEqual(
+          endcapBounds.x + endcapBounds.width,
+        );
+      }
       const link = row.locator(".sidebar-recent-session__link");
       const details = row.locator(".sidebar-recent-session__details");
       const pin = row.getByRole("button", { name: "Pin session" });

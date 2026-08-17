@@ -305,6 +305,13 @@ export function renderRecentSession(params: {
                   title=${t("sessionsView.archived")}
                   >${icons.archive}</span
                 >`
+              : nothing}${session.forkSource
+              ? html`<span
+                  class="sidebar-session-fork-indicator"
+                  role="img"
+                  aria-label=${t("sessionsView.forkedSession")}
+                  >${icons.gitFork}</span
+                >`
               : nothing}${label}</span
           >
           <span class="sidebar-recent-session__details">

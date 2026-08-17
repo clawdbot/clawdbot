@@ -5680,12 +5680,14 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-.session-row-fork-indicator {
+.sidebar-session-fork-indicator {
   display: inline-flex;
+  margin-right: 4px;
   color: var(--muted);
+  vertical-align: -2px;
 }
 
-.session-row-fork-indicator svg {
+.sidebar-session-fork-indicator svg {
   width: 14px;
   height: 14px;
   fill: none;
