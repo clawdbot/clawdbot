@@ -238,10 +238,12 @@ try {
     throw new Error("worker processes did not reach a quiescent state");
   }
 } catch (error) {
+  // Thaw before retiring the watchdog: a bounded identity probe can throw here, and
+  // retiring first would leave a stopped worker with no remaining resumer.
+  resumeProcesses([...frozen].map(([pid, start]) => ({ pid, start })));
   if (processIdentity(watchdog.pid) === watchdogStart) {
     try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || (killError.code !== "ESRCH" && killError.code !== "EPERM")) throw killError; }
   }
-  resumeProcesses([...frozen].map(([pid, start]) => ({ pid, start })));
   try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
   throw error;
 }
