@@ -2276,7 +2276,6 @@ src/cli/cron-cli/list-jobs.ts	4
 src/cli/cron-cli/register.cron-add.ts	1
 src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
-src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/cron-cli/shared.ts	8
 src/cli/daemon-cli/launchd-recovery.ts	1
 src/cli/daemon-cli/lifecycle.ts	1
@@ -2666,6 +2665,8 @@ src/cron/store.ts	1
 src/cron/store/delivery-codec.ts	2
 src/cron/store/quarantine.ts	1
 src/cron/store/row-codec.ts	4
+src/cron/store/state-codec.ts	3
+src/cron/store/transaction-hooks.ts	1
 src/cron/task-run-detail.ts	2
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	6
