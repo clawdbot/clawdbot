@@ -50,7 +50,7 @@ export function mergeReplyDirectiveResults(
     audioAsVoice: first.audioAsVoice || second.audioAsVoice || undefined,
     isSilent: first.isSilent || second.isSilent,
     mediaTokenSkippedInFence:
-      Boolean(first.mediaTokenSkippedInFence) || Boolean(second.mediaTokenSkippedInFence),
+      first.mediaTokenSkippedInFence === true || second.mediaTokenSkippedInFence === true,
     fencedSkippedMediaDirectives,
   };
 }

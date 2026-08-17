@@ -51,6 +51,8 @@ describe("pending assistant reply directives", () => {
       replyToTag: true,
       audioAsVoice: true,
       isSilent: false,
+      mediaTokenSkippedInFence: false,
+      fencedSkippedMediaDirectives: [],
     });
 
     expect(

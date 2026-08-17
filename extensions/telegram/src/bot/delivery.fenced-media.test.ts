@@ -3,13 +3,18 @@ import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const fencedMediaLogWarn = vi.hoisted(() => vi.fn());
+const warnFencedMediaSkipsForAcceptedOutboundDelivery = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/logger.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/logger.js")>();
+vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime")
+    >();
   return {
     ...actual,
-    logWarn: (msg: string) => fencedMediaLogWarn(msg),
+    warnFencedMediaSkipsForAcceptedOutboundDelivery: (
+      ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
+    ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
   };
 });
 
@@ -96,7 +101,7 @@ function createBot(
 
 describe("telegram deliverReplies fenced MEDIA diagnostic (#41966)", () => {
   beforeEach(() => {
-    fencedMediaLogWarn.mockClear();
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockClear();
   });
 
   it("warns once after accepted Telegram Bot API text retains fenced MEDIA identity", async () => {
@@ -112,10 +117,11 @@ describe("telegram deliverReplies fenced MEDIA diagnostic (#41966)", () => {
       bot: createBot(sendMessage),
     });
     expect(sendMessage).toHaveBeenCalled();
-    expect(fencedMediaLogWarn).toHaveBeenCalledTimes(1);
-    expect(fencedMediaLogWarn.mock.calls[0]?.[0]).toMatch(
-      /fenced code block and will not be delivered/,
-    );
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).toHaveBeenCalledTimes(1);
+    const arg = warnFencedMediaSkipsForAcceptedOutboundDelivery.mock.calls[0]?.[0] as
+      | Array<{ fencedSkippedMediaDirectives?: string[] }>
+      | undefined;
+    expect(arg?.[0]?.fencedSkippedMediaDirectives).toEqual(["MEDIA:/tmp/demo.png"]);
   });
 
   it("stays silent when Telegram send fails before acceptance", async () => {
@@ -132,6 +138,6 @@ describe("telegram deliverReplies fenced MEDIA diagnostic (#41966)", () => {
         bot: createBot(sendMessage),
       }),
     ).rejects.toThrow(/network down/);
-    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).not.toHaveBeenCalled();
   });
 });
