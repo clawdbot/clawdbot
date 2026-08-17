@@ -277,7 +277,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
           senderIsOwner: false,
         },
       };
+      throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       const { runMemoryFlushIfNeeded } = await loadAgentRunnerMemoryRuntime();
+      throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       const memoryFlushResult = await runMemoryFlushIfNeeded({
         cfg,
         followupRun,
