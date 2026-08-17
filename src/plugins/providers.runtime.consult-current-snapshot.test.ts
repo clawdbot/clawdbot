@@ -117,14 +117,12 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     clearPluginMetadataLifecycleCaches();
-    clearPluginMetadataLifecycleCaches();
     loadPluginRegistrySnapshotWithMetadata.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry());
   });
 
   afterEach(() => {
-    clearPluginMetadataLifecycleCaches();
     clearPluginMetadataLifecycleCaches();
     resetPluginRuntimeStateForTest();
   });
