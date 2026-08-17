@@ -483,6 +483,7 @@
 
 :is(.chat-text, .sidebar-markdown) .markdown-external-image {
   display: flex;
+  box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
