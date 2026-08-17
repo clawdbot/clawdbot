@@ -308,6 +308,49 @@ describe("createBeamMirrorRunner", () => {
     }
   });
 
+  it("retries when the configured receiver redirects to a successful response", async () => {
+    const receiverBodies: string[] = [];
+    const redirectedBodies: string[] = [];
+    const server = createServer((req, res) => {
+      void readRequestBody(req).then(
+        (body) => {
+          if (req.url === "/redirected") {
+            redirectedBodies.push(body);
+            res.statusCode = 200;
+            res.end("ok");
+            return;
+          }
+          receiverBodies.push(body);
+          res.statusCode = 307;
+          res.setHeader("Location", "/redirected");
+          res.end();
+        },
+        (error: unknown) => {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+    try {
+      const origin = await listenOnLoopback(server);
+      const runner = createBeamMirrorRunner({
+        runtime: fakeRuntime(mirrorConfig({ endpoint: `${origin}/beam` })),
+        logger: silentLogger,
+        now: () => NOW,
+        listCatalogs: () => [
+          fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+        ],
+      });
+
+      await runner.tick();
+      await runner.tick();
+
+      expect(receiverBodies).toHaveLength(2);
+      expect(redirectedBodies).toEqual([]);
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+
   it("uploads active local sessions and skips unchanged ones", async () => {
     const sent: SentRequest[] = [];
     const reads: string[] = [];
@@ -414,6 +457,7 @@ describe("createBeamMirrorRunner", () => {
         expect.objectContaining({
           url: "https://team.example/api/v1/beam/sessions",
           timeoutMs: 15_000,
+          maxRedirects: 0,
           policy: { allowedOrigins: ["https://team.example"] },
         }),
       );

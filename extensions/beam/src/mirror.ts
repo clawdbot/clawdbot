@@ -297,6 +297,9 @@ export function createBeamMirrorRunner(params: {
       timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
       policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
       auditContext: "beam.mirror_upload",
+      // Only the configured receiver can acknowledge delivery. Following a redirect
+      // could fingerprint a payload that the receiver never accepted.
+      maxRedirects: 0,
       init: {
         method: "POST",
         headers: {
