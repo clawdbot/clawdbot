@@ -688,7 +688,7 @@ suite.define(() => {
         sessionKey: "main",
         data: {
           phase: "warning",
-          message: `Automatic approval review ${outcome}: ${rationale}`,
+          message: `Automatic approval review ${outcome} (risk: ${riskLevel}, authorization: ${userAuthorization}): ${rationale}`,
         },
       });
       await gateway.emitGatewayEvent("agent", {
@@ -717,6 +717,7 @@ suite.define(() => {
           phase: "review",
           toolCallId,
           hideFromChannelProgress: true,
+          guardianWarningMessage: `Automatic approval review ${outcome} (risk: ${riskLevel}, authorization: ${userAuthorization}): ${rationale}`,
           review: {
             id: `review-${outcome}`,
             label: "Guardian",

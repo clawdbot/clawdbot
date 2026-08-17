@@ -951,9 +951,10 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
 function removeGuardianDecisionWarning(
   notices: readonly ChatGuardianNotice[],
   runId: string,
+  message: string,
 ): ChatGuardianNotice[] {
-  const index = notices.findLastIndex(
-    (notice) => notice.runId === runId && notice.kind === "warning",
+  const index = notices.findIndex(
+    (notice) => notice.runId === runId && notice.kind === "warning" && notice.message === message,
   );
   return index === -1 ? [...notices] : notices.filter((_notice, candidate) => candidate !== index);
 }
@@ -974,8 +975,13 @@ function handleToolReviewEvent(host: ToolStreamHost, payload: AgentEventPayload)
   entry.approvalReviews = upsertToolApprovalReview(entry.approvalReviews ?? [], review);
   entry.details = withToolApprovalReviews(entry.details, entry.approvalReviews);
   entry.message = buildToolStreamMessage(entry);
-  if (review.status !== "in_progress") {
-    host.guardianNotices = removeGuardianDecisionWarning(host.guardianNotices ?? [], payload.runId);
+  const guardianWarningMessage = toTrimmedString(payload.data.guardianWarningMessage);
+  if (guardianWarningMessage) {
+    host.guardianNotices = removeGuardianDecisionWarning(
+      host.guardianNotices ?? [],
+      payload.runId,
+      guardianWarningMessage,
+    );
   }
   scheduleToolStreamSync(host, true);
   return true;

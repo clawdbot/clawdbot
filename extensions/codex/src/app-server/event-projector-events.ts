@@ -54,7 +54,26 @@ function guardianActionCommand(action: JsonObject | undefined): string | undefin
 }
 
 function normalizeApprovalReviewStatus(status: string | undefined): string | undefined {
-  return status === "inProgress" ? "in_progress" : status;
+  return status === "inProgress" ? "in_progress" : status === "timedOut" ? "timed_out" : status;
+}
+
+function guardianDecisionWarningMessage(params: {
+  status: string | undefined;
+  riskLevel: string | undefined;
+  userAuthorization: string | undefined;
+  rationale: string | null | undefined;
+}): string | undefined {
+  const { status, riskLevel, userAuthorization, rationale } = params;
+  if (!rationale) {
+    return undefined;
+  }
+  if (status === "timed_out") {
+    return rationale;
+  }
+  if ((status !== "approved" && status !== "denied") || !riskLevel || !userAuthorization) {
+    return undefined;
+  }
+  return `Automatic approval review ${status} (risk: ${riskLevel}, authorization: ${userAuthorization}): ${rationale}`;
 }
 
 export function projectNormalizedToolItem(params: {
@@ -125,6 +144,12 @@ export class CodexEventProjection {
     const riskLevel = review ? readString(review, "riskLevel") : undefined;
     const userAuthorization = review ? readString(review, "userAuthorization") : undefined;
     const rationale = review ? readNullableString(review, "rationale") : undefined;
+    const guardianWarningMessage = guardianDecisionWarningMessage({
+      status,
+      riskLevel,
+      userAuthorization,
+      rationale,
+    });
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: {
@@ -157,6 +182,7 @@ export class CodexEventProjection {
           phase: "review",
           toolCallId: targetItemId,
           hideFromChannelProgress: true,
+          ...(guardianWarningMessage ? { guardianWarningMessage } : {}),
           review: approvalReview,
         },
       });

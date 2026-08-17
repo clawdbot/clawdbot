@@ -136,6 +136,10 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         rationale: "Benign local probe.",
       },
     ]);
+    expect(toolReviews[0]?.data.guardianWarningMessage).toBeUndefined();
+    expect(toolReviews[1]?.data.guardianWarningMessage).toBe(
+      "Automatic approval review approved (risk: low, authorization: high): Benign local probe.",
+    );
     expect(toolReviews.every((event) => event.data.hideFromChannelProgress === true)).toBe(true);
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.didSendDeterministicApprovalPrompt).toBe(false);
