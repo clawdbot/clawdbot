@@ -262,6 +262,9 @@ export async function prepareOutboundPayloadBatch(
     ...((params.runId ?? params.replyPayloadSendingHook?.runId)
       ? { runId: params.runId ?? params.replyPayloadSendingHook?.runId }
       : {}),
+    ...(params.executionIdentityToken
+      ? { executionIdentityToken: params.executionIdentityToken }
+      : {}),
     entries,
   };
 }

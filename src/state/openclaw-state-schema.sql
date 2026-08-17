@@ -195,6 +195,16 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
 CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
   ON audit_events(direction, sequence DESC);
 
+CREATE TABLE IF NOT EXISTS outbound_message_execution_bindings (
+  event_id TEXT NOT NULL PRIMARY KEY,
+  context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),
+  execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 256),
+  FOREIGN KEY (event_id) REFERENCES audit_events(event_id) ON DELETE CASCADE
+) STRICT;
+CREATE INDEX IF NOT EXISTS outbound_message_execution_bindings_execution_event_idx
+  ON outbound_message_execution_bindings (context_id, execution_id, run_id, event_id);
+
 CREATE TABLE IF NOT EXISTS outbound_message_progress (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   progress_id TEXT NOT NULL UNIQUE CHECK (length(progress_id) BETWEEN 1 AND 256),
@@ -210,6 +220,8 @@ CREATE TABLE IF NOT EXISTS outbound_message_progress (
   actor_id TEXT NOT NULL CHECK (length(actor_id) BETWEEN 1 AND 256),
   agent_id TEXT CHECK (agent_id IS NULL OR length(agent_id) BETWEEN 1 AND 256),
   run_id TEXT CHECK (run_id IS NULL OR length(run_id) BETWEEN 1 AND 256),
+  context_id TEXT,
+  execution_id TEXT,
   channel TEXT NOT NULL CHECK (length(channel) BETWEEN 1 AND 256),
   conversation_kind TEXT NOT NULL CHECK (
     conversation_kind IN ('direct', 'group', 'channel', 'unknown')

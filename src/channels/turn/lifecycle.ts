@@ -1,3 +1,4 @@
+import type { ExecutionIdentityAdmissionToken as ExecutionToken } from "../../audit/execution-identity-admission.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
@@ -417,17 +418,15 @@ async function dispatchChannelTurnWithDeliveryOwner(
       nonVisibleDeliveryCounts[info.kind] += 1;
     }
   };
-  let agentRunId: string | undefined;
+  let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
   const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
-  const replyOptions = delivery.observeMessageSent
-    ? {
-        ...replyPipeline.replyOptions,
-        onAgentRunStart: (runId: string) => {
-          agentRunId = runId;
-          onAgentRunStart?.(runId);
-        },
-      }
-    : replyPipeline.replyOptions;
+  const replyOptions = {
+    ...replyPipeline.replyOptions,
+    onAgentRunStart: (runId: string, executionIdentityToken?: ExecutionToken) => {
+      agentRun = [runId, executionIdentityToken];
+      onAgentRunStart?.(runId, executionIdentityToken);
+    },
+  };
   const hookCtx = delivery.observeMessageSent
     ? deriveInboundMessageHookContext(params.ctxPayload)
     : undefined;
@@ -442,7 +441,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
       to: resolveInboundReplyHookTarget(params.ctxPayload, hookCtx),
       accountId: params.accountId,
       sessionKeyForInternalHooks: params.routeSessionKey,
-      runId: agentRunId,
+      runId: agentRun[0],
       isGroup: hookCtx.isGroup,
       groupId: hookCtx.groupId,
       logPrefix: "dispatchAssembledChannelTurn",
@@ -558,6 +557,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         ctxPayload: params.ctxPayload,
                         payload: preparedPayload,
                         info,
+                        executionIdentityToken: agentRun[1],
                         ...durableOptions,
                       });
                       throwIfDurableInboundReplyDeliveryFailed(durable);

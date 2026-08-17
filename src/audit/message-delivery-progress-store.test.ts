@@ -12,6 +12,10 @@ import {
 import { recordAuditEvent } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
+  createExecutionIdentityAdmissionToken,
+  type ExecutionIdentityAdmissionToken,
+} from "./execution-identity-admission.js";
+import {
   countOutboundMessageAuditEventsForRun,
   pageOutboundMessageAuditEventsForRun,
 } from "./message-delivery-audit-store.js";
@@ -78,6 +82,7 @@ function terminalInput(
     sourceSequence?: number;
     occurredAt?: number;
     runId?: string;
+    executionIdentityToken?: ExecutionIdentityAdmissionToken;
   } = {},
 ) {
   return {
@@ -110,17 +115,40 @@ afterEach(() => {
 });
 
 describe("outbound message progress companion", () => {
+  it("upgrades the predecessor progress table before a run-only insert", () => {
+    const database = databaseOptions();
+    const { db } = openOpenClawStateDatabase(database);
+    const schema = fs
+      .readFileSync(new URL("../state/openclaw-state-schema.sql", import.meta.url), "utf8")
+      .replace("  context_id TEXT,\n  execution_id TEXT,\n", "");
+    const start = schema.indexOf("CREATE TABLE IF NOT EXISTS outbound_message_progress (");
+    const end = schema.indexOf(") STRICT;", start);
+    db.exec(schema.slice(start, end + ") STRICT;".length));
+
+    expect(
+      recordOutboundMessageProgress(progressInput("message.outbound.queued"), database),
+    ).toBeDefined();
+    const columns = db.prepare("PRAGMA table_info(outbound_message_progress)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["context_id", "execution_id"]),
+    );
+  });
+
   it("stays absent through startup, reads, and terminal-only writes at schema v9", () => {
     const database = databaseOptions();
     const opened = openOpenClawStateDatabase(database);
     expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(9);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
+    expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 
     expect(countOutboundMessageAuditEventsForRun({ runId: "missing", database })).toBe(0);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
 
     recordAuditEvent(terminalInput(), database);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
+    expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
     expect(
       (
         opened.db
@@ -219,8 +247,17 @@ describe("outbound message progress companion", () => {
       progressInput("message.outbound.platform-started", { occurredAt }),
       database,
     );
-    recordAuditEvent(terminalInput({ occurredAt }), database);
+    recordAuditEvent(
+      terminalInput({
+        occurredAt,
+        executionIdentityToken: createExecutionIdentityAdmissionToken("run-progress"),
+      }),
+      database,
+    );
     openOpenClawStateDatabase(database);
+    expect(
+      tableExists(openOpenClawStateDatabase(database).db, "outbound_message_execution_bindings"),
+    ).toBe(true);
     closeOpenClawStateDatabaseForTest();
 
     const repositoryRoot = process.cwd();

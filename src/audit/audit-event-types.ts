@@ -1,4 +1,5 @@
 /** Versioned metadata-only durable audit contract. */
+import type { ExecutionIdentityAdmissionToken } from "./execution-identity-admission.js";
 
 export const AUDIT_EVENT_SCHEMA_VERSION = 1 as const;
 
@@ -217,6 +218,7 @@ export type OutboundMessageProgressInput = MessageAuditEventInputBase &
     { action: "message.outbound.queued" | "message.outbound.platform-started" }
   > & {
     direction: "outbound";
+    executionIdentityToken?: ExecutionIdentityAdmissionToken;
   };
 
 /** Raw identifiers exist only on the trusted producer-to-writer boundary. */
@@ -234,6 +236,7 @@ type OutboundMessageAuditEventInput = MessageAuditEventInputBase &
   OutboundMessageAuditAttribution &
   OutboundMessageAuditLifecycle & {
     direction: "outbound";
+    executionIdentityToken?: ExecutionIdentityAdmissionToken;
   };
 
 export type MessageAuditEventInput = InboundMessageAuditEventInput | OutboundMessageAuditEventInput;

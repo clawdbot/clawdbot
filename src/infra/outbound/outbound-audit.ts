@@ -4,6 +4,7 @@ import type {
   AuditMessageFailureStage,
   AuditOutboundMessageSuppressedReasonCode,
 } from "../../audit/audit-event-types.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
   emitTrustedMessageAuditEvent,
   hasTrustedMessageAuditListeners,
@@ -34,7 +35,11 @@ type OutboundAuditDeliveryContext = {
   accountId?: string;
   payloads?: readonly ReplyPayload[];
   replyPayloadSendingHook?: { runId?: string };
-  preparedBatch?: { runId?: string; sourcePayloadCount?: number };
+  preparedBatch?: {
+    runId?: string;
+    executionIdentityToken?: ExecutionIdentityAdmissionToken;
+    sourcePayloadCount?: number;
+  };
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
 };
@@ -395,6 +400,9 @@ function emitOutboundAuditTerminal(params: {
               context.replyPayloadSendingHook?.runId,
           }
         : {}),
+      ...(context.preparedBatch?.executionIdentityToken
+        ? { executionIdentityToken: context.preparedBatch.executionIdentityToken }
+        : {}),
       direction: "outbound",
       channel: context.channel,
       conversationKind: resolveConversationKind(context),
@@ -437,6 +445,9 @@ export function emitOutboundAuditLifecycle(params: {
         ...(agentId ? { agentId } : {}),
         ...((params.context.runId ?? params.context.preparedBatch?.runId)
           ? { runId: params.context.runId ?? params.context.preparedBatch?.runId }
+          : {}),
+        ...(params.context.preparedBatch?.executionIdentityToken
+          ? { executionIdentityToken: params.context.preparedBatch.executionIdentityToken }
           : {}),
         direction: "outbound" as const,
         channel: params.context.channel,

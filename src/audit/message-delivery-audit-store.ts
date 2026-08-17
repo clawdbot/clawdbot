@@ -7,6 +7,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { AUDIT_EVENT_RETENTION_MS, rowToAuditEvent } from "./audit-event-store.js";
@@ -16,8 +17,12 @@ import {
   hasOutboundMessageProgressCursor,
   readOutboundMessageProgressForRun,
 } from "./message-delivery-progress-store.js";
+import { selectMessageExecutionBinding } from "./message-execution-binding.js";
 
-type MessageDeliveryAuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
+type MessageDeliveryAuditDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "audit_events" | "outbound_message_execution_bindings"
+>;
 
 function deliveryAuditDb(db: DatabaseSync) {
   return getNodeSqliteKysely<MessageDeliveryAuditDatabase>(db);
@@ -29,6 +34,25 @@ type OwnedMessageEvent = {
   event: OutboundMessageAuditEventRecord;
   rowId: number;
 };
+
+type MessageExecutionSelector = {
+  runId: string;
+  contextId?: string;
+  executionId?: string;
+};
+
+function terminalBindingEventIds(
+  db: DatabaseSync,
+  runId: string,
+  binding: { contextId: string; executionId: string },
+) {
+  return deliveryAuditDb(db)
+    .selectFrom("outbound_message_execution_bindings")
+    .select("event_id")
+    .where("context_id", "=", binding.contextId)
+    .where("execution_id", "=", binding.executionId)
+    .where("run_id", "=", runId);
+}
 
 const MESSAGE_CURSOR_STAGE_SPAN = 1_000_000_000_000;
 const MESSAGE_STREAM_CHUNK_SIZE = 256;
@@ -61,6 +85,8 @@ function compositeMessageRowId(event: OutboundMessageAuditEventRecord): number {
 
 function readTerminalEventsForRun(params: {
   runId: string;
+  contextId?: string;
+  executionId?: string;
   after?: { occurredAt: number; sequence: number };
   limit: number;
   now?: number;
@@ -68,6 +94,10 @@ function readTerminalEventsForRun(params: {
 }): OutboundMessageAuditEventRecord[] {
   return (
     withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      const exact = selectMessageExecutionBinding(params);
+      if (exact && !tableExists(db, "outbound_message_execution_bindings")) {
+        return [];
+      }
       let query = deliveryAuditDb(db)
         .selectFrom("audit_events")
         .selectAll()
@@ -76,6 +106,9 @@ function readTerminalEventsForRun(params: {
         .where("action", "=", "message.outbound.finished")
         .where("run_id", "=", params.runId)
         .where("occurred_at", ">=", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS);
+      if (exact) {
+        query = query.where("event_id", "in", terminalBindingEventIds(db, params.runId, exact));
+      }
       const after = params.after;
       if (after) {
         query = query.where((expression) =>
@@ -123,13 +156,18 @@ function streamAfterCursor(
 
 function fillMessageStream(
   stream: MessageStream,
-  params: { runId: string; now: number; database?: OpenClawStateDatabaseOptions },
+  params: MessageExecutionSelector & {
+    now: number;
+    database?: OpenClawStateDatabaseOptions;
+  },
 ): void {
   if (stream.buffered.length > 0 || stream.exhausted) {
     return;
   }
   const query = {
     runId: params.runId,
+    ...(params.contextId ? { contextId: params.contextId } : {}),
+    ...(params.executionId ? { executionId: params.executionId } : {}),
     now: params.now,
     database: params.database,
     after: stream.after,
@@ -153,7 +191,10 @@ function fillMessageStream(
 
 function takeNextMessageEvent(
   streams: MessageStream[],
-  params: { runId: string; now: number; database?: OpenClawStateDatabaseOptions },
+  params: MessageExecutionSelector & {
+    now: number;
+    database?: OpenClawStateDatabaseOptions;
+  },
 ): OwnedMessageEvent | undefined {
   for (const stream of streams) {
     fillMessageStream(stream, params);
@@ -171,51 +212,61 @@ function takeNextMessageEvent(
 
 function hasTerminalCursor(params: {
   runId: string;
+  contextId?: string;
+  executionId?: string;
   occurredAt: number;
   sequence: number;
   database?: OpenClawStateDatabaseOptions;
 }): boolean {
   return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) =>
-        Boolean(
-          executeSqliteQueryTakeFirstSync(
-            db,
-            deliveryAuditDb(db)
-              .selectFrom("audit_events")
-              .select("sequence")
-              .where("sequence", "=", params.sequence)
-              .where("run_id", "=", params.runId)
-              .where("occurred_at", "=", params.occurredAt)
-              .where("kind", "=", "message")
-              .where("direction", "=", "outbound")
-              .where("action", "=", "message.outbound.finished"),
-          ),
-        ),
-      params.database,
-    ) ?? false
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      const exact = selectMessageExecutionBinding(params);
+      if (exact && !tableExists(db, "outbound_message_execution_bindings")) {
+        return false;
+      }
+      let query = deliveryAuditDb(db)
+        .selectFrom("audit_events")
+        .select("sequence")
+        .where("sequence", "=", params.sequence)
+        .where("run_id", "=", params.runId)
+        .where("occurred_at", "=", params.occurredAt)
+        .where("kind", "=", "message")
+        .where("direction", "=", "outbound")
+        .where("action", "=", "message.outbound.finished");
+      if (exact) {
+        query = query.where("event_id", "in", terminalBindingEventIds(db, params.runId, exact));
+      }
+      return Boolean(executeSqliteQueryTakeFirstSync(db, query));
+    }, params.database) ?? false
   );
 }
 
 /** Count retained owner-native outbound lifecycle records for one run. */
 export function countOutboundMessageAuditEventsForRun(params: {
   runId: string;
+  contextId?: string;
+  executionId?: string;
   now?: number;
   database?: OpenClawStateDatabaseOptions;
 }): number {
   return (
     (withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        deliveryAuditDb(db)
-          .selectFrom("audit_events")
-          .select((expression) => expression.fn.countAll<number>().as("count"))
-          .where("kind", "=", "message")
-          .where("direction", "=", "outbound")
-          .where("action", "=", "message.outbound.finished")
-          .where("run_id", "=", params.runId)
-          .where("occurred_at", ">=", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS),
-      );
+      const exact = selectMessageExecutionBinding(params);
+      if (exact && !tableExists(db, "outbound_message_execution_bindings")) {
+        return 0;
+      }
+      let query = deliveryAuditDb(db)
+        .selectFrom("audit_events")
+        .select((expression) => expression.fn.countAll<number>().as("count"))
+        .where("kind", "=", "message")
+        .where("direction", "=", "outbound")
+        .where("action", "=", "message.outbound.finished")
+        .where("run_id", "=", params.runId)
+        .where("occurred_at", ">=", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS);
+      if (exact) {
+        query = query.where("event_id", "in", terminalBindingEventIds(db, params.runId, exact));
+      }
+      const row = executeSqliteQueryTakeFirstSync(db, query);
       return normalizeSqliteNumber(row?.count ?? null) ?? 0;
     }, params.database) ?? 0) + countOutboundMessageProgressForRun(params)
   );
@@ -224,6 +275,8 @@ export function countOutboundMessageAuditEventsForRun(params: {
 /** Page retained owner-native outbound lifecycle records in decision order. */
 export function pageOutboundMessageAuditEventsForRun(params: {
   runId: string;
+  contextId?: string;
+  executionId?: string;
   after?: OutboundMessageAuditEventCursor;
   offset?: number;
   limit: number;
@@ -238,12 +291,16 @@ export function pageOutboundMessageAuditEventsForRun(params: {
         ? stage === 2
           ? hasTerminalCursor({
               runId: params.runId,
+              ...(params.contextId ? { contextId: params.contextId } : {}),
+              ...(params.executionId ? { executionId: params.executionId } : {}),
               occurredAt: params.after.occurredAt,
               sequence,
               database: params.database,
             })
           : hasOutboundMessageProgressCursor({
               runId: params.runId,
+              ...(params.contextId ? { contextId: params.contextId } : {}),
+              ...(params.executionId ? { executionId: params.executionId } : {}),
               occurredAt: params.after.occurredAt,
               sequence,
               action: stage === 0 ? "message.outbound.queued" : "message.outbound.platform-started",
@@ -262,6 +319,8 @@ export function pageOutboundMessageAuditEventsForRun(params: {
   }));
   const streamParams = {
     runId: params.runId,
+    ...(params.contextId ? { contextId: params.contextId } : {}),
+    ...(params.executionId ? { executionId: params.executionId } : {}),
     now: params.now ?? Date.now(),
     database: params.database,
   };

@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent } from "../../channels/message/types.js";
@@ -64,6 +65,8 @@ export type MessageActionInput = {
   sessionId?: string;
   /** @internal Admitted run correlation carried into owner-native delivery audit. */
   runId?: string;
+  /** @internal Exact admitted execution provenance for owner-native delivery audit. */
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionGateway;
   deps?: OutboundSendDeps;

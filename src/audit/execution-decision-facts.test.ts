@@ -46,7 +46,15 @@ function databaseOptions() {
 
 function seedExecutionContext(
   database: ReturnType<typeof databaseOptions>,
+  overrides: {
+    runId?: string;
+    contextId?: string;
+    executionId?: string;
+  } = {},
 ): ExecutionIdentityContextV1 {
+  const runId = overrides.runId ?? "run-1";
+  const contextId = overrides.contextId ?? "context-1";
+  const executionId = overrides.executionId ?? "execution-1";
   let envelope: ExecutionIdentityAdmissionEnvelope | undefined;
   const clear = configureExecutionIdentityAdmissionSink((work) => {
     if (work.kind === "capture") {
@@ -57,7 +65,7 @@ function seedExecutionContext(
   try {
     enqueueExecutionIdentityContextAtAdmission(
       {
-        runId: "run-1",
+        runId,
         agentId: "main",
         ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
         runtime: { kind: "embedded" },
@@ -65,8 +73,8 @@ function seedExecutionContext(
       {
         enabled: true,
         now: 50,
-        contextId: "context-1",
-        executionId: "execution-1",
+        contextId,
+        executionId,
         runtimeInstanceId: "runtime-1",
       },
     );
@@ -81,9 +89,9 @@ function seedExecutionContext(
     { ...database, now: 50 },
   );
   if (
-    stored.contextId !== "context-1" ||
-    stored.executionId !== "execution-1" ||
-    stored.runId !== "run-1"
+    stored.contextId !== contextId ||
+    stored.executionId !== executionId ||
+    stored.runId !== runId
   ) {
     throw new Error(`unexpected execution context: ${JSON.stringify(stored)}`);
   }
@@ -116,6 +124,14 @@ function receipt(id: string, occurredAt = 100): DecisionReceiptV1 {
     missingEvidence: [],
     remediation: [{ code: "choose_allowed_tool", text: "Choose an allowed tool and retry." }],
   };
+}
+
+function tokenForContext(context: ExecutionIdentityContextV1) {
+  return createExecutionIdentityAdmissionToken(context.runId, {
+    contextId: context.contextId,
+    executionId: context.executionId,
+    now: context.createdAt,
+  });
 }
 
 describe("execution decision facts", () => {
@@ -182,6 +198,7 @@ describe("execution decision facts", () => {
         actorId: "main",
         agentId: "main",
         runId: "run-1",
+        executionIdentityToken: tokenForContext(context),
         direction: "outbound",
         channel: "qa-channel",
         conversationKind: "direct",
@@ -210,6 +227,97 @@ describe("execution decision facts", () => {
     );
   });
 
+  it("does not assign run-only delivery evidence to either exact execution sharing a run id", () => {
+    const database = databaseOptions();
+    const first = seedExecutionContext(database, {
+      runId: "shared-run",
+      contextId: "context-first",
+      executionId: "execution-first",
+    });
+    const second = seedExecutionContext(database, {
+      runId: "shared-run",
+      contextId: "context-second",
+      executionId: "execution-second",
+    });
+    const now = Date.now();
+    recordAuditEvent(
+      {
+        sourceId: "message:shared-run:unbound",
+        sourceSequence: 1,
+        occurredAt: now,
+        kind: "message",
+        action: "message.outbound.finished",
+        status: "succeeded",
+        outcome: "sent",
+        actorType: "agent",
+        actorId: "main",
+        agentId: "main",
+        runId: "shared-run",
+        direction: "outbound",
+        channel: "qa-channel",
+        conversationKind: "direct",
+        resultCount: 1,
+      },
+      database,
+    );
+
+    for (const context of [first, second]) {
+      expect(
+        presentExecutionDecisionReceipts({
+          context,
+          decisionLimit: 10,
+          options: { ...database, now },
+        }).decisions.filter((item) => item.action.family === "message"),
+      ).toEqual([]);
+    }
+    expect(
+      tableExists(openOpenClawStateDatabase(database).db, "outbound_message_execution_bindings"),
+    ).toBe(false);
+
+    recordAuditEvent(
+      {
+        sourceId: "message:shared-run:first-execution",
+        sourceSequence: 2,
+        occurredAt: now + 1,
+        kind: "message",
+        action: "message.outbound.finished",
+        status: "succeeded",
+        outcome: "sent",
+        actorType: "agent",
+        actorId: "main",
+        agentId: "main",
+        runId: "shared-run",
+        executionIdentityToken: tokenForContext(first),
+        direction: "outbound",
+        channel: "qa-channel",
+        conversationKind: "direct",
+        resultCount: 1,
+      },
+      database,
+    );
+    const messageReceipts = (context: ExecutionIdentityContextV1) =>
+      presentExecutionDecisionReceipts({
+        context,
+        decisionLimit: 10,
+        options: { ...database, now: now + 1 },
+      }).decisions.filter((item) => item.action.family === "message");
+    expect(messageReceipts(first)).toHaveLength(1);
+    expect(messageReceipts(second)).toEqual([]);
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare(
+          "SELECT context_id, execution_id, run_id FROM outbound_message_execution_bindings",
+        )
+        .all(),
+    ).toEqual([
+      {
+        context_id: "context-first",
+        execution_id: "execution-first",
+        run_id: "shared-run",
+      },
+    ]);
+  });
+
   it("keeps delivery stages distinct, redacted, replay-safe, and retention bounded", () => {
     const database = databaseOptions();
     const context = seedExecutionContext(database);
@@ -222,6 +330,7 @@ describe("execution decision facts", () => {
       actorId: "main",
       agentId: "main",
       runId: "run-1",
+      executionIdentityToken: tokenForContext(context),
       direction: "outbound" as const,
       channel: "qa-channel",
       conversationKind: "direct" as const,

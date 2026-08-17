@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import type { OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
@@ -13,13 +14,14 @@ import {
 describe("outbound audit projection", () => {
   it("projects replay-safe queued and platform-started lifecycle records", () => {
     const events: TrustedMessageAuditEvent[] = [];
+    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-1");
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
     try {
       const context = {
         channel: "qa-channel",
         to: "raw-target",
         payloads: [{ text: "secret message" }],
-        preparedBatch: { runId: "run-1", sourcePayloadCount: 1 },
+        preparedBatch: { runId: "run-1", executionIdentityToken, sourcePayloadCount: 1 },
       };
       emitOutboundAuditLifecycle({
         context,
@@ -44,6 +46,7 @@ describe("outbound audit projection", () => {
         status: "started",
         outcome: "queued",
         runId: "run-1",
+        executionIdentityToken,
       }),
       expect.objectContaining({
         sourceId: "message:outbound:queue:queue-1:payload:0:platform_started",
@@ -51,6 +54,7 @@ describe("outbound audit projection", () => {
         status: "started",
         outcome: "platform_started",
         runId: "run-1",
+        executionIdentityToken,
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain("secret message");

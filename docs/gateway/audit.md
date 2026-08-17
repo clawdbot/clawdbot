@@ -145,12 +145,13 @@ owner with terminal ledger rows and reports `queued`, `platform-started`,
 `delivered`, `failed`, `unknown`, and intentionally `suppressed` as distinct
 receipts. Queue and transport results are `attribution-only`: they record what
 the delivery owner observed but do not prove authorization. The existing
-message row has a keyed destination reference and `runId`, but no exact
-execution binding, so inspection reports `message.execution_link` as missing
-instead of inferring one. Only an exact target-validation, message-policy, or
-turn-capability denial that changed the result is `enforced`. Portable actions
-and early suppressions without a durable owner record use the generic fact
-owner on the same audit-writer FIFO.
+message row keeps its keyed destination reference and `runId`; a lazy companion
+retains the host-validated context/execution/run binding. Inspection requires
+that exact tuple and never assigns run-only delivery evidence to an execution.
+The binding remains diagnostic provenance. Only an exact target-validation,
+message-policy, or turn-capability denial that changed the result is
+`enforced`. Portable actions and early suppressions without a durable owner
+record use the generic fact owner on the same audit-writer FIFO.
 
 When the same `runId` has a retained terminal row in `operator_approvals`, the
 inspector also reads its owner-local `operator_approval_execution_identities`
@@ -343,6 +344,11 @@ advance the current state schema version 9. Missing under read-only inspection m
 retained progress. It is capped at 200,000 rows with the same 30-day retention.
 Terminal `message.outbound.finished` rows stay in `audit_events`, so a compatible
 older Gateway can open and use the database while ignoring the additive table.
+Exact terminal linkage lives in the lazy
+`outbound_message_execution_bindings` companion rather than changing the
+released `audit_events` shape. It is created only for a host-validated exact
+binding; run-only terminal writes leave it absent. Compatible older Gateways
+ignore this additive table as well.
 
 Upgrading from a Gateway with the earlier run/tool-only ledger migrates the
 schema automatically at startup (or via `openclaw doctor --fix`); existing

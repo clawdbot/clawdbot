@@ -1064,6 +1064,13 @@ export interface OutboundMediaProvenance {
   version: number;
 }
 
+export interface OutboundMessageExecutionBindings {
+  context_id: string;
+  event_id: string;
+  execution_id: string;
+  run_id: string;
+}
+
 export interface OutboundMessageProgress {
   account_ref: string | null;
   action: string;
@@ -1071,9 +1078,11 @@ export interface OutboundMessageProgress {
   actor_type: string;
   agent_id: string | null;
   channel: string;
+  context_id: string | null;
   conversation_kind: string;
   conversation_ref: string | null;
   duration_ms: number | null;
+  execution_id: string | null;
   occurred_at: number;
   outcome: string;
   progress_id: string;
@@ -1805,6 +1814,7 @@ export interface DB {
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
+  outbound_message_execution_bindings: OutboundMessageExecutionBindings;
   outbound_message_progress: OutboundMessageProgress;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;

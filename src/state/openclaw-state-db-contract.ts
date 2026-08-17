@@ -17,6 +17,7 @@ export const FIRST_USE_STATE_TABLES = [
   "node_worker_launches",
   "operator_approval_execution_identities",
   "execution_decision_facts",
+  "outbound_message_execution_bindings",
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
@@ -24,6 +25,7 @@ export const FIRST_USE_STATE_INDEXES = [
   "execution_identity_contexts_run_created_idx",
   "execution_decision_facts_context_occurred_idx",
   "execution_decision_facts_run_occurred_idx",
+  "outbound_message_execution_bindings_execution_event_idx",
   "outbound_message_progress_occurred_idx",
   "outbound_message_progress_run_occurred_idx",
 ] as const;

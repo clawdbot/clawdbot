@@ -175,6 +175,7 @@ type RunMessageActionInput = {
   };
   cfg?: unknown;
   conversationReadOrigin?: "delegated" | "direct-operator";
+  executionIdentityToken?: unknown;
   defaultAccountId?: string;
   gateway?: {
     timeoutMs?: unknown;
@@ -187,6 +188,7 @@ type RunMessageActionInput = {
   params?: Record<string, unknown>;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  runId?: string;
   messageActionAuthorization?: {
     requesterAccountId?: string;
     requesterSenderId?: string;
@@ -2820,6 +2822,10 @@ describe("message tool explicit target guard", () => {
       await withGatewayToolCallerIdentity(identity, () =>
         actionTool.execute("portable-action", { action: "react", emoji: "ok" }),
       );
+      expect(lastRunMessageActionInput()?.executionIdentityToken).toBe(
+        identity.executionIdentityToken,
+      );
+      expect(lastRunMessageActionInput()?.runId).toBe("run-message-decisions");
 
       const sourceReplyTool = createMessageTool({
         runMessageAction: mocks.runMessageAction as never,

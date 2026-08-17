@@ -51,6 +51,7 @@ export function createMessageToolDecisionRecorder(params: {
     );
   };
   return {
+    executionIdentityToken: token,
     recordTypedDenial,
     runBoundary<T>(operation: () => T): T {
       try {

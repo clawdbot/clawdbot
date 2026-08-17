@@ -359,6 +359,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action,
         channel: decisionChannel,
       });
+      const executionIdentityToken =
+        !options?.runId || decisions.executionIdentityToken?.runId === options.runId
+          ? decisions.executionIdentityToken
+          : undefined;
+      const deliveryRunId = options?.runId ?? executionIdentityToken?.runId;
       const trustedTurnContext =
         resolvedAgentId && options?.agentSessionKey
           ? resolveMessageActionTurnCapability({
@@ -658,7 +663,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sessionKey: options?.agentSessionKey,
           sourceReplySessionKey: options?.runSessionKey,
           sessionId: options?.sessionId,
-          runId: options?.runId,
+          runId: deliveryRunId,
+          executionIdentityToken,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,

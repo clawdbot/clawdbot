@@ -112,7 +112,7 @@ function projectMessageDeliveryReceipt(
       evaluatorRef: "outbound-delivery",
       policyRefs: [],
       grantRefs: [],
-      contextFieldsUsed: ["runId"],
+      contextFieldsUsed: ["contextId", "executionId", "runId"],
     },
     source: {
       owner:
@@ -120,9 +120,9 @@ function projectMessageDeliveryReceipt(
       recordRef: event.eventId,
       decisionBoundary: event.action,
     },
-    // Message audit predates exact execution linkage. Never upgrade transport
-    // evidence into an authorization claim merely because the run id matches.
-    missingEvidence: ["message.execution_link"],
+    // Exact linkage remains diagnostic provenance. Delivery never becomes an
+    // authorization claim merely because it belongs to this execution.
+    missingEvidence: [],
     remediation: outcome.remediation,
   };
 }
@@ -133,13 +133,15 @@ export function summarizeMessageDeliveryReceiptsForRun(params: {
 }): { count: number; coverageState?: "attribution-only"; missingEvidence: string[] } {
   const count = countOutboundMessageAuditEventsForRun({
     runId: params.context.runId,
+    contextId: params.context.contextId,
+    executionId: params.context.executionId,
     now: params.options.now,
     database: params.options,
   });
   return {
     count,
     ...(count > 0 ? { coverageState: "attribution-only" as const } : {}),
-    missingEvidence: count > 0 ? ["message.execution_link"] : [],
+    missingEvidence: [],
   };
 }
 
@@ -152,6 +154,8 @@ export function pageMessageDeliveryReceiptsForRun(params: {
 }): { receipts: DecisionReceiptV1[]; nextCursor?: OutboundMessageAuditEventCursor } {
   const page = pageOutboundMessageAuditEventsForRun({
     runId: params.context.runId,
+    contextId: params.context.contextId,
+    executionId: params.context.executionId,
     after: params.after,
     offset: params.offset,
     limit: params.limit,

@@ -183,10 +183,12 @@ transport progress as authorization:
 These owner-native records are always `attribution-only`. Queue and
 platform-start progress comes from the lazy `outbound_message_progress`
 companion; terminal outcomes remain in `audit_events`. Both retain only a
-`runId` correlation, not an exact execution binding, so neither can claim that
-identity or a grant authorized delivery. Target validation, message policy,
-and active-turn capability denials are `enforced` only when their exact
-context/execution/run tuple was recorded and the gate changed the outcome.
+host-validated context/execution/run binding when the admitted turn supplied
+one. Inspection requires that exact binding and never assigns run-only delivery
+evidence to an execution from `runId`. The binding is diagnostic provenance,
+not proof that identity or a grant authorized delivery. Target validation,
+message policy, and active-turn capability denials are `enforced` only when
+their exact tuple was recorded and the gate changed the outcome.
 Portable actions and early suppressions that have no durable delivery record
 use the generic decision-fact owner instead of duplicating delivery state.
 

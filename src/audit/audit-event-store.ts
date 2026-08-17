@@ -36,6 +36,11 @@ import {
   loadOrCreateAuditIdentityKey,
   pseudonymizeAuditIdentity,
 } from "./audit-identity.js";
+import {
+  ensureTerminalMessageExecutionBindingSchema,
+  planMessageExecutionBinding,
+  recordConfirmedTerminalMessageExecutionBinding,
+} from "./message-execution-binding.js";
 
 type AuditEventsTable = OpenClawStateKyselyDatabase["audit_events"];
 type AuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
@@ -604,6 +609,13 @@ export function recordAuditEvent(
   if (isOutboundMessageProgressInput(input)) {
     throw new Error("outbound message progress belongs to its companion store");
   }
+  const executionToken =
+    input.kind === "message" && input.direction === "outbound"
+      ? planMessageExecutionBinding(input.executionIdentityToken, input.runId)
+      : undefined;
+  if (executionToken) {
+    ensureTerminalMessageExecutionBindingSchema(options);
+  }
   let countCacheDatabase: DatabaseSync | undefined;
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
@@ -630,6 +642,10 @@ export function recordAuditEvent(
           .selectAll()
           .where("sequence", "=", insertedSequence),
       );
+      recordConfirmedTerminalMessageExecutionBinding(db, {
+        eventId: row?.event_id,
+        token: executionToken,
+      });
       return row ? rowToAuditEvent(row) : undefined;
     }, options);
   } catch (error) {

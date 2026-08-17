@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
-import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import type {
+  AdmittedRunContext,
+  PreparedAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
@@ -117,6 +120,7 @@ async function executeAgentTurnInternalWithRetryState(
   overloadRetryState: OverloadRetryState,
   commitMcpAppModelContext: () => void,
   preparedRunAdmission: PreparedAgentRunAdmission,
+  admittedRunContext: { current?: AdmittedRunContext },
 ): Promise<AgentTurnInternalResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -244,7 +248,7 @@ async function executeAgentTurnInternalWithRetryState(
       return;
     }
     didNotifyAgentRunStart = true;
-    params.opts?.onAgentRunStart?.(runId);
+    params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
   };
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
@@ -513,6 +517,7 @@ async function executeAgentTurnInternal(
     completed: false,
   };
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  const admittedRunContext: { current?: AdmittedRunContext } = {};
   const preparedRunAdmission = prepareChannelRunAdmission({
     cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
     runId,
@@ -520,6 +525,9 @@ async function executeAgentTurnInternal(
     ingressKind: "channel",
     boundary: "auto-reply.agent-runner",
     evidence: params.followupRun.channelAdmissionEvidence,
+    onAdmitted: (context) => {
+      admittedRunContext.current = context;
+    },
   });
   try {
     return await executeAgentTurnInternalWithRetryState(
@@ -528,6 +536,7 @@ async function executeAgentTurnInternal(
       overloadRetryState,
       commitMcpAppModelContext,
       preparedRunAdmission,
+      admittedRunContext,
     );
   } finally {
     preparedRunAdmission.close();
