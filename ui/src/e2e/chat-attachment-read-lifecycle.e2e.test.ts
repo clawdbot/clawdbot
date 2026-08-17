@@ -2,12 +2,14 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { navigateInApp, replaceGatewayClient } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat attachment read lifecycle",
@@ -56,6 +58,105 @@ async function pastePng(composer: Locator): Promise<void> {
 }
 
 suite.define(() => {
+  it("keeps exact staged files across a same-Gateway client replacement", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+        ...(artifactDir ? { recordVideo: { dir: artifactDir } } : {}),
+      },
+      async ({ page }) => {
+        const sessionKey = "agent:main:attachment-owner-rotation";
+        const gateway = await installMockGateway(page, { sessionKey });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const files = [
+          { name: "proof.txt", mimeType: "text/plain", buffer: Buffer.from("first-proof") },
+          { name: "proof.txt", mimeType: "text/plain", buffer: Buffer.from("second-proof") },
+        ];
+        await composer.fill("Keep both exact files");
+        await page.locator(".agent-chat__file-input").setInputFiles(files);
+        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({ path: path.join(artifactDir, "01-staged-files.png") });
+        }
+
+        await navigateInApp(page, "new-session");
+        await page.locator(".new-session-page__message").waitFor();
+        const socketsBefore = await gateway.getSocketCount();
+        await replaceGatewayClient(page);
+        await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
+        await waitForControlUiGatewayReady(page);
+        await navigateInApp(page, "chat");
+        await composer.waitFor();
+        if (artifactDir) {
+          await page.screenshot({ path: path.join(artifactDir, "02-restored-files.png") });
+        }
+        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
+        await expect.poll(() => composer.inputValue()).toBe("Keep both exact files");
+
+        await gateway.deferNext("chat.send");
+        await composer.press("Enter");
+        const rejectedRequest = await gateway.waitForRequest("chat.send");
+        expect(rejectedRequest.params).toMatchObject({
+          sessionKey,
+          message: "Keep both exact files",
+          attachments: [
+            { content: Buffer.from("first-proof").toString("base64"), fileName: "proof.txt" },
+            { content: Buffer.from("second-proof").toString("base64"), fileName: "proof.txt" },
+          ],
+        });
+        await gateway.rejectDeferred("chat.send", { message: "Rejected for attachment proof" });
+        await page
+          .getByRole("alert")
+          .filter({ hasText: "Rejected for attachment proof" })
+          .waitFor();
+        await expect.poll(() => composer.inputValue()).toBe("Keep both exact files");
+        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
+        if (artifactDir) {
+          await page.screenshot({ path: path.join(artifactDir, "03-rejected-restored.png") });
+        }
+
+        await composer.press("Enter");
+        await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
+        const acceptedRequest = (await gateway.getRequests("chat.send"))[1]!;
+        expect(acceptedRequest.params).toMatchObject({
+          sessionKey,
+          message: "Keep both exact files",
+          attachments: [
+            { content: Buffer.from("first-proof").toString("base64"), fileName: "proof.txt" },
+            { content: Buffer.from("second-proof").toString("base64"), fileName: "proof.txt" },
+          ],
+        });
+        const acceptedRunId = (acceptedRequest.params as { idempotencyKey?: unknown })
+          .idempotencyKey;
+        expect(typeof acceptedRunId).toBe("string");
+        await gateway.emitChatFinal({
+          runId: String(acceptedRunId),
+          sessionKey,
+          text: "Done.",
+        });
+        await page.getByText("Done.", { exact: true }).last().waitFor();
+        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
+        await expect.poll(() => composer.inputValue()).toBe("");
+        await page.getByRole("button", { name: "Remove queued message" }).click();
+        await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(0);
+        await navigateInApp(page, "new-session");
+        await page.locator(".new-session-page__message").waitFor();
+        await navigateInApp(page, "chat");
+        await composer.waitFor();
+        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+        if (artifactDir) {
+          await page.screenshot({ path: path.join(artifactDir, "04-final-clean.png") });
+        }
+      },
+    );
+  });
+
   it("rejects a combined attachment frame before the Gateway connection is lost", async () => {
     await suite.withPage(
       {

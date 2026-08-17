@@ -90,6 +90,13 @@ export type ApplicationChatAttachmentHandoff = {
   consume(handoff: ChatAttachmentHandoffKey): {
     attachments: ChatAttachment[];
     fallbacks: Record<string, ChatComposerMemoryFallback>;
+    // This exact client is lifecycle identity, never authorization.
+    // Same-target replacement may retain plain local payload bytes.
+    // Consumers compare it with the current client before adoption,
+    // release browser annotations bound to the old client generation,
+    // and keep shared ids referenced by live or fallback owners.
+    // Different Gateway targets never produce a consumable result.
+    owner: ApplicationGateway["snapshot"]["client"];
     message?: string;
   } | null;
   clearPane(paneId: string): void;

@@ -182,8 +182,8 @@ describe("staged chat attachment pane handoff", () => {
   });
 
   it("keeps plain staged attachments across a gateway client rotation", () => {
-    const previousOwner = {} as GatewayBrowserClient;
-    const nextOwner = {} as GatewayBrowserClient;
+    const previousOwner = { gatewayUrl: "ws://same.test" } as GatewayBrowserClient;
+    const nextOwner = { gatewayUrl: "ws://same.test" } as GatewayBrowserClient;
     const handoff = createChatAttachmentHandoff();
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const plainImage = storedAttachment("rotation-image");
@@ -212,9 +212,38 @@ describe("staged chat attachment pane handoff", () => {
     discardStateStagedAttachments(current);
   });
 
+  it("drops every staged attachment when the Gateway target changes", () => {
+    const previousOwner = {
+      gatewayUrl: "ws://same.test/control?tenant=one",
+    } as GatewayBrowserClient;
+    const nextOwner = {
+      gatewayUrl: "ws://same.test/control?tenant=two",
+    } as GatewayBrowserClient;
+    const handoff = createChatAttachmentHandoff();
+    const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
+    const attachment = storedAttachment("different-gateway-file", "application/pdf");
+    const fallback = storedAttachment("different-gateway-fallback", "text/plain");
+    const current = state([attachment]);
+    current.chatComposerFallbackByScope = {
+      fallback: {
+        attachments: [fallback],
+        message: "must not cross gateways",
+        sequence: 1,
+        storageFailed: true,
+      },
+    };
+
+    replacePaneStagedAttachmentGatewayOwner(context, "p1", current, previousOwner, nextOwner);
+
+    expect(current.chatAttachments).toEqual([]);
+    expect(current.chatComposerFallbackByScope.fallback?.attachments).toEqual([]);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    expect(getChatAttachmentDataUrl(fallback)).toBeNull();
+  });
+
   it("restores a mixed package only to the exact mounted owner", () => {
-    const owner = {} as GatewayBrowserClient;
-    const otherOwner = {} as GatewayBrowserClient;
+    const owner = { gatewayUrl: "ws://first.test" } as GatewayBrowserClient;
+    const otherOwner = { gatewayUrl: "ws://second.test" } as GatewayBrowserClient;
     const handoff = createChatAttachmentHandoff();
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const image = storedAttachment("image");

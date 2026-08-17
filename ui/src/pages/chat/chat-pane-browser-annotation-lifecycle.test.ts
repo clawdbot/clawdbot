@@ -326,8 +326,8 @@ describe("staged attachment composer adoption", () => {
   });
 
   it("rejects a new pane after client replacement instead of relabeling staged annotations", () => {
-    const owner = {} as GatewayBrowserClient;
-    const replacement = {} as GatewayBrowserClient;
+    const owner = { gatewayUrl: "ws://same.test" } as GatewayBrowserClient;
+    const replacement = { gatewayUrl: "ws://same.test" } as GatewayBrowserClient;
     const context = createSessionContext(owner, {} as SessionCapability);
     const pane = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:replaced-client");
     pane.active = true;
@@ -349,8 +349,8 @@ describe("staged attachment composer adoption", () => {
   });
 
   it("preserves the package on same-client reconnect and clears it on replacement", () => {
-    const owner = {} as GatewayBrowserClient;
-    const replacement = {} as GatewayBrowserClient;
+    const owner = { gatewayUrl: "ws://same.test" } as GatewayBrowserClient;
+    const replacement = { gatewayUrl: "ws://same.test" } as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client: owner,
       sessions: {} as SessionCapability,
@@ -441,8 +441,8 @@ describe("staged attachment composer adoption", () => {
   });
 
   it("invalidates annotation Undo when the logical Gateway client is replaced", async () => {
-    const owner = {} as GatewayBrowserClient;
-    const replacement = {} as GatewayBrowserClient;
+    const owner = { gatewayUrl: "ws://same.test" } as GatewayBrowserClient;
+    const replacement = { gatewayUrl: "ws://same.test" } as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client: owner,
       sessions: {} as SessionCapability,
