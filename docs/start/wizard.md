@@ -208,6 +208,9 @@ workspace. The command validates TTY availability and rejectable CLI options
 before moving state to Trash; non-interactive setup also requires
 `--accept-risk` first. Interactive classic setup performs reset before showing
 its risk acknowledgement, and declining that prompt does not undo the reset.
+Migration import options (`--flow import`, `--import-from`, `--import-source`,
+and `--import-secrets`) cannot be combined with `--reset`; run the import
+without `--reset`.
 Without `--reset`, an invalid config or legacy keys make onboarding ask you to
 run `openclaw doctor` first.
 </Note>

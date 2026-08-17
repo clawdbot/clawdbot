@@ -48,6 +48,9 @@ not install or modify anything on the remote host.
       setup also requires `--accept-risk` before reset. Interactive classic
       setup performs reset before showing its risk acknowledgement; declining
       that prompt does not undo the reset.
+    - Migration import options (`--flow import`, `--import-from`,
+      `--import-source`, and `--import-secrets`) cannot be combined with
+      `--reset`; run the import without `--reset`.
     - Without `--reset`, invalid config or legacy keys stop the wizard and ask
       you to run `openclaw doctor` before continuing.
 

@@ -25,6 +25,9 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - Before reset, the command validates TTY availability and rejectable CLI
       options, including the full-reset workspace target. Non-interactive setup
       also requires `--accept-risk` at this point.
+    - Migration import options (`--flow import`, `--import-from`,
+      `--import-source`, and `--import-secrets`) cannot be combined with
+      `--reset`; run the import without `--reset`.
     - Interactive classic setup moves state to Trash (never deletes directly)
       before showing its risk acknowledgement. Declining that later prompt
       cancels setup but does not undo the reset.
