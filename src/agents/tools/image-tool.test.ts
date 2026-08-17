@@ -16,7 +16,10 @@ import type {
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
-import { installTemporaryCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  installTemporaryCurrentPluginMetadataSnapshot,
+} from "../../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -654,6 +657,7 @@ function installImageUnderstandingProviderDeps(
     resolveModelAsync?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["resolveModelAsync"];
+    useDefaultResolveModelAsync?: boolean;
   },
 ) {
   imageProviderHarness.setProviders(providers);
@@ -687,7 +691,9 @@ function installImageUnderstandingProviderDeps(
         providerId,
         imageProviderHarness.buildProviderRegistry(),
       ),
-    resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest,
+    ...(options?.useDefaultResolveModelAsync
+      ? {}
+      : { resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest }),
     ...(options?.resolveImageCompressionPolicy
       ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
       : {}),
@@ -3156,10 +3162,15 @@ describe("image compression policy", () => {
   it("keeps runtime augmentation pinned to the prepared plugin generation", async () => {
     const provider = "prepared-image-provider";
     const model = "prepared-image-model";
+    const workspaceDir = "/fake/prepared-image-workspace";
     const cfg = {} satisfies OpenClawConfig;
     const createSnapshot = (
       runtimeAugment: boolean,
-      imagePolicy: { maxBytes: number; tokenMode: "detail" | "provider" },
+      imagePolicy: {
+        maxBytes: number;
+        preferredSidePx: number;
+        tokenMode: "detail" | "provider";
+      },
     ) => {
       const plugin = {
         id: "prepared-image-plugin",
@@ -3194,18 +3205,22 @@ describe("image compression policy", () => {
       return createPluginMetadataSnapshot({
         config: cfg,
         manifestRegistry: { plugins: [plugin], diagnostics: [] },
+        workspaceDir,
       });
     };
     const preparedSnapshot = createSnapshot(true, {
       maxBytes: 1_000_000,
+      preferredSidePx: 1_280,
       tokenMode: "detail",
     });
     const currentSnapshot = createSnapshot(false, {
       maxBytes: 2_000_000,
+      preferredSidePx: 2_560,
       tokenMode: "provider",
     });
     const preparedModelRuntime = {
       agentDir: "/fake/prepared-image-agent",
+      workspaceDir,
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
       config: cfg,
@@ -3216,60 +3231,45 @@ describe("image compression policy", () => {
       inlineProviderModels: [],
       createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
     } satisfies PreparedModelRuntimeSnapshot;
-    const hookModes: Array<boolean | undefined> = [];
-    const forwardedPreparedRuntimes: Array<PreparedModelRuntimeSnapshot | undefined> = [];
+    const modelModule = await import("../embedded-agent-runner/model.js");
+    const resolveModelAsyncSpy = vi.spyOn(modelModule, "resolveModelAsync");
     installImageUnderstandingProviderDeps([], {
-      resolveModelAsync: async (resolvedProvider, resolvedModel, _agentDir, _cfg, options) => {
-        hookModes.push(options?.skipProviderRuntimeHooks);
-        forwardedPreparedRuntimes.push(options?.preparedModelRuntime);
-        const usesPreparedGeneration = options?.preparedModelRuntime === preparedModelRuntime;
-        return {
-          model: {
-            id: resolvedModel,
-            provider: resolvedProvider,
-            input: ["text", "image"],
-            mediaInput: {
-              image: usesPreparedGeneration
-                ? options?.skipProviderRuntimeHooks
-                  ? { preferredSidePx: 1_280 }
-                  : { maxPixels: 2_000_000, maxSidePx: 1_536 }
-                : options?.skipProviderRuntimeHooks
-                  ? { preferredSidePx: 2_560 }
-                  : { maxPixels: 8_000_000, maxSidePx: 4_096 },
-            },
-          } as never,
-          authStorage: {} as never,
-          modelRegistry: {} as never,
-        };
-      },
+      useDefaultResolveModelAsync: true,
     });
     const currentLease = installTemporaryCurrentPluginMetadataSnapshot(currentSnapshot, {
       config: cfg,
+      workspaceDir,
     });
 
     try {
+      expect(getCurrentPluginMetadataSnapshot({ config: cfg, workspaceDir })).toBe(currentSnapshot);
       await expect(
         testing.resolveImageCompressionPolicy({
           cfg,
           imageModelConfig: { primary: `${provider}/${model}` },
           imageCount: 1,
           preparedModelRuntime,
+          workspaceDir,
         }),
       ).resolves.toEqual({
         imageCount: 1,
         models: [
           {
             maxBytes: 1_000_000,
-            maxPixels: 2_000_000,
-            maxSidePx: 1_536,
             preferredSidePx: 1_280,
             tokenMode: "detail",
           },
         ],
       });
-      expect(hookModes).toEqual([true, false]);
-      expect(forwardedPreparedRuntimes).toEqual([preparedModelRuntime, preparedModelRuntime]);
+      expect(resolveModelAsyncSpy).toHaveBeenCalledTimes(2);
+      expect(
+        resolveModelAsyncSpy.mock.calls.map((call) => call[4]?.skipProviderRuntimeHooks),
+      ).toEqual([true, false]);
+      for (const call of resolveModelAsyncSpy.mock.calls) {
+        expect(call[4]?.preparedModelRuntime).toBe(preparedModelRuntime);
+      }
     } finally {
+      resolveModelAsyncSpy.mockRestore();
       currentLease.release();
     }
   });
