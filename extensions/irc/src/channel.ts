@@ -346,17 +346,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     base: ircOutboundBaseAdapter,
     attachedResults: {
       channel: "irc",
-      sendText: async ({ onDeliveryResult: _onDeliveryResult, ...ctx }) => {
-        const { target: _target, ...result } = await ircMessageAdapter.send.text(ctx);
-        return result;
-      },
-      sendMedia: async ({ onDeliveryResult: _onDeliveryResult, mediaUrl, ...ctx }) => {
-        const { target: _target, ...result } = await ircMessageAdapter.send.media({
-          ...ctx,
-          mediaUrl: mediaUrl ?? "",
-        });
-        return result;
-      },
+      sendText: ({ onDeliveryResult: _onDeliveryResult, ...ctx }) =>
+        ircMessageAdapter.send.text(ctx),
+      sendMedia: ({ onDeliveryResult: _onDeliveryResult, mediaUrl, ...ctx }) =>
+        ircMessageAdapter.send.media({ ...ctx, mediaUrl: mediaUrl ?? "" }),
     },
   },
 });
