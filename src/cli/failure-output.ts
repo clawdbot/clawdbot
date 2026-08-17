@@ -21,7 +21,7 @@ export type CliJsonFailure = {
   };
 };
 
-export class CliParseError extends Error {
+export class ExpectedCliError extends Error {
   readonly humanOutput: string;
   readonly humanOutputWritten: boolean;
   readonly machineOutput: string;
@@ -33,11 +33,15 @@ export class CliParseError extends Error {
     machineOutput: string;
   }) {
     super(params.message);
-    this.name = "CliParseError";
+    this.name = "ExpectedCliError";
     this.humanOutput = params.humanOutput;
     this.humanOutputWritten = params.humanOutputWritten ?? false;
     this.machineOutput = params.machineOutput;
   }
+}
+
+export function isExpectedCliError(error: unknown): error is ExpectedCliError {
+  return error instanceof ExpectedCliError;
 }
 
 /** Canonical machine-readable failure envelope for CLI-owned errors. */
@@ -45,10 +49,9 @@ export function formatCliJsonFailure(
   error: unknown,
   options: CliFailureDebugOptions = {},
 ): CliJsonFailure {
-  const message =
-    error instanceof CliParseError
-      ? formatErrorMessage(error.machineOutput.trimEnd())
-      : formatCliOperatorError(error, options);
+  const message = isExpectedCliError(error)
+    ? formatErrorMessage(error.machineOutput.trimEnd())
+    : formatCliOperatorError(error, options);
   return {
     ok: false,
     error: {
@@ -97,7 +100,7 @@ function pushPrefixed(out: string[], value: string): void {
 }
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
-  if (options.error instanceof CliParseError) {
+  if (isExpectedCliError(options.error)) {
     return options.error.humanOutputWritten ? [] : options.error.humanOutput.trimEnd().split("\n");
   }
 
