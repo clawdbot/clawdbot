@@ -188,11 +188,11 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: SimpleStreamOptions["reasoning"] | undefined,
 ): ResponsesReasoningEffort | undefined {
-  if (reasoning && resolveResponsesApiReasoningEffort(model, reasoning) === undefined) {
-    return undefined;
-  }
   const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;
   if (!clampedReasoning || clampedReasoning === "off") {
+    return undefined;
+  }
+  if (resolveResponsesApiReasoningEffort(model, clampedReasoning) === undefined) {
     return undefined;
   }
   if (clampedReasoning === "max") {
