@@ -110,7 +110,8 @@ describe("Workboard gateway lifecycle sync", () => {
     const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
     const request = vi.fn().mockResolvedValue({ ok: true, ran: true });
     const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
-    const context = { logger: { warn: vi.fn() } } as never;
+    const info = vi.fn();
+    const context = { logger: { info, warn: vi.fn() } } as never;
     await service.start(context);
 
     await syncWorkboardSubagentEnded({
@@ -125,6 +126,42 @@ describe("Workboard gateway lifecycle sync", () => {
       { id: "job-categorize-planning", mode: "force" },
       { scopes: ["operator.admin"] },
     );
+    expect(info).toHaveBeenCalledWith(
+      "workboard automation nudge requested for board planning: job job-categorize-planning",
+    );
+  });
+
+  it("uses the active service owner from a prepared plugin generation", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
+    const sessionKey = "agent:main:subagent:workboard-planning-card-generation";
+    const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
+    const activeRequest = vi.fn();
+    const activeService = createWorkboardAutomationNudgeService({
+      store,
+      gateway: { request: activeRequest },
+    });
+    const generationRequest = vi.fn().mockResolvedValue({ ok: true, ran: true });
+    const generationService = createWorkboardAutomationNudgeService({
+      store,
+      gateway: { request: generationRequest },
+    });
+    const context = { logger: { info: vi.fn(), warn: vi.fn() } } as never;
+    await activeService.start(context);
+
+    await syncWorkboardSubagentEnded({
+      store,
+      event: { targetSessionKey: sessionKey, endedAt: card.updatedAt + 1, outcome: "ok" },
+      onMatched: generationService.nudge,
+    });
+    await activeService.stop?.(context);
+
+    expect(activeRequest).not.toHaveBeenCalled();
+    expect(generationRequest).toHaveBeenCalledWith(
+      "cron.run",
+      { id: "job-categorize-planning", mode: "force" },
+      { scopes: ["operator.admin"] },
+    );
   });
 
   it("does not nudge a matching card whose board has no automation", async () => {
@@ -134,7 +171,7 @@ describe("Workboard gateway lifecycle sync", () => {
     const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
     const request = vi.fn();
     const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
-    const context = { logger: { warn: vi.fn() } } as never;
+    const context = { logger: { info: vi.fn(), warn: vi.fn() } } as never;
     await service.start(context);
 
     await syncWorkboardSubagentEnded({
@@ -155,7 +192,7 @@ describe("Workboard gateway lifecycle sync", () => {
       const card = await createLinkedCard(store, { boardId: "planning", sessionKey });
       const request = vi.fn();
       const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
-      const context = { logger: { warn: vi.fn() } } as never;
+      const context = { logger: { info: vi.fn(), warn: vi.fn() } } as never;
       await service.start(context);
 
       await syncWorkboardSubagentEnded({
@@ -180,7 +217,7 @@ describe("Workboard gateway lifecycle sync", () => {
     });
     const request = vi.fn().mockReturnValue(run);
     const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
-    const context = { logger: { warn: vi.fn() } } as never;
+    const context = { logger: { info: vi.fn(), warn: vi.fn() } } as never;
     await service.start(context);
     const event = {
       targetSessionKey: sessionKey,
@@ -207,7 +244,7 @@ describe("Workboard gateway lifecycle sync", () => {
     const request = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
     const warn = vi.fn();
     const service = createWorkboardAutomationNudgeService({ store, gateway: { request } });
-    const context = { logger: { warn } } as never;
+    const context = { logger: { info: vi.fn(), warn } } as never;
     await service.start(context);
 
     await expect(
