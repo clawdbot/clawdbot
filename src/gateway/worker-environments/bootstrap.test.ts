@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
   isSupportedOpenClawNodeVersion,
-  OPENCLAW_PROCESS_NODE_VERSION_CHECK,
+  PROCESS_NODE_VERSION_CHECK,
 } from "../../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../../../test/helpers/node-version-cases.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
@@ -392,15 +392,15 @@ describe("bootstrapWorker", () => {
     ).rejects.toThrow("Node 22.22.3+, 24.15.0+, or 25.9.0+ with WAL-reset-safe SQLite");
     expect(runner.calls).toHaveLength(2);
     expect(runner.calls[0]?.options.input).toContain(
-      `const nodeSafe = ${OPENCLAW_PROCESS_NODE_VERSION_CHECK};`,
+      `const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};`,
     );
     expect(runner.calls[0]?.options.input).toContain("SELECT sqlite_version() AS version");
   });
 
   it("embeds a shell-safe Node release check matching the canonical contract", () => {
-    expect(OPENCLAW_PROCESS_NODE_VERSION_CHECK).not.toContain("'");
+    expect(PROCESS_NODE_VERSION_CHECK).not.toContain("'");
     for (const version of NODE_RELEASE_VERSION_CASES) {
-      const actual = runInNewContext(OPENCLAW_PROCESS_NODE_VERSION_CHECK, {
+      const actual = runInNewContext(PROCESS_NODE_VERSION_CHECK, {
         process: { versions: { node: version } },
       });
       expect(actual, version).toBe(isSupportedOpenClawNodeVersion(version));
