@@ -934,6 +934,26 @@ async function generateIdentity(): Promise<DeviceIdentity> {
   };
 }
 
+/**
+ * Synchronous identity probe for render gating: reads the stored device id
+ * without creating, repairing, or fingerprint-verifying an identity, so a
+ * "do we hold credentials?" check stays side-effect free before connect().
+ */
+export function peekStoredDeviceIdentityId(): string | null {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as StoredIdentity;
+    return parsed?.version === 1 && typeof parsed.deviceId === "string" && parsed.deviceId
+      ? parsed.deviceId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 // Storage-blocked pages (for example private browsing) must still present one
 // stable device per page lifetime; minting a fresh key on every reconnect
 // would raise a new unpaired request each time and never retain approval.
