@@ -345,7 +345,11 @@ function createCloseMock() {
 }
 
 function createGatewayServer(close: GatewayCloseFn, startupSettled = Promise.resolve()) {
-  return { close, startupSettled } satisfies GatewayServer;
+  return {
+    getTailscaleIngressEndpoint: () => undefined,
+    close,
+    startupSettled,
+  } satisfies GatewayServer;
 }
 
 function expectRestartCloseCall(
