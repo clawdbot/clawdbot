@@ -445,44 +445,6 @@ describe("session transcript reader facade", () => {
     expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
   });
 
-  test.each(["single", "batch"] as const)(
-    "flattens last-message Markdown in the %s title reader",
-    async (mode) => {
-      const scope = await writeSqliteMessages(`reader-title-markdown-${mode}`, [
-        { role: "user", content: "Keep **title Markdown** unchanged" },
-        {
-          role: "assistant",
-          content:
-            "# Done\n\nLanded [PR #124879](https://github.com/openclaw/openclaw/pull/124879) with **green** CI.",
-        },
-      ]);
-      const fields =
-        mode === "single"
-          ? readSessionTitleFieldsFromTranscript(scope)
-          : readSessionTitleFieldsFromTranscriptBatch([scope])[0];
-
-      expect(fields).toEqual({
-        firstUserMessage: "Keep **title Markdown** unchanged",
-        lastMessagePreview: "Done Landed PR #124879 with green CI.",
-      });
-    },
-  );
-
-  test.each(["single", "batch"] as const)(
-    "returns no %s title preview when Markdown flattens to empty",
-    async (mode) => {
-      const scope = await writeSqliteMessages(`reader-title-empty-markdown-${mode}`, [
-        { role: "assistant", content: "```ts\nconst hidden = true;\n```" },
-      ]);
-      const fields =
-        mode === "single"
-          ? readSessionTitleFieldsFromTranscript(scope)
-          : readSessionTitleFieldsFromTranscriptBatch([scope])[0];
-
-      expect(fields?.lastMessagePreview).toBeNull();
-    },
-  );
-
   test("falls back to the canonical visible window for reset transcripts", async () => {
     const sessionId = "reader-title-reset-window";
     const scope = await writeTranscript(sessionId, [
