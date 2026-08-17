@@ -65,7 +65,11 @@ const recordSchema = z
   .refine((record) => record.sessionId === record.snapshot.sessionId);
 
 type SessionSnapshotRecord = z.infer<typeof recordSchema>;
-type StoredSessionState = Pick<SessionSnapshotRecord, "rowHeights" | "snapshot">;
+type StoredSessionState = {
+  rowHeights: Map<string, number>;
+  snapshot: ChatSessionSnapshot;
+};
+type PendingSessionState = StoredSessionState & { savedAt: number };
 
 const activeStores = new Set<SessionSnapshotStore>();
 let snapshotStoreGeneration = 0;
@@ -99,14 +103,10 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
-function sanitizeSnapshot(snapshot: ChatSessionSnapshot): ChatSessionSnapshot | null {
+function sanitizeSnapshot(snapshot: ChatSessionSnapshot): unknown {
   try {
     const json = JSON.stringify(snapshot);
-    if (!json) {
-      return null;
-    }
-    const parsed = snapshotSchema.safeParse(JSON.parse(json));
-    return parsed.success ? parsed.data : null;
+    return json ? JSON.parse(json) : null;
   } catch {
     return null;
   }
@@ -117,6 +117,24 @@ function parseSnapshotRecord(value: unknown, sessionKey?: string): SessionSnapsh
   return parsed.success && (!sessionKey || parsed.data.sessionKey === sessionKey)
     ? parsed.data
     : null;
+}
+
+function createSnapshotRecord(
+  sessionKey: string,
+  pending: PendingSessionState,
+): SessionSnapshotRecord | null {
+  const sanitizedSnapshot = sanitizeSnapshot(pending.snapshot);
+  if (!sanitizedSnapshot) {
+    return null;
+  }
+  const parsed = recordSchema.safeParse({
+    rowHeights: pending.rowHeights,
+    savedAt: pending.savedAt,
+    sessionId: pending.snapshot.sessionId,
+    sessionKey,
+    snapshot: sanitizedSnapshot,
+  });
+  return parsed.success ? parsed.data : null;
 }
 
 async function readSnapshotRecord(sessionKey: string): Promise<SessionSnapshotRecord | null> {
@@ -219,7 +237,8 @@ async function writeSnapshotRecords(
 export class SessionSnapshotStore implements ChatCacheObserver {
   private connected = false;
   private readonly sessions = new Map<string, StoredSessionState>();
-  private readonly pending = new Map<string, SessionSnapshotRecord>();
+  private readonly pending = new Map<string, PendingSessionState>();
+  private readonly hydratedSnapshots = new Map<string, ChatSessionSnapshot>();
   private readonly revisions = new Map<string, number>();
   private writeTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private writeChain = Promise.resolve();
@@ -259,20 +278,22 @@ export class SessionSnapshotStore implements ChatCacheObserver {
         snapshot: record.snapshot,
       });
     }
+    setSessionCacheValue(this.hydratedSnapshots, sessionKey, record.snapshot);
     return record.snapshot;
   }
 
   write(sessionKey: string, snapshot: ChatSessionSnapshot): void {
     this.revisions.set(sessionKey, (this.revisions.get(sessionKey) ?? 0) + 1);
-    const sanitized = sanitizeSnapshot(snapshot);
-    if (!sanitized) {
-      void this.delete(sessionKey);
+    if (getSessionCacheValue(this.hydratedSnapshots, sessionKey) === snapshot) {
       return;
     }
+    this.hydratedSnapshots.delete(sessionKey);
     const existing = getSessionCacheValue(this.sessions, sessionKey);
+    // Cache reconciliation replaces snapshots immutably, so retaining this raw
+    // reference until the debounced flush cannot observe in-place mutation.
     const state = {
       rowHeights: existing?.rowHeights ?? new Map<string, number>(),
-      snapshot: sanitized,
+      snapshot,
     };
     setSessionCacheValue(this.sessions, sessionKey, state);
     this.schedule(sessionKey, state);
@@ -285,6 +306,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   forget(sessionKey: string): void {
     this.revisions.set(sessionKey, (this.revisions.get(sessionKey) ?? 0) + 1);
     this.pending.delete(sessionKey);
+    this.hydratedSnapshots.delete(sessionKey);
     this.sessions.delete(sessionKey);
   }
 
@@ -317,8 +339,17 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       globalThis.clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
-    const records = [...this.pending.values()];
+    const pending = [...this.pending.entries()];
     this.pending.clear();
+    const records: SessionSnapshotRecord[] = [];
+    for (const [sessionKey, state] of pending) {
+      const record = createSnapshotRecord(sessionKey, state);
+      if (record) {
+        records.push(record);
+      } else {
+        await this.delete(sessionKey);
+      }
+    }
     const generation = snapshotStoreGeneration;
     this.writeChain = this.writeChain.then(() => writeSnapshotRecords(records, generation));
     await this.writeChain;
@@ -330,6 +361,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       this.writeTimer = null;
     }
     this.pending.clear();
+    this.hydratedSnapshots.clear();
     this.sessions.clear();
     this.revisions.clear();
     this.memoryCache?.clear();
@@ -343,8 +375,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     this.pending.set(sessionKey, {
       rowHeights: new Map(state.rowHeights),
       savedAt: Date.now(),
-      sessionId: state.snapshot.sessionId,
-      sessionKey,
       snapshot: state.snapshot,
     });
     if (this.writeTimer !== null) {

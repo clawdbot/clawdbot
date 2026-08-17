@@ -230,14 +230,16 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
       messageWeights.length - start,
     );
     if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
-      const messages = start === 0 ? snapshot.messages : snapshot.messages.slice(start);
+      if (start === 0) {
+        return { snapshot, weight };
+      }
       return {
         snapshot: {
           ...(Object.hasOwn(snapshot, "displayedLeafEntryId")
             ? { displayedLeafEntryId: snapshot.displayedLeafEntryId }
             : {}),
-          messages,
-          pagination: start === 0 ? pagination : { ...pagination },
+          messages: snapshot.messages.slice(start),
+          pagination: { ...pagination },
           sessionId: snapshot.sessionId,
         },
         weight,
