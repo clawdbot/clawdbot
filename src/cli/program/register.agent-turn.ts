@@ -188,10 +188,8 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         messageFile: opts.messageFile ?? parentOpts?.messageFile,
         model: opts.model ?? parentOpts?.model,
         thinking: opts.thinking ?? parentOpts?.thinking,
-        // Exec --timeout has a child default ("600"), so `opts.timeout ?? parent`
-        // would never inherit. Prefer an explicit leaf flag; otherwise inherit a
-        // parent CLI value. Parent-first `??` would keep the parent even when the
-        // operator also set exec --timeout (production enables positional options).
+        // Exec --timeout defaults to "600"; inherit a parent flag only when the
+        // leaf source is default. An explicit nested --timeout must win.
         timeout: inheritOptionFromParent<string>(command, "timeout") ?? opts.timeout,
         json: opts.json === true || parentOpts?.json === true,
       };
