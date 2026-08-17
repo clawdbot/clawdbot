@@ -105,7 +105,7 @@ export type SessionWorkspaceHost = {
   sessionWorkspaceOpenRequest?: SessionWorkspaceOpenRequest;
   sessionWorkspaceDraftScope?: string;
   requestUpdate?: () => void;
-  handleOpenSidebar: (content: SidebarContent) => void;
+  handleOpenSidebar: (content: SidebarContent | null) => void;
 };
 
 /** Agent owning the pane's current session: explicit key scope first, then the
@@ -425,6 +425,7 @@ function openWorkspaceItem<T>(
   missingMessage: string,
 ) {
   const request = beginOpenRequest(state, workspace, itemId);
+  state.handleOpenSidebar(null);
   void (async () => {
     if (!state.client || !state.connected) {
       return;
@@ -436,7 +437,6 @@ function openWorkspaceItem<T>(
       if (!content) {
         if (isCurrentOpenRequest(state, request)) {
           workspace.error = missingMessage;
-          requestUpdate(state);
         }
         return;
       }
