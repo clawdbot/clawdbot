@@ -5,7 +5,8 @@ import {
 import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { readItemString, readString } from "./event-projector-values.js";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readItemString } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 

@@ -55,28 +55,43 @@ Use a SQLite online backup or another WAL-aware snapshot produced while the sour
 
 ## Agent schema history
 
-| Version | Change                                                                                                                                                                                                                                                         | First release                                   |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| 1       | Initial per-agent store ([#88349](https://github.com/openclaw/openclaw/pull/88349))                                                                                                                                                                            | `v2026.5.30-beta.1`, stable through `v2026.7.1` |
-| 2       | Memory index identity ([#104449](https://github.com/openclaw/openclaw/pull/104449))                                                                                                                                                                            | `v2026.7.2-beta.1`                              |
-| 4       | Sessions and transcripts moved into SQLite ([#98236](https://github.com/openclaw/openclaw/pull/98236))                                                                                                                                                         | `v2026.7.2-beta.1`                              |
-| 5-6     | Terminal freshness and state lifecycle ([#104859](https://github.com/openclaw/openclaw/pull/104859))                                                                                                                                                           | `v2026.7.2-beta.1`                              |
-| 7       | Per-entry lifecycle status projection ([#106151](https://github.com/openclaw/openclaw/pull/106151))                                                                                                                                                            | `v2026.7.2-beta.1`                              |
-| 8       | Per-transcript session provenance ([#106766](https://github.com/openclaw/openclaw/pull/106766))                                                                                                                                                                | `v2026.7.2-beta.2`                              |
-| 9       | `STRICT` tables ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                                  | `v2026.7.2-beta.2`                              |
-| 10      | Materialized active transcript paths ([#108851](https://github.com/openclaw/openclaw/pull/108851))                                                                                                                                                             | Unreleased                                      |
-| 11      | Leases, durable delivery, conversation addresses, and heartbeat outcomes ([#109636](https://github.com/openclaw/openclaw/pull/109636), [#95838](https://github.com/openclaw/openclaw/pull/95838), [#109999](https://github.com/openclaw/openclaw/pull/109999)) | Unreleased                                      |
+| Version | Change                                                                                                                                                                                                                                                 | First release                                   |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
+| 1       | Initial per-agent store ([#88349](https://github.com/openclaw/openclaw/pull/88349))                                                                                                                                                                    | `v2026.5.30-beta.1`, stable through `v2026.7.1` |
+| 2       | Memory index identity ([#104449](https://github.com/openclaw/openclaw/pull/104449))                                                                                                                                                                    | `v2026.7.2-beta.1`                              |
+| 4       | Sessions and transcripts moved into SQLite ([#98236](https://github.com/openclaw/openclaw/pull/98236))                                                                                                                                                 | `v2026.7.2-beta.1`                              |
+| 5-6     | Terminal freshness and state lifecycle ([#104859](https://github.com/openclaw/openclaw/pull/104859))                                                                                                                                                   | `v2026.7.2-beta.1`                              |
+| 7       | Per-entry lifecycle status projection ([#106151](https://github.com/openclaw/openclaw/pull/106151))                                                                                                                                                    | `v2026.7.2-beta.1`                              |
+| 8       | Per-transcript session provenance ([#106766](https://github.com/openclaw/openclaw/pull/106766))                                                                                                                                                        | `v2026.7.2-beta.2`                              |
+| 9       | `STRICT` tables ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                          | `v2026.7.2-beta.2`                              |
+| 10      | Materialized active transcript paths ([#108851](https://github.com/openclaw/openclaw/pull/108851))                                                                                                                                                     | Unreleased                                      |
+| 11      | Durable delivery, conversation addresses, and heartbeat outcomes ([#109636](https://github.com/openclaw/openclaw/pull/109636), [#95838](https://github.com/openclaw/openclaw/pull/95838), [#109999](https://github.com/openclaw/openclaw/pull/109999)) | Unreleased                                      |
+| 12      | Session-owned ACP parent-stream events                                                                                                                                                                                                                 | Unreleased                                      |
+| 13      | Durable transcript rewrite watermarks                                                                                                                                                                                                                  | Unreleased                                      |
+| 14      | Logical session nodes, generation windows, and node-owned artifact foreign keys                                                                                                                                                                        | Unreleased                                      |
+| 15      | Board and session-sharing tables                                                                                                                                                                                                                       | Unreleased                                      |
+| 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | Unreleased                                      |
+| 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
 
 ## State schema history
 
-| Version | Change                                                                                                   | First release       |
-| ------- | -------------------------------------------------------------------------------------------------------- | ------------------- |
-| 1       | Initial shared state database                                                                            | `v2026.5.30-beta.1` |
-| 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))         | `v2026.7.2-beta.1`  |
-| 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663)) | `v2026.7.2-beta.2`  |
-| 4       | Session watch provenance replaces encoded sentinel rows                                                  | Unreleased          |
+| Version | Change                                                                                                                                                                                                                                           | First release       |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------- |
+| 1       | Initial shared state database                                                                                                                                                                                                                    | `v2026.5.30-beta.1` |
+| 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))                                                                                                                                                 | `v2026.7.2-beta.1`  |
+| 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                         | `v2026.7.2-beta.2`  |
+| 4       | Session watch provenance replaces encoded sentinel rows                                                                                                                                                                                          | Unreleased          |
+| 5       | Durable cloud-worker result references on pending workspace fences ([`7a7d6bb`](https://github.com/openclaw/openclaw/commit/7a7d6bb51f42bd896de2b8a4df2ee66f3dce0a21), [#110952](https://github.com/openclaw/openclaw/pull/110952))              | `v2026.7.2-beta.4`  |
+| 6       | Every committed shared-state table becomes part of the canonical runtime schema ([`509a5f0`](https://github.com/openclaw/openclaw/commit/509a5f03737642fec4a940e6d605887f7957ddc8), [#113473](https://github.com/openclaw/openclaw/pull/113473)) | `v2026.7.2-beta.5`  |
+| 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                      | Unreleased          |
+| 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                | Unreleased          |
+| 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                     | Unreleased          |
+
+### State schema 9
+
+Schema 9 stores an `agent_databases.path` value relative to the state directory when the registered agent database is inside that directory. During migration, a foreign default-layout row is re-anchored to the in-root counterpart when that file exists. It is deleted only when the same agent already holds its in-root registration, because dual default-layout registrations cannot produce a valid combined session list. Otherwise, the absolute row is preserved, so genuine external registrations are never deleted. This keeps a copied state directory self-contained without dropping supported external database paths.
 
 ## Integrity checks
 
@@ -129,31 +144,115 @@ The general procedure is:
 3. Set `PRAGMA user_version` and `schema_meta.schema_version` to the target version.
 4. Run the target release's full database verification before starting the Gateway.
 
-### Example: agent schema 11 to 9
+### Example: state schema 9 to 8
 
-Schema 10 added the active transcript projection. Schema 11 added leases, durable delivery, conversation-address state, and heartbeat outcomes.
+Schema 8 expects every `agent_databases.path` value to be absolute. Before lowering `user_version`, inspect each registry row on the same platform that wrote it. Leave absolute external paths unchanged; replace every relative path with its platform-native absolute form by resolving it against the state directory that owns `state/openclaw.sqlite`. Then set both `PRAGMA user_version` and `schema_meta.schema_version` to 8 in the same transaction.
 
-Run equivalent SQL against each affected per-agent database after inspecting the exact schema that wrote it:
+Do not lower the version while relative registry rows remain. A schema 8 build interprets them relative to its process working directory rather than the copied state directory.
+
+### Example: state schema 7 to 6
+
+Schema 7 removed the retired shared commitments table. A schema 6 build still requires that canonical table, so a manual downgrade must recreate its exact empty schema before lowering the version.
+
+Run equivalent SQL against the global state database after inspecting the exact schema that wrote it:
 
 ```sql
 BEGIN IMMEDIATE;
 
-DROP TABLE IF EXISTS heartbeat_outcomes;
-DROP TABLE IF EXISTS conversation_deliveries;
-DROP TABLE IF EXISTS state_leases;
-DROP TABLE IF EXISTS session_transcript_active_events;
+CREATE TABLE commitments (
+  id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  account_id TEXT,
+  recipient_id TEXT,
+  thread_id TEXT,
+  sender_id TEXT,
+  kind TEXT NOT NULL,
+  sensitivity TEXT NOT NULL,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  suggested_text TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  due_earliest_ms INTEGER NOT NULL,
+  due_latest_ms INTEGER NOT NULL,
+  due_timezone TEXT NOT NULL,
+  source_message_id TEXT,
+  source_run_id TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  attempts INTEGER NOT NULL,
+  last_attempt_at_ms INTEGER,
+  sent_at_ms INTEGER,
+  dismissed_at_ms INTEGER,
+  snoozed_until_ms INTEGER,
+  expired_at_ms INTEGER,
+  record_json TEXT NOT NULL
+) STRICT;
 
-ALTER TABLE session_transcript_index_state DROP COLUMN active_event_count;
-ALTER TABLE session_transcript_index_state DROP COLUMN active_message_count;
-ALTER TABLE conversations DROP COLUMN delivery_target;
+CREATE INDEX idx_commitments_scope_due
+  ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
 
-PRAGMA user_version = 9;
+CREATE INDEX idx_commitments_status_due
+  ON commitments(status, due_earliest_ms, due_latest_ms);
+
+CREATE INDEX idx_commitments_scope_dedupe
+  ON commitments(agent_id, session_key, channel, dedupe_key, status);
+
+CREATE INDEX idx_commitments_agent_due
+  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
+
+CREATE INDEX idx_commitments_agent_sent
+  ON commitments(agent_id, status, sent_at_ms, session_key);
+
+PRAGMA user_version = 6;
 UPDATE schema_meta
-SET schema_version = 9,
+SET schema_version = 6,
     updated_at = unixepoch('now') * 1000
 WHERE meta_key = 'primary';
 
 COMMIT;
 ```
 
-This discards version 10-11 state, including in-flight delivery operations, leases, heartbeat outcomes, and the derived active transcript projection. A botched downgrade means restore from the verified backup.
+The recreated table starts empty because schema 7 discarded the retired rows. A botched downgrade means restore from the verified backup.
+
+### Example: agent schema 17 to 16
+
+Schema 17 removed the tenant-free per-agent lease table. A schema 16 build still requires that canonical table, so a manual downgrade must recreate its exact schema before lowering the version.
+
+Run equivalent SQL against each affected per-agent database after inspecting the exact schema that wrote it:
+
+```sql
+BEGIN IMMEDIATE;
+
+CREATE TABLE state_leases (
+  scope TEXT NOT NULL,
+  lease_key TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  expires_at INTEGER,
+  heartbeat_at INTEGER,
+  payload_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, lease_key)
+) STRICT;
+
+CREATE INDEX idx_agent_state_leases_expiry
+  ON state_leases(expires_at, scope, lease_key)
+  WHERE expires_at IS NOT NULL;
+
+CREATE INDEX idx_agent_state_leases_owner
+  ON state_leases(owner, updated_at DESC);
+
+PRAGMA user_version = 16;
+UPDATE schema_meta
+SET schema_version = 16,
+    updated_at = unixepoch('now') * 1000
+WHERE meta_key = 'primary';
+
+COMMIT;
+```
+
+The recreated table starts empty because schema 17 has no agent-DB lease tenants to preserve. A botched downgrade means restore from the verified backup.

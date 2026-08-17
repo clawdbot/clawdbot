@@ -311,6 +311,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           cfg,
           sessionKey: requestContext.sessionKey,
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
+          runtimePolicyAgentId: requestContext.runtimePolicyAgentId,
           agentId: requestContext.agentId,
           sessionId: requestContext.sessionId,
           runId: requestContext.runId,
@@ -428,6 +429,11 @@ async function startMcpLoopbackServer(port = 0): Promise<{
                   agentId: scopedTools.agentId,
                   sessionKey: requestContext.sessionKey,
                   turnSourceChannel: requestContext.messageProvider,
+                  turnSourceLocal:
+                    !requestContext.messageProvider &&
+                    requestContext.cronCreatorCallerOrigin?.kind === "local"
+                      ? true
+                      : undefined,
                   turnSourceTo: requestContext.currentChannelId,
                   turnSourceAccountId: requestContext.accountId,
                   turnSourceThreadId: requestContext.currentThreadTs,

@@ -5,6 +5,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import prettyMilliseconds from "pretty-ms";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "../packages/normalization-core/src/number-coercion.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
@@ -13,7 +17,6 @@ const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
 const TIMEOUT_KILL_GRACE_MS = 250;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 250;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -59,6 +62,8 @@ export const BOUNDARY_CHECKS = (
     ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
     ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
     ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
+    ["lint:no-chained-type-assertions", "pnpm", ["run", "lint:no-chained-type-assertions"]],
+    ["lint:no-widen-then-assert", "pnpm", ["run", "lint:no-widen-then-assert"]],
     [
       "lint:plugins:no-register-http-handler",
       "pnpm",
@@ -85,7 +90,6 @@ export const BOUNDARY_CHECKS = (
       ["run", "lint:plugins:plugin-sdk-subpaths-exported"],
     ],
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
-    ["web-search-provider-boundary", "pnpm", ["run", "lint:web-search-provider-boundaries"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
       "extension-src-outside-plugin-sdk-boundary",
@@ -93,9 +97,9 @@ export const BOUNDARY_CHECKS = (
       ["run", "lint:extensions:no-src-outside-plugin-sdk"],
     ],
     [
-      "extension-plugin-sdk-internal-boundary",
+      "extension-normalization-core-bypass-boundary",
       "pnpm",
-      ["run", "lint:extensions:no-plugin-sdk-internal"],
+      ["run", "lint:extensions:no-normalization-core-bypass"],
     ],
     [
       "extension-relative-outside-package-boundary",
@@ -148,14 +152,6 @@ export function resolvePositiveInteger(value: unknown, fallback: number, label =
     throw new Error(`${label} must be a positive integer; got: ${displayValue(value)}`);
   }
   return parsed;
-}
-
-function resolveTimerTimeoutMs(valueMs: number) {
-  const value = valueMs;
-  if (!Number.isFinite(value)) {
-    return MAX_TIMER_TIMEOUT_MS;
-  }
-  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
 /**
@@ -443,7 +439,7 @@ export function runSingleCheck(
   }: RunSingleCheckOptions,
 ) {
   return new Promise<BoundaryCheckResult>((resolve) => {
-    const resolvedCheckTimeoutMs = resolveTimerTimeoutMs(checkTimeoutMs);
+    const resolvedCheckTimeoutMs = resolveTimerTimeoutMs(checkTimeoutMs, MAX_TIMER_TIMEOUT_MS);
     const startedAt = performance.now();
     const child = spawn(check.command, check.args, {
       cwd,

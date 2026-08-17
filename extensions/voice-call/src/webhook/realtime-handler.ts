@@ -256,6 +256,7 @@ export type StreamSession = {
 
 type CallRegistration = {
   callId: string;
+  agentId?: string;
   instructions: string;
   initialGreetingInstructions?: string;
 };
@@ -654,7 +655,7 @@ export class RealtimeCallHandler {
       return null;
     }
 
-    const { callId, instructions, initialGreetingInstructions } = registration;
+    const { callId, agentId, instructions, initialGreetingInstructions } = registration;
     const callRecord = this.manager.getCallByProviderCallId(callSid);
     const harness = createRealtimeVoiceSessionHarness({
       talk: {
@@ -792,6 +793,7 @@ export class RealtimeCallHandler {
     const bridgeParams: Parameters<typeof harness.createBridge>[0] = {
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
+      agentId,
       providerConfig: this.providerConfig,
       interruptResponseOnInputAudio,
       instructions,
@@ -977,17 +979,17 @@ export class RealtimeCallHandler {
           });
           return;
         }
-        if (event.type === "response.done") {
-          harness.finishOutputAudio("response.done");
-          harness.endTurn("response.done");
-          return;
-        }
         if (event.type === "error") {
           harness.emit({
             type: "session.error",
             payload: { message: event.detail ?? "Realtime provider error" },
             final: true,
           });
+        }
+      },
+      onResponseDone: (outcome) => {
+        if (outcome.status === "failed" || outcome.status === "incomplete") {
+          console.warn(`[voice-call] realtime response ${outcome.status}: ${outcome.message}`);
         }
       },
       onReady: () => {
@@ -1595,6 +1597,7 @@ export class RealtimeCallHandler {
     const instructions = this.resolveInstructions?.(callRecord) ?? this.config.instructions;
     return {
       callId: callRecord.callId,
+      agentId: callRecord.agentId,
       instructions,
       initialGreetingInstructions: buildGreetingInstructions(instructions, initialGreeting),
     };

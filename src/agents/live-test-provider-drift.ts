@@ -10,7 +10,6 @@ import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";
@@ -81,8 +80,7 @@ function isLiveBillingDrift(error: unknown): boolean {
 
 /** Returns whether an error is expected live rate-limit drift. */
 function isLiveRateLimitDrift(error: unknown): boolean {
-  const raw = liveProviderErrorText(error);
-  return isRateLimitErrorMessage(raw) || isApiKeyRateLimitError(raw);
+  return isApiKeyRateLimitError(liveProviderErrorText(error));
 }
 
 /** Returns whether an error is expected live timeout drift. */

@@ -25,6 +25,7 @@ type AgentToolGatewayRequest = Pick<
   | "onSignalAbort"
   | "params"
   | "signal"
+  | "scopes"
   | "timeoutMs"
 >;
 
@@ -54,30 +55,32 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
     const { callGateway } = await import("../../gateway/call.js");
     return await callGateway<T>(request);
   }
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(request.method, request.params);
+  const scopes =
+    request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(request.method, request.params);
   const timeoutMs =
     request.timeoutMs === null
       ? undefined
       : (request.timeoutMs ?? DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS);
+  const dispatchOptions = {
+    forceSyntheticClient: true,
+    syntheticScopes: scopes,
+    ...(request.expectFinal !== undefined ? { expectFinal: request.expectFinal } : {}),
+    ...(request.onAccepted ? { onAccepted: request.onAccepted } : {}),
+    ...(request.onSignalAbort
+      ? {
+          onSignalAbort: () =>
+            request.onSignalAbort?.((method, params, options) =>
+              callAgentToolGatewayRequest({ method, params, ...options }),
+            ),
+        }
+      : {}),
+    ...(request.signal ? { signal: request.signal } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  };
   return await dispatchGatewayMethodInProcess<T>(
     request.method,
     (request.params ?? {}) as Record<string, unknown>,
-    {
-      forceSyntheticClient: true,
-      syntheticScopes: scopes,
-      ...(request.expectFinal !== undefined ? { expectFinal: request.expectFinal } : {}),
-      ...(request.onAccepted ? { onAccepted: request.onAccepted } : {}),
-      ...(request.onSignalAbort
-        ? {
-            onSignalAbort: () =>
-              request.onSignalAbort?.((method, params, options) =>
-                callAgentToolGatewayRequest({ method, params, ...options }),
-              ),
-          }
-        : {}),
-      ...(request.signal ? { signal: request.signal } : {}),
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-    },
+    dispatchOptions,
   );
 };
 
@@ -99,6 +102,7 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   method: string,
   params: Record<string, unknown>,
   creation: TrustedSessionCreation,
+  options: { signal?: AbortSignal; timeoutMs?: number | null } = {},
 ): Promise<T> {
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   if (hasInProcessGatewayContext()) {
@@ -106,12 +110,20 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
       forceSyntheticClient: true,
       sessionCreation: creation,
       syntheticScopes: scopes,
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs !== undefined && options.timeoutMs !== null
+        ? { timeoutMs: options.timeoutMs }
+        : {}),
     });
   }
   // The fallback is a real local Gateway request. Carry spawn policy only in
   // the signed agent-runtime identity token, never in model-authored params.
   if (creation.via !== "spawn" || !creation.inheritedToolPolicy) {
-    return await callGatewayTool<T>(method, {}, params, { scopes });
+    return await callGatewayTool<T>(method, {}, params, {
+      scopes,
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    });
   }
   return await runWithGatewaySessionSpawnContext(
     {
@@ -124,6 +136,8 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
       callGatewayTool<T>(method, {}, params, {
         scopes,
         requireAgentRuntimeIdentity: true,
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       }),
   );
 }

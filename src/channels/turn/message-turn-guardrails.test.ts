@@ -36,7 +36,6 @@ const historyWindowFiles = [
   "extensions/line/src/group-history.ts",
   "extensions/mattermost/src/mattermost/monitor-posts.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ts",
-  "extensions/qqbot/src/bridge/sdk-adapter.ts",
   "extensions/signal/src/monitor/event-handler.ts",
   "extensions/slack/src/monitor/message-handler/prepare.ts",
   "extensions/telegram/src/bot-message-dispatch-context.ts",

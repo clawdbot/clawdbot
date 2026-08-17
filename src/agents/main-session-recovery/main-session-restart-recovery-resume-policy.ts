@@ -356,7 +356,6 @@ type MainSessionResumePolicy =
       toolCallId: string;
     }
   | { action: "complete"; reason: "handled-silent" }
-  | { action: "fail"; reason: string }
   | {
       action: "resume";
       forceRestartSafeTools: boolean;
@@ -385,25 +384,23 @@ export function resolveMainSessionResumePolicy(
           reason: "delivered-terminal-receipt",
           toolCallId: deliveryToolCallId,
         }
-      : { action: "fail", reason: "terminal delivery receipt lacks tool-call correlation" };
+      : { action: "resume", forceRestartSafeTools: true };
   }
   if (deliveryReceiptState === "terminal-pending") {
-    return { action: "fail", reason: "terminal source reply delivery outcome is unknown" };
+    return { action: "resume", forceRestartSafeTools: true };
   }
   if (beforeAgentReplyState === "handled-silent") {
     return { action: "complete", reason: "handled-silent" };
   }
   if (beforeAgentReplyState === "pending") {
-    return { action: "fail", reason: "before_agent_reply hook outcome is unknown" };
+    return { action: "resume", forceRestartSafeTools: true };
   }
   if (beforeAgentReplyState === "handled-reply") {
-    return { action: "fail", reason: "before_agent_reply handled reply is not recoverable" };
+    return { action: "resume", forceRestartSafeTools: true };
   }
   if (beforeAgentReplyState === "handled-unrecoverable") {
-    return { action: "fail", reason: "before_agent_reply handled an unrecoverable reply shape" };
+    return { action: "resume", forceRestartSafeTools: true };
   }
-  // `admitted` means no optional hook started. The dispatch boundary reloads
-  // the current hook set before it permits this transcript to resume.
   // Progress can commit after the recovery mark while the old run is winding
   // down. It is not a terminal turn boundary; preserve it in the transcript
   // while classifying the actual user/tool/assistant boundary beneath it.
@@ -442,23 +439,20 @@ export function resolveMainSessionResumePolicy(
     const checkpoint = readCodeModeCheckpoint(meaningfulMessages[2]);
     return waitCall && checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
       ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : {
-          action: "fail",
-          reason: "failed Code Mode wait cannot be matched to a replay-safe checkpoint",
-        };
+      : { action: "resume", forceRestartSafeTools: true };
   }
   const waitCall = readCodeModeWaitCall(lastMeaningful);
   if (waitCall) {
     const checkpoint = readCodeModeCheckpoint(meaningfulMessages[1]);
     return checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
       ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : { action: "fail", reason: "Code Mode wait checkpoint is not replay-safe" };
+      : { action: "resume", forceRestartSafeTools: true };
   }
   const tailCheckpoint = readCodeModeCheckpoint(lastMeaningful);
   if (tailCheckpoint) {
     return tailCheckpoint.replaySafe
       ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : { action: "fail", reason: "Code Mode wait checkpoint is not replay-safe" };
+      : { action: "resume", forceRestartSafeTools: true };
   }
   // A tool call interrupted mid-execution resumes like the manual re-send the
   // failure notice used to demand: the dangling call is dropped from the next
@@ -468,14 +462,20 @@ export function resolveMainSessionResumePolicy(
   if (pendingToolCallTail) {
     return { action: "resume", forceRestartSafeTools: pendingToolCallTail.forceRestartSafeTools };
   }
+  const danglingControlCalls =
+    lastMeaningful && typeof lastMeaningful === "object"
+      ? classifyDanglingToolCalls((lastMeaningful as { content?: unknown }).content)
+      : undefined;
+  if (danglingControlCalls?.kind === "code-mode") {
+    // Without an exact replay-safe checkpoint, Code Mode controls stay unavailable.
+    // The model can inspect the transcript under the ordinary restart-safe restriction.
+    return { action: "resume", forceRestartSafeTools: true };
+  }
   if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
-    return { action: "fail", reason: "transcript tail is not resumable" };
+    return { action: "resume", forceRestartSafeTools: false };
   }
   if (isApprovalPendingToolResult(lastMeaningful)) {
-    return {
-      action: "fail",
-      reason: "transcript tail is a stale approval-pending tool result",
-    };
+    return { action: "resume", forceRestartSafeTools: true };
   }
   // A later tool result can hide the checkpoint at the transcript tail; keep
   // the interrupted turn restricted without borrowing an earlier turn's state.

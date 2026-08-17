@@ -2,15 +2,15 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
-import { normalizeToolName as normalizePolicyToolName } from "../agents/tool-policy.js";
+import { normalizeToolPolicyName as normalizePolicyToolName } from "../agents/tool-policy.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import {
   formatUnknownError,
   normalizeCronRunDiagnosticSummary,
-  normalizeCronRunDiagnostics as normalizeCronRunDiagnosticsValue,
+  normalizeCronRunDiagnosticsCore as normalizeCronRunDiagnosticsValue,
   normalizeExitCode,
-  normalizeToolName,
+  normalizeDiagnosticToolName,
   tailText,
 } from "./run-diagnostics-normalize.js";
 import type {
@@ -208,7 +208,8 @@ function createCronRunDiagnosticsFromToolPayload(
   if (!record) {
     return undefined;
   }
-  const toolName = normalizeToolName(record.toolName) ?? normalizeToolName(record.name);
+  const toolName =
+    normalizeDiagnosticToolName(record.toolName) ?? normalizeDiagnosticToolName(record.name);
   const detailsDiagnostics = createCronRunDiagnosticsFromExecDetails(record.details, {
     nowMs: opts?.nowMs,
     toolName,

@@ -12,14 +12,6 @@ import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "./model-selection-config.js";
-export {
-  resolveThinkingDefault,
-  resolveThinkingDefaultWithRuntimeCatalog,
-} from "./model-thinking-default.js";
-import {
   type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
@@ -29,43 +21,43 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "./model-ref-shared.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "./model-selection-config.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import {
-  resolveAllowedModelRef as resolveAllowedModelRefInternal,
+  resolveAllowedModelRefCore as resolveAllowedModelRefInternal,
   resolveConfiguredModelFallbacks,
 } from "./model-selection-resolve.js";
 import {
   buildAllowedModelSetWithFallbacks,
-  buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
-  inferUniqueProviderFromCatalog,
   inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
   resolveBareModelDefaultProvider,
-  resolveAllowlistModelKey as resolveAllowlistModelKeyFromShared,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveModelAliasFromPair,
   resolveModelRefFromString,
   type ModelAliasIndex,
-  type ModelRefStatus,
 } from "./model-selection-shared.js";
+export {
+  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
+} from "./model-thinking-default.js";
 
-export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, ModelRefStatus };
-
-export type { ThinkLevel } from "../auto-reply/thinking.shared.js";
+export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
 
 export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
 
 export {
-  buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   findNormalizedProviderKey,
   findNormalizedProviderValue,
   inferUniqueProviderFromConfiguredModels,
-  inferUniqueProviderFromCatalog,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
@@ -208,15 +200,6 @@ export function normalizeStoredOverrideModel(params: {
       ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
       : modelOverride,
   };
-}
-
-export function resolveAllowlistModelKey(
-  raw: string,
-  defaultProvider: string,
-  cfg?: OpenClawConfig,
-  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
-): string | null {
-  return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider, manifestPlugins });
 }
 
 export async function canonicalizeCaseOnlyCatalogModelRef(params: {

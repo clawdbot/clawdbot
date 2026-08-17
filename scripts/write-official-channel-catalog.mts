@@ -22,6 +22,7 @@ type CatalogEntry = Partial<Record<"version" | "description" | "source" | "kind"
     catalog?: Record<string, unknown>;
     contracts?: Record<string, string[] | undefined>;
     channel: Record<string, unknown>;
+    channelHostConfig?: Record<string, unknown>;
     channelConfigs?: Record<string, { schema?: unknown }>;
     providerEndpoints?: Array<Record<string, unknown>>;
     install: CatalogInstall;
@@ -224,6 +225,24 @@ function setUniqueCatalogEntry(
   entriesByChannelId.set(channelKey, { entry, owner });
 }
 
+function stripSeedOnlyDocsMetadata(entry: CatalogEntry): CatalogEntry {
+  const hostConfig = isRecord(entry.openclaw.channelHostConfig)
+    ? entry.openclaw.channelHostConfig
+    : null;
+  if (!hostConfig || !("docsInventory" in hostConfig)) {
+    return entry;
+  }
+  const runtimeHostConfig = { ...hostConfig };
+  delete runtimeHostConfig.docsInventory;
+  return {
+    ...entry,
+    openclaw: {
+      ...entry.openclaw,
+      channelHostConfig: runtimeHostConfig,
+    },
+  };
+}
+
 /**
  * Collects publishable channel catalog entries from bundled and external channels.
  * @internal Directly tested script implementation detail.
@@ -254,7 +273,7 @@ export function buildOfficialChannelCatalog(params: CatalogParams = {}): {
     } satisfies CatalogEntry;
     setUniqueCatalogEntry(
       seedEntriesByChannelId,
-      catalogEntry,
+      stripSeedOnlyDocsMetadata(catalogEntry),
       `scripts/lib/official-external-channel-seed.json package "${trimString(entry.name)}"`,
     );
   }
@@ -311,10 +330,19 @@ export function checkOfficialChannelCatalogSource(params: CatalogParams = {}) {
 }
 
 function toChannelDocsEntry(
-  entry: { source?: string; openclaw: { channel: Record<string, unknown> } },
+  entry: {
+    source?: string;
+    openclaw: {
+      channel: Record<string, unknown>;
+      channelHostConfig?: Record<string, unknown>;
+    };
+  },
   sourceOverride?: ChannelDocsSource,
 ) {
   const channel = isRecord(entry.openclaw.channel) ? entry.openclaw.channel : null;
+  const hostConfig = isRecord(entry.openclaw.channelHostConfig)
+    ? entry.openclaw.channelHostConfig
+    : null;
   const exposure = channel && isRecord(channel.exposure) ? channel.exposure : null;
   if (!channel || exposure?.docs === false) {
     return null;
@@ -324,7 +352,7 @@ function toChannelDocsEntry(
     return null;
   }
   const docsPath = trimString(channel.docsPath) || `/channels/${id}`;
-  const source = sourceOverride ?? trimString(entry.source);
+  const source = sourceOverride ?? (trimString(hostConfig?.docsSource) || trimString(entry.source));
   return {
     id,
     docsPath,

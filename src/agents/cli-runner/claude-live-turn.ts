@@ -27,15 +27,15 @@ import {
   frameBoundedCliJsonlChunk,
   normalizeClaudeCliStreamJsonRecord,
 } from "../cli-output-stream.js";
-import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
-import { classifyFailoverReason } from "../embedded-agent-helpers.js";
-import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { parseCliOutput } from "../cli-output.js";
+import type { FailoverError } from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import {
   armClaudeTurnTimers,
   clearClaudeTurnTimers,
   resetClaudeNoOutputTimer,
 } from "./claude-live-turn-timeouts.js";
+import { createCliExitFailoverError, createCliFailoverError } from "./exit-error.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import { createCliOutputFailoverError } from "./output-error.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -59,6 +59,7 @@ type ClaudeLiveActiveTool = {
 
 export type ClaudeLiveTurn = {
   backend: CliBackendConfig;
+  cwd: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;
   diagnosticRefs: {
     runId: string;
@@ -150,11 +151,9 @@ export function createClaudeOutputLimitError(
   host: ClaudeLiveTurnHost,
   message: string,
 ): FailoverError {
-  return new FailoverError(message, {
-    reason: "format",
+  return createCliFailoverError(message, "format", {
     provider: host.providerId,
     model: host.modelId,
-    status: resolveFailoverStatus("format"),
   });
 }
 
@@ -522,36 +521,16 @@ export function acceptClaudeExit(host: ClaudeLiveTurnHost, exitCode: number | nu
     return;
   }
   const stderr = host.stderr.trim();
-  const message =
-    extractCliErrorMessage(stderr) ??
-    (stderr ||
-      (exitCode === 0 ? "Claude CLI exited before completing the turn." : "Claude CLI failed."));
-  if (exitCode === 0 && !stderr) {
-    const turn = host.currentTurn;
-    failClaudeTurn(
-      host,
-      new FailoverError(message, {
-        reason: "empty_response",
-        provider: host.providerId,
-        model: host.modelId,
-        status: resolveFailoverStatus("empty_response"),
-        code:
-          turn && !turn.observedStdout && turn.rawLines.length === 0
-            ? "cli_unknown_empty_failure"
-            : undefined,
-      }),
-    );
-    return;
-  }
-  const reason = classifyFailoverReason(message, { provider: host.providerId }) ?? "unknown";
+  const turn = host.currentTurn;
   failClaudeTurn(
     host,
-    new FailoverError(message, {
-      reason,
-      provider: host.providerId,
-      model: host.modelId,
-      status: resolveFailoverStatus(reason),
-      code: reason === "context_overflow" ? "cli_context_overflow" : undefined,
+    createCliExitFailoverError({
+      context: { provider: host.providerId, model: host.modelId },
+      candidates: [stderr],
+      fallbackMessage:
+        exitCode === 0 ? "Claude CLI exited before completing the turn." : "Claude CLI failed.",
+      emptyReason: exitCode === 0 ? "empty_response" : undefined,
+      retryEmptyFailure: !turn.observedStdout && turn.rawLines.length === 0,
     }),
   );
 }
@@ -581,6 +560,7 @@ export function createClaudeTurn(params: {
 }): ClaudeLiveTurn {
   const turn: ClaudeLiveTurn = {
     backend: params.context.preparedBackend.backend,
+    cwd: params.context.cwd ?? params.context.workspaceDir,
     parseJsonlEvent: params.context.backendResolved.parseJsonlEvent,
     diagnosticRefs: {
       runId: params.context.params.runId,

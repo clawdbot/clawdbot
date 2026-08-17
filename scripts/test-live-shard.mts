@@ -4,6 +4,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { asSafeIntegerInRange } from "../packages/normalization-core/src/number-coercion.ts";
+import { isRecord as isUnknownRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { spawnPnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
   createVitestProcessCompletion,
@@ -443,18 +446,6 @@ function collectReportedLiveTestFiles(payload: unknown, repoRoot = process.cwd()
   );
 }
 
-function readOptionalNonNegativeInt(value: unknown) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function isTruthyEnvValue(value: string | undefined) {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 function isDisabledOptInAssertion(assertion: Record<string, unknown>) {
   if (assertion.status !== "passed") {
     return false;
@@ -495,8 +486,8 @@ function buildFilePassEvidence(result: Record<string, unknown>) {
     return evidence;
   }
   evidence.passed =
-    readOptionalNonNegativeInt(result.numPassingTests) ??
-    readOptionalNonNegativeInt(result.numPassedTests) ??
+    asSafeIntegerInRange(result.numPassingTests, { min: 0 }) ??
+    asSafeIntegerInRange(result.numPassedTests, { min: 0 }) ??
     0;
   return evidence;
 }
@@ -537,7 +528,10 @@ function isDisabledOptionalLiveShardFile(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const requiredEnvNames = OPTIONAL_LIVE_SHARD_FILE_ENVS.get(file);
-  if (!requiredEnvNames || requiredEnvNames.some((name) => isTruthyEnvValue(env[name]))) {
+  if (
+    !requiredEnvNames ||
+    requiredEnvNames.some((name) => parsePermissiveBooleanToken(env[name]) === true)
+  ) {
     return false;
   }
   const statuses = evidence?.statuses ?? [];
@@ -796,8 +790,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         process.exit(1);
       },
     );
-}
-
-function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -287,7 +287,7 @@ function resolveMatrixQaStreamingMode(
 function isMatrixQaStreamingConfig(
   value: MatrixQaConfigOverrides["streaming"],
 ): value is MatrixQaStreamingConfig {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return isRecord(value);
 }
 
 function resolveMatrixQaStreamingPreviewToolProgress(

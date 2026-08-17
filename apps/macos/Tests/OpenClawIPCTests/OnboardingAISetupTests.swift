@@ -2988,6 +2988,42 @@ struct OnboardingAISetupTests {
         await automatic.value
     }
 
+    @Test func `user pick after exhausted auto candidates clears the stale verdict`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingExhaustedRetryTests"))
+        let attempts = AISetupSocketGeneration()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            switch request.method {
+            case "openclaw.setup.detect":
+                return selectableCandidatesDetectedSetupResponse(id: request.id)
+            case "openclaw.setup.activate" where attempts.claim() < 2:
+                return failedActivationResponse(id: request.id)
+            case "openclaw.setup.activate":
+                return successfulActivationResponse(
+                    id: request.id,
+                    modelRef: "openai/gpt-5.5",
+                    latencyMs: 120)
+            default:
+                return nil
+            }
+        }
+        let model = harness.model(defaults: defaults)
+
+        await model.detectAndAutoConnect()
+        #expect(model.exhaustedAutoCandidates)
+        #expect(!model.connected)
+
+        model.userSelect(kind: "codex-cli")
+        // The retest owns the verdict from the moment it starts; the stale
+        // "none of the found options worked" card must not outlive the pick.
+        #expect(!model.exhaustedAutoCandidates)
+        for _ in 0..<400 where !model.connected {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(model.connected)
+        #expect(model.selectedKind == "codex-cli")
+    }
+
     @Test func `candidate click after connection is ignored`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConnectedCandidateClickTests"))
         let url = try #require(URL(string: "ws://example.invalid"))

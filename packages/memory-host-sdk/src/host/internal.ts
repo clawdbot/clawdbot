@@ -8,6 +8,7 @@ import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
+import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   isFileMissingError,
   readRegularFile,
@@ -15,6 +16,7 @@ import {
   walkDirectory,
   type WalkDirectoryEntry,
 } from "./fs-utils.js";
+import { hashText } from "./hash.js";
 import {
   buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
@@ -35,7 +37,6 @@ import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryEntryProvenance, MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-import { hashText } from "./hash.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -257,7 +258,11 @@ export async function listMemoryFiles(
           );
           continue;
         }
-        if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
+        if (
+          stat.isFile() &&
+          (isExplicitExtraMarkdownFilePath(inputPath) ||
+            isAllowedMemoryFilePath(inputPath, multimodal))
+        ) {
           result.push(inputPath);
         }
       } catch {}

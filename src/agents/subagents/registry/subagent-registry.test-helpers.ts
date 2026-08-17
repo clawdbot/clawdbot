@@ -1,26 +1,33 @@
 export * from "./subagent-registry.js";
+export {
+  buildLatestSubagentRunReadIndex,
+  buildSubagentRunReadIndex,
+  buildSubagentSessionListReadIndex,
+  countActiveDescendantRuns,
+  countPendingDescendantRuns,
+  getLatestLiveSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
+  getSessionDisplaySubagentRunByChildSessionKey,
+  getSubagentRunByChildSessionKey,
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+  hasDescendantRunAwaitingSettle,
+  isSubagentRunLive,
+  isSubagentSessionRunActive,
+  listDescendantRunsForRequester,
+  listSubagentRunsForController,
+  listSubagentRunsForRequester,
+  resolveRequesterForChildSession,
+  resolveSubagentSessionStatus,
+  shouldIgnorePostCompletionAnnounceForSession,
+} from "./subagent-registry-read.js";
 
 import { collectSessionMaintenancePreserveKeys } from "../../../config/sessions/store-maintenance-preserve.js";
-import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  countPendingDescendantRunsExcludingRunFromRuns,
-  isSubagentSessionRunActiveFromRuns,
-  listRunsForRequesterFromRuns,
-  resolveRequesterForChildSessionFromRuns,
-  shouldIgnorePostCompletionAnnounceForSessionFromRuns,
-} from "./subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-export {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
-  resolveSubagentSessionStatus,
-} from "./subagent-session-metrics.js";
 
 type RegistryTestApi = {
   addSubagentRunForTests(entry: SubagentRunRecord): void;
@@ -48,7 +55,6 @@ type RegistryDeps = {
     | undefined;
   captureSubagentCompletionReply: typeof import("../announce/subagent-announce.js").captureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd: typeof import("../../../browser-lifecycle-cleanup.js").cleanupBrowserSessionsForLifecycleEnd;
-  getSubagentRunsSnapshotForRead: typeof import("./subagent-registry-state.js").getSubagentRunsSnapshotForRead;
   getRuntimeConfig: typeof import("../../../config/config.js").getRuntimeConfig;
   onAgentEvent: typeof import("../../../infra/agent-events.js").onAgentEvent;
   persistSubagentRunsToDisk: typeof import("./subagent-registry-state.js").persistSubagentRunsToDisk;
@@ -103,49 +109,6 @@ export const testing = {
   setDepsForTest: (overrides?: Partial<RegistryDeps>) =>
     getRegistryTestApi().testing.setDepsForTest(overrides),
 };
-
-export function countPendingDescendantRunsExcludingRun(
-  rootSessionKey: string,
-  excludeRunId: string,
-) {
-  return countPendingDescendantRunsExcludingRunFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    rootSessionKey,
-    excludeRunId,
-  );
-}
-
-export function isSubagentSessionRunActive(childSessionKey: string) {
-  return isSubagentSessionRunActiveFromRuns(subagentRuns, childSessionKey);
-}
-
-export function listSubagentRunsForRequester(
-  requesterSessionKey: string,
-  options?: { requesterRunId?: string },
-) {
-  return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
-}
-
-export function resolveRequesterForChildSession(childSessionKey: string) {
-  const resolved = resolveRequesterForChildSessionFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    childSessionKey,
-  );
-  if (!resolved) {
-    return null;
-  }
-  return {
-    requesterSessionKey: resolved.requesterSessionKey,
-    requesterOrigin: normalizeDeliveryContext(resolved.requesterOrigin),
-  };
-}
-
-export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string) {
-  return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    childSessionKey,
-  );
-}
 
 export function listSessionMaintenanceProtectedSubagentSessionKeys() {
   return [...(collectSessionMaintenancePreserveKeys() ?? [])];

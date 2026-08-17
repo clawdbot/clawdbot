@@ -233,6 +233,16 @@ class ChatOutboxGatewayOwner {
   hasVolatile(host: Host, id: string): boolean {
     return this.hosts.get(host)?.retryable.has(id) ?? false;
   }
+  // Panes share this outbox and its drain while composer state stays per pane, so
+  // a pane-local fact that blocks delivery has to be answerable from any of them.
+  anyPane(matches: (host: Host) => boolean): boolean {
+    for (const pane of this.panes) {
+      if (matches(pane)) {
+        return true;
+      }
+    }
+    return false;
+  }
   mayRemove(host: Host, scope: Scope, id: string): boolean {
     const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(id);
     const local = host.chatQueue.find((item) => item.id === id);

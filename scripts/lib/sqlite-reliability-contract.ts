@@ -305,7 +305,9 @@ export type ReliabilityReport = {
 
 export const PROFILES: Record<ProfileId, ProfileConfig> = {
   smoke: {
-    iterations: 4,
+    // One snapshot before the forced writer crash and one after restart prove
+    // both distinct smoke paths; larger profiles retain repeated stress loops.
+    iterations: 2,
     maxWalBytes: 64 * 1024 * 1024,
     payloadBytes: 512,
     retainedBatches: 32,

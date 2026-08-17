@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
+import { AUDIT_ACTIVITY_MESSAGE_KIND } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -19,6 +20,7 @@ import {
   AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
   AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS,
   AUDIT_OUTBOUND_MESSAGE_SUPPRESSED_REASONS,
+  isOutboundMessageProgressInput,
   type AgentRunAuditEventRecord,
   type AuditEventInput,
   type AuditEventListFilters,
@@ -34,12 +36,17 @@ import {
   loadOrCreateAuditIdentityKey,
   pseudonymizeAuditIdentity,
 } from "./audit-identity.js";
+import {
+  ensureTerminalMessageExecutionBindingSchema,
+  planMessageExecutionBinding,
+  recordConfirmedTerminalMessageExecutionBinding,
+} from "./message-execution-binding.js";
 
 type AuditEventsTable = OpenClawStateKyselyDatabase["audit_events"];
 type AuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
 type AuditEventRow = Selectable<AuditEventsTable>;
 
-const AUDIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
+export const AUDIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const AUDIT_EVENT_MAX_ROWS = 100_000;
 const AUDIT_EVENT_PRUNE_BATCH_ROWS = 1_024;
 // The single audit writer owns one DB handle. Invalidate on out-of-band
@@ -365,24 +372,43 @@ function parseInboundMessageRow(row: AuditEventRow): InboundMessageAuditEventRec
 }
 
 function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventRecord {
-  requiredEnum(row, row.action, "action", ["message.outbound.finished"]);
+  const action = requiredEnum(row, row.action, "action", [
+    "message.outbound.queued",
+    "message.outbound.platform-started",
+    "message.outbound.finished",
+  ]);
   requiredEnum(row, row.direction, "direction", ["outbound"]);
   const actorType = requiredEnum(row, row.actor_type, "actorType", ["agent", "system"]);
   const actorId = requiredText(row, row.actor_id, "actorId");
   const commonFields = parseMessageRecordFields(row);
   const common = {
     ...commonFields,
-    action: "message.outbound.finished" as const,
+    action,
     direction: "outbound" as const,
     actorType,
     actorId,
   };
+  if (row.status === "started") {
+    requireNull(row, "delivery_kind");
+    requireNullColumns(row, ["error_code", "reason_code", "failure_stage"]);
+    if (action === "message.outbound.queued") {
+      requiredEnum(row, row.message_outcome, "outcome", ["queued"]);
+      return { ...common, action, status: "started", outcome: "queued" };
+    }
+    if (action === "message.outbound.platform-started") {
+      requiredEnum(row, row.message_outcome, "outcome", ["platform_started"]);
+      return { ...common, action, status: "started", outcome: "platform_started" };
+    }
+    return corruptAuditRow(row, "invalid outbound lifecycle action");
+  }
+  requiredEnum(row, action, "action", ["message.outbound.finished"]);
+  const terminalCommon = { ...common, action: "message.outbound.finished" as const };
   if (row.status === "succeeded") {
     const deliveryKind = optionalEnum(row, row.delivery_kind, "deliveryKind", DELIVERY_KINDS);
     requiredEnum(row, row.message_outcome, "outcome", ["sent"]);
     requireNullColumns(row, ["error_code", "reason_code", "failure_stage"]);
     return {
-      ...common,
+      ...terminalCommon,
       status: "succeeded",
       outcome: "sent",
       ...(deliveryKind ? { deliveryKind } : {}),
@@ -399,7 +425,7 @@ function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventR
       AUDIT_OUTBOUND_MESSAGE_SUPPRESSED_REASONS,
     );
     return {
-      ...common,
+      ...terminalCommon,
       status: "blocked",
       outcome: "suppressed",
       reasonCode,
@@ -415,7 +441,7 @@ function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventR
     ]);
     const failureStage = requiredEnum(row, row.failure_stage, "failureStage", FAILURE_STAGES);
     return {
-      ...common,
+      ...terminalCommon,
       status: "failed",
       outcome: "failed",
       errorCode,
@@ -429,7 +455,7 @@ function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventR
     requireNullColumns(row, ["error_code", "reason_code"]);
     const failureStage = requiredEnum(row, row.failure_stage, "failureStage", FAILURE_STAGES);
     return {
-      ...common,
+      ...terminalCommon,
       status: "unknown",
       outcome: "unknown",
       failureStage,
@@ -438,7 +464,7 @@ function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventR
   return corruptAuditRow(row, "invalid outbound status");
 }
 
-function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
+export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
   if (row.kind === "agent_run") {
     return parseAgentRunRow(row);
   }
@@ -485,7 +511,8 @@ function projectMessageIdentities(db: DatabaseSync, input: MessageAuditEventInpu
 }
 
 function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<AuditEventsTable> {
-  const message = input.kind === "message" ? projectMessageIdentities(db, input) : undefined;
+  const message =
+    input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? projectMessageIdentities(db, input) : undefined;
   return {
     event_id: randomUUID(),
     source_id: input.sourceId,
@@ -499,13 +526,13 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<Au
     actor_type: input.actorType,
     actor_id: message?.actorId ?? input.actorId,
     agent_id: input.agentId ?? null,
-    session_key: input.kind === "message" ? null : (input.sessionKey ?? null),
-    session_id: input.kind === "message" ? null : (input.sessionId ?? null),
+    session_key: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? null : (input.sessionKey ?? null),
+    session_id: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? null : (input.sessionId ?? null),
     run_id: input.runId ?? null,
     tool_call_id: input.kind === "tool_action" ? (input.toolCallId ?? null) : null,
     tool_name: input.kind === "tool_action" ? input.toolName : null,
-    direction: input.kind === "message" ? input.direction : null,
-    channel: input.kind === "message" ? input.channel : null,
+    direction: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.direction : null,
+    channel: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.channel : null,
     conversation_kind: input.kind === "message" ? input.conversationKind : null,
     message_outcome: input.kind === "message" ? input.outcome : null,
     reason_code: input.kind === "message" ? (input.reasonCode ?? null) : null,
@@ -579,6 +606,16 @@ export function recordAuditEvent(
   input: AuditEventInput,
   options: OpenClawStateDatabaseOptions = {},
 ): AuditEventRecord | undefined {
+  if (isOutboundMessageProgressInput(input)) {
+    throw new Error("outbound message progress belongs to its companion store");
+  }
+  const executionToken =
+    input.kind === "message" && input.direction === "outbound"
+      ? planMessageExecutionBinding(input.executionIdentityToken, input.runId)
+      : undefined;
+  if (executionToken) {
+    ensureTerminalMessageExecutionBindingSchema(options);
+  }
   let countCacheDatabase: DatabaseSync | undefined;
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
@@ -605,6 +642,10 @@ export function recordAuditEvent(
           .selectAll()
           .where("sequence", "=", insertedSequence),
       );
+      recordConfirmedTerminalMessageExecutionBinding(db, {
+        eventId: row?.event_id,
+        token: executionToken,
+      });
       return row ? rowToAuditEvent(row) : undefined;
     }, options);
   } catch (error) {
@@ -630,7 +671,10 @@ export function listAuditEvents(params: {
   let query = getAuditKysely(db)
     .selectFrom("audit_events")
     .selectAll()
-    .where("occurred_at", ">=", retainedAfter);
+    .where("occurred_at", ">=", retainedAfter)
+    // Nonterminal outbound facts belong to the lazy progress owner. Excluding
+    // transitional rows keeps the released activity contract terminal-only.
+    .where("action", "not in", ["message.outbound.queued", "message.outbound.platform-started"]);
   if (params.cursor !== undefined) {
     query = query.where("sequence", "<", params.cursor);
   }

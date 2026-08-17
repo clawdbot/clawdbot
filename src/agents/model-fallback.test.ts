@@ -1451,36 +1451,6 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("does not prepare agent harness plugins for forced OpenClaw runtime candidates", async () => {
-    const cfg = makeCfg({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
-      },
-    });
-    const prepareAgentHarnessRuntime = vi.fn(() => {
-      throw new Error("OpenClaw candidates should not prepare plugin harnesses");
-    });
-    const run = vi.fn().mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openai",
-      model: "gpt-5.5",
-      prepareAgentHarnessRuntime,
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(prepareAgentHarnessRuntime).not.toHaveBeenCalled();
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
   it("does not prepare agent harness plugins for implicit Codex candidates", async () => {
     const cfg = makeCfg();
     const prepareAgentHarnessRuntime = vi.fn(() => {
@@ -2256,6 +2226,46 @@ describe("runWithModelFallback", () => {
         ),
     ],
   ])("aborts fallback on %s gateway drain failures", async (_label, makeError) => {
+    const error = makeError();
+    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        fallbacksOverride: ["openai/gpt-5.4-mini"],
+        skipAuthProfileRuntime: true,
+        run,
+        onError,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onFallbackStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "direct",
+      () =>
+        Object.assign(new Error("device worker capacity remained full"), {
+          name: "WorkerRunnerCapacityError",
+        }),
+    ],
+    [
+      "wrapped",
+      () =>
+        new Error("worker turn failed", {
+          cause: Object.assign(new Error("device worker capacity remained full"), {
+            name: "WorkerRunnerCapacityError",
+          }),
+        }),
+    ],
+  ])("aborts fallback on %s device capacity failures", async (_label, makeError) => {
     const error = makeError();
     const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
     const onError = vi.fn();
@@ -3303,43 +3313,6 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.authMode).toBe("oauth");
   });
 
-  it("falls back on OpenRouter API-key budget limit errors", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openrouter/xiaomi/mimo-v2-pro",
-            fallbacks: ["openai/gpt-4.1-mini"],
-          },
-        },
-      },
-    });
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        Object.assign(
-          new Error("403 API key budget limit exceeded (monthly limit). Contact your org admin."),
-          { status: 403 },
-        ),
-      )
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openrouter",
-      model: "xiaomi/mimo-v2-pro",
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(run.mock.calls).toEqual([
-      ["openrouter", "xiaomi/mimo-v2-pro", { isFinalFallbackAttempt: false }],
-      ["openai", "gpt-4.1-mini", { isFinalFallbackAttempt: true }],
-    ]);
-    expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0]?.reason).toBe("billing");
-  });
-
   it("falls back on model-not-found error shapes", async () => {
     const cases: Array<{
       name: string;
@@ -3497,6 +3470,36 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
     expect(store.order?.[provider]).toEqual(orderedProfileIds);
+  });
+
+  it("does not skip a provider when only its user-pinned profile is cooling down", async () => {
+    const provider = `pinned-cooldown-${crypto.randomUUID()}`;
+    const pinnedProfileId = `${provider}:pinned`;
+    const backupProfileId = `${provider}:backup`;
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [pinnedProfileId]: { type: "api_key", provider, key: "pinned-key" },
+        [backupProfileId]: { type: "api_key", provider, key: "backup-key" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [backupProfileId] },
+      usageStats: {
+        [pinnedProfileId]: { cooldownUntil: Date.now() + 60_000 },
+      },
+    };
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store,
+      provider,
+      run,
+      userLockedAuthProfileId: pinnedProfileId,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
   });
 
   it("discovers an exact external CLI user lock before cooldown admission", async () => {

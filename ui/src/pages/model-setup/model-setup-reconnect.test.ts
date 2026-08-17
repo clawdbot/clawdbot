@@ -5,7 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import type { ModelSetupRouteData } from "./model-setup-page.ts";
 import "./model-setup-page.ts";
@@ -69,6 +69,10 @@ function createFixture() {
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const context = {
     gateway,
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
     basePath: "",
     navigate: vi.fn(),
     runtimeConfig,
@@ -95,7 +99,7 @@ async function mountPage(
   const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
   page.routeData = {
     state: { phase: "ready", result: detection },
-    connection: { client, hello },
+    connection: { client, hello, agentId: context.agentSelection.state.selectedId },
     firstRun: false,
   };
   provider.append(page);

@@ -15,12 +15,12 @@ import {
 } from "../../../channels/route-projection.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
-  stripTargetKindPrefix,
+  stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../../../infra/outbound/channel-target-prefix.js";
 import type { ConversationRef } from "../../../infra/outbound/session-binding-service.js";
-import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue.js";
+import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue-storage.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
@@ -55,7 +55,10 @@ function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undef
     ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging
     : undefined;
   const route = stripTargetTopicSuffix(
-    stripTargetKindPrefix(stripTargetProviderPrefix(rawTo, channel ?? ""), ["group", "channel"]),
+    stripOutboundTargetKindPrefix(stripTargetProviderPrefix(rawTo, channel ?? ""), [
+      "group",
+      "channel",
+    ]),
   );
   const normalized = messaging?.normalizeTarget?.(route) ?? route;
   return normalized || undefined;

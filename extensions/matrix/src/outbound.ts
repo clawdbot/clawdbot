@@ -13,6 +13,7 @@ import {
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
 import {
@@ -29,15 +30,14 @@ type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
 };
 
-function toRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+function toMatrixOutboundResult<T extends { roomId: string }>(result: T) {
+  const { roomId, ...delivery } = result;
+  return { ...delivery, target: { kind: "room" as const, id: roomId } };
 }
 
 function resolveMatrixChannelData(payload: ReplyPayload): MatrixChannelData {
-  const raw = toRecord(payload.channelData)?.matrix;
-  return (toRecord(raw) as MatrixChannelData | undefined) ?? {};
+  const raw = asOptionalRecord(payload.channelData)?.matrix;
+  return (asOptionalRecord(raw) as MatrixChannelData | undefined) ?? {};
 }
 
 function buildMatrixPresentationContent(presentation: MessagePresentation) {
@@ -51,8 +51,8 @@ function buildMatrixPresentationContent(presentation: MessagePresentation) {
 function resolveMatrixPresentationContent(
   payload: ReplyPayload,
 ): Record<string, unknown> | undefined {
-  const extraContent = toRecord(resolveMatrixChannelData(payload).extraContent);
-  const presentation = toRecord(extraContent?.[MATRIX_OPENCLAW_PRESENTATION_KEY]);
+  const extraContent = asOptionalRecord(resolveMatrixChannelData(payload).extraContent);
+  const presentation = asOptionalRecord(extraContent?.[MATRIX_OPENCLAW_PRESENTATION_KEY]);
   if (
     !presentation ||
     presentation.version !== 1 ||
@@ -108,7 +108,7 @@ function resolveMatrixDeliveryProgress(
 ) {
   return onDeliveryResult
     ? async (result: Awaited<ReturnType<typeof sendMessageMatrix>>) => {
-        await onDeliveryResult(attachChannelToResult("matrix", result));
+        await onDeliveryResult(attachChannelToResult("matrix", toMatrixOutboundResult(result)));
       }
     : undefined;
 }
@@ -193,12 +193,15 @@ export const matrixOutbound: ChannelOutboundAdapter = {
         // One payload owns one receipt; keep every attachment and its original reply metadata.
         const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
         receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
-        return attachChannelToResult("matrix", {
-          ...lastResult,
-          primaryMessageId: receipt.primaryPlatformMessageId,
-          receipt,
-          content: sentResults.map((result) => result.content).join("\n"),
-        });
+        return attachChannelToResult(
+          "matrix",
+          toMatrixOutboundResult({
+            ...lastResult,
+            primaryMessageId: receipt.primaryPlatformMessageId,
+            receipt,
+            content: sentResults.map((result) => result.content).join("\n"),
+          }),
+        );
       }
     }
     const result = await send(to, payloadText, {
@@ -217,7 +220,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       extraContent: resolveMatrixExtraContent(payload),
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return attachChannelToResult("matrix", result);
+    return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendText: async ({
     cfg,
@@ -250,7 +253,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return attachChannelToResult("matrix", result);
+    return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendMedia: async ({
     cfg,
@@ -291,7 +294,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return attachChannelToResult("matrix", result);
+    return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendPoll: async ({ cfg, to, poll, threadId, accountId }) => {
     const resolvedThreadId = threadId !== undefined && threadId !== null ? threadId : undefined;

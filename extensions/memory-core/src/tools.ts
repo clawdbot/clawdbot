@@ -26,7 +26,7 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { asRecord } from "./dreaming-shared.js";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
@@ -161,7 +161,7 @@ const PAUSED_MEMORY_INDEX_ACTION =
   "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
 
 function resolvePausedMemoryIndexIdentityReason(status: { custom?: unknown }): string | undefined {
-  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
   if (indexIdentity?.status !== "mismatched" && indexIdentity?.status !== "missing") {
     return undefined;
   }

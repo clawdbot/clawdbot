@@ -12,6 +12,7 @@ function restoreMocks(mocks: readonly RestorableMock[]): void {
   }
 }
 
+// This guard requires concrete Promise.finally narrowing for synchronous cleanup overloads.
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return (
     typeof value === "object" &&

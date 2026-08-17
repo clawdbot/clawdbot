@@ -1,5 +1,6 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
+import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -16,10 +17,10 @@ import "./tooltip.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
+import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarAttention,
@@ -76,6 +77,26 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
 
+  sessionGroupDefaults(name: string) {
+    if (this.context?.sessions.groupsStatus() !== "ready") {
+      return null;
+    }
+    const group = this.context?.sessions.state.groupSettings.find((entry) => entry.name === name);
+    return group ? { cwd: group.cwd ?? "", worktree: group.worktree === true } : null;
+  }
+
+  async listSessionGroupFolders(path?: string): Promise<FsListDirResult> {
+    const scope = this.sessionData.beginSessionMutation();
+    if (!scope) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    const result = await scope.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
+    if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    return result;
+  }
+
   // Lazy: the controller pulls core token-suppression modules that must stay
   // out of the startup chunk (QA smoke startup-JS budget). It loads on the
   // first update with the preference enabled; earlier events are safely
@@ -86,6 +107,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
   private readonly nativeGatewaysChanged = () => this.requestUpdate();
+  private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   };
@@ -108,7 +130,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   );
 
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
-  @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
 
   constructor() {
     super();
@@ -179,16 +200,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         ? [chip.activeId]
         : chip.agents.map((agent) => agent.id);
     this.ensureAgentIdentities(identityIds);
-    // A fresh draft must be visible where it will live: genuinely expand a
-    // collapsed Threads section (persisted) instead of overriding at render
-    // time, so the header toggle keeps matching the visible state.
-    if (
-      changed.has("draftSessionAgentId") &&
-      this.draftSessionAgentId &&
-      this.collapsedSessionSections.has("ungrouped")
-    ) {
-      this.sessionOrganizer.toggleSection("ungrouped");
-    }
   }
 
   ensureAgentIdentities(agentIds: readonly string[]): void {
@@ -345,8 +356,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionOrganizer.handleSessionListDrop(event);
   }
 
-  openNewSession(): void {
-    this.requestOpenNewSession(this.expandedAgentId());
+  openNewSession(target?: NewSessionTarget): void {
+    this.requestOpenNewSession(this.expandedAgentId(), target);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
@@ -375,12 +386,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       this.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
       catalogId;
     setStoredSessionCatalogHidden(catalogId, true);
-    // On a phone this menu was opened inside the navigation drawer, which is a modal
-    // dialog: a toast raised behind it is occluded and inert, so the operator would get
-    // the same silent hide this repair exists to remove. Hand the drawer back first —
-    // the section is already gone from it, and the outcome belongs on the main surface.
-    // No-op wherever the drawer is not open.
-    this.onCloseNavDrawer?.();
     // Reuse the settings-search destination for the Sidebar preferences block so the
     // toast opens the same place the rest of the app calls "Appearance > Sidebar".
     const recovery = SETTINGS_SEARCH_TARGETS.appearanceSidebar;
@@ -433,9 +438,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
     ];
     const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
-    const catalogs = this.sessionData.sessionCatalogs.filter(
-      (catalog) => !this.hiddenSessionCatalogIds.has(catalog.id),
-    );
+    const catalogs = this.visibleSessionCatalogs();
     const visibleCatalogIds = new Set(catalogs.map((catalog) => catalog.id));
     const sections = allSections.filter(
       (section) => !section.id.startsWith("catalog:") || visibleCatalogIds.has(section.id.slice(8)),
@@ -452,9 +455,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       sections,
       nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
       catalogRenderer: this.catalogRenderer,
-      showDraft:
-        Boolean(this.draftSessionAgentId) &&
-        normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
       catalogs: {
         catalogs,
         refreshStatus: this.sessionData.sessionCatalogRefreshStatus,
@@ -525,7 +525,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .updateAvailable=${this.updateAvailable}
               .updateSchedule=${this.updateSchedule}
               .heldUpdateCampaignId=${this.heldUpdateCampaignId}
-              .updateRunning=${this.updateRunning}
+              .updateBusy=${this.updateBusy}
+              .statusBanner=${this.updateStatusBanner}
+              .watchUpdateProgress=${this.watchUpdateProgress}
               .canUpdate=${this.canUpdate}
               .canHoldUpdate=${this.canHoldUpdate}
               .onUpdate=${this.onUpdate}
@@ -543,6 +545,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .visitsEnabled=${this.lobsterPetVisits}
               .soundsEnabled=${this.lobsterPetSounds}
               .gatewayVersion=${this.gatewayVersion}
+              .onVisitsDisabled=${this.refreshAppearanceSettings}
             ></openclaw-lobster-pet>
             ${this.devGitBranch
               ? html`<openclaw-tooltip .content=${this.devGitBranch}>

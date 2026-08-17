@@ -1,6 +1,7 @@
 // Owns durable queue admission and hands stable custody to the execution loop.
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
@@ -8,28 +9,36 @@ import { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import { buildPayloadSummary } from "./deliver-payload.js";
-import { OutboundPayloadPreparationError, prepareOutboundPayloadBatch } from "./deliver-prepare.js";
+import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import {
   restoreQueuedDeliveryCustody,
   stageAndEnqueueOutboundDelivery,
 } from "./deliver-queue-admission.js";
 import { deliverOutboundPayloadsWithQueueCleanup } from "./deliver-queue-execute.js";
+import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { markDurableDeliveryQueued } from "./delivery-completion.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
+import {
+  claimReusableDeliveryPlatformSendAttempt,
+  renewDeliveryPlatformSendLease,
+} from "./delivery-queue-platform-lease.js";
 import {
   StableDeliveryPreparationLostError,
   withStableDeliveryPreparation,
   type StableDeliveryPreparationOwner,
 } from "./delivery-queue-preparation.js";
+import { withActiveDeliveryClaim } from "./delivery-queue-recovery.js";
 import { findDeliveryIntentOwner, loadPendingDelivery } from "./delivery-queue-storage.js";
-import {
-  claimReusableDeliveryPlatformSendAttempt,
-  renewDeliveryPlatformSendLease,
-  withActiveDeliveryClaim,
-} from "./delivery-queue.js";
 import { createMessageSentEmitter } from "./message-sent-hook.js";
-import { emitOutboundAuditTerminals, uniformOutboundAuditTerminals } from "./outbound-audit.js";
+import {
+  emitOutboundAuditLifecycle,
+  emitOutboundAuditTerminals,
+  uniformOutboundAuditTerminals,
+} from "./outbound-audit.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+
+const log = createSubsystemLogger("outbound/deliver");
 
 export async function runOutboundDelivery(
   params: DeliverOutboundPayloadsParams,
@@ -135,13 +144,16 @@ async function runOutboundDeliveryWithQueue(
     );
   }
   if (params.deferredDeliveryAdmissionPassed !== true) {
-    const admission = resolveDeferredDeliveryAdmission({
-      cfg: params.cfg,
-      channel,
-      to,
-      accountId: params.accountId,
-      phase: "live",
-    });
+    const admission = resolveDeferredDeliveryAdmission(
+      {
+        cfg: params.cfg,
+        channel,
+        to,
+        accountId: params.accountId,
+        phase: "live",
+      },
+      { agentId: params.session?.agentId },
+    );
     if (admission.status === "permanent_rejection") {
       emitPreQueueFailure();
       throw new Error(admission.reason);
@@ -181,10 +193,10 @@ async function runOutboundDeliveryWithQueue(
     stablePreparationOwner?.markPrepared();
   } catch (error) {
     emitPreQueueFailure();
-    const failedPayload =
-      error instanceof OutboundPayloadPreparationError ? error.payload : params.payloads[0];
-    if (failedPayload) {
-      const summary = buildPayloadSummary(failedPayload);
+    // Preparation aborts the whole batch, so hooks get one failure per
+    // logical payload — matching the per-payload audit terminals above and
+    // the recovery sibling's queuedTerminalFailureEvents.
+    if (params.payloads.length > 0) {
       const { emitMessageSent } = createMessageSentEmitter({
         hookRunner: getGlobalHookRunner(),
         channel,
@@ -196,11 +208,14 @@ async function runOutboundDeliveryWithQueue(
         runId: params.replyPayloadSendingHook?.runId,
         logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
       });
-      emitMessageSent({
-        success: false,
-        content: summary.hookContent ?? summary.text,
-        error: formatErrorMessage(error),
-      });
+      for (const payload of params.payloads) {
+        const summary = buildPayloadSummary(payload);
+        emitMessageSent({
+          success: false,
+          content: summary.hookContent ?? summary.text,
+          error: formatErrorMessage(error),
+        });
+      }
     }
     throw error;
   }
@@ -223,6 +238,7 @@ async function runOutboundDeliveryWithQueue(
     delete requirements.messageSendingHooks;
     const support = await resolveOutboundDurableFinalDeliverySupport({
       cfg: params.cfg,
+      agentId: params.session?.agentId,
       channel,
       requirements,
     });
@@ -265,12 +281,39 @@ async function runOutboundDeliveryWithQueue(
             emitPreQueueFailure();
             throw err;
           }
+          // Best-effort delivery continues live-only, but a crash mid-send now
+          // loses the message — record why the write-ahead row is missing.
+          log.warn(
+            `outbound queue write failed; continuing without durability (channel=${params.channel} to=${params.to}): ${formatErrorMessage(err)}`,
+          );
           return null;
-        }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
+        });
 
   const queueId = queued?.id ?? null;
   if (queued?.created && stablePreparationOwner) {
     stablePreparationOwner.markPublished();
+  }
+  if (queueId && params.deliveryCompletion) {
+    const completion = await markDurableDeliveryQueued(
+      params.deliveryCompletion,
+      queueId,
+      queued?.created ? "prepared" : undefined,
+    );
+    if (completion.state !== "queued") {
+      await createQueuedDeliveryOwner({
+        queueId,
+        expectedPlatformSendAttemptId: queued?.producerClaimId,
+      }).ack({ suppressCompletionReceipt: true });
+      return [];
+    }
+  }
+  if (queueId) {
+    emitOutboundAuditLifecycle({
+      context: deliveryParams,
+      outcome: "queued",
+      queueId,
+      startedAt: auditStartedAt,
+    });
   }
   if (queueId) {
     params.onDeliveryIntent?.({

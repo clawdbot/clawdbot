@@ -119,31 +119,65 @@ describe("channel ingress queue", () => {
   it("keeps channel and account queue identities unambiguous", async () => {
     await withTempState(async (stateDir) => {
       const first = createChannelIngressQueue<{ text: string }>({
-        channelId: "a",
-        accountId: "b:c",
+        channelId: "discord",
+        accountId: "account-a",
         stateDir,
       });
       const second = createChannelIngressQueue<{ text: string }>({
-        channelId: "a:b",
-        accountId: "c",
+        channelId: "discord",
+        accountId: "account-b",
         stateDir,
       });
 
-      expect(await first.enqueue("same-id", { text: "first" })).toMatchObject({
+      expect(
+        await first.enqueue("same-id", { text: "first" }, { laneKey: "channel:same-lane" }),
+      ).toMatchObject({
         kind: "accepted",
       });
-      expect(await second.enqueue("same-id", { text: "second" })).toMatchObject({
+      expect(
+        await second.enqueue("same-id", { text: "second" }, { laneKey: "channel:same-lane" }),
+      ).toMatchObject({
         kind: "accepted",
       });
 
-      await first.complete("same-id");
+      const firstClaim = await first.claim("same-id", { ownerId: "first-worker" });
+      expect(firstClaim).not.toBeNull();
+      if (!firstClaim) {
+        return;
+      }
+      await first.fail(firstClaim, { reason: "poison", failedAt: 20 });
 
       expect(await first.enqueue("same-id", { text: "first duplicate" })).toMatchObject({
-        kind: "completed",
+        kind: "failed",
       });
       expect(await second.enqueue("same-id", { text: "second duplicate" })).toMatchObject({
         kind: "pending",
         record: { payload: { text: "second" } },
+      });
+
+      if (!first.resubmit) {
+        return;
+      }
+      await expect(first.resubmit("same-id", { resubmittedAt: 30 })).resolves.toMatchObject({
+        kind: "resubmitted",
+        record: { attempts: 0, laneKey: "channel:same-lane", payload: { text: "first" } },
+      });
+      const resubmittedClaim = await first.claim("same-id", { ownerId: "replacement" });
+      const secondClaim = await second.claim("same-id", { ownerId: "second-worker" });
+      expect(resubmittedClaim).not.toBeNull();
+      expect(secondClaim).not.toBeNull();
+      if (!resubmittedClaim || !secondClaim) {
+        return;
+      }
+      await first.fail(resubmittedClaim, { reason: "poison-again", failedAt: 40 });
+      await second.complete(secondClaim, { completedAt: 40 });
+
+      expect(await first.prune({ failedTtlMs: 1, now: 42 })).toBe(1);
+      expect(await first.enqueue("same-id", { text: "fresh after prune" })).toMatchObject({
+        kind: "accepted",
+      });
+      expect(await second.enqueue("same-id", { text: "completed duplicate" })).toMatchObject({
+        kind: "completed",
       });
     });
   });

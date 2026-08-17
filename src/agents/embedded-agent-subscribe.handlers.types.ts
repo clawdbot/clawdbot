@@ -25,6 +25,7 @@ import type {
   SubscribeEmbeddedAgentSessionParams,
 } from "./embedded-agent-subscribe.types.js";
 import type { ThinkingTagStreamState } from "./embedded-agent-utils.js";
+import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -50,6 +51,7 @@ export type ToolCallSummary = {
   instanceReplaySafe: boolean;
   replaySafe: boolean;
   mutatingAction: boolean;
+  ownerKey?: string;
   actionFingerprint?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
@@ -105,6 +107,7 @@ export type EmbeddedAgentSubscribeState = {
   assistantTurnCount: number;
   lastToolError?: ToolErrorSummary;
   latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
 
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;
@@ -329,6 +332,7 @@ type ToolHandlerParams = Pick<
   | "sessionId"
   | "agentId"
   | "replaySafeToolNames"
+  | "sideEffectToolOwners"
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
@@ -348,6 +352,7 @@ type ToolHandlerState = Pick<
   | "itemCompletedCount"
   | "lastToolError"
   | "latestMcpAppChannelView"
+  | "latestMcpConnectAction"
   | "pendingMessagingTargets"
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"

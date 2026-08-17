@@ -3638,6 +3638,29 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it.each(["security_scan_blocked", "security_scan_failed"] as const)(
+    "does not bypass %s with the beta npm fallback",
+    async (code) => {
+      installPluginFromNpmSpecMock.mockResolvedValueOnce({
+        ok: false,
+        code,
+        error: `install policy returned ${code}`,
+      });
+
+      const result = await updatePlugin(
+        createCodexAppServerInstallConfig({ spec: "openclaw-codex-app-server" }),
+        "openclaw-codex-app-server",
+        { updateChannel: "beta" },
+      );
+
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+      expect(result.outcomes[0]).toMatchObject({
+        status: "error",
+        message: `Failed to update openclaw-codex-app-server: install policy returned ${code}`,
+      });
+    },
+  );
+
   it.each([
     {
       name: "reports the fallback npm spec when beta fallback also fails",
@@ -4934,6 +4957,57 @@ describe("syncPluginsForUpdateChannel", () => {
       resolvedName: "@openclaw/legacy-chat",
       resolvedVersion: "2.0.0",
       resolvedSpec: "@openclaw/legacy-chat@2.0.0",
+    });
+  });
+
+  it("installs an externalized bundled plugin under its renamed package id", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-qqbot",
+        targetDir: "/tmp/openclaw-plugins/openclaw-qqbot",
+        version: "2.0.1",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "qqbot",
+          pluginId: "openclaw-qqbot",
+          npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+          expectedIntegrity: "sha512-qqbot-catalog-pin",
+          channelIds: ["qqbot"],
+        },
+      ],
+      config: {
+        channels: { qqbot: { enabled: true } },
+        plugins: {
+          entries: { qqbot: { enabled: true } },
+          load: { paths: [appBundledPluginRoot("qqbot")] },
+          installs: {
+            qqbot: {
+              source: "path",
+              sourcePath: appBundledPluginRoot("qqbot"),
+              installPath: appBundledPluginRoot("qqbot"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(npmInstallCall()?.expectedPluginId).toBe("openclaw-qqbot");
+    expect(npmInstallCall()?.expectedIntegrity).toBe("sha512-qqbot-catalog-pin");
+    expect(result.summary.switchedToNpm).toEqual(["openclaw-qqbot"]);
+    expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
+    expect(result.config.plugins?.entries?.["openclaw-qqbot"]).toEqual({ enabled: true });
+    expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
+    expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
+      source: "npm",
+      spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      installPath: "/tmp/openclaw-plugins/openclaw-qqbot",
+      version: "2.0.1",
     });
   });
 

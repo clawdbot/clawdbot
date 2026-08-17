@@ -1,12 +1,92 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
-import { formatCliFailureLines } from "./failure-output.js";
+import { CliParseError, formatCliFailureLines, formatCliJsonFailure } from "./failure-output.js";
+
+describe("formatCliJsonFailure", () => {
+  it("uses the canonical typed envelope and redacts the message", () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    const payload = formatCliJsonFailure(new Error(`Authorization: Bearer ${token}`));
+
+    expect(payload).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("Authorization: Bearer"),
+      },
+    });
+    expect(payload.error.message).not.toContain(token);
+  });
+  it("keeps nested causes behind the debug gate", () => {
+    const error = new Error("Promotion is not available.", {
+      cause: new Error("ClawHub /api/v1/promotions/nope failed (404)"),
+    });
+
+    expect(formatCliJsonFailure(error, { env: {} }).error.message).toBe(
+      "Promotion is not available.",
+    );
+    expect(formatCliJsonFailure(error, { env: { OPENCLAW_DEBUG: "1" } }).error.message).toBe(
+      "Promotion is not available. | ClawHub /api/v1/promotions/nope failed (404)",
+    );
+  });
+
+  it.each([
+    { label: "default output", env: {} },
+    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
+  ])("keeps the full parse guidance unchanged in $label", ({ env }) => {
+    const error = Object.assign(
+      new CliParseError({
+        message: 'OpenClaw sessions has no command "lst".',
+        humanOutput:
+          '\u001B[31mOpenClaw sessions has no command "lst".\u001B[39m\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: \u001B]8;;https://docs.openclaw.ai/cli\u0007docs.openclaw.ai/cli\u001B]8;;\u0007\n',
+        machineOutput:
+          'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli\n',
+      }),
+      { cause: new Error("internal parse cause") },
+    );
+    const payload = formatCliJsonFailure(error, { env });
+
+    expect(payload).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message:
+          'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli',
+      },
+    });
+    expect(payload.error.message).not.toContain("internal parse cause");
+  });
+});
 
 describe("formatCliFailureLines", () => {
+  it.each([
+    { label: "default output", env: {} },
+    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
+  ])("emits parse guidance only when not already written in $label", ({ env }) => {
+    const pending = new CliParseError({
+      message: "bad input",
+      humanOutput: "\u001B[31mfirst\u001B[39m\nsecond\n",
+      machineOutput: "first\nsecond\n",
+    });
+    const written = new CliParseError({
+      message: "bad input",
+      humanOutput: "\u001B[31mfirst\u001B[39m\nsecond\n",
+      humanOutputWritten: true,
+      machineOutput: "first\nsecond\n",
+    });
+
+    expect(formatCliFailureLines({ title: "ignored", error: pending, env })).toEqual([
+      "\u001B[31mfirst\u001B[39m",
+      "second",
+    ]);
+    expect(formatCliFailureLines({ title: "ignored", error: written, env })).toEqual([]);
+  });
+
   it("shows a concise reason and recovery commands by default", () => {
     const lines = formatCliFailureLines({
       title: "Could not start the CLI.",
-      error: new Error("config file is invalid"),
+      error: new Error("config file is invalid", {
+        cause: new Error("unexpected token at /internal/config.json:12"),
+      }),
       argv: ["node", "openclaw", "status"],
       env: {},
     });
@@ -39,11 +119,12 @@ describe("formatCliFailureLines", () => {
   it.each(["--debug", "--verbose"])("prints stack details for the root %s option", (debugFlag) => {
     const lines = formatCliFailureLines({
       title: "The CLI command failed.",
-      error: new Error("boom"),
+      error: new Error("boom", { cause: new Error("transport detail") }),
       argv: ["node", "openclaw", "proxy", "run", debugFlag],
       env: {},
     });
 
+    expect(lines).toContain("[openclaw] Reason: boom | transport detail");
     expect(lines).toContain("[openclaw] Stack:");
     expect(lines).toContain("[openclaw] Error: boom");
   });

@@ -2,6 +2,7 @@
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { isDeepStrictEqual } from "node:util";
 import { hasLegacyAuthProfileSourcesForStartup } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,8 +28,8 @@ import {
 import {
   activateSecretsRuntimeSnapshotState,
   graftActiveSecretsRuntimeAuthState,
-  getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
   hasActiveSecretsRuntimeSnapshotLineage,
   hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
@@ -49,15 +50,15 @@ import {
   logPreparedSecretDegradations,
   logThrownSecretDegradations,
 } from "./server-startup-secret-diagnostics.js";
-export {
-  loadGatewayStartupConfigSnapshot,
-  type GatewayStartupConfigSnapshotLoadResult,
-} from "./server-startup-config-helpers.js";
 import {
   resolveGatewayStartupSecretProjection,
   resolveGatewayStartupSourceConfig,
 } from "./server-startup-secret-surfaces.js";
 import { ensureGatewayStartupAuth } from "./startup-auth.js";
+export {
+  loadGatewayStartupConfigSnapshot,
+  type GatewayStartupConfigSnapshotLoadResult,
+} from "./server-startup-config-helpers.js";
 
 type GatewaySecretsStateEventCode = "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED";
 
@@ -80,6 +81,8 @@ type RuntimeSecretsActivationParams = {
   runtimeSourceConfig?: OpenClawConfig;
   /** Defer degradation/recovery publication until a larger transaction can no longer roll back. */
   deferStatePublication?: boolean;
+  /** SecretRefs that must not retain last-known-good values during this reload. */
+  forceColdRefKeys?: ReadonlySet<string>;
 };
 
 type DeferredSecretsStateTransition = {
@@ -266,7 +269,7 @@ export function createRuntimeSecretsActivator(params: {
     const activationScope = options?.stateScope ?? "full";
     if (activationParams.activate && (statePrepared.degradedOwners?.length ?? 0) > 0) {
       if (activationParams.deferStatePublication === true) {
-        const activationRevision = getActiveSecretsRuntimeSnapshotRevision();
+        const activationRevision = getActiveSecretsRuntimeSnapshotRevisionState();
         deferredStateTransitions.set(prepared, {
           kind: "degraded",
           activationRevision,
@@ -280,7 +283,7 @@ export function createRuntimeSecretsActivator(params: {
     } else if (activationParams.activate && secretsDegraded) {
       if (activationParams.deferStatePublication === true) {
         if (activeDegradationGeneration !== null) {
-          const activationRevision = getActiveSecretsRuntimeSnapshotRevision();
+          const activationRevision = getActiveSecretsRuntimeSnapshotRevisionState();
           deferredStateTransitions.set(prepared, {
             kind: "recovered",
             activationRevision,
@@ -413,7 +416,7 @@ export function createRuntimeSecretsActivator(params: {
         const prepareRuntimeSecretsSnapshot =
           params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
         const allowUnavailableSecretOwners =
-          activationParams.reason !== "startup" || getActiveSecretsRuntimeSnapshot() === null;
+          activationParams.reason !== "startup" || getActiveSecretsRuntimeSnapshotState() === null;
         const prepared = await measureDiagnosticsTimelineSpan(
           "secrets.prepare",
           () =>
@@ -423,6 +426,7 @@ export function createRuntimeSecretsActivator(params: {
               allowUnavailableSecretOwners,
               ...(activationParams.env ? { env: activationParams.env } : {}),
               includeAuthStoreRefs: activationParams.includeAuthStoreRefs,
+              forceColdRefKeys: activationParams.forceColdRefKeys,
               ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
               ...(params.pluginMetadataSnapshot
                 ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
@@ -482,7 +486,7 @@ export function createRuntimeSecretsActivator(params: {
       : undefined;
     return await runWithSecretsActivationLock(async () => {
       if (
-        getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision ||
+        getActiveSecretsRuntimeSnapshotRevisionState() !== expectedRevision ||
         !hasCurrentAuthStoreCredentialsRevision(snapshot) ||
         (canActivate && !canActivate())
       ) {
@@ -519,7 +523,7 @@ export function createRuntimeSecretsActivator(params: {
   registerProviderAuthRuntimeSnapshotActivationOwner({
     runExclusive: runWithSecretsActivationLock,
     isCurrent: (snapshot, expectedRevision) =>
-      getActiveSecretsRuntimeSnapshotRevision() === expectedRevision &&
+      getActiveSecretsRuntimeSnapshotRevisionState() === expectedRevision &&
       hasCurrentAuthStoreCredentialsRevision(snapshot),
     assertValid: (snapshot) => assertRuntimeGatewayAuthNotKnownWeak(snapshot.config),
     publish: async (snapshot) => {
@@ -550,7 +554,7 @@ export function createRuntimeSecretsActivator(params: {
         options?.sourceOnly === true &&
         options.expectedRevision !== undefined &&
         hasActiveSecretsRuntimeSnapshotLineage(options.expectedRevision);
-      const activeSnapshot = sourceOnlyOwnsLineage ? getActiveSecretsRuntimeSnapshot() : null;
+      const activeSnapshot = sourceOnlyOwnsLineage ? getActiveSecretsRuntimeSnapshotState() : null;
       const sourceOnlyDegradationGeneration = activeDegradationGeneration;
       const sourceOnlyContractRecovered =
         activeSnapshot !== null &&
@@ -571,7 +575,7 @@ export function createRuntimeSecretsActivator(params: {
     if (!hasActiveSecretsRuntimeSnapshotLineage(transition.activationRevision)) {
       return;
     }
-    const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+    const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
     if (!activeSnapshot) {
       return;
     }
@@ -708,6 +712,6 @@ export async function prepareGatewayStartupConfig(params: {
   ).config;
   return {
     ...authBootstrap,
-    cfg: activatedConfig,
+    cfg: inheritLegacyDefaultAgentId(params.configSnapshot.config, activatedConfig),
   };
 }

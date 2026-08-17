@@ -330,7 +330,7 @@ describe("migrateApplyCommand", () => {
 
   it("requires --yes in non-interactive apply mode", async () => {
     await expect(migrateApplyCommand(runtime, { provider: "hermes" })).rejects.toThrow(
-      "requires --yes",
+      "requires --yes in non-interactive mode. Preview first with openclaw migrate plan 'hermes'.",
     );
     expect(mocks.provider.plan).not.toHaveBeenCalled();
   });

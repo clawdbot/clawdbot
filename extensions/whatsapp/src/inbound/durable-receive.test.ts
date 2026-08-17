@@ -51,6 +51,34 @@ function payload(id: string, remoteJid = REMOTE_JID): WhatsAppDurableInboundPayl
 }
 
 describe("createWhatsAppIngressMonitor", () => {
+  it("rejects messages without a native id as a permanent ingress failure", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+      });
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        dispatch: async () => ({ kind: "completed" }),
+      });
+      monitor.start();
+      const missingIdMessage = {
+        ...message("unused"),
+        key: { remoteJid: REMOTE_JID, fromMe: false },
+      } as WAMessage;
+
+      await expect(
+        monitor.admit({ message: missingIdMessage, receivedAt: 1 }, { receivedAt: 1 }),
+      ).rejects.toMatchObject({
+        name: "WhatsAppIngressPermanentError",
+        reason: "missing-message-key",
+      });
+      await monitor.stop();
+    });
+  });
+
   it("releases claims when dispatch throws before adoption", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({

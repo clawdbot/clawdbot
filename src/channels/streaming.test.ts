@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inferToolMetaFromArgs } from "../agents/embedded-agent-utils.js";
+import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import {
   buildChannelProgressDraftLine,
@@ -187,7 +187,7 @@ describe("backend tool-name casing", () => {
       },
       { commandText: "raw" },
     );
-    const meta = inferToolMetaFromArgs(name, args, { detailMode: "explain" });
+    const meta = inferToolMetaFromArgsCore(name, args, { detailMode: "explain" });
     const summaryText = formatToolAggregate(name, meta ? [meta] : undefined, { markdown: true });
 
     const merged = mergeChannelProgressDraftLine(

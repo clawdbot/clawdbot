@@ -1,10 +1,8 @@
 // Formats detailed subagent run information for the info action.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
-import { countPendingDescendantRunsFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagents/registry/subagent-registry-state.js";
+import { countPendingDescendantRuns } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
@@ -29,7 +27,7 @@ function formatTimestampWithAge(valueMs?: number) {
 
 function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], childKey: string) {
   const parsed = parseAgentSessionKey(childKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: parsed?.agentId,
   });
   return {
@@ -67,6 +65,8 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   const linkedTask = findTaskByRunIdForOwner({
     runId: run.runId,
     callerOwnerKey: requesterKey,
+    callerAgentId: params.agentId,
+    config: params.cfg,
   });
   const taskText = sanitizeTaskStatusText(run.task) || "n/a";
   const progressText = sanitizeTaskStatusText(linkedTask?.progressSummary);
@@ -77,13 +77,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
 
   const lines = [
     "ℹ️ Subagent info",
-    `Status: ${resolveSubagentDisplayStatus(
-      run,
-      countPendingDescendantRunsFromRuns(
-        getSubagentRunsSnapshotForRead(subagentRuns),
-        run.childSessionKey,
-      ),
-    )}`,
+    `Status: ${resolveSubagentDisplayStatus(run, countPendingDescendantRuns(run.childSessionKey))}`,
     `Label: ${formatRunLabel(run)}`,
     `Task: ${taskText}`,
     `Run: ${run.runId}`,

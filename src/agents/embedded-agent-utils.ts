@@ -1,3 +1,4 @@
+import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 /**
  * Embedded-agent message text utilities.
  * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
@@ -17,7 +18,6 @@ import {
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 export { stripDowngradedToolCallText } from "../shared/text/assistant-visible-text.js";
 
@@ -52,7 +52,7 @@ type AssistantTextExtractionResult = {
   hadRequestedPhase: boolean;
 };
 
-function extractAssistantTextForPhase(
+function extractEmbeddedAssistantTextForPhase(
   msg: AssistantMessage,
   phase?: AssistantPhase,
   options?: { unphasedSignedFinalAnswer?: boolean },
@@ -124,21 +124,22 @@ function extractAssistantTextForPhase(
 
 /** Extract text intended for users, preferring explicit final-answer phase blocks. */
 export function extractAssistantVisibleText(msg: AssistantMessage): string {
-  const finalAnswerExtraction = extractAssistantTextForPhase(msg, "final_answer");
+  const finalAnswerExtraction = extractEmbeddedAssistantTextForPhase(msg, "final_answer");
   if (finalAnswerExtraction.hadRequestedPhase) {
     return finalAnswerExtraction.text.trim() ? finalAnswerExtraction.text : "";
   }
 
-  return extractAssistantTextForPhase(msg, undefined, { unphasedSignedFinalAnswer: true }).text;
+  return extractEmbeddedAssistantTextForPhase(msg, undefined, { unphasedSignedFinalAnswer: true })
+    .text;
 }
 
 /** Extract the commentary/narration text of a commentary-phase assistant message. */
 export function extractAssistantCommentaryText(msg: AssistantMessage): string {
-  return extractAssistantTextForPhase(msg, "commentary").text;
+  return extractEmbeddedAssistantTextForPhase(msg, "commentary").text;
 }
 
 /** Extract sanitized assistant text across all text content blocks. */
-export function extractAssistantText(msg: AssistantMessage): string {
+export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) => sanitizeAssistantText(text),
@@ -162,9 +163,10 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
       if (!block || typeof block !== "object") {
         return "";
       }
-      const record = block as unknown as Record<string, unknown>;
-      if (record.type === "thinking" && typeof record.thinking === "string") {
-        const thinking = record.thinking.trim();
+      const type: unknown = Reflect.get(block, "type");
+      const rawThinking = Reflect.get(block, "thinking");
+      if (type === "thinking" && typeof rawThinking === "string") {
+        const thinking = rawThinking.trim();
         if (thinking) {
           return thinking;
         }
@@ -174,7 +176,8 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
         // .filter(Boolean) below drops the bubble — a diagnostic placeholder is not reasoning
         // content and must not be shown on any channel. The signed block stays on the message
         // for API replay; this only governs display.
-        if (typeof record.thinkingSignature === "string" && record.thinkingSignature.trim()) {
+        const thinkingSignature = Reflect.get(block, "thinkingSignature");
+        if (typeof thinkingSignature === "string" && thinkingSignature.trim()) {
           return "";
         }
       }
@@ -350,6 +353,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
     return;
   }
   message.content = next;
+  stripCompactionReplayCheckpointInPlace(message);
 }
 
 /** Extract closed thinking-tag content from a complete text payload. */
@@ -407,14 +411,4 @@ export function extractThinkingFromTaggedStream(
     return closed;
   }
   return text.slice(state.lastTag.end).trim();
-}
-
-/** Infer compact display metadata for a tool call from its args. */
-export function inferToolMetaFromArgs(
-  toolName: string,
-  args: unknown,
-  options?: { detailMode?: "explain" | "raw" },
-): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
-  return formatToolDetail(display);
 }

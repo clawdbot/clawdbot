@@ -275,6 +275,73 @@ describe("stored outbox summaries", () => {
     expect(summary.countsByScope.get(storedChatOutboxScopeKey({ sessionKey: "thread-b" }))).toBe(1);
   });
 
+  it("counts only durable operator-review states for session-row attention", () => {
+    const gatewayUrl = "ws://gateway.test/control";
+    const quietSendStates = [
+      undefined,
+      "waiting-idle",
+      "executing-command",
+      "steering",
+      "sending",
+      "waiting-reconnect",
+    ] as const;
+    sessionStorage.setItem(
+      `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: {
+          "thread-a\u0000agent:main": {
+            queue: [
+              ...quietSendStates.map((sendState, index) => ({
+                id: `healthy-${index}`,
+                text: `healthy ${index}`,
+                createdAt: index,
+                sendState,
+              })),
+              { id: "failed", text: "failed", createdAt: 10, sendState: "failed" },
+              { id: "failed", text: "duplicate", createdAt: 11, sendState: "failed" },
+              {
+                id: "unconfirmed",
+                text: "unconfirmed",
+                createdAt: 12,
+                sendState: "unconfirmed",
+              },
+              {
+                id: "unconfirmed",
+                text: "duplicate uncertainty",
+                createdAt: 13,
+                sendState: "unconfirmed",
+              },
+            ],
+            updatedAt: 13,
+          },
+          "thread-b\u0000agent:main": {
+            queue: [
+              {
+                id: "unconfirmed",
+                text: "other scope",
+                createdAt: 14,
+                sendState: "unconfirmed",
+              },
+            ],
+            updatedAt: 14,
+          },
+        },
+      }),
+    );
+
+    const summary = summarizeStoredChatOutboxes({ settings: { gatewayUrl } });
+    const threadA = storedChatOutboxScopeKey({ sessionKey: "thread-a" });
+    const threadB = storedChatOutboxScopeKey({ sessionKey: "thread-b" });
+
+    expect(summary.total).toBe(9);
+    expect(summary.countsByScope.get(threadA)).toBe(8);
+    expect(summary.countsByScope.get(threadB)).toBe(1);
+    expect(summary.attentionCountsByScope.get(threadA)).toBe(2);
+    expect(summary.attentionCountsByScope.get(threadB)).toBe(1);
+  });
+
   it("derives badges and replay from the same migrated durable queue", () => {
     const gatewayUrl = "ws://gateway.test/control";
     const legacyKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;

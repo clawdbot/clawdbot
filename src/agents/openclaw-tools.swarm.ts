@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getLatestSubagentRunByChildSessionKey } from "./subagents/registry/subagent-registry-read.js";
 import {
-  getLatestSubagentRunByChildSessionKey,
   getSubagentRunByRunId,
   recordSwarmStructuredOutput,
 } from "./subagents/registry/subagent-registry.js";

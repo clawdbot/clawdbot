@@ -6,7 +6,7 @@
 /**
  * @template {Record<string, unknown>} T
  * @typedef {{
- *   flag?: string,
+ *   flag: string,
  *   nextIndex: number,
  *   repeatable?: boolean,
  *   apply: ApplyFlag<T>,
@@ -46,6 +46,9 @@
  *   ignoreDoubleDash?: boolean,
  *   onUnhandledArg?: (arg: string, args: T) => "handled" | void,
  * }} ParseOptions
+ */
+/**
+ * @typedef {{ kind: "syntax" } | { kind: "below" } | { kind: "above" } | { kind: "value", value: number }} BoundedUnsignedDecimalResult
  */
 /** @param {string} message */
 function failFlagParse(message) {
@@ -169,6 +172,74 @@ function readFlagOptionValue(argv, index, flag) {
     failFlagParse(`${flag} requires a value`);
   }
   return { nextIndex: index + 1, value };
+}
+/**
+ * Parse the exact lowercase Boolean language used by strict script arguments.
+ * @param {unknown} value
+ * @param {string} label
+ */
+export function parseStrictBooleanArg(value, label) {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  throw new Error(`${label} must be true or false.`);
+}
+/**
+ * Classify an ASCII unsigned-decimal token against inclusive bounds.
+ * @param {unknown} value
+ * @param {number} min
+ * @param {number} max
+ * @returns {BoundedUnsignedDecimalResult}
+ */
+export function classifyBoundedUnsignedDecimal(value, min, max) {
+  if (typeof value !== "string" || !/^\d+$/u.test(value)) {
+    return { kind: "syntax" };
+  }
+  const parsed = Number(value);
+  if (parsed < min) {
+    return { kind: "below" };
+  }
+  if (parsed > max) {
+    return { kind: "above" };
+  }
+  return { kind: "value", value: parsed };
+}
+const PERMISSIVE_BOOLEAN_TRUE_TOKENS = new Set(["1", "on", "true", "yes"]);
+const PERMISSIVE_BOOLEAN_FALSE_TOKENS = new Set(["0", "false", "no", "off"]);
+/**
+ * Parse the normalized Boolean token language shared by repository scripts.
+ * @param {unknown} value
+ * @returns {boolean | undefined}
+ */
+export function parsePermissiveBooleanToken(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!normalized) {
+    return undefined;
+  }
+  if (PERMISSIVE_BOOLEAN_TRUE_TOKENS.has(normalized)) {
+    return true;
+  }
+  return PERMISSIVE_BOOLEAN_FALSE_TOKENS.has(normalized) ? false : undefined;
+}
+const OPEN_ENDED_FALSE_TOKENS = new Set(["", "0", "false", "no"]);
+/**
+ * Treat every non-empty token except the explicit false language as enabled.
+ * @param {string | undefined} value
+ */
+export function isOpenEndedTruthyValue(value) {
+  return !OPEN_ENDED_FALSE_TOKENS.has((value ?? "").trim().toLowerCase());
+}
+
+const STRICT_AFFIRMATIVE_TOKENS = new Set(["1", "true", "yes"]);
+/**
+ * Accept only the narrow affirmative token language used by script environment flags.
+ * @param {string | undefined} value
+ */
+export function isStrictAffirmativeValue(value) {
+  return STRICT_AFFIRMATIVE_TOKENS.has(value?.trim().toLowerCase() ?? "");
 }
 /**
  * @param {string} raw
@@ -330,9 +401,6 @@ export function parseFlagArgs(argv, args, specs, options = {}) {
       const option = spec.consume(argv, i, args);
       if (!option) {
         continue;
-      }
-      if (typeof option.flag !== "string" || !option.flag) {
-        failFlagParse("parseFlagArgs specs must declare a flag for consumed options");
       }
       if (option.repeatable !== true) {
         if (seenFlags.has(option.flag)) {

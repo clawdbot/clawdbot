@@ -793,7 +793,8 @@ async function generateAndAppendDreamNarrative(
   params: DreamNarrativeRequest,
 ): Promise<DreamNarrativeOutcome> {
   // `runDreamNarrative` is the only entry point and already dropped empty narrative data.
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowMs =
+    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const runKey = buildNarrativeRunKey({
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
@@ -1039,7 +1040,8 @@ export async function runDreamNarrative(
     : async () => {
         await appendFallbackNarrativeEntry({
           ...rest,
-          nowMs: Number.isFinite(rest.nowMs) ? (rest.nowMs as number) : Date.now(),
+          nowMs:
+            typeof rest.nowMs === "number" && Number.isFinite(rest.nowMs) ? rest.nowMs : Date.now(),
           reason: "the dreaming sweep has no owning agent id",
         });
         return { status: "completed" as const };

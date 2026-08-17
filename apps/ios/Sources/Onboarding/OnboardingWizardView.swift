@@ -27,6 +27,7 @@ struct OnboardingWizardView: View {
     @State private var manualPort: Int = 18789
     @State private var manualPortText: String = "18789"
     @State private var manualTLS: Bool = true
+    @State private var manualContextPath: String?
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
     @State private var gatewayCredentialFieldStableID: String?
@@ -743,6 +744,7 @@ extension OnboardingWizardView {
             get: { self.manualTransport.effectiveTLS },
             set: { enabled in
                 guard !self.manualTransport.requiresTLS else { return }
+                self.manualContextPath = nil
                 self.manualTLS = enabled
             })
     }
@@ -979,6 +981,7 @@ extension OnboardingWizardView {
         self.manualPort = link.port
         self.manualPortText = String(link.port)
         self.manualTLS = link.tls
+        self.manualContextPath = link.contextPath
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         if setupAuth.hasBootstrapToken {
@@ -1221,6 +1224,7 @@ extension OnboardingWizardView {
                 self.manualHost = host
                 self.manualPort = port
                 self.manualTLS = active.useTLS
+                self.manualContextPath = active.contextPath
             } else {
                 self.manualHost = "openclaw.local"
                 self.manualPort = 18789
@@ -1280,7 +1284,8 @@ extension OnboardingWizardView {
         guard !host.isEmpty, let port = self.resolvedManualPort(host: host) else { return nil }
         return GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
-            port: port)
+            port: port,
+            contextPath: self.manualContextPath)
     }
 
     private var gatewayCredentialTargetStableID: String? {
@@ -1313,6 +1318,7 @@ extension OnboardingWizardView {
             get: { self.manualHost },
             set: { value in
                 let previousStableID = self.currentManualGatewayStableID
+                self.manualContextPath = nil
                 self.manualHost = value
                 if GatewayStableIdentifier.key(previousStableID) !=
                     GatewayStableIdentifier.key(self.currentManualGatewayStableID)
@@ -1327,6 +1333,7 @@ extension OnboardingWizardView {
             get: { self.manualPortText },
             set: { value in
                 let previousStableID = self.currentManualGatewayStableID
+                self.manualContextPath = nil
                 let digits = value.filter(\.isNumber)
                 self.manualPortText = digits
                 self.manualPort = min(Int(digits) ?? 0, 65535)
@@ -1420,6 +1427,7 @@ extension OnboardingWizardView {
 
     private func applyModeDefaults(_ mode: OnboardingConnectionMode) {
         let previousStableID = self.currentManualGatewayStableID
+        self.manualContextPath = nil
         defer {
             if GatewayStableIdentifier.key(previousStableID) !=
                 GatewayStableIdentifier.key(self.currentManualGatewayStableID)
@@ -1502,6 +1510,7 @@ extension OnboardingWizardView {
             host: host,
             port: port,
             useTLS: self.manualTLS,
+            contextPath: self.manualContextPath,
             authOverride: authOverride,
             forceReconnect: forceReconnect)
         // The controller now owns this attempt's immutable override. A later retry must reload

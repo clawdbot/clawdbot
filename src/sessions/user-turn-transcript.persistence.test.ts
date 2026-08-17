@@ -310,6 +310,8 @@ describe("persistUserTurnTranscript", () => {
       input: {
         text: "secret prompt",
         idempotencyKey: "chat-run-1:user",
+        replyToId: "transcript-reply-1",
+        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
         senderIsOwner: true,
         provenance,
         sender: { id: "user-42", name: "Ada" },
@@ -327,6 +329,8 @@ describe("persistUserTurnTranscript", () => {
       input: {
         text: "secret prompt",
         idempotencyKey: "chat-run-1:user",
+        replyToId: "transcript-reply-1",
+        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
         senderIsOwner: true,
         provenance,
         sender: { id: "user-42", name: "Ada" },
@@ -348,6 +352,8 @@ describe("persistUserTurnTranscript", () => {
         provenance,
         __openclaw: {
           hookOwned: true,
+          replyToId: "transcript-reply-1",
+          replyToPreview: { text: "Original reply", senderLabel: "Molty" },
           senderIsOwner: false,
           transport: {
             channel: "reef",

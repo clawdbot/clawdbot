@@ -9,7 +9,7 @@ import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
@@ -89,7 +89,7 @@ async function applyMixedDirectives(params: {
   const sessionStore = { [sessionKey]: sessionEntry };
   const directives =
     params.directives ??
-    parseInlineDirectives(params.body, {
+    parseInlineSessionDirectives(params.body, {
       modelAliases: params.modelAliases,
     });
   const allowedModels = params.allowedModels ?? [];
@@ -637,7 +637,7 @@ describe("mixed inline directives", () => {
       kind: "continue",
       provider: "anthropic",
       model: "claude-opus-4-6",
-      contextTokens: 90_000,
+      contextTokens: 1_000_000,
       directiveAck: {
         text: "Session model reset to configured default (anthropic/claude-opus-4-6).",
       },

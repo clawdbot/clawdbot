@@ -4,9 +4,28 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const secretStoreMocks = vi.hoisted(() => ({
+  deleteEntry: vi.fn(),
+  listEntries: vi.fn(() => []),
+  purgeEntries: vi.fn(() => 0),
+  writeEntry: vi.fn(),
+}));
+
+vi.mock("../secrets/store/secret-store.js", () => {
+  class SecretStoreValidationError extends Error {}
+  return {
+    deleteSecretStoreEntry: secretStoreMocks.deleteEntry,
+    listSecretStoreEntries: secretStoreMocks.listEntries,
+    purgeExpiredSecretStoreEntries: secretStoreMocks.purgeEntries,
+    SECRET_STORE_VALUE_MAX_BYTES: 64 * 1024,
+    SecretStoreValidationError,
+    writeSecretStoreEntry: secretStoreMocks.writeEntry,
+  };
+});
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -149,6 +168,21 @@ async function invokeSecretsReload(params: {
   });
 }
 
+async function invokeSecretStoreSet(params: {
+  handlers: ReturnType<typeof createGatewayAuxHandlers>["extraHandlers"];
+  respond: ReturnType<typeof vi.fn>;
+  name: string;
+}) {
+  await params.handlers["secrets.store.set"]({
+    req: { type: "req", id: "store-1", method: "secrets.store.set" },
+    params: { name: params.name, value: "next-value", kind: "secret" },
+    client: null,
+    isWebchatConnect: () => false,
+    respond: params.respond as never,
+    context: {} as never,
+  });
+}
+
 type RespondCall = [boolean, unknown, { message?: string } | undefined];
 type GatewayAuxHandlerParams = Parameters<typeof createGatewayAuxHandlers>[0];
 type ChannelName = Parameters<GatewayAuxHandlerParams["startChannel"]>[0];
@@ -180,6 +214,7 @@ type SecretsReloadHarnessParams = {
   logChannelsInfo?: GatewayAuxHandlerParams["logChannels"]["info"];
   respond?: ReturnType<typeof vi.fn>;
   onApprovalLifecycle?: GatewayAuxHandlerParams["onApprovalLifecycle"];
+  onAgentRunAuthorityClosed?: GatewayAuxHandlerParams["onAgentRunAuthorityClosed"];
   validateAgentRuntimeDelegatedAuthority?: GatewayAuxHandlerParams["validateAgentRuntimeDelegatedAuthority"];
   registerWorkerTurnClaimClosedHandler?: GatewayAuxHandlerParams["registerWorkerTurnClaimClosedHandler"];
 };
@@ -202,6 +237,7 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     logChannels: { info: params.logChannelsInfo ?? vi.fn() },
     onApprovalLifecycle: params.onApprovalLifecycle,
+    onAgentRunAuthorityClosed: params.onAgentRunAuthorityClosed,
     validateAgentRuntimeDelegatedAuthority: params.validateAgentRuntimeDelegatedAuthority,
     registerWorkerTurnClaimClosedHandler: params.registerWorkerTurnClaimClosedHandler,
   });
@@ -240,6 +276,10 @@ function createSecretsReloadHarnessWithChannelMocks(
 beforeEach(() => {
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
+  secretStoreMocks.deleteEntry.mockReset();
+  secretStoreMocks.listEntries.mockReset().mockReturnValue([]);
+  secretStoreMocks.purgeEntries.mockReset().mockReturnValue(0);
+  secretStoreMocks.writeEntry.mockReset();
 });
 
 afterEach(() => {
@@ -262,6 +302,65 @@ describe("gateway aux handlers", () => {
     expect(first.execApprovalManager.runtimeEpoch).not.toBe(
       second.execApprovalManager.runtimeEpoch,
     );
+  });
+
+  it("fans exact run closure out to Gateway-owned capability cleanup", () => {
+    const onAgentRunAuthorityClosed = vi.fn();
+    const gatewayAux = createSecretsReloadHarness({
+      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+      onAgentRunAuthorityClosed,
+    });
+    const operationalRunInstance = Object.freeze({
+      instanceId: "egress-proxy-instance",
+      runId: "egress-proxy-run",
+    });
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+
+    releaseAgentRunDelegatedAuthority(authority);
+
+    expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
+    expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
+      expect.objectContaining({ operationalRunInstance }),
+    );
+    gatewayAux.unregisterApprovalAuthorityObserver();
+  });
+
+  it("publishes exec.approval.resolved when the gateway timeout expires an approval", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayAux = createSecretsReloadHarness({
+        activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+      });
+      const broadcast = vi.fn();
+      const publishResolved = vi.fn();
+      gatewayAux.bindApprovalPublicationContext({
+        broadcast,
+        broadcastToConnIds: vi.fn(),
+        approvalEvents: { publishResolved },
+        logGateway: { error: vi.fn() },
+      } as never);
+      const record = gatewayAux.execApprovalManager.create(
+        { command: "echo expires" },
+        1_000,
+        "exec-timeout-publish",
+      );
+      const decision = gatewayAux.execApprovalManager.register(record, 1_000);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(decision).resolves.toBeNull();
+      // The gateway clock owns expiry: reviewer surfaces must receive the
+      // terminal event instead of pruning on their own (skewed) clocks.
+      await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(1));
+      expect(broadcast).toHaveBeenCalledWith(
+        "exec.approval.resolved",
+        expect.objectContaining({ id: "exec-timeout-publish", decision: "deny" }),
+        expect.anything(),
+      );
+      gatewayAux.unregisterApprovalAuthorityObserver();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("settles and publishes both approval kinds from the production worker-claim observer", async () => {
@@ -514,6 +613,60 @@ describe("gateway aux handlers", () => {
     expect(respond).toHaveBeenNthCalledWith(2, true, { ok: true, warningCount: 0 });
   });
 
+  it("runs a trailing refresh when a referenced store mutation overlaps reload", async () => {
+    const sourceConfig = asConfig({
+      models: {
+        providers: {
+          test: {
+            apiKey: { source: "store", provider: "default", id: "SERVICE_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    });
+    activateSecretsRuntimeSnapshot(createSourceSnapshot(sourceConfig));
+    let releaseFirst: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted: (() => void) | undefined;
+    const firstEntered = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const activateRuntimeSecrets = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        firstStarted?.();
+        await firstBlocked;
+        return createSourceSnapshot(sourceConfig);
+      })
+      .mockResolvedValue(createSourceSnapshot(sourceConfig));
+    const { extraHandlers, reload } = createSecretsReloadHarness({ activateRuntimeSecrets });
+    const reloadPromise = reload();
+    await firstEntered;
+
+    const setRespond = vi.fn();
+    const setPromise = invokeSecretStoreSet({
+      handlers: extraHandlers,
+      respond: setRespond,
+      name: "SERVICE_API_KEY",
+    });
+    await vi.waitFor(() => expect(secretStoreMocks.writeEntry).toHaveBeenCalledOnce());
+    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
+    releaseFirst?.();
+    await Promise.all([reloadPromise, setPromise]);
+
+    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(2);
+    expect(activateRuntimeSecrets.mock.calls[1]?.[1]).toMatchObject({
+      forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
+    });
+    expect(setRespond).toHaveBeenCalledWith(true, {
+      ok: true,
+      reloaded: true,
+      warningCount: 0,
+    });
+  });
+
   it("retries from the canonical source when it changes during secrets.reload preparation", async () => {
     const initialConfig = slackConfig("initial-secret");
     const canonicalConfig = slackConfig("canonical-secret");
@@ -658,7 +811,7 @@ describe("gateway aux handlers", () => {
       required: "gen-old",
     });
     expect(
-      getRuntimeAuthProfileStoreSnapshot(authAgentDir)?.profiles["openai:default"],
+      getRuntimeAuthProfileStoreSnapshotCore(authAgentDir)?.profiles["openai:default"],
     ).toMatchObject({ access: "access-new", refresh: "refresh-new" });
   });
 

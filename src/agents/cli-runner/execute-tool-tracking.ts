@@ -14,6 +14,10 @@ import {
   resolveMessageToolSourceReplyFinal,
 } from "../embedded-agent-message-tool-source-reply.js";
 import {
+  extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+} from "../embedded-agent-messaging-extraction.js";
+import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
@@ -23,9 +27,9 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
 import {
-  extractMessagingToolSendResult,
-  extractMessagingToolSourceReplyPayload,
-} from "../embedded-agent-subscribe.tools.js";
+  extractToolResultMediaArtifact,
+  filterToolResultMediaUrls,
+} from "../embedded-agent-tool-media.js";
 import { closeClaudeSession } from "./claude-live-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
@@ -85,6 +89,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const messagingToolSentTargets: MessagingToolSend[] = [];
   const messagingToolSentTargetKeys = new Set<string>();
   const messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
+  const toolMediaUrls: string[] = [];
+  const toolMediaUrlKeys = new Set<string>();
+  let toolAudioAsVoice = false;
+  let toolTrustedLocalMedia = false;
   const matchesCliLoopbackCall = (
     toolName: string,
     toolArgs: Record<string, unknown>,
@@ -422,6 +430,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
             result: "result" in call ? call.result : undefined,
             isError: call.outcome !== "completed",
           });
+        } else if (call.outcome === "completed" && "result" in call) {
+          const artifact = extractToolResultMediaArtifact(call.result);
+          const mediaUrls = artifact
+            ? filterToolResultMediaUrls(toolName, artifact.mediaUrls, call.result)
+            : [];
+          appendUniqueCliMessagingEvidence(toolMediaUrls, toolMediaUrlKeys, mediaUrls);
+          if (mediaUrls.length > 0) {
+            toolAudioAsVoice ||= artifact?.audioAsVoice === true;
+            toolTrustedLocalMedia ||= artifact?.trustedLocalMedia === true;
+          }
         }
       },
     });
@@ -591,6 +609,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     messagingToolSentMediaUrls,
     messagingToolSentTargets,
     messagingToolSourceReplyPayloads,
+    toolMediaUrls,
+    toolAudioAsVoice,
+    toolTrustedLocalMedia,
   });
   return {
     beginGatewayCapture,
@@ -620,6 +641,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ...(current.messagingToolSourceReplyPayloads.length > 0
           ? { messagingToolSourceReplyPayloads: current.messagingToolSourceReplyPayloads.slice() }
           : {}),
+        ...(current.toolMediaUrls.length > 0
+          ? { toolMediaUrls: current.toolMediaUrls.slice() }
+          : {}),
+        ...(current.toolAudioAsVoice ? { toolAudioAsVoice: true } : {}),
+        ...(current.toolTrustedLocalMedia ? { toolTrustedLocalMedia: true } : {}),
       };
     },
     attachDeliveryEvidence(error: unknown) {

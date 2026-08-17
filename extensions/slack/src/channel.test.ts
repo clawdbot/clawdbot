@@ -1,5 +1,6 @@
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Slack tests cover channel plugin behavior.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
@@ -156,10 +157,6 @@ function requireSlackListPeers() {
     throw new Error("slack directory.listPeers unavailable");
   }
   return listPeers;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -1753,7 +1750,11 @@ describe("slackPlugin outbound new targets", () => {
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("user:U99NEW");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello new user");
     expect(requireMockCallArg(sendSlack, 0, 2).cfg).toBe(cfg);
-    expect(result).toEqual({ channel: "slack", messageId: "m-new-user", channelId: "D999" });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "m-new-user",
+      target: { kind: "channel", id: "D999" },
+    });
   });
 
   it("sends to a new channel target without erroring", async () => {
@@ -1771,7 +1772,11 @@ describe("slackPlugin outbound new targets", () => {
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("channel:C555NEW");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello channel");
     expect(requireMockCallArg(sendSlack, 0, 2).cfg).toBe(cfg);
-    expect(result).toEqual({ channel: "slack", messageId: "m-new-chan", channelId: "C555" });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "m-new-chan",
+      target: { kind: "channel", id: "C555" },
+    });
   });
 
   it("sends media to a new user target without erroring", async () => {
@@ -1793,7 +1798,11 @@ describe("slackPlugin outbound new targets", () => {
       cfg,
       mediaUrl: "https://example.com/file.png",
     });
-    expect(result).toEqual({ channel: "slack", messageId: "m-new-media", channelId: "D888" });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "m-new-media",
+      target: { kind: "channel", id: "D888" },
+    });
   });
 });
 

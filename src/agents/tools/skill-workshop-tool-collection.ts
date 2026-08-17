@@ -16,7 +16,7 @@ import {
 } from "../../skills/workshop/collection-reconcile.js";
 import { readSkillProposalTargetTreeSha256 } from "../../skills/workshop/proposal-bundle.js";
 import { stringEnum } from "../schema/typebox.js";
-import { readStringParam, ToolInputError } from "./common.js";
+import { readToolStringParam, ToolInputError } from "./common.js";
 
 export async function recordSkillCollectionReadReceipt(params: {
   context: SkillCollectionReconcileContext;
@@ -140,8 +140,8 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
     if (!entry) {
       throw new ToolInputError(`collection[${index}] must be an object`);
     }
-    const action = readStringParam(entry, "action", { required: true });
-    const name = readStringParam(entry, "name", { required: true });
+    const action = readToolStringParam(entry, "action", { required: true });
+    const name = readToolStringParam(entry, "name", { required: true });
     if (action === "keep") {
       return { action, name };
     }
@@ -149,15 +149,15 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
       return {
         action,
         name,
-        reason: readStringParam(entry, "reason", { required: true }),
+        reason: readToolStringParam(entry, "reason", { required: true }),
       };
     }
     if (action === "write") {
       return {
         action,
         name,
-        description: readStringParam(entry, "description", { required: true }),
-        content: readStringParam(entry, "content", { required: true, trim: false }),
+        description: readToolStringParam(entry, "description", { required: true }),
+        content: readToolStringParam(entry, "content", { required: true, trim: false }),
       };
     }
     throw new ToolInputError(`collection[${index}].action must be keep, write, or drop`);

@@ -326,7 +326,12 @@ export async function resolveReplyDirectives(params: {
     typing.cleanup();
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg,
-      sessionKey: resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey: ctx.SessionKey }),
+      sessionKey: resolveRuntimePolicySessionKey({
+        agentId,
+        cfg,
+        ctx,
+        sessionKey: ctx.SessionKey,
+      }),
     }).sandboxed;
     return {
       kind: "reply",
@@ -471,10 +476,9 @@ export async function resolveReplyDirectives(params: {
   model = modelState.model;
 
   let contextTokens = useFastReplyRuntime
-    ? (agentCfg?.contextTokens ?? DEFAULT_CONTEXT_TOKENS)
+    ? DEFAULT_CONTEXT_TOKENS
     : resolveContextTokens({
         cfg,
-        agentCfg,
         provider,
         model,
         modelContextWindow: modelState.modelContextWindow,
@@ -541,7 +545,7 @@ export async function resolveReplyDirectives(params: {
     provider,
     modelId: model,
     agentId,
-    sessionKey: resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey }),
+    sessionKey: resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey }),
     sessionEntry: targetSessionEntry,
   });
   const resolvedThinkLevelWithDefault =

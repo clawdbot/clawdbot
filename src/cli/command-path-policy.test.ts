@@ -74,18 +74,64 @@ describe("command-path-policy", () => {
     });
   });
 
-  it("keeps RPC-only nodes reads off the config guard", () => {
-    expectResolvedPolicy(["nodes", "status"], {
-      configGuard: "skip",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["nodes", "list"], {
-      configGuard: "skip",
-      networkProxy: "bypass",
-    });
+  it("keeps built-in node RPCs off the config guard", () => {
+    for (const subcommand of ["status", "list"]) {
+      expectResolvedPolicy(["nodes", subcommand], {
+        configGuard: "skip",
+        networkProxy: "bypass",
+      });
+    }
+    for (const subcommand of [
+      "describe",
+      "pending",
+      "approve",
+      "reject",
+      "remove",
+      "rename",
+      "invoke",
+      "notify",
+      "push",
+      "camera",
+      "screen",
+      "location",
+    ]) {
+      expectResolvedPolicy(["nodes", subcommand], {
+        configGuard: "validate",
+        networkProxy: "bypass",
+      });
+    }
     // Bare `openclaw nodes` still resolves plugin subcommands from validated config.
     expectResolvedPolicy(["nodes"], { networkProxy: "bypass" });
     expectResolvedPolicy(["nodes", "pair"], { networkProxy: "bypass" });
+  });
+
+  it("keeps gateway-owned node and device mutations off the local config guard", () => {
+    for (const subcommand of [
+      "list",
+      "join-code",
+      "approve",
+      "reject",
+      "remove",
+      "clear",
+      "rename",
+      "rotate",
+      "revoke",
+    ]) {
+      const commandPath = ["devices", subcommand];
+      expectResolvedPolicy(commandPath, {
+        configGuard: "validate",
+        networkProxy: "bypass",
+      });
+    }
+  });
+
+  it("keeps gateway suspension RPCs on non-observing config validation", () => {
+    for (const subcommand of ["suspend", "resume"]) {
+      expectResolvedPolicy(["gateway", subcommand], {
+        configGuard: "validate",
+        networkProxy: "bypass",
+      });
+    }
   });
 
   it("applies exact overrides after broader channel plugin rules", () => {

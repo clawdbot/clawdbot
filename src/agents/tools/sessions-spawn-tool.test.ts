@@ -3,8 +3,9 @@ import path from "node:path";
 // dispatch, and result details for spawned child sessions.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -36,9 +37,6 @@ vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
 }));
 
 vi.mock("../subagents/spawn/acp-spawn.js", () => ({
-  ACP_SPAWN_MODES: ["run", "session"],
-  ACP_SPAWN_STREAM_TARGETS: ["parent"],
-  isSpawnAcpAcceptedResult: (result: { status?: string }) => result?.status === "accepted",
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
@@ -420,6 +418,9 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.visible?.description).toBe(
       "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     );
+    expect(schema.properties?.cwd?.description).toContain(
+      "outside configured agent workspaces require operator.admin",
+    );
     expect(tool.description).toContain("`visible=true`: persistent sidebar dashboard session");
     expect(tool.description).toContain("when the user asks to create/open a thread");
     expect(tool.description).toContain('no `mode="run"`');
@@ -436,7 +437,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("creates visible worktree sessions and registers completion announce", async () => {
-    await withTempDir({ prefix: "openclaw-visible-spawn-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-" }, async (dir) => {
       const callGateway = vi.fn(async () => ({
         key: "agent:main:dashboard:child",
         runStarted: true,
@@ -514,6 +515,147 @@ describe("sessions_spawn tool", () => {
         }),
       );
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("explains an out-of-workspace visible cwd denial without suggesting a CLI fallback", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-external-cwd-" }, async (workspace) => {
+      const outside = path.dirname(workspace);
+      const callGateway = vi.fn(async () => {
+        throw new GatewayClientRequestError({
+          code: "FORBIDDEN",
+          message: "permission denied",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        });
+      });
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: { agents: { list: [{ id: "main", workspace }] } },
+        callGateway: callGateway as never,
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("visible-external-cwd", {
+        task: "inspect issue",
+        cwd: outside,
+        visible: true,
+        worktree: true,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "forbidden",
+        error: `Visible session cwd "${outside}" is outside configured agent workspaces and requires operator.admin. Omit cwd to use the target agent workspace, or ask the operator to start the session from a registered project. Do not substitute the synchronous \`openclaw agent\` CLI for a persistent visible session.`,
+      });
+      expect(callGateway).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("preserves matching error text without structured missing-scope details", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("missing scope: operator.admin");
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway: callGateway as never,
+      countActiveRuns: () => 0,
+    });
+
+    await expect(
+      tool.execute("visible-message-only-denial", {
+        task: "inspect issue",
+        cwd: "/srv/external/repo",
+        visible: true,
+      }),
+    ).rejects.toThrow("missing scope: operator.admin");
+  });
+
+  it("preserves inconsistent structured missing-scope details", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new GatewayClientRequestError({
+        code: "FORBIDDEN",
+        message: "permission denied",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.write"],
+        },
+      });
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway: callGateway as never,
+      countActiveRuns: () => 0,
+    });
+
+    await expect(
+      tool.execute("visible-inconsistent-scope-denial", {
+        task: "inspect issue",
+        cwd: "/srv/external/repo",
+        visible: true,
+      }),
+    ).rejects.toThrow("permission denied");
+  });
+
+  it("preserves unrelated visible-session admin denials with an allowed cwd", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-allowed-cwd-" }, async (workspace) => {
+      const callGateway = vi.fn(async () => {
+        throw new GatewayClientRequestError({
+          code: "FORBIDDEN",
+          message: "permission denied",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        });
+      });
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: { agents: { list: [{ id: "main", workspace }] } },
+        callGateway: callGateway as never,
+        countActiveRuns: () => 0,
+      });
+
+      await expect(
+        tool.execute("visible-admin-denial", {
+          task: "inspect issue",
+          cwd: workspace,
+          visible: true,
+        }),
+      ).rejects.toThrow("permission denied");
+    });
+  });
+
+  it("rejects a visible spawn before creation when the exact parent incarnation changed", async () => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-parent-race-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const parentSessionKey = "agent:main:main";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: parentSessionKey, storePath },
+        { sessionId: "replacement-parent", updatedAt: 2 },
+      );
+      const callGateway = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: parentSessionKey,
+        expectedParentSessionId: "original-parent",
+        config: {
+          session: { store: storePath },
+          agents: { list: [{ id: "main" }] },
+        },
+        callGateway,
+        countActiveRuns: () => 0,
+      });
+
+      await expect(
+        tool.execute("visible-stale-parent", { task: "inspect", visible: true }),
+      ).rejects.toThrow(`Session "${parentSessionKey}" changed after access was granted.`);
+      expect(callGateway).not.toHaveBeenCalled();
     });
   });
 
@@ -628,7 +770,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("rejects cwd escape for sandboxed visible sessions", async () => {
-    await withTempDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
       const callGateway = vi.fn();
       const tool = createSessionsSpawnTool({
         agentSessionKey: "agent:main:main",
@@ -658,7 +800,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("allows cwd within a sandboxed visible session workspace", async () => {
-    await withTempDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
       const workspace = path.join(dir, "workspace");
       const cwd = path.join(workspace, "packages", "app");
       const callGateway = vi.fn(async () => ({
@@ -1054,14 +1196,14 @@ describe("sessions_spawn tool", () => {
   });
 
   it("applies spawn depth limits to visible dashboard descendants", async () => {
-    await withTempDir({ prefix: "openclaw-visible-depth-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-visible-depth-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const childKey = "agent:main:dashboard:child";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:main", storePath },
         { sessionId: "root", updatedAt: 1 },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: childKey, storePath },
         // Canonical spawn-child shape: sessions.create persists explicit
         // spawnDepth; parentSessionKey alone is UI threading and adds no depth.
@@ -1085,6 +1227,44 @@ describe("sessions_spawn tool", () => {
 
       expect(result.details).toMatchObject({ status: "forbidden" });
       expect(callGateway).not.toHaveBeenCalled();
+
+      callGateway.mockResolvedValue({
+        key: "agent:main:dashboard:grandchild",
+        runStarted: true,
+        runId: "run-grandchild",
+      });
+      const nestedTool = createSessionsSpawnTool({
+        agentSessionKey: childKey,
+        config: {
+          session: { store: storePath },
+          agents: {
+            list: [{ id: "main" }],
+            defaults: { subagents: { maxSpawnDepth: 2 } },
+          },
+        },
+        callGateway,
+        countActiveRuns: () => 0,
+        registerRun: vi.fn(),
+      });
+
+      const nestedResult = await nestedTool.execute("visible-nested", {
+        task: "inspect from the grandchild",
+        visible: true,
+      });
+
+      expect(nestedResult.details).toMatchObject({
+        status: "accepted",
+        childSessionKey: "agent:main:dashboard:grandchild",
+        runId: "run-grandchild",
+      });
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({
+          parentSessionKey: childKey,
+          spawnDepth: 2,
+          task: "inspect from the grandchild",
+        }),
+      );
     });
   });
 

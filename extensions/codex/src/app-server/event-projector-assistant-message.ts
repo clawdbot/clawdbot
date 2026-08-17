@@ -11,6 +11,11 @@ import {
 
 type CodexAssistantMessageParams = CodexLocalRuntimeAttributionParams &
   Pick<AgentHarnessAttemptParamsV2, "modelId">;
+type CodexAssistantAttribution = {
+  provider: string;
+  modelId: string;
+  api?: AssistantMessage["api"];
+};
 
 type CodexAssistantUsage = Usage & {
   // Codex is a managed runtime; keep reasoning telemetry private to managed consumers.
@@ -44,6 +49,19 @@ export function createAssistantMessage(
   options: AssistantMessageOptions,
 ): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
+  return createAttributedCodexAssistantMessage(
+    { ...attribution, modelId: params.modelId },
+    text,
+    options,
+  );
+}
+
+/** Creates a Codex assistant row when a bounded call already owns attribution. */
+export function createAttributedCodexAssistantMessage(
+  attribution: CodexAssistantAttribution,
+  text: string,
+  options: AssistantMessageOptions,
+): AssistantMessage {
   const usage: CodexAssistantUsage = options.tokenUsage
     ? {
         input: options.tokenUsage.input ?? 0,
@@ -70,7 +88,7 @@ export function createAssistantMessage(
     content: [{ type: "text", text }],
     api: attribution.api ?? "openai-chatgpt-responses",
     provider: attribution.provider,
-    model: params.modelId,
+    model: attribution.modelId,
     usage,
     stopReason: options.aborted ? "aborted" : options.promptError ? "error" : "stop",
     errorMessage: options.promptError ? formatErrorMessage(options.promptError) : undefined,
@@ -85,7 +103,9 @@ export function createAssistantCommentaryMessage(
   timestamp: number,
 ): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
-  return {
+  const message: AssistantMessage & {
+    openclawStreamFallback: { replacementText: string; source: "segment"; itemId: string };
+  } = {
     role: "assistant",
     content: [{ type: "text", text }],
     api: attribution.api ?? "openai-chatgpt-responses",
@@ -101,7 +121,8 @@ export function createAssistantCommentaryMessage(
       source: "segment",
       itemId,
     },
-  } as unknown as AssistantMessage;
+  };
+  return message;
 }
 
 export function createAssistantMirrorMessage(

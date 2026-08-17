@@ -4,11 +4,14 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { hasAgentRosterProperty, listAgentEntries } from "../agents/agent-scope-config.js";
-import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  hasAgentRosterProperty,
+  listAgentEntries,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
+import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -34,9 +37,8 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
+import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { readControlUiDeviceAuthMigrationState } from "../state/control-ui-device-auth-migration.js";
-import { resolveUserPath } from "../utils.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -477,30 +479,6 @@ function collectGatewayConfigFindings(
     collectDangerousConfigFlags: collectEnabledInsecureOrDangerousFlags,
     gatewayAuthOverride: options.gatewayAuthOverride,
   });
-}
-
-function collectControlUiDeviceAuthMigrationFindings(params: {
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-}): SecurityAuditFinding[] {
-  const migration = readControlUiDeviceAuthMigrationState({
-    env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
-  });
-  if (migration?.status !== "pending") {
-    return [];
-  }
-  return [
-    {
-      checkId: "gateway.control_ui.device_auth_disabled",
-      severity: "critical",
-      title: "Control UI device-auth migration is pending",
-      detail:
-        "The retired device-auth bypass was imported into pending migration state. " +
-        "Device-less Control UI sessions with valid shared auth can still connect for remediation until an operator browser completes pairing.",
-      remediation:
-        "Reopen the Control UI over HTTPS or localhost and click Secure this browser to complete pairing and end the compatibility window.",
-    },
-  ];
 }
 
 async function collectPluginSecurityAuditFindings(
@@ -956,7 +934,14 @@ function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     return [];
   }
   const defaultCount = agents.filter((agent) => agent?.default === true).length;
-  if (defaultCount === 1) {
+  const explicitOwnership = cfg.agents?.ownership === "explicit";
+  // Mirror runtime default resolution: explicit fleets are ownerless by design,
+  // otherwise the roster is valid exactly when the canonical resolver finds an
+  // owner (sole agent, one legacy marker, or a retained migration owner).
+  const resolvable = explicitOwnership
+    ? defaultCount === 0
+    : tryResolveLegacyCompatibilityAgentId(cfg) !== undefined;
+  if (resolvable) {
     return [];
   }
   return [
@@ -964,7 +949,9 @@ function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       checkId: "config.agent_roster.invalid_default_count",
       severity: "warn",
       title: "Agent roster has an invalid default selection",
-      detail: `Expected exactly one agents.entries default=true entry, found ${defaultCount}.`,
+      detail: explicitOwnership
+        ? `Expected no agents.entries default=true entries with agents.ownership=explicit, found ${defaultCount}.`
+        : `Expected a resolvable default agent (sole entry, one default=true marker, or agents.ownership=explicit); found ${defaultCount} default markers across ${agents.length} configured agents.`,
       remediation: "Run `openclaw doctor --fix` to repair the authored agent roster.",
     },
   ];
@@ -1297,15 +1284,11 @@ async function createAuditExecutionContext(
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
-  const configuredDefaultWorkspace = cfg.agents?.defaults?.workspace?.trim();
-  const workspaceDir =
-    opts.workspaceDir ??
-    (defaultAgentId
-      ? resolveAgentWorkspaceDir(cfg, defaultAgentId)
-      : configuredDefaultWorkspace
-        ? resolveUserPath(configuredDefaultWorkspace, env)
-        : resolveDefaultAgentWorkspaceDir(env));
+  const workspaceDir = resolvePluginControlPlaneWorkspace({
+    config: cfg,
+    workspaceDir: opts.workspaceDir,
+    env,
+  }).workspaceDir;
   const { readConfigSnapshotForAudit } = await loadAuditNonDeepModule();
   const configSnapshot = includeFilesystem
     ? opts.configSnapshot !== undefined
@@ -1336,7 +1319,9 @@ async function createAuditExecutionContext(
   };
 }
 
-export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<SecurityAuditReport> {
+export async function runSecurityAuditCore(
+  opts: SecurityAuditOptions,
+): Promise<SecurityAuditReport> {
   const findings: SecurityAuditFinding[] = [];
   const context = await createAuditExecutionContext(opts);
   const { cfg, env, platform, stateDir, configPath } = context;
@@ -1351,7 +1336,6 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       gatewayAuthOverride: context.auditGatewayAuthOverride,
     }),
   );
-  findings.push(...collectControlUiDeviceAuthMigrationFindings({ env, stateDir }));
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));

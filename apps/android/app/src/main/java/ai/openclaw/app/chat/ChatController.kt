@@ -58,6 +58,9 @@ import java.util.concurrent.atomic.AtomicLong
 internal const val SESSION_LIST_FETCH_LIMIT = 200
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
+private const val WEAR_AGENT_PULSE_SWARM_MAX_ROWS = 1_000
+private const val WEAR_AGENT_PULSE_SWARM_FETCH_LIMIT = WEAR_AGENT_PULSE_SWARM_MAX_ROWS + 1
+private const val WEAR_AGENT_PULSE_DIRECT_CHILDREN_GROUP = "__wear_agent_pulse_direct_children__"
 private const val SUBAGENT_ACTIVITY_RETENTION_MS = 60_000L
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
 private val MANAGED_MEDIA_PATH_REGEX =
@@ -101,6 +104,8 @@ class ChatController internal constructor(
   private val scope: CoroutineScope,
   private val json: Json,
   private val requestGateway: suspend (method: String, paramsJson: String?) -> String,
+  private val requestGatewayWithTimeout: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String =
+    { method, paramsJson, _ -> requestGateway(method, paramsJson) },
   private val requestGatewayForGateway: suspend (gatewayId: String, method: String, paramsJson: String?) -> String =
     { _, method, paramsJson -> requestGateway(method, paramsJson) },
   private val captureSettingsRequestLease: (gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease? =
@@ -154,6 +159,9 @@ class ChatController internal constructor(
     scope = scope,
     json = json,
     requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
+    requestGatewayWithTimeout = { method, paramsJson, timeoutMs ->
+      session.request(method, paramsJson, timeoutMs)
+    },
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
@@ -346,8 +354,8 @@ class ChatController internal constructor(
 
   private val questionEvictionJobs = mutableMapOf<String, QuestionEvictionJob>()
 
-  private val _planSteps = MutableStateFlow<List<ChatPlanStep>>(emptyList())
-  val planSteps: StateFlow<List<ChatPlanStep>> = _planSteps.asStateFlow()
+  private val _planSnapshot = MutableStateFlow(ChatPlanSnapshot(steps = emptyList()))
+  val planSnapshot: StateFlow<ChatPlanSnapshot> = _planSnapshot.asStateFlow()
 
   // Owning run for the current plan snapshot; run-scoped terminal events must
   // not clear another run's checklist (parallel/delayed runs share a session).
@@ -379,6 +387,116 @@ class ChatController internal constructor(
   private var swarmRefreshJob: Job? = null
   private var swarmSessionKey: String? = null
   private var swarmEnabled = false
+
+  internal fun currentSwarmSnapshot(): ChatSwarmSnapshot =
+    synchronized(swarmLock) {
+      ChatSwarmSnapshot(
+        sessionKey = swarmSessionKey,
+        enabled = swarmEnabled,
+        groups = _swarmGroups.value,
+      )
+    }
+
+  /** Reads Swarm state for a Wear-selected session without changing the Phone chat selection. */
+  internal suspend fun readSwarmSnapshotFor(
+    sessionKey: String,
+    agentId: String,
+  ): ChatSwarmSnapshot? {
+    val requestedSessionKey = sessionKey.trim().takeIf(String::isNotEmpty) ?: return null
+    val requestedAgentId = agentId.trim().takeIf(String::isNotEmpty) ?: return null
+    val scopedSessionKey = normalizeRequestedSessionKey(requestedSessionKey)
+    val scopedAgentId = resolveAgentIdFromMainSessionKey(scopedSessionKey)
+    val restrictToParentAgent =
+      when {
+        scopedAgentId == requestedAgentId -> false
+        requestedSessionKey == "main" && scopedSessionKey == "main" && scopedAgentId == null -> true
+        else -> return null
+      }
+    val requestCacheScope = currentCacheScope() ?: return null
+    val enabled =
+      try {
+        val params =
+          buildJsonObject {
+            put("agentId", JsonPrimitive(requestedAgentId))
+          }
+        val root =
+          json
+            .parseToJsonElement(
+              requestGatewayBound(
+                requestCacheScope.gatewayId,
+                "chat.metadata",
+                params.toString(),
+              ),
+            ).asObjectOrNull()
+        root?.get("swarmEnabled").asBooleanOrNull() == true
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        return null
+      }
+    if (!enabled) {
+      return ChatSwarmSnapshot(
+        sessionKey = requestedSessionKey,
+        enabled = false,
+        groups = emptyList(),
+      )
+    }
+    val rows =
+      try {
+        val params =
+          buildJsonObject {
+            put("includeGlobal", JsonPrimitive(false))
+            put("includeUnknown", JsonPrimitive(false))
+            put("configuredAgentsOnly", JsonPrimitive(true))
+            if (restrictToParentAgent) {
+              put("agentId", JsonPrimitive(requestedAgentId))
+            }
+            put("spawnedBy", JsonPrimitive(scopedSessionKey))
+            put("limit", JsonPrimitive(WEAR_AGENT_PULSE_SWARM_FETCH_LIMIT))
+            put("offset", JsonPrimitive(0))
+          }
+        val root =
+          json
+            .parseToJsonElement(
+              requestGatewayBound(
+                requestCacheScope.gatewayId,
+                "sessions.list",
+                params.toString(),
+              ),
+            ).asObjectOrNull()
+            ?: return null
+        val sessionElements = root["sessions"] as? JsonArray ?: return null
+        val parsedRows = sessionElements.mapNotNull { parseSessionEntry(it.asObjectOrNull()) }
+        val truncated =
+          root["hasMore"].asBooleanOrNull() == true ||
+            root["totalCount"].asLongOrNull()?.let { total -> total > sessionElements.size.toLong() } == true ||
+            sessionElements.size > WEAR_AGENT_PULSE_SWARM_MAX_ROWS
+        if (truncated || parsedRows.size != sessionElements.size) {
+          return null
+        }
+        parsedRows
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        return null
+      }
+    val projectedRows =
+      rows.map { row ->
+        val hasExplicitGroup = !row.swarmGroupId.isNullOrBlank()
+        val hasSubagentProvenance = row.subagentRunState != null || row.hasActiveSubagentRun != null
+        if (!hasExplicitGroup && hasSubagentProvenance) {
+          row.copy(swarmGroupId = WEAR_AGENT_PULSE_DIRECT_CHILDREN_GROUP)
+        } else {
+          row
+        }
+      }
+    if (requestCacheScope != currentCacheScope()) return null
+    return ChatSwarmSnapshot(
+      sessionKey = requestedSessionKey,
+      enabled = true,
+      groups = buildChatSwarmGroups(projectedRows) { candidate -> sameOutboxSession(candidate, scopedSessionKey) },
+    )
+  }
 
   private val _sessionBranches = MutableStateFlow<List<SessionBranch>>(emptyList())
   val sessionBranches: StateFlow<List<SessionBranch>> = _sessionBranches.asStateFlow()
@@ -692,7 +810,7 @@ class ChatController internal constructor(
         clearPendingRuns()
         clearLiveRunUi()
       }
-      clearPlanSteps()
+      clearPlan()
       appliedMainSessionKey = "main"
       beginHistoryLoad(
         key = "main",
@@ -917,6 +1035,7 @@ class ChatController internal constructor(
   suspend fun patchSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -932,11 +1051,17 @@ class ChatController internal constructor(
         ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
     val hasPatch = clearLabel || label != null || clearCategory || category != null || pinned != null || archived != null || unread != null
     if (!hasPatch) return false
+    val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
+    if (archived != null && lifecycleSessionId == null) {
+      updateErrorText("Session lifecycle action requires a durable session identity.")
+      return false
+    }
     try {
       val params =
         buildJsonObject {
           put("key", JsonPrimitive(sessionKey))
           capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
+          lifecycleSessionId?.let { put("expectedSessionId", JsonPrimitive(it)) }
           if (clearLabel) {
             put("label", JsonNull)
           } else if (label != null) {
@@ -951,7 +1076,11 @@ class ChatController internal constructor(
           if (archived != null) put("archived", JsonPrimitive(archived))
           if (unread != null) put("unread", JsonPrimitive(unread))
         }
-      requestGateway("sessions.patch", params.toString())
+      if (archived == true) {
+        requestGatewayWithTimeout("sessions.patch", params.toString(), 10 * 60_000L)
+      } else {
+        requestGateway("sessions.patch", params.toString())
+      }
       if (archived == true) {
         fallBackFromRetiredActiveSession(sessionKey)
       }
@@ -1103,6 +1232,7 @@ class ChatController internal constructor(
   suspend fun forkSession(
     parentKey: String,
     ownerAgentId: String? = null,
+    fromLastCompleted: Boolean = false,
   ): String? {
     val sessionKey = parentKey.trim().takeIf { it.isNotEmpty() } ?: return null
     val capturedOwnerAgentId =
@@ -1114,6 +1244,7 @@ class ChatController internal constructor(
         buildJsonObject {
           put("parentSessionKey", JsonPrimitive(sessionKey))
           put("fork", JsonPrimitive(true))
+          if (fromLastCompleted) put("forkFrom", JsonPrimitive("last-completed"))
           // Keep the fork under the selected row's captured agent; omitting agentId can
           // create the child under a newer gateway default for unscoped parent keys.
           capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
@@ -2258,7 +2389,7 @@ class ChatController internal constructor(
     clearLiveHistoryMarker()
     clearPendingRuns()
     clearLiveRunUi()
-    clearPlanSteps()
+    clearPlan()
     _sessionId.value = null
     _historyLoading.value = markLoading
     if (clearMessages) {
@@ -2579,7 +2710,7 @@ class ChatController internal constructor(
             if (ack.isTerminalSuccess) {
               if (isCapturedOwnerCurrent()) {
                 clearLiveRunUi()
-                clearPlanSteps()
+                clearPlan()
                 refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
               }
               true
@@ -2588,7 +2719,7 @@ class ChatController internal constructor(
               // Surface failed acceptance instead of letting a cleared composer look successful.
               if (isCapturedOwnerCurrent()) {
                 clearLiveRunUi()
-                clearPlanSteps()
+                clearPlan()
                 updateLocalizedErrorText(nativeText("Chat failed before the run started; try again."))
               }
               // The parked row owns the input; restoring the draft would duplicate it.
@@ -2847,7 +2978,7 @@ class ChatController internal constructor(
     _streamingAssistantText.value = null
     pendingToolCallsById.clear()
     publishPendingToolCalls()
-    clearPlanSteps()
+    clearPlan()
     publishRunPresentation()
   }
 
@@ -4222,6 +4353,7 @@ class ChatController internal constructor(
       ) {
         return
       }
+      swarmSessionKey = snapshot.parentKey
       _swarmGroups.value = groups
     }
   }
@@ -5413,7 +5545,7 @@ class ChatController internal constructor(
             synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
           if (!hasNewerRun) {
             clearLiveRunUi()
-            clearPlanStepsFor(runId)
+            clearPlanFor(runId)
             updateLocalizedErrorText(
               if (state == "error") {
                 payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed")
@@ -5451,7 +5583,7 @@ class ChatController internal constructor(
           clearPendingRuns(clearOptimisticMessages = false, clearRunTelemetry = false)
         }
         clearLiveRunUi()
-        clearPlanStepsFor(runId)
+        clearPlanFor(runId)
         refreshCurrentHistoryBestEffort(
           runIdsToReconcile = terminalRunIds,
           updateSessionInfo = true,
@@ -5619,7 +5751,7 @@ class ChatController internal constructor(
     if (!entry.hasActiveRunMetadata) retireRunTelemetry(settledRunId)
     if (terminalWasLocal) {
       clearPendingRun(settledRunId)
-      clearPlanStepsFor(settledRunId)
+      clearPlanFor(settledRunId)
       clearTransientRunUiIfIdle()
     } else {
       publishRunPresentation()
@@ -5692,7 +5824,7 @@ class ChatController internal constructor(
           if (!accepted) return
           if (isLocallyOwnedRun(lifecycleRunId)) {
             clearPendingRun(lifecycleRunId)
-            clearPlanStepsFor(lifecycleRunId)
+            clearPlanFor(lifecycleRunId)
             clearTransientRunUiIfIdle()
           } else {
             publishRunPresentation()
@@ -5752,9 +5884,19 @@ class ChatController internal constructor(
       }
       "plan" -> {
         if (runId.isNullOrBlank()) return
-        if (data?.get("phase").asStringOrNull() != "update") return
+        val planData = data ?: return
+        if (planData["phase"].asStringOrNull() != "update") return
         planRunId = runId
-        _planSteps.value = parseChatPlanSteps(data?.get("steps"))
+        val steps = parseChatPlanSteps(planData["steps"])
+        _planSnapshot.value =
+          ChatPlanSnapshot(
+            steps = steps,
+            explanation =
+              planData["explanation"]
+                .asStringOrNull()
+                ?.trim()
+                ?.takeIf { steps.isNotEmpty() && it.isNotEmpty() },
+          )
       }
       "error" -> {
         updateLocalizedErrorText(nativeText("Event stream interrupted; try refreshing."))
@@ -5762,7 +5904,7 @@ class ChatController internal constructor(
           clearPendingRuns()
         } else {
           clearPendingRun(runId)
-          clearPlanStepsFor(runId)
+          clearPlanFor(runId)
           clearTransientRunUiIfIdle()
         }
         pendingToolCallsById.clear()
@@ -5904,16 +6046,17 @@ class ChatController internal constructor(
               ?: existing?.childSessionKey,
         )
       _subagentActivities.value = _subagentActivities.value + (taskId to activity)
-      subagentActivityExpiryJobs.remove(taskId)?.cancel()
-      if (!activity.isWorking) {
+      if (activity.isWorking) {
+        subagentActivityExpiryJobs.remove(taskId)?.cancel()
+      } else if (terminal && existing?.isWorking != false) {
+        // Local receipt starts retention; remote endedAt may be old.
+        // Duplicate terminal updates must not extend that retention window.
         subagentActivityExpiryJobs[taskId] =
           scope.launch {
-            val expiresAt = (activity.endedAtMs ?: now) + SUBAGENT_ACTIVITY_RETENTION_MS
-            delay((expiresAt - System.currentTimeMillis()).coerceAtLeast(0L))
+            delay(SUBAGENT_ACTIVITY_RETENTION_MS)
             synchronized(subagentActivityLock) {
-              if (_subagentActivities.value[taskId] == activity) {
-                _subagentActivities.value = _subagentActivities.value - taskId
-              }
+              if (subagentActivityExpiryJobs[taskId] !== coroutineContext[Job]) return@synchronized
+              _subagentActivities.value = _subagentActivities.value - taskId
               subagentActivityExpiryJobs.remove(taskId)
             }
           }
@@ -5942,14 +6085,14 @@ class ChatController internal constructor(
     _streamingAssistantText.value = null
   }
 
-  private fun clearPlanSteps() {
+  private fun clearPlan() {
     planRunId = null
-    _planSteps.value = emptyList()
+    _planSnapshot.value = ChatPlanSnapshot(steps = emptyList())
   }
 
-  private fun clearPlanStepsFor(runId: String?) {
+  private fun clearPlanFor(runId: String?) {
     if (runId == null || planRunId == null || planRunId == runId) {
-      clearPlanSteps()
+      clearPlan()
     }
   }
 
@@ -5974,7 +6117,7 @@ class ChatController internal constructor(
         history.sessionInfo?.hasActiveRun == false ||
         (activeRunIds != null && retainedRunId !in activeRunIds)
       ) {
-        clearPlanSteps()
+        clearPlan()
       }
       return
     }
@@ -5991,12 +6134,12 @@ class ChatController internal constructor(
     }
     val plan = run.plan
     if (plan == null) {
-      if (planRunId != null && planRunId != runId) clearPlanSteps()
+      if (planRunId != null && planRunId != runId) clearPlan()
     } else if (plan.steps.isEmpty()) {
-      clearPlanSteps()
+      clearPlan()
     } else {
       planRunId = runId
-      _planSteps.value = plan.steps
+      _planSnapshot.value = plan
     }
   }
 
@@ -6091,7 +6234,7 @@ class ChatController internal constructor(
   private fun clearTransientRunUiIfIdle(preservePlan: Boolean = false) {
     if (synchronized(pendingRuns) { pendingRuns.isNotEmpty() }) return
     clearLiveRunUi()
-    if (!preservePlan) clearPlanSteps()
+    if (!preservePlan) clearPlan()
   }
 
   private fun clearPendingRuns(
@@ -6342,6 +6485,8 @@ class ChatController internal constructor(
           timestampMs = ts,
           idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
           entryId = obj["__openclaw"].asObjectOrNull()?.get("id").asStringOrNull(),
+          provenance = parseChatMessageProvenance(obj["provenance"]),
+          transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
         )
       }
 
@@ -6352,6 +6497,26 @@ class ChatController internal constructor(
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
+    )
+  }
+
+  private fun parseChatMessageProvenance(element: JsonElement?): ChatMessageProvenance? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull() ?: return null
+    return ChatMessageProvenance(
+      kind = kind,
+      sourceTool = obj["sourceTool"].asJsonStringOrNull(),
+    )
+  }
+
+  private fun parseChatTranscriptMarker(element: JsonElement?): ChatTranscriptMarker? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull() ?: return null
+    return ChatTranscriptMarker(
+      kind = kind,
+      id = obj["id"].asJsonStringOrNull(),
+      tokensBefore = obj["tokensBefore"].asJsonNumberOrNull(),
+      tokensAfter = obj["tokensAfter"].asJsonNumberOrNull(),
     )
   }
 
@@ -6419,6 +6584,7 @@ class ChatController internal constructor(
     if (key.isEmpty()) return null
     return ChatSessionEntry(
       key = key,
+      sessionId = obj["sessionId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
       ownerAgentId = obj["agentId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
       classification = obj["classification"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
@@ -7291,6 +7457,17 @@ private fun JsonElement?.asStringOrNull(): String? =
     else -> null
   }
 
+private fun JsonElement?.asJsonStringOrNull(): String? =
+  (this as? JsonPrimitive)
+    ?.takeIf(JsonPrimitive::isString)
+    ?.content
+
+private fun JsonElement?.asJsonNumberOrNull(): Double? =
+  (this as? JsonPrimitive)
+    ?.takeUnless(JsonPrimitive::isString)
+    ?.content
+    ?.toDoubleOrNull()
+
 private fun JsonElement?.asLongOrNull(): Long? =
   when (this) {
     is JsonPrimitive -> content.toLongOrNull()
@@ -7362,6 +7539,9 @@ internal fun mergeChatSessionEntry(
       status = if (next.hasRunMetadata) next.status else existing.status,
     )
   return existing.copy(
+    // Partial events may omit identity; retain the last observed occurrence until
+    // an authoritative event supplies the replacement session ID.
+    sessionId = next.sessionId ?: existing.sessionId,
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     ownerAgentId = next.ownerAgentId ?: existing.ownerAgentId,
     classification = if (next.hasClassificationMetadata) next.classification else existing.classification,

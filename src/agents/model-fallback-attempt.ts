@@ -604,7 +604,6 @@ export function throwFallbackFailureSummary(params: {
       agentId: params.agentId,
       agentDir: params.agentDir,
       sessionId: params.attribution.sessionId,
-      laneId: params.attribution.lane,
       reason: "circuit_open",
       failedProvider: params.attempts.at(-1)?.provider ?? "unknown",
       failedModel: params.attempts.at(-1)?.model ?? "unknown",

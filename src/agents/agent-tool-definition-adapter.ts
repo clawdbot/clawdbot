@@ -38,7 +38,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
@@ -357,7 +357,7 @@ export function findClientToolNameConflicts(params: {
   for (const name of params.existingToolNames ?? []) {
     const trimmed = name.trim();
     if (trimmed) {
-      existingNormalized.add(normalizeToolName(trimmed));
+      existingNormalized.add(normalizeToolPolicyName(trimmed));
     }
   }
 
@@ -368,7 +368,7 @@ export function findClientToolNameConflicts(params: {
     if (!rawName) {
       continue;
     }
-    const normalizedName = normalizeToolName(rawName);
+    const normalizedName = normalizeToolPolicyName(rawName);
     if (existingNormalized.has(normalizedName)) {
       conflicts.add(rawName);
     }
@@ -400,7 +400,7 @@ export function toToolDefinitions(
 ): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
-    const normalizedName = normalizeToolName(name);
+    const normalizedName = normalizeToolPolicyName(name);
     const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
     const sourcePreparer = getInternalToolExecutionPreparer(tool);
     const definition = {

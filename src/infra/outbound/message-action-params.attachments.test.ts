@@ -8,58 +8,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadWebMedia } from "../../media/web-media.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { runMessageAction } from "./message-action-runner.js";
+import {
+  messageActionRunnerMocks,
+  resetMessageActionMediaMocks,
+  runMessageAction,
+  setMessageActionTestPlugin as setTestPlugin,
+} from "./message-action-runner.test-helpers.js";
+
+const loadWebMedia = messageActionRunnerMocks.loadWebMedia;
 
 const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5m8gAAAABJRU5ErkJggg==",
   "base64",
 );
-
-const channelResolutionMocks = vi.hoisted(() => ({
-  resolveOutboundChannelPlugin: vi.fn(),
-  executeSendAction: vi.fn(),
-  executePollAction: vi.fn(),
-}));
-
-vi.mock("./channel-resolution.js", () => ({
-  normalizeDeliverableOutboundChannel: (value?: string | null) =>
-    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
-  resolveOutboundChannelPlugin: channelResolutionMocks.resolveOutboundChannelPlugin,
-  resetOutboundChannelResolutionStateForTest: vi.fn(),
-}));
-
-vi.mock("./outbound-send-service.js", () => ({
-  executeSendAction: channelResolutionMocks.executeSendAction,
-  executePollAction: channelResolutionMocks.executePollAction,
-}));
-
-vi.mock("./outbound-session.js", () => ({
-  ensureOutboundSessionEntry: vi.fn(async () => undefined),
-  resolveOutboundSessionRoute: vi.fn(async () => null),
-}));
-
-vi.mock("./message-action-threading.js", async () => {
-  const { createOutboundThreadingMock } =
-    await import("./message-action-threading.test-helpers.js");
-  return createOutboundThreadingMock();
-});
-
-vi.mock("../../media/web-media.js", async () => {
-  const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
-    "../../media/web-media.js",
-  );
-  return {
-    ...actual,
-    loadWebMedia: vi.fn(actual.loadWebMedia),
-  };
-});
-
-function setTestPlugin(plugin: ChannelPlugin, pluginId: string) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId, source: "test", plugin }]));
-}
 
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -132,58 +95,9 @@ function expectAttachmentRemoteMediaPayload(result: Awaited<ReturnType<typeof ru
   expect(payload.buffer).toBe(Buffer.from("hello").toString("base64"));
 }
 
-let actualLoadWebMedia: typeof loadWebMedia;
-
 describe("runMessageAction media behavior", () => {
   beforeEach(async () => {
-    actualLoadWebMedia ??= (
-      await vi.importActual<typeof import("../../media/web-media.js")>("../../media/web-media.js")
-    ).loadWebMedia;
-    vi.restoreAllMocks();
-    vi.clearAllMocks();
-    channelResolutionMocks.resolveOutboundChannelPlugin.mockReset();
-    channelResolutionMocks.resolveOutboundChannelPlugin.mockImplementation(
-      ({ channel }: { channel: string }) =>
-        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
-    );
-    channelResolutionMocks.executeSendAction.mockReset();
-    channelResolutionMocks.executeSendAction.mockImplementation(
-      async ({
-        ctx,
-        to,
-        message,
-        mediaUrl,
-        mediaUrls,
-      }: {
-        ctx: { channel: string; dryRun: boolean };
-        to: string;
-        message: string;
-        mediaUrl?: string;
-        mediaUrls?: string[];
-      }) => ({
-        handledBy: "core" as const,
-        payload: {
-          channel: ctx.channel,
-          to,
-          message,
-          mediaUrl,
-          mediaUrls,
-          dryRun: ctx.dryRun,
-        },
-        sendResult: {
-          channel: ctx.channel,
-          messageId: "msg-test",
-          ...(mediaUrl ? { mediaUrl } : {}),
-          ...(mediaUrls ? { mediaUrls } : {}),
-        },
-      }),
-    );
-    channelResolutionMocks.executePollAction.mockReset();
-    channelResolutionMocks.executePollAction.mockImplementation(async () => {
-      throw new Error("executePollAction should not run in media tests");
-    });
-    vi.mocked(loadWebMedia).mockReset();
-    vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
+    await resetMessageActionMediaMocks();
   });
   describe("sendAttachment hydration", () => {
     const cfg = {

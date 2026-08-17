@@ -1,5 +1,6 @@
 // Workshop policy helpers validate generated skill drafts against workspace policy.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -64,14 +65,6 @@ function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
   };
 }
 
-function readOptionalString(
-  record: Record<string, unknown> | null,
-  key: string,
-): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function formatBodySizeKb(content: string): string {
   return (Buffer.byteLength(content, "utf8") / 1024).toFixed(1);
 }
@@ -126,8 +119,8 @@ async function resolveLifecycleApprovalDescription(params: {
   const toolParams = asNullableRecord(params.toolParams);
   try {
     const proposal = await resolvePendingSkillProposal({
-      proposalId: readOptionalString(toolParams, "proposal_id"),
-      name: readOptionalString(toolParams, "name"),
+      proposalId: normalizeOptionalString(toolParams?.proposal_id),
+      name: normalizeOptionalString(toolParams?.name),
       workspaceDir: params.workspaceDir,
     });
     const record = proposal.record;

@@ -333,6 +333,68 @@ function requireCancelledTurn(call: CallRecord): RecentTalkEvent & { turnId: str
 }
 
 describe("RealtimeCallHandler path routing", () => {
+  it.each([
+    [{ status: "completed" as const, responseId: "response-1" }, "turn.ended"],
+    [
+      { status: "failed" as const, responseId: "response-1", message: "provider failed" },
+      "turn.ended",
+    ],
+    [
+      {
+        status: "incomplete" as const,
+        responseId: "response-1",
+        reason: "max_output_tokens",
+        message: "provider response incomplete",
+      },
+      "turn.ended",
+    ],
+    [
+      { status: "cancelled" as const, responseId: "response-1", reason: "client_cancelled" },
+      "turn.cancelled",
+    ],
+  ])("finishes each telephony turn without closing the call", async (outcome, terminalType) => {
+    await withBargeInHarness(
+      { providerCallId: `CA-response-${outcome.status}` },
+      async ({ callbacks, call, ws }) => {
+        callbacks.onTranscript?.("user", "first turn", true);
+        callbacks.onAudio(Buffer.from([1]));
+        callbacks.onResponseDone?.(outcome);
+        callbacks.onEvent?.({
+          direction: "server",
+          responseId: outcome.responseId,
+          type: "response.done",
+        });
+
+        const firstEvents = recentTalkEvents(call);
+        expect(firstEvents.filter((event) => event.type === terminalType)).toHaveLength(1);
+        expect(firstEvents.filter((event) => event.type === "output.audio.done")).toHaveLength(1);
+        expect(firstEvents.filter((event) => event.type === "session.error")).toHaveLength(
+          outcome.status === "failed" || outcome.status === "incomplete" ? 1 : 0,
+        );
+        expect(ws.readyState).toBe(WebSocket.OPEN);
+
+        callbacks.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+        callbacks.onTranscript?.("user", "later turn", true);
+        callbacks.onAudio(Buffer.from([2]));
+        callbacks.onResponseDone?.({ status: "completed", responseId: "response-2" });
+        callbacks.onEvent?.({
+          direction: "server",
+          responseId: "response-2",
+          type: "response.done",
+        });
+
+        const finalEvents = recentTalkEvents(call);
+        expect(
+          finalEvents.filter(
+            (event) => event.type === "turn.ended" || event.type === "turn.cancelled",
+          ),
+        ).toHaveLength(2);
+        expect(finalEvents.filter((event) => event.type === "output.audio.done")).toHaveLength(2);
+        expect(ws.readyState).toBe(WebSocket.OPEN);
+      },
+    );
+  });
+
   it("uses the request host and stream path in TwiML", () => {
     const handler = makeHandler();
     const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook", "gateway.ts.net"));
@@ -510,6 +572,7 @@ describe("RealtimeCallHandler path routing", () => {
           }),
         );
         expect(createBridge.mock.calls[0]?.[0].instructions).toBe("instructions:support");
+        expect(createBridge.mock.calls[0]?.[0].agentId).toBe("support");
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

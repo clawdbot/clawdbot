@@ -534,7 +534,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
   OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
@@ -860,6 +860,7 @@ jobs:
               add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"
               add_profile_suite live-gateway-advisory-docker-xai-zai "full"
               add_profile_suite live-cli-backend-docker "stable full"
+              add_profile_suite live-cli-cache-docker "stable full"
               add_profile_suite live-acp-bind-docker "stable full"
               add_profile_suite live-codex-harness-docker "stable full"
               add_profile_suite live-codex-harness-gpt56-sol-docker "stable full"
@@ -977,7 +978,7 @@ jobs:
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
+    timeout-minutes: 90
     env:
       OPENCLAW_BUILD_PRIVATE_QA: "1"
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
@@ -1003,6 +1004,9 @@ jobs:
 
       - name: Install Playwright Chromium
         run: pnpm --dir ui exec playwright install --with-deps chromium
+
+      - name: Build sandbox image
+        run: scripts/sandbox-setup.sh
 
       - name: Run repo E2E suite
         run: pnpm test:e2e
@@ -1538,6 +1542,7 @@ jobs:
           LANES: ${{ inputs.docker_lanes }}
           GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         run: |
           set -euo pipefail
           groups_json="$(node scripts/plan-targeted-docker-lane-groups.mjs)"
@@ -1555,7 +1560,7 @@ jobs:
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -2349,7 +2354,7 @@ jobs:
           echo "Validating Docker E2E package tarball: $target"
           validator=(node scripts/check-openclaw-package-tarball.mjs)
           if [[ -n "${EXPECTED_PACKAGE_FILE_NAME// }" ]]; then
-            validator=(pnpm --dir .release-harness exec node scripts/check-openclaw-package-tarball.mjs)
+            validator=(bash -c 'cd .release-harness && pnpm exec node scripts/check-openclaw-package-tarball.mjs "$1"' --)
           fi
           started_at="$(date +%s)"
           timeout --foreground 5m "${validator[@]}" "$GITHUB_WORKSPACE/$target"
@@ -2798,7 +2803,7 @@ jobs:
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          live_image_extensions="matrix,acpx"
+          live_image_extensions="matrix,acpx,anthropic"
           live_image_tag_suffix="${live_image_extensions//,/-}"
           if [[ "$SHARED_IMAGE_POLICY" == "no-push-artifact" ]]; then
             live_image="openclaw-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
@@ -3619,9 +3624,12 @@ jobs:
             echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
           fi
           case "${{ matrix.suite_id }}" in
-            live-cli-backend-docker)
+            live-cli-backend-docker | live-cli-cache-docker)
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
-              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+              if [[ "${{ matrix.suite_id }}" == "live-cli-cache-docker" ]]; then
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+                echo "OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1" >> "$GITHUB_ENV"
+              elif [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription" >> "$GITHUB_ENV"
               else
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
@@ -3747,6 +3755,12 @@ jobs:
             profiles: full
           - suite_id: live-cli-backend-docker
             label: Docker live CLI backend
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh
+            timeout_minutes: 50
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-cli-cache-docker
+            label: Docker live Claude CLI prompt cache
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh
             timeout_minutes: 50
             profile_env_only: false
@@ -3940,9 +3954,12 @@ jobs:
             echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
           fi
           case "${{ matrix.suite_id }}" in
-            live-cli-backend-docker)
+            live-cli-backend-docker | live-cli-cache-docker)
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
-              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+              if [[ "${{ matrix.suite_id }}" == "live-cli-cache-docker" ]]; then
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+                echo "OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1" >> "$GITHUB_ENV"
+              elif [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription" >> "$GITHUB_ENV"
               else
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"

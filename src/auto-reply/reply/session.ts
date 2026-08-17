@@ -19,7 +19,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -80,8 +80,8 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import {
+  recordSessionCreated,
   classifySessionStateActor,
   registerMainSessionGroupWatch,
 } from "../../sessions/session-state-events.js";
@@ -319,7 +319,7 @@ function resolveInitSessionStateAttemptContext(
     storePath: resolveSessionStorePathForScope({
       agentId,
       sessionKey: sessionCtxForState.SessionKey,
-      storePath: resolveStorePath(cfg.session?.store, { agentId }),
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     }),
   };
 }
@@ -394,10 +394,14 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionE
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
     label: entry.label,
     displayName: entry.displayName,
+    // Notice debt survives rollover: erasing it here would recreate the
+    // silent ambiguous-loss outcome the debt exists to prevent.
+    pendingDeliveryNotice: entry.pendingDeliveryNotice,
     spawnedBy: entry.spawnedBy,
     spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
     spawnedCwd: entry.spawnedCwd,
     parentSessionKey: entry.parentSessionKey,
+    parentSessionId: entry.parentSessionId,
     forkedFromParent: entry.forkedFromParent,
     forkSource: entry.forkSource,
     createdVia: entry.createdVia,
@@ -1053,6 +1057,7 @@ async function initSessionStateAttemptLocked(
       agentId,
       entry: sessionEntry,
       dmScope: ctx.DmScope ?? sessionCfg?.dmScope ?? "main",
+      mainKey,
     });
   }
   const sessionStore = committed.sessionStoreView;
@@ -1098,7 +1103,12 @@ async function initSessionStateAttemptLocked(
     // Direct-message browser tabs use a peer-scoped runtime identity even when
     // their transcript aliases main; cleanup must carry both exact keys.
     const runtimePolicySessionKey =
-      resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
+      resolveRuntimePolicySessionKey({
+        agentId,
+        cfg,
+        ctx: sessionCtxForState,
+        sessionKey,
+      }) ?? sessionKey;
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await cleanupBrowserSessionsForLifecycleEnd({
         cfg,
@@ -1134,7 +1144,7 @@ async function initSessionStateAttemptLocked(
         const payload = buildSessionEndHookPayload({
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
-          cfg,
+          agentId,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
           transcriptArchived: previousSessionTranscript.transcriptArchived,
@@ -1164,7 +1174,7 @@ async function initSessionStateAttemptLocked(
       const payload = buildSessionStartHookPayload({
         sessionId: effectiveSessionId,
         sessionKey,
-        cfg,
+        agentId,
         resumedFrom: previousSessionEntry?.sessionId,
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {

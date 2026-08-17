@@ -87,6 +87,26 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
+  it("prefers the root build for source-external plugins without using package-local output", () => {
+    const fixture = createBundledPluginFixture();
+    const packageLocalSource = path.join(fixture.rootDir, "dist", "index.js");
+    fs.mkdirSync(path.dirname(packageLocalSource), { recursive: true });
+    fs.writeFileSync(packageLocalSource, 'module.exports = { id: "stale" };\n');
+
+    const resolved = resolvePluginRuntimeArtifact({
+      pluginId: "fixture",
+      entryKind: "runtime",
+      rootDir: fixture.rootDir,
+      source: fixture.source,
+      origin: "bundled",
+      preferBuiltPluginArtifacts: true,
+      packageManifest: { build: { bundledDist: false } },
+    });
+
+    expect(resolved.source).toBe(fixture.builtSource);
+    expect(resolved.source).not.toBe(fs.realpathSync(packageLocalSource));
+  });
+
   it("aliases different physical inputs for the same logical runtime entry", () => {
     const fixture = createBundledPluginFixture();
     const first = resolveFixture({

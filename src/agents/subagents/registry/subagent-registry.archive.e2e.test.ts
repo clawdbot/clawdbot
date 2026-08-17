@@ -91,7 +91,7 @@ vi.mock("../../../config/config.js", async () => {
 });
 
 vi.mock("../announce/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn(async () => true),
+  runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
@@ -244,7 +244,7 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
     setRegistryTestDeps({
       captureSubagentCompletionReply: vi.fn(async () => "completed result"),
-      runSubagentAnnounceFlow: vi.fn(async () => false),
+      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
     });
 
     mod.registerSubagentRun({
@@ -275,6 +275,33 @@ describe("subagent registry archive behavior", () => {
         archiveAtMs: endedAt + 60_000,
       });
     });
+  });
+
+  it("does not reap a queued collector waiting for a swarm slot past the stale grace", async () => {
+    // Queued collectors have no gateway run context until FIFO dispatch; the
+    // stale-context reap must not fabricate a lost-context failure for them.
+    const now = Date.now();
+    addCanonicalSubagentRunForTests({
+      runId: "run-queued-collector",
+      childSessionKey: "agent:main:subagent:queued-collector",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait for a swarm slot",
+      cleanup: "keep",
+      collect: true,
+      createdAt: now - 120_000,
+      execution: { status: "queued" },
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
+      runId: "run-queued-collector",
+      execution: { status: "queued" },
+    });
+    expect(
+      mod.listSubagentRunsForRequester("agent:main:main")[0]?.collectorCompletion,
+    ).toBeUndefined();
   });
 
   it("does not archive an active run carrying an obsolete persisted deadline", async () => {
@@ -962,7 +989,7 @@ describe("subagent registry archive behavior", () => {
       cleanup: "keep",
     });
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-old",
       nextRunId: "run-new",
     });
@@ -991,7 +1018,7 @@ describe("subagent registry archive behavior", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-old",
       nextRunId: "run-delete-new",
     });
@@ -1022,7 +1049,7 @@ describe("subagent registry archive behavior", () => {
       attachmentsDir,
     });
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-attachments-old",
       nextRunId: "run-delete-attachments-new",
     });

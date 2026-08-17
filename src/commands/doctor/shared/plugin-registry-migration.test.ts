@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { recordPluginCandidateInstallOwner } from "../../../plugins/candidate-install-owner.js";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -40,7 +41,11 @@ function createCandidate(
   rootDir: string,
   id = "demo",
   origin: PluginCandidate["origin"] = "global",
-  options: { enabledByDefault?: boolean; manifest?: Record<string, unknown> } = {},
+  options: {
+    enabledByDefault?: boolean;
+    installOwner?: string;
+    manifest?: Record<string, unknown>;
+  } = {},
 ): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
@@ -59,12 +64,15 @@ function createCandidate(
     }),
     "utf8",
   );
-  return {
-    idHint: id,
-    source: path.join(rootDir, "index.ts"),
-    rootDir,
-    origin,
-  };
+  return recordPluginCandidateInstallOwner(
+    {
+      idHint: id,
+      source: path.join(rootDir, "index.ts"),
+      rootDir,
+      origin,
+    },
+    options.installOwner,
+  );
 }
 
 function createCurrentIndex(): InstalledPluginIndex {
@@ -454,7 +462,7 @@ describe("plugin registry install migration", () => {
 
     const result = await migratePluginRegistryForInstall({
       stateDir,
-      candidates: [createCandidate(pluginDir)],
+      candidates: [createCandidate(pluginDir, "demo", "global", { installOwner: "demo" })],
       readConfig: async () => ({
         plugins: {
           entries: {

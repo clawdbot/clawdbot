@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { upsertSessionEntry } from "../../../../src/config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import type {
@@ -112,7 +112,7 @@ describe("session and transcript child CLI product proof", () => {
       });
       instance.state.applyEnv();
 
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         {
           agentId: "main",
           sessionKey: SESSION_KEY,

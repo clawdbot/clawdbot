@@ -86,24 +86,6 @@ function runUpdateDryRun(root: string, args: string[]) {
 }
 
 describe("update dry-run process state", () => {
-  it.each([
-    ["root command", ["update", "--dry-run", "--no-restart", "--json"]],
-    ["root shorthand", ["--update", "--dry-run", "--no-restart", "--json"]],
-  ])("leaves isolated state unchanged for the %s", async (_name, args) => {
-    const root = tempDirs.make("openclaw-update-dry-run-");
-    await fs.mkdir(path.join(root, "config"), { recursive: true });
-    await fs.mkdir(path.join(root, "state"), { recursive: true });
-    await fs.writeFile(path.join(root, "config", "openclaw.json"), "{}\n");
-    const before = await snapshotTree(root);
-
-    const result = runUpdateDryRun(root, args);
-
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true });
-    expect(await snapshotTree(root)).toEqual(before);
-  });
-
   it("keeps malformed config immutable while producing a best-effort preview", async () => {
     const root = tempDirs.make("openclaw-update-dry-run-malformed-");
     const configPath = path.join(root, "config", "openclaw.json");

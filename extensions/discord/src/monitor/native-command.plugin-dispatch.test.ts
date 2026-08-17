@@ -228,13 +228,13 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectValue(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} should be an object`).toBe(true);
-  if (!isRecord(value)) {
+  expect(isObjectValue(value), `${label} should be an object`).toBe(true);
+  if (!isObjectValue(value)) {
     throw new Error(`${label} should be an object`);
   }
   return value;
@@ -292,7 +292,7 @@ function expectFollowUpFields(
 
 function expectNoFollowUpContent(interaction: MockCommandInteraction, content: string) {
   const calls = (interaction.followUp as unknown as MockCalls).mock.calls;
-  const matched = calls.some(([payload]) => isRecord(payload) && payload.content === content);
+  const matched = calls.some(([payload]) => isObjectValue(payload) && payload.content === content);
   expect(matched).toBe(false);
 }
 
@@ -1896,7 +1896,7 @@ describe("Discord native plugin command dispatch", () => {
     const replyCalls = (interaction.reply as unknown as MockCalls).mock.calls;
     const blockedReply = replyCalls.some(
       ([payload]) =>
-        isRecord(payload) &&
+        isObjectValue(payload) &&
         payload.content === "Configured ACP binding is unavailable right now. Please try again.",
     );
     expect(blockedReply).toBe(false);

@@ -1,8 +1,12 @@
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
+  type DesktopObserveParams,
   type EnvironmentSummary,
+  type WorkerMachineOption,
   ErrorCodes,
   errorShape,
+  validateDesktopLaunchParams,
+  validateDesktopObserveParams,
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
   validateEnvironmentsListParams,
@@ -12,8 +16,17 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
+import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
+import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import {
+  collectNodeRunnerIssuesByNodeId,
+  collectNodeWorkerBundleStatusByNodeId,
+  isNodeRunnerSessionHost,
+} from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
@@ -25,6 +38,9 @@ const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
   type: "local",
   label: "Gateway local",
   status: "available",
+  platform: process.platform,
+  sessionHost: true,
+  trust: "persistent",
   capabilities: ["agent.run", "sessions", "tools", "workspace"],
 };
 const WORKER_STATUS: Record<WorkerEnvironmentState, EnvironmentSummary["status"]> = {
@@ -50,16 +66,44 @@ function rejectInvalid(
 ) {
   return respondInvalidParams({ respond, method, validator });
 }
-function summarizeNodeEnvironment(node: NodeListNode): EnvironmentSummary {
+function summarizeNodeEnvironment(
+  node: NodeListNode,
+  config: Parameters<typeof resolveNodeCommandAllowlist>[0],
+): EnvironmentSummary {
   // Expose both declared capabilities and command names so older node
   // runtimes still advertise useful execution surfaces in one stable list.
   const capabilities = uniqueSortedStrings(node.caps, node.commands);
+  const platform = node.platform?.trim();
+  const desktop =
+    node.connected === true &&
+    isNodeCommandAllowed({
+      command: NODE_DESKTOP_STREAM_COMMAND,
+      declaredCommands: node.commands,
+      allowlist: resolveNodeCommandAllowlist(config, {
+        platform: node.platform,
+        deviceFamily: node.deviceFamily,
+        commands: node.commands,
+        approvedCommands: node.commands,
+      }),
+    }).ok;
   return {
     id: `node:${node.nodeId}`,
     type: "node",
     label: node.displayName ?? node.nodeId,
     status: node.connected ? "available" : "unavailable",
+    ...(platform ? { platform } : {}),
+    sessionHost: node.connected === true && node.sessionHost === true,
+    ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
+    ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
+    ...(node.lastDisconnectedAtMs !== undefined
+      ? { lastDisconnectedAtMs: node.lastDisconnectedAtMs }
+      : {}),
+    ...(node.lastSeenAtMs !== undefined ? { lastSeenAtMs: node.lastSeenAtMs } : {}),
+    ...(node.lastSeenReason ? { lastSeenReason: node.lastSeenReason } : {}),
+    trust: "persistent",
+    ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
+    ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
 /** Projects a durable worker row without exposing its SSH credential reference. */
@@ -71,6 +115,10 @@ export function summarizeWorkerEnvironment(
     id: record.environmentId,
     type: "worker",
     status: WORKER_STATUS[record.state],
+    ...(record.sharedHost === null
+      ? {}
+      : { trust: record.sharedHost ? "persistent" : "disposable" }),
+    ...(record.desktopAvailable ? { desktop: true } : {}),
     worker: {
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),
@@ -101,12 +149,41 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
       });
     }
   }
+  const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(currentPairingStates);
+  const sessionHostNodeIds = new Set(
+    connectedNodes.flatMap((node) =>
+      isNodeRunnerSessionHost({
+        registry: context.nodeRegistry,
+        nodeId: node.nodeId,
+        connId: node.connId,
+        pairingGeneration: node.pairingGeneration,
+      })
+        ? [node.nodeId]
+        : [],
+    ),
+  );
+  const issuesByNodeId = collectNodeRunnerIssuesByNodeId(context.nodeRegistry, connectedNodes);
+  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
+    context.nodeRegistry,
+    connectedNodes,
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: devices.paired,
     pairedNodes: nodes.paired,
-    connectedNodes: context.nodeRegistry.listConnectedForPairingStates(currentPairingStates),
+    connectedNodes,
+    sessionHostNodeIds,
+    workerBundleByNodeId,
+    issuesByNodeId,
   });
-  return [GATEWAY_ENVIRONMENT, ...listKnownNodes(catalog).map(summarizeNodeEnvironment)];
+  const config = context.getRuntimeConfig();
+  const gateway =
+    config.desktop?.host?.enabled === true
+      ? { ...GATEWAY_ENVIRONMENT, desktop: true }
+      : GATEWAY_ENVIRONMENT;
+  return [
+    gateway,
+    ...listKnownNodes(catalog).map((node) => summarizeNodeEnvironment(node, config)),
+  ];
 }
 function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironmentServiceRecord[] {
   try {
@@ -115,6 +192,14 @@ function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironme
     // A damaged worker store must not regress the pre-existing gateway/node inventory.
     return [];
   }
+}
+function projectWorkerMachineOption(option: WorkerMachineOption): WorkerMachineOption {
+  return {
+    id: option.id,
+    label: option.label,
+    ...(option.description === undefined ? {} : { description: option.description }),
+    ...(option.default === undefined ? {} : { default: option.default }),
+  };
 }
 export function listWorkerProfiles(context: GatewayRequestContext) {
   if (!context.workerEnvironmentService || !context.workerPlacementDispatchService) {
@@ -127,6 +212,25 @@ export function listWorkerProfiles(context: GatewayRequestContext) {
       return id.trim() && providerId ? [{ id: id.trim(), providerId }] : [];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
+  const summaries = listWorkerProfiles(context);
+  return await Promise.all(
+    summaries.map(async (summary) => {
+      try {
+        const options = await context.workerEnvironmentService?.listMachineOptions?.(summary.id);
+        const machines = options?.map(projectWorkerMachineOption) ?? [];
+        return machines.length > 0
+          ? { id: summary.id, providerId: summary.providerId, machines }
+          : summary;
+      } catch (error) {
+        context.logGateway.warn(
+          `worker machine catalog unavailable (${summary.id}): ${formatForLog(error)}`,
+        );
+        return summary;
+      }
+    }),
+  );
 }
 async function respondWorkerMutation(
   respond: RespondFn,
@@ -147,6 +251,193 @@ async function respondWorkerMutation(
     );
   }
 }
+
+async function respondDesktopObserve(params: {
+  request: DesktopObserveParams;
+  respond: RespondFn;
+  context: GatewayRequestContext;
+}) {
+  if (params.request.source.kind === "host") {
+    if (params.context.getRuntimeConfig().desktop?.host?.enabled !== true) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true), then restart the gateway",
+        ),
+      );
+      return;
+    }
+    if (!params.context.hostDesktopService) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "gateway host desktop is not active; desktop.host.enabled changes require a gateway restart",
+        ),
+      );
+      return;
+    }
+    try {
+      params.respond(
+        true,
+        await params.context.hostDesktopService.observe({
+          control: params.request.control ?? false,
+          ...("credentials" in params.request && params.request.credentials
+            ? { credentials: params.request.credentials }
+            : {}),
+        }),
+        undefined,
+      );
+    } catch (error) {
+      if (isDesktopCredentialsRequiredError(error)) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+            details: {
+              code: error.detailCode,
+              auth: error.auth,
+            },
+          }),
+        );
+        return;
+      }
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          error instanceof Error
+            ? error.message
+            : "gateway host desktop observe unavailable; verify the VNC server and retry",
+        ),
+      );
+    }
+    return;
+  }
+
+  if (params.request.source.kind === "node") {
+    const service = getNodeDesktopService(params.context);
+    if (!service) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node desktop is disabled; explicitly allow desktop.stream, then restart the gateway",
+        ),
+      );
+      return;
+    }
+    try {
+      params.respond(
+        true,
+        await service.observe({
+          nodeId: params.request.source.nodeId,
+          control: params.request.control ?? false,
+          ...("credentials" in params.request && params.request.credentials
+            ? { credentials: params.request.credentials }
+            : {}),
+        }),
+        undefined,
+      );
+    } catch (error) {
+      if (isDesktopCredentialsRequiredError(error)) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+            details: { code: error.detailCode, auth: error.auth },
+          }),
+        );
+        return;
+      }
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          error instanceof Error ? error.message : "node desktop observe unavailable",
+        ),
+      );
+    }
+    return;
+  }
+
+  const service = params.context.workerEnvironmentService;
+  if (!service) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),
+    );
+    return;
+  }
+  try {
+    const result = await service.observeDesktop({
+      environmentId: params.request.source.environmentId,
+      control: params.request.control ?? false,
+    });
+    params.respond(true, result, undefined);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    const invalid = code === "environment_not_found" || code === "invalid_state";
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+        invalid && error instanceof Error ? error.message : "worker desktop observe unavailable",
+      ),
+    );
+  }
+}
+
+async function respondDesktopLaunch(params: {
+  environmentId: string;
+  app: "browser" | "terminal";
+  respond: RespondFn;
+  context: GatewayRequestContext;
+}) {
+  const service = params.context.workerEnvironmentService;
+  if (!service) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),
+    );
+    return;
+  }
+  try {
+    params.respond(
+      true,
+      await service.launchDesktopApp({ environmentId: params.environmentId, app: params.app }),
+      undefined,
+    );
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    const invalid =
+      code === "environment_not_found" ||
+      code === "invalid_state" ||
+      code === "desktop_app_not_found" ||
+      code === "unsupported_platform";
+    const actionable = invalid || code === "launcher_failure";
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+        actionable && error instanceof Error
+          ? error.message
+          : "worker desktop app launch unavailable; try again",
+      ),
+    );
+  }
+}
+
 export const environmentsHandlers: GatewayRequestHandlers = {
   "environments.list": async ({ params, respond, context }) => {
     if (!validateEnvironmentsListParams(params)) {
@@ -159,7 +450,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       environments.push(
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
       );
-      const profiles = listWorkerProfiles(context);
+      const profiles = await listWorkerProfilesWithMachines(context);
       respond(true, { environments, ...(profiles.length > 0 ? { profiles } : {}) }, undefined);
     });
   },
@@ -257,69 +548,41 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     if (!validateWorkerDesktopObserveParams(params)) {
       return rejectInvalid(respond, "worker.desktop.observe", validateWorkerDesktopObserveParams);
     }
-    const service = context.workerEnvironmentService;
-    if (!service) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"));
-      return;
-    }
-    try {
-      respond(
-        true,
-        await service.observeDesktop({
-          environmentId: params.environmentId,
-          control: params.control ?? false,
-        }),
-        undefined,
-      );
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-      const invalid = code === "environment_not_found" || code === "invalid_state";
-      respond(
-        false,
-        undefined,
-        errorShape(
-          invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-          invalid && error instanceof Error ? error.message : "worker desktop observe unavailable",
-        ),
-      );
-    }
+    await respondDesktopObserve({
+      request: {
+        source: { kind: "environment", environmentId: params.environmentId },
+        ...(params.control === undefined ? {} : { control: params.control }),
+      },
+      respond,
+      context,
+    });
   },
   "worker.desktop.launch": async ({ params, respond, context }) => {
     if (!validateWorkerDesktopLaunchParams(params)) {
       return rejectInvalid(respond, "worker.desktop.launch", validateWorkerDesktopLaunchParams);
     }
-    const service = context.workerEnvironmentService;
-    if (!service) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"));
-      return;
+    await respondDesktopLaunch({
+      environmentId: params.environmentId,
+      app: params.app,
+      respond,
+      context,
+    });
+  },
+  "desktop.observe": async ({ params, respond, context }) => {
+    if (!validateDesktopObserveParams(params)) {
+      return rejectInvalid(respond, "desktop.observe", validateDesktopObserveParams);
     }
-    try {
-      respond(
-        true,
-        await service.launchDesktopApp({
-          environmentId: params.environmentId,
-          app: params.app,
-        }),
-        undefined,
-      );
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-      const invalid =
-        code === "environment_not_found" ||
-        code === "invalid_state" ||
-        code === "desktop_app_not_found" ||
-        code === "unsupported_platform";
-      const actionable = invalid || code === "launcher_failure";
-      respond(
-        false,
-        undefined,
-        errorShape(
-          invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-          actionable && error instanceof Error
-            ? error.message
-            : "worker desktop app launch unavailable; try again",
-        ),
-      );
+    await respondDesktopObserve({ request: params, respond, context });
+  },
+  "desktop.launch": async ({ params, respond, context }) => {
+    if (!validateDesktopLaunchParams(params)) {
+      return rejectInvalid(respond, "desktop.launch", validateDesktopLaunchParams);
     }
+    await respondDesktopLaunch({
+      environmentId: params.source.environmentId,
+      app: params.app,
+      respond,
+      context,
+    });
   },
 };

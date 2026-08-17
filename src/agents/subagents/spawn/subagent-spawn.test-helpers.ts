@@ -16,7 +16,7 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
   Partial<
     Pick<
       SubagentLifecycleHookRunner,
-      "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentProgress" | "runSubagentEnded"
+      "runSubagentSpawned" | "runSubagentProgress" | "runSubagentEnded"
     >
   >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
@@ -315,7 +315,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     // Real scope resolver: spawn's admin-tier pinning depends on params-aware
     // sessions.patch policy, so a stub here would hide policy regressions.
     resolveLeastPrivilegeOperatorScopesForMethod,
-    upsertSessionEntry: async (
+    upsertSessionEntryCore: async (
       scope: { storePath?: string; sessionKey: string },
       patch: Record<string, unknown>,
     ) => {

@@ -1,9 +1,11 @@
 // Voice Call plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
+  asNonArrayRecord as asParamRecord,
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -27,7 +29,6 @@ import {
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
-import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
@@ -86,12 +87,6 @@ const VoiceCallToolSchema = Type.Union([
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
 ]);
-
-function asParamRecord(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object" && !Array.isArray(params)
-    ? (params as Record<string, unknown>)
-    : {};
-}
 
 function isCliOnlyProcess(): boolean {
   return process.env.OPENCLAW_CLI === "1" && !process.argv.slice(2).includes("gateway");
@@ -181,7 +176,7 @@ export default definePluginEntry({
           };
     const continueOperationStore = createVoiceCallContinueOperationStore({
       config,
-      coreConfig: api.config as CoreConfig,
+      coreConfig: api.config as OpenClawConfig,
     });
 
     const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
@@ -238,7 +233,7 @@ export default definePluginEntry({
 
         const runtimePromise = createVoiceCallRuntime({
           config,
-          coreConfig: api.config as CoreConfig,
+          coreConfig: api.config as OpenClawConfig,
           fullConfig: api.config,
           agentRuntime: api.runtime.agent,
           stateRuntime: api.runtime.state,

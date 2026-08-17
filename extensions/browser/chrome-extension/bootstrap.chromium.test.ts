@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,8 +13,9 @@ import {
   stableChromeExtensionDir,
 } from "../src/browser/extension-install-layout.js";
 import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
-import { startExtensionRelayServer } from "../src/browser/extension-relay/relay-server.js";
+import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
 import { getFreePort } from "../src/browser/test-port.js";
+import { getBrowserControlState, stopBrowserControlService } from "../src/control-service.js";
 import { relayTestKey } from "./relay-key.test-support.js";
 
 declare const chrome: {
@@ -24,6 +26,7 @@ const runE2E =
   process.env.OPENCLAW_BROWSER_EXTENSION_E2E === "1" &&
   (process.platform === "linux" || process.platform === "darwin");
 const cleanups: Array<() => Promise<void>> = [];
+const STORE_ORIGIN = "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/";
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -146,7 +149,11 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
     const homeDir = path.join(root, "home");
     const stateDir = path.join(root, "custom-state");
     const configPath = path.join(root, "custom-config", "openclaw.json");
-    const relayPort = await getFreePort();
+    const gatewayPort = await getFreePort();
+    let relayPort = await getFreePort();
+    while (relayPort === gatewayPort) {
+      relayPort = await getFreePort();
+    }
     const linuxConfigHome = path.join(homeDir, ".config");
     const chromeRootEnv =
       process.platform === "linux"
@@ -166,11 +173,15 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
     );
     await fs.writeFile(
       configPath,
-      `${JSON.stringify({ browser: { profiles: { e2e: { driver: "extension", cdpPort: relayPort } } } })}\n`,
+      `${JSON.stringify({ gateway: { port: gatewayPort }, browser: { profiles: { e2e: { driver: "extension", cdpPort: relayPort } } } })}\n`,
       { mode: 0o600 },
     );
     await withEnvAsync(
-      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+      {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_GATEWAY_PORT: String(gatewayPort),
+      },
       async () => {
         const extensionSource = path.dirname(fileURLToPath(import.meta.url));
         const nativeHostPath = await fs.realpath(
@@ -187,12 +198,28 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             ...chromeRootEnv,
             OPENCLAW_STATE_DIR: stateDir,
             OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_GATEWAY_PORT: String(gatewayPort),
           },
           nodePath: tsxPath,
           nativeHostPath,
         };
-        const relay = await startExtensionRelayServer({ port: relayPort, token });
-        cleanups.push(relay.close);
+        const gatewayServer = http.createServer((_req, res) => {
+          res.writeHead(426);
+          res.end();
+        });
+        gatewayServer.on("upgrade", (req, socket, head) => {
+          void handleGatewayExtensionUpgrade(req, socket, head);
+        });
+        await new Promise<void>((resolve) => {
+          gatewayServer.listen(gatewayPort, "127.0.0.1", resolve);
+        });
+        cleanups.push(
+          async () =>
+            await new Promise<void>((resolve) => {
+              gatewayServer.close(() => resolve());
+            }),
+        );
+        cleanups.push(stopBrowserControlService);
         const browserEnv: NodeJS.ProcessEnv = {
           ...process.env,
           HOME: homeDir,
@@ -223,6 +250,8 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         ]
           .toSorted()
           .map((id) => `chrome-extension://${id}/`);
+        expectedOrigins.push(STORE_ORIGIN);
+        expectedOrigins.sort();
         const relevantManifestPaths = chromeProductRoots(deps)
           .filter((productRoot) => productRoot.userDataDir === userDataDir)
           .map((productRoot) =>
@@ -291,7 +320,13 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         }
         expect(extensionStatus).toMatchObject({ paired: true, accessMode: "all" });
         try {
-          await expect.poll(() => relay.bridge.extensionConnected, { timeout: 15_000 }).toBe(true);
+          await expect
+            .poll(
+              () =>
+                getBrowserControlState()?.extensionRelays?.get("e2e")?.bridge.extensionConnected,
+              { timeout: 15_000 },
+            )
+            .toBe(true);
         } catch (error) {
           extensionStatus = await extensionPage.evaluate(
             async () => await chrome.runtime.sendMessage({ type: "getStatus" }),
@@ -299,6 +334,10 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           throw new Error(`Extension relay did not connect: ${JSON.stringify(extensionStatus)}`, {
             cause: error,
           });
+        }
+        const relay = getBrowserControlState()?.extensionRelays?.get("e2e");
+        if (!relay || relay.port !== relayPort) {
+          throw new Error("Gateway wakeup did not start the configured extension relay");
         }
 
         const registration = status.registrations.find(
@@ -349,11 +388,26 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         }
         if (
           relayUrl.hostname !== "127.0.0.1" ||
-          relayUrl.port !== String(relayPort) ||
+          relayUrl.port !== String(gatewayPort) ||
+          relayUrl.pathname !== "/browser/extension" ||
+          relayUrl.searchParams.get("gateway") !== `ws://127.0.0.1:${gatewayPort}` ||
           nativeResponse.pairingString.slice(fragmentAt + 1) !== token
         ) {
           throw new Error("native host did not use the custom installation context");
         }
+        const storeHostProbe = spawnSync(manifest.path, [STORE_ORIGIN], {
+          input: requestFrame,
+          env: browserEnv,
+          timeout: 30_000,
+        });
+        expect(
+          storeHostProbe.status,
+          `Store native host exit=${storeHostProbe.status} signal=${storeHostProbe.signal} stderr=${storeHostProbe.stderr.toString("utf8")}`,
+        ).toBe(0);
+        expect(decodeSingleNativeResponse(storeHostProbe.stdout)).toMatchObject({
+          ok: true,
+          nonce: "BwcHBwcHBwcHBwcHBwcHBw",
+        });
         process.stderr.write("[browser-extension-e2e] launcher probe passed\n");
 
         await expect

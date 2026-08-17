@@ -82,7 +82,12 @@ describe("worker environment protocol schemas", () => {
   });
 
   it("accepts worker metadata additively across summary and mutation results", () => {
-    const requested = workerSummary("requested");
+    const requested = {
+      ...workerSummary("requested"),
+      platform: "linux",
+      sessionHost: false,
+      trust: "disposable",
+    };
     const destroyedBase = workerSummary("destroyed", "unavailable");
     const destroyed = {
       ...destroyedBase,
@@ -107,6 +112,59 @@ describe("worker environment protocol schemas", () => {
         },
       }),
     ).toBe(true);
+  });
+
+  it("accepts only redacted node worker bundle status", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "2026.8.9" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "missing" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: {
+          status: "installed",
+          version: "2026.8.9",
+          bundleHash: "a".repeat(64),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "unavailable",
+      lastConnectedAtMs: 1_000,
+      lastDisconnectedAtMs: 2_000,
+      lastSeenAtMs: 1_500,
+      lastSeenReason: "silent_push",
+    };
+    expect(Value.Check(EnvironmentSummarySchema, node)).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastDisconnectedAtMs: -1 })).toBe(
+      false,
+    );
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, lastSeenReason: "" })).toBe(false);
   });
 
   it("keeps desktop app launch requests, results, and projected ids closed", () => {
@@ -140,13 +198,45 @@ describe("worker environment protocol schemas", () => {
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox" }],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            trust: "disposable",
+            machines: [
+              {
+                id: "standard",
+                label: "Standard",
+                description: "Cheap smoke checks and small repos",
+                default: true,
+              },
+            ],
+          },
+        ],
       }),
     ).toBe(true);
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
         profiles: [{ id: "aws", providerId: "crabbox", settings: { token: "hidden" } }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox", trust: "temporary" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            machines: [{ id: "standard", label: "Standard", cpu: 32 }],
+          },
+        ],
       }),
     ).toBe(false);
   });
@@ -159,6 +249,29 @@ describe("worker environment protocol schemas", () => {
         status: "available",
       }),
     ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [
+          {
+            code: "update-required",
+            action: "update-and-reconnect",
+            updateCommand: "openclaw update",
+            headlessReconnectCommand: "openclaw node restart",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [{ code: "update-required", action: "run-legacy-worker" }],
+      }),
+    ).toBe(false);
     expect(
       Value.Check(EnvironmentSummarySchema, {
         ...workerSummary("ready", "available"),
@@ -178,6 +291,12 @@ describe("worker environment protocol schemas", () => {
       Value.Check(EnvironmentSummarySchema, {
         ...workerSummary("failed"),
         worker: { ...workerSummary("failed").worker, error: "" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...workerSummary("ready", "available"),
+        trust: "temporary",
       }),
     ).toBe(false);
   });

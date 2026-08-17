@@ -16,7 +16,7 @@ export {
   readReactionParams,
   readStringArrayParam,
   readStringOrNumberParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
   ToolAuthorizationError,
 } from "../agents/tools/common.js";
 export type { ActionGate } from "../agents/tools/common.js";

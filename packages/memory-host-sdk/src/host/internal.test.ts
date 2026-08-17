@@ -19,6 +19,7 @@ import {
   stripMemoryAnnotationCarriers,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
+import { readMemoryFile } from "./read-file.js";
 
 type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
 type MultimodalIndexingChunk = NonNullable<
@@ -93,6 +94,22 @@ const multimodal: MemoryMultimodalSettings = normalizeMemoryMultimodalSettings({
 
 describe("memory host SDK package internals", () => {
   const getTmpDir = setupTempDirLifecycle("memory-package-");
+
+  it.skipIf(process.platform === "win32")(
+    "rejects an uppercase explicit extra file on case-sensitive hosts",
+    async () => {
+      const tmpDir = getTmpDir();
+      const workspaceDir = path.join(tmpDir, "workspace");
+      const upperPath = path.join(tmpDir, "NOTES.MD");
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(upperPath, "not lowercase Markdown", "utf8");
+
+      await expect(listMemoryFiles(workspaceDir, [upperPath])).resolves.toEqual([]);
+      await expect(
+        readMemoryFile({ workspaceDir, extraPaths: [upperPath], relPath: upperPath }),
+      ).rejects.toThrow("path required");
+    },
+  );
 
   it("drains in-flight work before propagating a concurrency failure", async () => {
     const failure = new Error("embedding failed");

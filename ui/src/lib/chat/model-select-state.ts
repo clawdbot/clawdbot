@@ -6,7 +6,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
+import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -22,21 +22,19 @@ type ChatModelSelectStateInput = {
   agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
-  restrictOptionsToCatalog?: boolean;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
 };
 
-export type ChatModelSelectOption = {
+type ChatModelSelectOption = {
   value: string;
   label: string;
+  disabled?: boolean;
 };
 
 type ChatModelSelectState = {
   currentOverride: string;
-  defaultSelectable: boolean;
   defaultModel: string;
-  defaultDisplay: string;
   defaultLabel: string;
   options: ChatModelSelectOption[];
 };
@@ -75,7 +73,9 @@ type ChatFastModeSelectStateInput = {
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
 
 function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
-  return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  return state.sessionsResult?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, state.sessionKey),
+  );
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
@@ -120,57 +120,21 @@ function normalizeChatModelAvailabilityKey(value: string): string {
   )}`;
 }
 
-function buildUnavailableChatModelValues(
-  catalog: ModelCatalogEntry[],
-  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
-): Set<string> {
-  const availableValues = new Set(
-    catalog
-      .filter((entry) => entry.available !== false)
-      .map((entry) =>
-        normalizeChatModelAvailabilityKey(
-          buildChatModelOptionFromLookup(entry, displayLookup).value,
-        ),
-      ),
-  );
-  return new Set(
-    catalog
-      .filter((entry) => entry.available === false)
-      .map((entry) =>
-        normalizeChatModelAvailabilityKey(
-          buildChatModelOptionFromLookup(entry, displayLookup).value,
-        ),
-      )
-      .filter((value) => !availableValues.has(value)),
-  );
-}
-
-function resolveAvailableChatModelValue(
-  value: string,
-  catalog: ModelCatalogEntry[],
-  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
-): string {
+function resolveCatalogChatModelValue(value: string, options: ChatModelSelectOption[]): string {
   const exactValue = value.trim().toLowerCase();
   if (!exactValue) {
     return value;
   }
-  for (const entry of catalog) {
-    if (entry.available === false) {
-      continue;
-    }
-    const option = buildChatModelOptionFromLookup(entry, displayLookup);
-    if (option.value.trim().toLowerCase() === exactValue) {
-      return option.value;
-    }
-  }
   const normalizedValue = normalizeChatModelAvailabilityKey(value);
-  for (const entry of catalog) {
-    if (entry.available === false) {
-      continue;
-    }
-    const option = buildChatModelOptionFromLookup(entry, displayLookup);
-    if (normalizeChatModelAvailabilityKey(option.value) === normalizedValue) {
-      return option.value;
+  for (const disabled of [false, true]) {
+    const match = options.find(
+      (option) =>
+        Boolean(option.disabled) === disabled &&
+        (option.value.trim().toLowerCase() === exactValue ||
+          normalizeChatModelAvailabilityKey(option.value) === normalizedValue),
+    );
+    if (match) {
+      return match.value;
     }
   }
   return value;
@@ -179,44 +143,55 @@ function resolveAvailableChatModelValue(
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
-  currentOverride: string,
-  defaultModel: string,
-  restrictOptionsToCatalog: boolean,
 ): ChatModelSelectOption[] {
   const seen = new Set<string>();
   const options: ChatModelSelectOption[] = [];
-  const unavailableValues = buildUnavailableChatModelValues(catalog, displayLookup);
+  const availableKeys = new Set(
+    catalog
+      .filter((entry) => entry.available !== false)
+      .map((entry) =>
+        normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)),
+      ),
+  );
 
-  const addOption = (value: string, label?: string) => {
-    pushUniqueTrimmedSelectOption(options, seen, value, (trimmed) => label ?? trimmed);
-  };
-  const addAvailableOption = (value: string, label?: string) => {
-    if (!unavailableValues.has(normalizeChatModelAvailabilityKey(value))) {
-      addOption(value, label);
-    }
-  };
-
-  for (const entry of catalog) {
-    if (entry.available === false) {
+  for (const entry of catalog.toSorted(
+    (left, right) =>
+      Number(left.available === false) - Number(right.available === false) ||
+      Number(left.provider.trim().toLowerCase() !== normalizeChatModelProviderId(left.provider)) -
+        Number(
+          right.provider.trim().toLowerCase() !== normalizeChatModelProviderId(right.provider),
+        ),
+  )) {
+    const option = buildChatModelOptionFromLookup(entry, displayLookup);
+    const value = option.value.trim();
+    const key = value.toLowerCase();
+    if (
+      !value ||
+      seen.has(key) ||
+      (entry.available === false &&
+        availableKeys.has(normalizeChatModelAvailabilityKey(option.value)))
+    ) {
       continue;
     }
-    const option = buildChatModelOptionFromLookup(entry, displayLookup);
-    addOption(option.value, option.label);
-  }
-
-  if (!restrictOptionsToCatalog && currentOverride) {
-    addAvailableOption(
-      currentOverride,
-      formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
-    );
-  }
-  if (!restrictOptionsToCatalog && defaultModel) {
-    addAvailableOption(
-      defaultModel,
-      formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup),
-    );
+    seen.add(key);
+    options.push({ ...option, ...(entry.available === false ? { disabled: true } : {}) });
   }
   return options;
+}
+
+export function isChatModelUnavailable(
+  model: string | null | undefined,
+  provider: string | null | undefined,
+  catalog: ModelCatalogEntry[],
+): boolean {
+  const value = resolvePreferredServerChatModelValue(model, provider, catalog);
+  const key = normalizeChatModelAvailabilityKey(value);
+  const matches = catalog.filter(
+    (entry) =>
+      normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)) ===
+      key,
+  );
+  return matches.length > 0 && matches.every((entry) => entry.available === false);
 }
 
 export function resolveChatModelSelectState(
@@ -224,44 +199,23 @@ export function resolveChatModelSelectState(
 ): ChatModelSelectState {
   const catalog = state.chatModelCatalog ?? [];
   const displayLookup = buildCatalogDisplayLookup(
-    catalog.filter((entry) => entry.available !== false),
+    catalog.filter(
+      (entry) =>
+        entry.available !== false || isChatModelUnavailable(entry.id, entry.provider, catalog),
+    ),
   );
-  const currentOverride = resolveAvailableChatModelValue(
+  const options = buildChatModelOptions(catalog, displayLookup);
+  const currentOverride = resolveCatalogChatModelValue(
     resolveChatModelOverrideValue(state),
-    catalog,
-    displayLookup,
+    options,
   );
-  const defaultModel = resolveAvailableChatModelValue(
-    resolveDefaultModelValue(state),
-    catalog,
-    displayLookup,
-  );
-  const defaultDisplay = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
-  const unavailableValues = buildUnavailableChatModelValues(catalog, displayLookup);
-  const options = buildChatModelOptions(
-    catalog,
-    displayLookup,
-    currentOverride,
-    defaultModel,
-    state.restrictOptionsToCatalog === true,
-  );
-  const defaultSelectable = state.restrictOptionsToCatalog
-    ? Boolean(
-        defaultModel &&
-        options.some(
-          (option) =>
-            normalizeChatModelAvailabilityKey(option.value) ===
-            normalizeChatModelAvailabilityKey(defaultModel),
-        ),
-      )
-    : !defaultModel || !unavailableValues.has(normalizeChatModelAvailabilityKey(defaultModel));
+  const defaultModel = resolveCatalogChatModelValue(resolveDefaultModelValue(state), options);
+  const defaultLabel = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
 
   return {
     currentOverride,
-    defaultSelectable,
     defaultModel,
-    defaultDisplay,
-    defaultLabel: defaultModel ? `Default (${defaultDisplay})` : "Default model",
+    defaultLabel: defaultModel ? `Default (${defaultLabel})` : "Default model",
     options,
   };
 }
@@ -353,7 +307,9 @@ function hasCatalogProviderMetadata(value: string, catalog: ModelCatalogEntry[])
 export function resolveChatFastModeSelectState(
   input: ChatFastModeSelectStateInput,
 ): ChatFastModeSelectState {
-  const activeRow = input.sessionsResult?.sessions?.find((row) => row.key === input.sessionKey);
+  const activeRow = input.sessionsResult?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, input.sessionKey),
+  );
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
   const defaultProvider =
     normalizeChatModelProviderId(input.sessionsResult?.defaults?.modelProvider ?? "") || null;

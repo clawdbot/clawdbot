@@ -16,14 +16,21 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
 
 <Steps>
   <Step title="Reset (optional)">
-    - `--reset` resets state before setup runs; without it, re-running onboarding
-      keeps existing config and reuses it as defaults.
+    - Reset is owned by the `--reset` command flag, not by the interactive
+      **Setup mode** menu. Without it, re-running onboarding keeps existing
+      config and reuses it as defaults.
     - `--reset-scope` controls what `--reset` removes: `config` (config file
       only), `config+creds+sessions` (default), or `full` (also removes the
       workspace).
-    - If the config file is invalid, onboarding stops and tells you to run
-      `openclaw doctor` first, then re-run setup.
-    - Reset moves state to Trash (never deletes directly).
+    - Before reset, the command validates TTY availability and rejectable CLI
+      options, including the full-reset workspace target. Non-interactive setup
+      also requires `--accept-risk` at this point.
+    - Migration import options (`--flow import`, `--import-from`,
+      `--import-source`, and `--import-secrets`) cannot be combined with
+      `--reset`; run the import without `--reset`.
+    - Interactive classic setup moves state to Trash (never deletes directly)
+      before showing its risk acknowledgement. Declining that later prompt
+      cancels setup but does not undo the reset.
 
   </Step>
   <Step title="Risk acknowledgement">
@@ -36,6 +43,12 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
       cancels setup.
 
   </Step>
+  <Step title="Workspace">
+    - Default `~/.openclaw/workspace` (configurable).
+    - Seeds the workspace files needed for the agent bootstrap ritual.
+    - Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
+
+  </Step>
   <Step title="Model/Auth">
     - **Anthropic API key**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
     - **Anthropic Claude CLI**: preferred local path when a Claude CLI sign-in already exists; OpenClaw still supports Anthropic setup-token auth as an alternative.
@@ -44,7 +57,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - **OpenAI Code (Codex) subscription (device pairing)**: browser pairing flow with a short-lived device code.
       - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol` through the Codex runtime.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
-      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6`; the bare direct-API model id resolves to the Sol tier.
+      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains supported and resolves to the same tier.
     - Adding or reauthenticating OpenAI preserves an existing explicit primary model, including `openai/gpt-5.5`. If the account does not expose GPT-5.6, select `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade the model.
     - **xAI OAuth**: device-code browser sign-in with no localhost callback required, so it works over SSH/Docker/VPS too (`--auth-choice xai-oauth`).
     - **xAI API key**: prompts for `XAI_API_KEY` (`--auth-choice xai-api-key`).
@@ -83,12 +96,6 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     `$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
     is only a legacy import source.
     </Note>
-  </Step>
-  <Step title="Workspace">
-    - Default `~/.openclaw/workspace` (configurable).
-    - Seeds the workspace files needed for the agent bootstrap ritual.
-    - Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
-
   </Step>
   <Step title="Gateway">
     - Port (default **18789**), bind, auth mode, tailscale exposure.
@@ -186,7 +193,7 @@ Gateway token SecretRef in non-interactive mode:
 
 ```bash
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice skip \
   --gateway-auth token \

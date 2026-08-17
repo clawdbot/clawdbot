@@ -169,7 +169,7 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
   }
   vi.mocked(runEmbeddedAgent).mockReset();
   vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
-  vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
+  vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue("delivered");
   vi.mocked(callGateway).mockReset().mockResolvedValue({ ok: true, deleted: true });
   setActivePluginRegistry(
     createTestRegistry([

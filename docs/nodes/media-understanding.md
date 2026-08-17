@@ -257,10 +257,19 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 
 ### File-attachment extraction
 
+- Every inbound document attachment ends in a model-visible file block. Attachments routed to image, audio, or video understanding are outside this contract; those stages own their outcomes.
 - Extracted file text is wrapped as untrusted external content before it's appended to the media prompt, using boundary markers like `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` plus a `Source: External` metadata line.
 - This path intentionally omits the long `SECURITY NOTICE:` banner to keep the media prompt short; the boundary markers and metadata still apply.
+- Unsupported files saved on local disk get self-serve guidance only when the reply runtime proves it can read host-local paths (currently non-sandboxed embedded sessions). The path is fenced as untrusted external metadata; the trusted guidance tells the agent to extract the file with its own tools, and modern Office files get an unzip hint. Generic ACP backends, URL-only attachments, and sandboxed sessions keep the plain `[Unsupported document format: <mime>. PDF and plain-text attachments can be read.]` marker.
+- Files rejected by an operator-configured allowlist never include the self-serve path; a policy rejection must not coach the agent around the operator's decision.
+- Files rejected by an operator-configured `allowedMimes` list get `[Attachment type not allowed: <mime>]` instead, so the prompt never claims support the active configuration disables.
+- Read failures get `[Attachment could not be read]`.
+- URL attachments get `[Attachment skipped: URL file sources are disabled]` when URL file sources are disabled.
 - A file with no extractable text gets `[No extractable text]`.
+- At most five skip markers render per message; further skipped attachments collapse into one reason-neutral `[<n> more attachments skipped]` summary so junk attachments cannot grow the prompt without bound. File and image, audio, or video markers share this five-marker budget.
 - If a PDF falls back to rendered page images, OpenClaw forwards those images to vision-capable reply models and keeps the placeholder `[PDF content rendered to images]` in the file block.
+- Image, audio, and video decisions record one closed disposition for every attachment candidate: handled, handed to native vision, not selected after the attachment limit, disabled, missing a model, denied by chat scope, or failed.
+- Unhandled media gets a bounded model-visible marker. Images handed to native vision and media turns owned by another harness do not add markers.
 
 ## Config examples
 

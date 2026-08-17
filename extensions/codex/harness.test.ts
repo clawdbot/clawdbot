@@ -6,9 +6,13 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
+const runCodexIsolatedCompletion = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
   completeWithPreparedSimpleCompletionModel,
+}));
+vi.mock("./src/app-server/isolated-completion.js", () => ({
+  runCodexIsolatedCompletion,
 }));
 
 import { createCodexAppServerAgentHarness } from "./harness.js";
@@ -25,6 +29,16 @@ describe("Codex agent harness supports()", () => {
 
   it("publishes provider ids for lightweight auto selection", () => {
     expect(harness.autoSelection?.providerIds).toEqual(["codex", "openai"]);
+    expect(
+      (harness as typeof harness & { cloudPlacement?: { mode: "remote-exec" } }).cloudPlacement,
+    ).toEqual({ mode: "remote-exec" });
+  });
+
+  it("keeps computer-control denies out of the native-surface exemption", () => {
+    expect(harness.conversationToolPolicySafeDenyTools).toContain("image_generate");
+    expect(harness.conversationToolPolicySafeDenyTools).not.toEqual(
+      expect.arrayContaining(["browser", "computer", "mobile_ui", "nodes", "screen"]),
+    );
   });
 
   const harness = createCodexAppServerAgentHarness({
@@ -66,6 +80,91 @@ describe("Codex agent harness supports()", () => {
     );
   });
 
+  it("delegates V2 isolated completion to the native bounded adapter", async () => {
+    const legacyCallCount = completeWithPreparedSimpleCompletionModel.mock.calls.length;
+    const result = {
+      assistant: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        stopReason: "stop",
+      },
+    };
+    runCodexIsolatedCompletion.mockResolvedValueOnce(result);
+    const params = {
+      authorization: {
+        owner: "harness",
+        plan: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+        },
+        authProfileStore: { version: 1, profiles: {} },
+      },
+      config: {},
+      systemPrompt: "system",
+      prompt: "user",
+      timeoutMs: 1_000,
+      provider: "openai",
+      modelId: "gpt-test",
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletionV2>>[0];
+
+    await expect(harness.runIsolatedCompletionV2?.(params)).resolves.toBe(result);
+    expect(runCodexIsolatedCompletion).toHaveBeenCalledWith(params, { pluginConfig: undefined });
+    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(legacyCallCount);
+  });
+
+  it("keeps V2 host authorization on the prepared direct transport", async () => {
+    const nativeCallCount = runCodexIsolatedCompletion.mock.calls.length;
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      stopReason: "stop",
+    };
+    completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce(assistant);
+    const websocketHarness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: {
+        appServer: { transport: "websocket", url: "ws://127.0.0.1:4501" },
+      },
+    });
+    const hostModel = {
+      provider: "openai",
+      id: "gpt-test",
+      api: "openai-responses",
+    };
+    const hostAuth = { apiKey: "secret", source: "profile:test", mode: "api-key" };
+    const params = {
+      authorization: {
+        owner: "host",
+        model: hostModel,
+        auth: hostAuth,
+      },
+      config: {},
+      systemPrompt: "system",
+      prompt: "user",
+      timeoutMs: 1_000,
+      provider: "openai",
+      modelId: "gpt-test",
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletionV2>>[0];
+
+    await expect(websocketHarness.runIsolatedCompletionV2?.(params)).resolves.toEqual({
+      assistant,
+    });
+    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: hostModel,
+        auth: hostAuth,
+        context: expect.objectContaining({ tools: [] }),
+      }),
+    );
+    expect(runCodexIsolatedCompletion).toHaveBeenCalledTimes(nativeCallCount);
+  });
+
   it("supports the canonical codex virtual provider", () => {
     expect(harness.supports({ provider: "codex", requestedRuntime: "codex" })).toEqual({
       supported: true,
@@ -78,13 +177,6 @@ describe("Codex agent harness supports()", () => {
   });
 
   it("supports openai as the primary OpenClaw routing id", () => {
-    expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
-      supported: true,
-      priority: 100,
-    });
-  });
-
-  it("supports the canonical openai routing id (documented Codex path)", () => {
     expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
       supported: true,
       priority: 100,
@@ -228,8 +320,11 @@ describe("Codex agent harness supports()", () => {
         preparedAuth: { source: "harness" },
       },
     });
-    expect(result.supported).toBe(false);
-    expect(!result.supported ? result.reason : undefined).toContain("request transport overrides");
+    expect(result).toEqual({
+      supported: false,
+      reason: "Codex cannot reproduce authored request transport overrides",
+      fallbackRuntime: "openclaw",
+    });
   });
 
   it("rejects an OpenAI route without a provider compatibility declaration", () => {

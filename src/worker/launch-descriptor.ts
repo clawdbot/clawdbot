@@ -25,10 +25,14 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import { isWorkerLocalToolName, type WorkerToolAuthority } from "./tool-authority.js";
+import { isWorkerToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
+import {
+  parseWorkerConnectionEndpoint,
+  type WorkerConnectionEndpoint,
+} from "./worker-connection-endpoint.js";
 
-const LAUNCH_VERSION = 2;
+const LAUNCH_VERSION = 3;
 
 export type WorkerBrowserLaunchDescriptor = {
   cdpUrl: string;
@@ -66,11 +70,14 @@ type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
   sessionId: string;
 };
 
-export type WorkerLaunchDescriptor = {
-  version: 2;
-  socketPath: string;
+export type WorkerLaunchPlan = {
+  version: 3;
   admission: WorkerLaunchAdmission;
   assignment: WorkerLaunchAssignment;
+};
+
+export type WorkerLaunchDescriptor = WorkerLaunchPlan & {
+  connectionEndpoint: WorkerConnectionEndpoint;
 };
 
 function hasExactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
@@ -93,6 +100,10 @@ function isSafeSequence(value: unknown, minimum: number): value is number {
   return Number.isSafeInteger(value) && typeof value === "number" && value >= minimum;
 }
 
+function isAbsoluteHostPath(value: string): boolean {
+  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
 function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
   return Value.Check(WorkerInferenceOptionsSchema, value);
 }
@@ -102,7 +113,7 @@ function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
     !isRecord(value) ||
     !hasExactKeys(value, ["allowedToolNames"]) ||
     !Array.isArray(value.allowedToolNames) ||
-    !value.allowedToolNames.every(isWorkerLocalToolName) ||
+    !value.allowedToolNames.every(isWorkerToolName) ||
     new Set(value.allowedToolNames).size !== value.allowedToolNames.length
   ) {
     return undefined;
@@ -116,7 +127,7 @@ function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescri
     !hasExactKeys(value, ["cdpUrl", "launcherPath"]) ||
     typeof value.cdpUrl !== "string" ||
     typeof value.launcherPath !== "string" ||
-    !path.isAbsolute(value.launcherPath)
+    !isAbsoluteHostPath(value.launcherPath)
   ) {
     return undefined;
   }
@@ -187,7 +198,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     typeof value.prompt !== "string" ||
     typeof value.suppressPromptTranscript !== "boolean" ||
     !isIdentifier(value.workspaceDir) ||
-    !path.isAbsolute(value.workspaceDir) ||
+    !isAbsoluteHostPath(value.workspaceDir) ||
     (value.systemPrompt !== undefined && typeof value.systemPrompt !== "string") ||
     !Array.isArray(value.initialMessages) ||
     value.initialMessages.length > WORKER_INFERENCE_MAX_CONTEXT_MESSAGES ||
@@ -239,7 +250,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
 }
 
 export function buildWorkerConnectParams(
-  descriptor: Pick<WorkerLaunchDescriptor, "admission" | "assignment">,
+  descriptor: Pick<WorkerLaunchPlan, "admission" | "assignment">,
 ): WorkerConnectParams {
   return {
     minProtocol: PROTOCOL_VERSION,
@@ -258,26 +269,7 @@ export function buildWorkerConnectParams(
   };
 }
 
-export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescriptor {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, ["version", "socketPath", "admission", "assignment"]) ||
-    value.version !== LAUNCH_VERSION ||
-    !isIdentifier(value.socketPath) ||
-    !path.isAbsolute(value.socketPath)
-  ) {
-    throw new Error("invalid worker launch descriptor");
-  }
-  const assignment = parseAssignment(value.assignment);
-  if (!assignment || !isRecord(value.admission)) {
-    throw new Error("invalid worker launch descriptor");
-  }
-  const candidate: WorkerLaunchDescriptor = {
-    version: LAUNCH_VERSION,
-    socketPath: value.socketPath,
-    admission: value.admission as WorkerLaunchAdmission,
-    assignment,
-  };
+function validateWorkerLaunchPlan(candidate: WorkerLaunchPlan): WorkerLaunchPlan {
   const frame: WorkerConnectRequestFrame = {
     type: "req",
     id: "launch-validation",
@@ -297,4 +289,52 @@ export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescrip
     throw new Error("invalid worker launch descriptor");
   }
   return candidate;
+}
+
+export function parseWorkerLaunchPlan(value: unknown): WorkerLaunchPlan {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["version", "admission", "assignment"]) ||
+    value.version !== LAUNCH_VERSION
+  ) {
+    throw new Error("invalid worker launch descriptor");
+  }
+  const assignment = parseAssignment(value.assignment);
+  if (!assignment || !isRecord(value.admission)) {
+    throw new Error("invalid worker launch descriptor");
+  }
+  return validateWorkerLaunchPlan({
+    version: LAUNCH_VERSION,
+    admission: value.admission as WorkerLaunchAdmission,
+    assignment,
+  });
+}
+
+export function completeWorkerLaunchDescriptor(
+  plan: WorkerLaunchPlan,
+  connectionEndpoint: WorkerConnectionEndpoint,
+): WorkerLaunchDescriptor {
+  const parsedPlan = parseWorkerLaunchPlan(plan);
+  const parsedEndpoint = parseWorkerConnectionEndpoint(connectionEndpoint);
+  if (!parsedEndpoint) {
+    throw new Error("invalid worker launch descriptor");
+  }
+  return { ...parsedPlan, connectionEndpoint: parsedEndpoint };
+}
+
+export function parseWorkerLaunchDescriptor(value: unknown): WorkerLaunchDescriptor {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["version", "connectionEndpoint", "admission", "assignment"])
+  ) {
+    throw new Error("invalid worker launch descriptor");
+  }
+  return completeWorkerLaunchDescriptor(
+    {
+      version: value.version as 3,
+      admission: value.admission as WorkerLaunchAdmission,
+      assignment: value.assignment as WorkerLaunchAssignment,
+    },
+    value.connectionEndpoint as WorkerConnectionEndpoint,
+  );
 }

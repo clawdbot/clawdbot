@@ -5,7 +5,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parseBrowserMajorVersion,
   readBrowserVersion,
@@ -15,12 +18,12 @@ import {
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
 import {
   browserExtensionStatus,
+  FOUNDATION_CHROME_WEB_STORE_URL,
   repairOwnedChromeExtensionNativeHosts,
 } from "./browser/extension-install.js";
 import { listSystemProfiles } from "./browser/system-profiles.js";
 import { movePathToTrash } from "./browser/trash.js";
 import type { OpenClawConfig } from "./config/config.js";
-import { asRecord } from "./record-shared.js";
 import { formatCliCommand, note } from "./sdk-setup-tools.js";
 import { CONFIG_DIR, resolveUserPath } from "./utils.js";
 
@@ -57,7 +60,7 @@ type BrowserDoctorFilesystemDeps = {
 };
 
 function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[] {
-  const browser = asRecord(cfg.browser);
+  const browser = asNullableRecord(cfg.browser);
   if (!browser) {
     return [];
   }
@@ -68,13 +71,13 @@ function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[]
     profiles.set("user", { name: "user" });
   }
 
-  const configuredProfiles = asRecord(browser.profiles);
+  const configuredProfiles = asNullableRecord(browser.profiles);
   if (!configuredProfiles) {
     return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
   }
 
   for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
-    const profile = asRecord(rawProfile);
+    const profile = asNullableRecord(rawProfile);
     const driver = normalizeOptionalString(profile?.driver) ?? "";
     if (driver === "existing-session") {
       profiles.set(profileName, {
@@ -88,7 +91,7 @@ function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[]
 }
 
 function collectManagedProfiles(cfg: OpenClawConfig): ManagedProfile[] {
-  const browser = asRecord(cfg.browser);
+  const browser = asNullableRecord(cfg.browser);
   if (!browser) {
     return [];
   }
@@ -99,13 +102,13 @@ function collectManagedProfiles(cfg: OpenClawConfig): ManagedProfile[] {
     profiles.set(defaultProfile, { name: defaultProfile });
   }
 
-  const configuredProfiles = asRecord(browser.profiles);
+  const configuredProfiles = asNullableRecord(browser.profiles);
   if (!configuredProfiles) {
     return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
   }
 
   for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
-    const profile = asRecord(rawProfile);
+    const profile = asNullableRecord(rawProfile);
     const driver = normalizeOptionalString(profile?.driver) ?? "openclaw";
     if (driver !== "existing-session") {
       profiles.set(profileName, { name: profileName });
@@ -134,7 +137,7 @@ function isSameOrChildPath(candidatePath: string, parentPath: string): boolean {
 }
 
 function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: string): boolean {
-  const browser = asRecord(cfg.browser);
+  const browser = asNullableRecord(cfg.browser);
   if (!browser) {
     return false;
   }
@@ -142,7 +145,7 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
     return true;
   }
 
-  const configuredProfiles = asRecord(browser.profiles);
+  const configuredProfiles = asNullableRecord(browser.profiles);
   if (!configuredProfiles) {
     return false;
   }
@@ -151,7 +154,7 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
   }
 
   for (const rawProfile of Object.values(configuredProfiles)) {
-    const profile = asRecord(rawProfile);
+    const profile = asNullableRecord(rawProfile);
     const userDataDir = normalizeOptionalString(profile?.userDataDir);
     if (userDataDir && isSameOrChildPath(resolveUserPath(userDataDir), legacyProfileDir)) {
       return true;
@@ -270,7 +273,8 @@ export async function noteChromeMcpBrowserReadiness(
           [
             "- The Chrome extension native bootstrap is not fully registered.",
             `- Run ${formatCliCommand("openclaw browser extension status --json")} for the redacted registration report.`,
-            `- Run ${formatCliCommand("openclaw browser extension install")} after loading the printed unpacked directory.`,
+            `- Run ${formatCliCommand("openclaw browser extension install")} before adding OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL}.`,
+            "- Load unpacked from the printed stable path only as a development fallback.",
           ].join("\n"),
           "Browser extension bootstrap",
         );

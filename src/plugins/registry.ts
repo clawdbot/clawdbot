@@ -50,13 +50,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const rollbackPluginGlobalSideEffects = (pluginId: string, record?: RegistryPluginRecord) => {
     deactivatePluginSideEffectGuards(pluginId);
+    runtimeResolver.revokePluginRuntimeRecord(pluginId, record);
     const schedulerRecords = state.registry.sessionSchedulerJobs.filter(
       (r) => r.pluginId === pluginId,
     );
     const gatewayMethods = state.registry.gatewayMethodDescriptors
       .filter((entry) => entry.owner.kind === "plugin" && entry.owner.pluginId === pluginId)
       .map((entry) => entry.name);
-    for (const value of Object.values(state.registry)) {
+    for (const [registryKey, value] of Object.entries(state.registry)) {
+      // Plugin records and diagnostics are operator-visible load outcomes, not registrations.
+      if (registryKey === "plugins" || registryKey === "diagnostics") {
+        continue;
+      }
       if (Array.isArray(value)) {
         for (let index = value.length - 1; index >= 0; index -= 1) {
           const entry = value[index] as

@@ -7,7 +7,6 @@ import type {
   MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   isAcpSessionKey,
   isCronSessionKey,
@@ -150,6 +149,35 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
     !state?.reservation &&
     !state?.tombstone
   );
+}
+
+type MainRestartRecoveryRolloverEligibility =
+  | { eligible: true }
+  | {
+      eligible: false;
+      reason: "already_recovered";
+      recoveredSessionId?: string;
+      recoveredSessionKey?: string;
+    }
+  | { eligible: false; reason: "not_tombstoned" };
+
+export function inspectMainRestartRecoveryRolloverEligibility(
+  entry: SessionEntry,
+): MainRestartRecoveryRolloverEligibility {
+  if (!entry.mainRestartRecovery?.tombstone) {
+    return { eligible: false, reason: "not_tombstoned" };
+  }
+  const recoveredSessionId = entry.mainRestartRecovery.tombstone.recoveredSessionId;
+  const recoveredSessionKey = entry.mainRestartRecovery.tombstone.recoveredSessionKey;
+  if (recoveredSessionId || recoveredSessionKey) {
+    return {
+      eligible: false,
+      reason: "already_recovered",
+      ...(recoveredSessionId ? { recoveredSessionId } : {}),
+      ...(recoveredSessionKey ? { recoveredSessionKey } : {}),
+    };
+  }
+  return { eligible: true };
 }
 
 // A healthy session can retain lifecycle fences after its final recovery owner
@@ -352,14 +380,15 @@ export function transitionMainSessionRecovery(
       if (command.attempt !== state.chargedAttempts + 1) {
         return { kind: "rejected", reason: "stale_revision" };
       }
-      const executionIdentityAdmission =
-        command.executionIdentity.state === "disabled"
-          ? undefined
-          : state.executionIdentity?.runId === command.runId
-            ? ({ kind: "retry-reference", token: state.executionIdentity } as const)
-            : undefined;
+      const retryExecutionIdentity =
+        command.executionIdentity.state === "enabled" && state.executionIdentity
+          ? state.executionIdentity
+          : undefined;
+      const executionIdentityAdmission = retryExecutionIdentity
+        ? ({ kind: "retry-reference", token: retryExecutionIdentity } as const)
+        : undefined;
       updateRecoveryState(entry, state, {
-        ...(command.executionIdentity.state === "disabled" ? { executionIdentity: undefined } : {}),
+        executionIdentity: retryExecutionIdentity,
         chargedAttempts: command.attempt,
         reservation: {
           runId: command.runId,
@@ -393,8 +422,7 @@ export function transitionMainSessionRecovery(
         !entry.restartRecoveryRuns?.some(
           (run) =>
             run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
-        ) ||
-        command.token.runId !== command.runId
+        )
       ) {
         return { kind: "rejected", reason: "stale_reservation" };
       }
@@ -402,6 +430,9 @@ export function transitionMainSessionRecovery(
         return JSON.stringify(state.executionIdentity) === JSON.stringify(command.token)
           ? { kind: "no_change" }
           : { kind: "rejected", reason: "stale_reservation" };
+      }
+      if (command.token.runId !== command.runId) {
+        return { kind: "rejected", reason: "stale_reservation" };
       }
       updateRecoveryState(entry, state, { executionIdentity: command.token });
       return { kind: "applied" };
@@ -631,28 +662,6 @@ export function transitionMainSessionRecovery(
       entry.runtimeMs = Math.max(0, command.now - (entry.startedAt ?? command.now));
       entry.updatedAt = command.now;
       return { kind: "tombstoned" };
-    }
-    case "fail_recovery": {
-      const conflict = matchesObservation(entry, command.observation);
-      if (conflict) {
-        return { kind: "rejected", reason: conflict };
-      }
-      const noticeEntry = structuredClone(entry);
-      entry.status = "failed";
-      entry.lifecycleRunId = undefined;
-      entry.abortedLastRun = true;
-      entry.endedAt = command.now;
-      entry.updatedAt = command.now;
-      Object.assign(entry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
-      Object.assign(
-        entry,
-        buildRestartRecoveryClaimCleanupPatch({
-          entry,
-          recordTerminalSource: true,
-        }),
-      );
-      entry.mainRestartRecovery = undefined;
-      return { kind: "failed", noticeEntry };
     }
     case "doctor_repair": {
       if (!entry.mainRestartRecovery?.tombstone || entry.abortedLastRun !== true) {

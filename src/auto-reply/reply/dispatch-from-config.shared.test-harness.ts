@@ -3,7 +3,6 @@ import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import type {
   PluginHookBeforeDispatchResult,
   PluginHookReplyDispatchResult,
@@ -69,13 +68,6 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
   markDiagnosticSessionProgress: vi.fn(),
-  requestStuckDiagnosticSessionRecovery: vi.fn<() => Promise<StuckSessionRecoveryOutcome>>(
-    async () => ({
-      status: "skipped" as const,
-      action: "keep_lane" as const,
-      reason: "active_reply_work" as const,
-    }),
-  ),
 }));
 const messageAuditMocks = vi.hoisted(() => ({
   enabled: true,
@@ -156,7 +148,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStore: vi.fn(() => ({})),
   readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
-  resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(
     (params: {
       store: Record<string, Record<string, unknown>>;
@@ -498,13 +490,8 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
+  logSessionTurnCreated: vi.fn(),
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
-  isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
-    config?.diagnostics?.enabled !== false,
-  requestStuckDiagnosticSessionRecovery: diagnosticMocks.requestStuckDiagnosticSessionRecovery,
-  resolveStuckSessionWarnMs: () => 120_000,
-  resolveStuckSessionAbortMs: (stuckSessionWarnMs: number) =>
-    Math.max(300_000, stuckSessionWarnMs * 3),
 }));
 vi.mock("../../audit/message-audit-events.js", () => ({
   emitTrustedMessageAuditEvent: messageAuditMocks.emitTrustedMessageAuditEvent,
@@ -522,7 +509,7 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
   loadSessionStore: sessionStoreMocks.loadSessionStore,
   readSessionEntry: sessionStoreMocks.readSessionEntry,
   resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  resolveStorePath: sessionStoreMocks.resolveStorePath,
+  resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
   updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
 }));
@@ -582,12 +569,16 @@ vi.mock("../../bindings/records.js", () => ({
     sessionBindingMocks.touch(...args),
 }));
 vi.mock("../../infra/agent-events.js", () => ({
+  assertAgentRunLifecycleGenerationCurrent: vi.fn(),
+  captureAgentRunLifecycleGeneration: () => "test-generation",
   emitAgentAuditEvent: (params: unknown) => agentEventMocks.emitAgentAuditEvent(params),
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
   registerAgentEventLifecycleRotationHandler: vi.fn(),
+  runOncePerAgentRun: <T>(_runId: string, _operation: string, run: () => Promise<T>) => run(),
+  withAgentRunLifecycleGeneration: <T>(_generation: string, run: () => T) => run(),
 }));
 vi.mock("../../plugins/conversation-binding.js", () => ({
   buildPluginBindingDeclinedText: () => "Plugin binding request was declined.",
@@ -644,6 +635,9 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 vi.mock("./reply-media-paths.runtime.js", () => ({
+  createReplyMediaContext: () => ({
+    normalizePayload: (payload: unknown) => payload,
+  }),
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
 }));
@@ -679,6 +673,7 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+  resolveEffectiveTtsConfig: (cfg: OpenClawConfig) => cfg.tts ?? {},
   shouldCleanTtsDirectiveText: () => true,
   shouldAttemptTtsPayload: () => true,
 }));

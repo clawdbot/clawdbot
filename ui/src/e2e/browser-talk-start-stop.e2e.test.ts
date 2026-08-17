@@ -825,6 +825,82 @@ suite.define(() => {
     });
   });
 
+  it("shows a visible error when relay microphone appends fall behind", async () => {
+    await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const relaySessionId = "relay-e2e-input-backpressure";
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "talk.client.create": {
+            provider: "openai",
+            transport: "gateway-relay",
+            relaySessionId,
+            audio: {
+              inputEncoding: "pcm16",
+              inputSampleRateHz: 16_000,
+              outputEncoding: "pcm16",
+              outputSampleRateHz: 24_000,
+            },
+          },
+          "talk.session.appendAudio": {},
+          "talk.session.close": {},
+        },
+      });
+      await installTalkBrowserFixtures(page);
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      for (let index = 0; index < 4; index += 1) {
+        await gateway.deferNext("talk.session.appendAudio");
+      }
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await gateway.waitForRequest("talk.client.create");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                window as Window & {
+                  openclawTalkE2eState?: { inputProcessor?: unknown };
+                }
+              ).openclawTalkE2eState?.inputProcessor != null,
+          ),
+        )
+        .toBe(true);
+      await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
+
+      await page.evaluate(() => {
+        const processor = (
+          window as Window & {
+            openclawTalkE2eState?: {
+              inputProcessor?: {
+                onaudioprocess?: (event: {
+                  inputBuffer: { getChannelData: () => Float32Array };
+                }) => void;
+              };
+            };
+          }
+        ).openclawTalkE2eState?.inputProcessor;
+        for (let index = 0; index < 5; index += 1) {
+          processor?.onaudioprocess?.({
+            inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.1) },
+          });
+        }
+      });
+
+      await expect
+        .poll(() =>
+          gateway.getRequests("talk.session.appendAudio").then((requests) => requests.length),
+        )
+        .toBe(4);
+      await expect
+        .poll(() => page.getByRole("alert").textContent())
+        .toContain("Realtime Talk audio input fell behind");
+      await expect
+        .poll(() => gateway.getRequests("talk.session.close").then((requests) => requests.length))
+        .toBe(1);
+      await captureComposerProof(page, "relay-input-backpressure-error.png");
+    });
+  });
+
   it("closes a stale relay when stop and restart race its create response", async () => {
     await suite.withPage({ locale: "en-US", permissions: ["microphone"] }, async ({ page }) => {
       const currentRelaySessionId = "relay-current-e2e";

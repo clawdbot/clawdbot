@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaEvidenceTiming, QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
 import { startQaGatewayChild } from "./gateway-child.js";
@@ -14,10 +15,7 @@ import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import type { QaLabServerHandle, QaLabServerStartParams } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import type { QaProviderMode } from "./model-selection.js";
-import {
-  parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv,
-  sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
-} from "./progress-format.js";
+import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   createQaTransportAdapter,
@@ -30,40 +28,12 @@ import type { QaReportCheck } from "./report.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import {
-  type QaSuiteGatewayHeapSnapshot,
-  type QaSuiteGatewayRssSample,
-  writeQaSuiteArtifacts,
-} from "./suite-artifacts.js";
-import {
-  scenarioRequiresControlUi,
-  shouldUseIsolatedQaSuiteScenarioWorkers,
-  splitModelRef,
-} from "./suite-planning.js";
+import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
+import { shouldUseIsolatedQaSuiteScenarioWorkers, splitModelRef } from "./suite-planning.js";
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
-import {
-  createQaSuiteScenarioStepRunner,
-  runQaSuiteScenarioDefinition,
-  runQaSuiteScenarioSteps,
-} from "./suite-runtime-flow.js";
+import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
-import {
-  appendNodeOption,
-  buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaIsolatedScenarioWorkerParams,
-  mergeQaRuntimeEnvPatches,
-  remapModelRefForForcedRuntime,
-} from "./suite-support.js";
-
-function resolveQaSuiteControlUiEnabled(params: {
-  explicit?: boolean;
-  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
-}) {
-  return (
-    params.explicit ?? params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario))
-  );
-}
 
 export type QaSuiteScenarioResult = {
   name: string;
@@ -169,11 +139,11 @@ export type QaSuiteRunParams = {
 };
 
 export function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
-  const override = parseQaSuiteBooleanEnv(env.OPENCLAW_QA_SUITE_PROGRESS);
+  const override = parseBooleanValue(env.OPENCLAW_QA_SUITE_PROGRESS);
   if (override !== undefined) {
     return override;
   }
-  return parseQaSuiteBooleanEnv(env.CI) === true;
+  return parseBooleanValue(env.CI) === true;
 }
 
 export function resolveQaSuiteTransportReadyTimeoutMs(
@@ -596,27 +566,3 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   const { runQaFlowSuiteFromRuntime } = await import("./suite-run.runtime.js");
   return await runQaFlowSuiteFromRuntime(params);
 }
-
-export const qaSuiteProgressTesting = {
-  appendNodeOption,
-  buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaIsolatedScenarioWorkerParams,
-  buildQaSuiteRuntimeMetrics,
-  createQaSuiteTransportAdapter,
-  createScenarioStepRunner: createQaSuiteScenarioStepRunner,
-  formatQaSuiteRunStartProgress,
-  mergeQaRuntimeEnvPatches,
-  parseQaSuiteBooleanEnv,
-  remapModelRefForForcedRuntime,
-  runQaFlowSuiteCleanupPlan,
-  runQaSuiteCleanupSteps,
-  throwQaSuiteCleanupErrors,
-  resolveQaSuiteControlUiEnabled,
-  scenarioRequiresControlUi,
-  resolveQaSuiteTransportReadyTimeoutMs,
-  sanitizeQaSuiteProgressValue,
-  shouldRunQaSuiteWithIsolatedScenarioWorkers,
-  shouldLogQaSuiteProgress,
-  waitForQaLabReadyOrStopOwned,
-  writeQaSuiteArtifacts,
-};

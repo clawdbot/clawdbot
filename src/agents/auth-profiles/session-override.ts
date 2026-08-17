@@ -113,7 +113,7 @@ async function persistSessionAuthProfileOverrideState(params: {
   }
   const persisted = await (
     await loadSessionAccessor()
-  ).patchSessionEntry(
+  ).patchSessionEntryCore(
     { storePath, sessionKey },
     (current) => {
       // Compare inside the canonical SQLite writer so a concurrent /model pin

@@ -12,7 +12,7 @@ import {
   ConnectErrorDetailCodes,
   createSignedDevice,
   expectHelloOkServerVersion,
-  getFreePort,
+  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -38,7 +38,7 @@ export function registerDefaultAuthTokenSuite(): void {
     let port: number;
 
     beforeAll(async () => {
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port);
     });
 
@@ -158,6 +158,15 @@ export function registerDefaultAuthTokenSuite(): void {
       );
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+      );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
+      );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
+      );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
       );
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,

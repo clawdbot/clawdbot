@@ -90,6 +90,96 @@ suite.define(() => {
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
   });
 
+  it("keeps the Sessions page query stable when the startup roster completes", async () => {
+    const visibleLabel = "Visible page-owned session";
+    const pageQueryParams = {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: false,
+      limit: 50,
+    };
+    const visibleResponse = {
+      count: 1,
+      defaults: { contextTokens: null, model: null, modelProvider: null },
+      path: "",
+      sessions: [
+        {
+          key: "agent:main:page-owned",
+          kind: "direct",
+          label: visibleLabel,
+          updatedAt: 1,
+        },
+      ],
+      ts: 1,
+    };
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      deferredMethods: ["sessions.list"],
+      sessionKey: "agent:main:main",
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            { match: pageQueryParams, response: visibleResponse },
+            {
+              response: {
+                count: 0,
+                defaults: visibleResponse.defaults,
+                path: "",
+                sessions: [],
+                ts: 1,
+              },
+            },
+          ],
+        },
+      },
+    });
+    const exactPageQueries = async () =>
+      (await gateway.getRequests("sessions.list")).filter((request) => {
+        const params = request.params;
+        if (!params || typeof params !== "object" || Array.isArray(params)) {
+          return false;
+        }
+        const record = params as Record<string, unknown>;
+        const entries = Object.entries(pageQueryParams);
+        return (
+          Object.keys(record).length === entries.length &&
+          entries.every(([key, value]) => record[key] === value)
+        );
+      });
+
+    await currentPage.goto(`${suite.server.baseUrl}sessions`);
+    const visibleRow = currentPage.getByText(visibleLabel, { exact: true }).first();
+    await visibleRow.waitFor({ timeout: 10_000 });
+
+    const startupAndPageRequests = await gateway.getRequests("sessions.list");
+    expect(startupAndPageRequests[0]?.params).toEqual({
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeDerivedTitles: true,
+      includeGlobal: true,
+      includeLastMessage: true,
+      includeUnknown: true,
+      limit: 50,
+    });
+    expect
+      .soft((await exactPageQueries()).map((request) => request.params))
+      .toEqual([pageQueryParams]);
+
+    await gateway.resolveDeferred("sessions.list", visibleResponse);
+    await visibleRow.waitFor();
+
+    const stabilityDeadline = Date.now() + 500;
+    do {
+      expect(await exactPageQueries()).toHaveLength(1);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    } while (Date.now() < stabilityDeadline);
+  });
+
   it("keeps older Gateway sessions consistent between the sidebar and Sessions page", async () => {
     const sessionKey = "agent:main:older-stored";
     const sessionLabel = "Older stored session";

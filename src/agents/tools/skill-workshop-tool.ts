@@ -38,7 +38,7 @@ import { readWritableWorkspaceSkill } from "../../skills/workshop/workspace-skil
 import { stringEnum } from "../schema/typebox.js";
 import {
   asToolParamsRecord,
-  readStringParam,
+  readToolStringParam,
   ToolInputError,
   type AnyAgentTool,
 } from "./common.js";
@@ -65,6 +65,7 @@ import {
   skillWorkshopAgentEventActor,
 } from "./skill-workshop-tool-helpers.js";
 import {
+  formatProposalEvaluation,
   formatProposalInspect,
   formatProposalList,
   listProposalEntries,
@@ -111,6 +112,18 @@ function requireProposalContent(content: string | undefined): string {
     throw new ToolInputError("proposal_content required");
   }
   return content;
+}
+
+function readSkillPatchText(params: Record<string, unknown>) {
+  return {
+    oldString:
+      readToolStringParam(params, "old_string", { label: "old_string", trim: false }) ?? "",
+    newString: readToolStringParam(params, "new_string", {
+      required: true,
+      label: "new_string",
+      trim: false,
+    }),
+  };
 }
 
 function buildSkillWorkshopToolSchema(
@@ -285,7 +298,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     ),
     execute: async (_toolCallId, args) => {
       const params = asToolParamsRecord(args);
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       const proposalActions = resolveProposalOnlyActions(
         options.updateProposals === true,
         options.proposalReviewCompletion !== undefined,
@@ -330,7 +343,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
         const skill = await readWritableWorkspaceSkill(
           options.workspaceDir,
-          readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
+          readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId },
         );
         if (
@@ -384,7 +397,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
 
       if (action === "list") {
         const status = readProposalStatusParam(params, SKILL_PROPOSAL_STATUSES);
-        const query = readStringParam(params, "query");
+        const query = readToolStringParam(params, "query");
         const limit = readListLimitParam(params);
         const proposals = listProposalEntries({
           proposals: (
@@ -426,14 +439,14 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           eventActor: skillWorkshopAgentEventActor(options.agentId),
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
-          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
-          correlationId: readStringParam(params, "correlation_id"),
+          expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
+          correlationId: readToolStringParam(params, "correlation_id"),
         });
         return {
           content: [
             {
               type: "text",
-              text: `Evaluated skill proposal ${evaluated.record.id} with ${evaluated.evaluation.outcomes.length} evaluator result(s).`,
+              text: formatProposalEvaluation(evaluated.evaluation, evaluated.record.id),
             },
           ],
           details: {
@@ -453,9 +466,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
-          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
-          correlationId: readStringParam(params, "correlation_id"),
-          reason: readStringParam(params, "reason"),
+          expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
+          correlationId: readToolStringParam(params, "correlation_id"),
+          reason: readToolStringParam(params, "reason"),
         });
         return actionResult(applied.record, {
           contentText: `Applied skill proposal ${applied.record.id}.`,
@@ -470,9 +483,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           eventActor: skillWorkshopAgentEventActor(options.agentId),
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
-          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
-          correlationId: readStringParam(params, "correlation_id"),
-          reason: readStringParam(params, "reason"),
+          expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
+          correlationId: readToolStringParam(params, "correlation_id"),
+          reason: readToolStringParam(params, "reason"),
         });
         return actionResult(rejected, {
           contentText: `Rejected skill proposal ${rejected.id}.`,
@@ -486,16 +499,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           eventActor: skillWorkshopAgentEventActor(options.agentId),
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
-          expectedRevisionHash: readStringParam(params, "expected_revision_hash"),
-          correlationId: readStringParam(params, "correlation_id"),
-          reason: readStringParam(params, "reason"),
+          expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
+          correlationId: readToolStringParam(params, "correlation_id"),
+          reason: readToolStringParam(params, "reason"),
         });
         return actionResult(quarantined, {
           contentText: `Quarantined skill proposal ${quarantined.id}.`,
         });
       }
 
-      const proposalContent = readStringParam(params, "proposal_content", {
+      const proposalContent = readToolStringParam(params, "proposal_content", {
         required: action !== "revise" && action !== "patch",
         label: "proposal_content",
         trim: false,
@@ -504,8 +517,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         throw new ToolInputError("proposal_content required");
       }
       const supportFiles = readSupportFilesParam(params);
-      const goal = readStringParam(params, "goal");
-      const evidence = readStringParam(params, "evidence");
+      const goal = readToolStringParam(params, "goal");
+      const evidence = readToolStringParam(params, "evidence");
 
       if (action === "patch" && options.proposalOnly === true && options.updateProposals !== true) {
         throw new ToolInputError("this Skill Workshop session cannot patch live skills");
@@ -521,7 +534,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         // autonomous rewrite. The service binds the proposal to that read.
         const target = await readWritableWorkspaceSkill(
           options.workspaceDir,
-          readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
+          readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId },
         );
         const readHash = readSkillHashes.get(target.skillKey);
@@ -553,15 +566,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             );
           }
           try {
-            composeSkillBodyPatch(stripProposalFrontmatterForSkill(target.content), {
-              oldString:
-                readStringParam(params, "old_string", { label: "old_string", trim: false }) ?? "",
-              newString: readStringParam(params, "new_string", {
-                required: true,
-                label: "new_string",
-                trim: false,
-              }),
-            });
+            composeSkillBodyPatch(
+              stripProposalFrontmatterForSkill(target.content),
+              readSkillPatchText(params),
+            );
           } catch (error) {
             throw new ToolInputError(error instanceof Error ? error.message : String(error));
           }
@@ -595,8 +603,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
-            name: readStringParam(params, "name", { required: true }),
-            description: readStringParam(params, "description", { required: true }),
+            name: readToolStringParam(params, "name", { required: true }),
+            description: readToolStringParam(params, "description", { required: true }),
             content: requireProposalContent(proposalContent),
             supportFiles,
             createdBy: "skill-workshop",
@@ -613,12 +621,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
-            skillName: readStringParam(params, "skill_name", {
+            skillName: readToolStringParam(params, "skill_name", {
               required: true,
               label: "skill_name",
             }),
             expectedCurrentContentHash,
-            description: readStringParam(params, "description"),
+            description: readToolStringParam(params, "description"),
             content: requireProposalContent(proposalContent),
             supportFiles,
             createdBy: "skill-workshop",
@@ -637,20 +645,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             eventActor: skillWorkshopAgentEventActor(options.agentId),
             config: options.config,
             env: options.env,
-            skillName: readStringParam(params, "skill_name", {
+            skillName: readToolStringParam(params, "skill_name", {
               required: true,
               label: "skill_name",
             }),
             expectedCurrentContentHash,
-            composePatch: {
-              oldString:
-                readStringParam(params, "old_string", { label: "old_string", trim: false }) ?? "",
-              newString: readStringParam(params, "new_string", {
-                required: true,
-                label: "new_string",
-                trim: false,
-              }),
-            },
+            composePatch: readSkillPatchText(params),
             createdBy: "skill-workshop",
             ...(options.autonomousCapture || foregroundRepair ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
@@ -664,10 +664,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             : proposalMutationText("Created skill patch proposal", proposal.record);
         } else if (action === "revise") {
           const pendingProposal = await resolvePendingSkillProposal({
-            proposalId: readStringParam(params, "proposal_id", {
+            proposalId: readToolStringParam(params, "proposal_id", {
               label: "proposal_id",
             }),
-            name: readStringParam(params, "name"),
+            name: readToolStringParam(params, "name"),
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
             env: options.env,
@@ -680,11 +680,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             env: options.env,
             proposalId: pendingProposal.record.id,
             expectedRevisionHash:
-              readStringParam(params, "expected_revision_hash") ?? pendingProposal.revisionHash,
-            correlationId: readStringParam(params, "correlation_id"),
+              readToolStringParam(params, "expected_revision_hash") ?? pendingProposal.revisionHash,
+            correlationId: readToolStringParam(params, "correlation_id"),
             content: proposalContent,
             supportFiles,
-            description: readStringParam(params, "description"),
+            description: readToolStringParam(params, "description"),
             ...(options.origin ? { origin: options.origin } : {}),
             goal,
             evidence,

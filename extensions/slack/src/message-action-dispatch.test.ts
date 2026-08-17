@@ -738,6 +738,32 @@ describe("handleSlackMessageAction", () => {
         initialComment: "path alias",
       },
     },
+    {
+      name: "maps an upload-file caption to the upload's initial comment",
+      params: {
+        channelId: "C1",
+        media: "/tmp/chart.png",
+        caption: "chart attached",
+      },
+      expected: {
+        filePath: "/tmp/chart.png",
+        initialComment: "chart attached",
+      },
+    },
+    {
+      name: "prefers an explicit upload-file initial comment over message and caption",
+      params: {
+        channelId: "C1",
+        media: "/tmp/chart.png",
+        initialComment: "",
+        message: "message text",
+        caption: "caption text",
+      },
+      expected: {
+        filePath: "/tmp/chart.png",
+        initialComment: "",
+      },
+    },
   ])("$name", async ({ params, expected }) => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();
@@ -750,6 +776,49 @@ describe("handleSlackMessageAction", () => {
     expectForwardedCfg(invoke, cfg);
     expectNoForwardedToolContext(invoke);
   });
+
+  it.each(["forceDocument", "asDocument"] as const)(
+    "normalizes %s for Slack send and upload-file",
+    async (propertyName) => {
+      const sendInvoke = createInvokeSpy();
+      await handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "send",
+          cfg: slackConfig(),
+          params: {
+            to: "channel:C1",
+            media: "/tmp/original.png",
+            [propertyName]: true,
+          },
+        } as never,
+        invoke: sendInvoke as never,
+      });
+      expect(firstAction(sendInvoke)).toMatchObject({
+        action: "sendMessage",
+        forceDocument: true,
+      });
+
+      const uploadInvoke = createInvokeSpy();
+      await handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "upload-file",
+          cfg: slackConfig(),
+          params: {
+            to: "channel:C1",
+            filePath: "/tmp/original.png",
+            [propertyName]: true,
+          },
+        } as never,
+        invoke: uploadInvoke as never,
+      });
+      expect(firstAction(uploadInvoke)).toMatchObject({
+        action: "uploadFile",
+        forceDocument: true,
+      });
+    },
+  );
 
   it("rejects replyBroadcast for upload-file", async () => {
     await expect(

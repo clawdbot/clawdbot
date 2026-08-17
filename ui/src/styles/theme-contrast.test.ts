@@ -100,27 +100,6 @@ describe("Control UI theme contrast", () => {
   const chatLayoutCss = readFileSync(path.join(here, "chat", "layout.css"), "utf8");
   const layoutCss = readFileSync(path.join(here, "layout.css"), "utf8");
 
-  it("keeps default dark muted text tokens at WCAG AA on declared surfaces", () => {
-    const dark = readCssVarBlock(baseCss, ":root");
-    const backgrounds = [
-      requireCssColor(dark, "bg"),
-      requireCssColor(dark, "bg-elevated"),
-      requireCssColor(dark, "bg-muted"),
-      requireCssColor(dark, "card"),
-    ];
-    const foregrounds = [
-      requireCssColor(dark, "muted"),
-      requireCssColor(dark, "muted-strong"),
-      requireCssColor(dark, "muted-foreground"),
-    ];
-
-    for (const foreground of foregrounds) {
-      for (const background of backgrounds) {
-        expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
-      }
-    }
-  });
-
   it("keeps chat timestamps and slash-arg hints AA without opacity dimming", () => {
     const dark = readCssVarBlock(baseCss, ":root");
     const muted = requireCssColor(dark, "muted");

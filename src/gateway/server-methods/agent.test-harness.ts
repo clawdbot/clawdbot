@@ -1,6 +1,7 @@
 // Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
@@ -36,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
+  persistSessionTranscriptTurn: vi.fn(),
   readTranscriptStatsSync: vi.fn<() => SessionTranscriptStats>(() => ({
     eventCount: 0,
     maxSeq: 0,
@@ -113,7 +115,33 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
     ...actual,
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
+    persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
     readTranscriptStatsSync: mocks.readTranscriptStatsSync,
+  };
+});
+
+vi.mock("../../sessions/user-turn-transcript.js", async () => {
+  const actual = await vi.importActual<typeof import("../../sessions/user-turn-transcript.js")>(
+    "../../sessions/user-turn-transcript.js",
+  );
+  return {
+    ...actual,
+    createUserTurnTranscriptRecorder: (
+      params: Parameters<typeof actual.createUserTurnTranscriptRecorder>[0],
+    ) =>
+      actual.createUserTurnTranscriptRecorder({
+        ...params,
+        // Handler-unit fixtures mock session loading with ordered returns. The
+        // gateway-server suites own real target revalidation and SQLite proof.
+        target: {
+          sessionId: "test-session-id",
+          expectedSessionId: "test-session-id",
+          sessionKey: "agent:main:main",
+          sessionEntry: { sessionId: "test-session-id", updatedAt: Date.now() },
+          storePath: "/tmp/sessions.json",
+          agentId: "main",
+        },
+      }),
   };
 });
 
@@ -288,13 +316,15 @@ vi.mock("../../channels/message/runtime.js", async () => {
   );
   return {
     ...actual,
-    sendDurableMessageBatch: (...args: Parameters<typeof actual.sendDurableMessageBatch>) => {
+    sendDurableMessageBatchCore: (
+      ...args: Parameters<typeof actual.sendDurableMessageBatchCore>
+    ) => {
       const override = mocks.sendDurableMessageBatch.getMockImplementation();
       return override
         ? (mocks.sendDurableMessageBatch(...args) as ReturnType<
-            typeof actual.sendDurableMessageBatch
+            typeof actual.sendDurableMessageBatchCore
           >)
-        : actual.sendDurableMessageBatch(...args);
+        : actual.sendDurableMessageBatchCore(...args);
     },
   };
 });
@@ -551,6 +581,52 @@ function resetSessionAccessorMocks() {
           skipMaintenance: params.skipMaintenance,
         },
       ),
+  );
+  mocks.persistSessionTranscriptTurn.mockReset().mockImplementation(
+    async (
+      scope: {
+        agentId?: string;
+        sessionId: string;
+        sessionKey: string;
+        sessionEntry?: SessionEntry;
+        storePath?: string;
+      },
+      options: {
+        messages: Array<{
+          message: unknown;
+          prepareMessageAfterIdempotencyCheck?: (message: unknown) => unknown;
+        }>;
+      },
+    ) => {
+      const candidate = options.messages[0]?.message;
+      const message =
+        options.messages[0]?.prepareMessageAfterIdempotencyCheck?.(candidate) ?? candidate;
+      if (!message) {
+        return { appendedCount: 0, messages: [], sessionEntry: scope.sessionEntry };
+      }
+      return {
+        appendedCount: 1,
+        messages: [
+          {
+            appended: true,
+            messageId: "test-user-turn",
+            message,
+            anchor: {
+              agentId: scope.agentId ?? "main",
+              sessionId: scope.sessionId,
+              sessionKey: scope.sessionKey,
+              storePath: scope.storePath ?? "/tmp/sessions.json",
+              generation: "test-generation",
+              entryId: "test-user-turn",
+              rawSeq: 1,
+              effectiveParentId: null,
+              activeMessagePosition: 0,
+            },
+          },
+        ],
+        sessionEntry: scope.sessionEntry,
+      };
+    },
   );
   mocks.patchSessionEntryTarget.mockReset().mockImplementation(
     async (
@@ -908,20 +984,6 @@ export async function invokeAgentIdentityGet(
     isWebchatConnect: () => false,
   });
   return respond;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 
 /**

@@ -134,11 +134,8 @@ export function resolveCodexAppServerModelProvider(params: {
   return normalizedLower === "openai" ? "openai" : normalized;
 }
 
-// Modern Codex models reject the legacy CLI `minimal` default. Prefer
-// app-server metadata, then use the app-server-owned fallback effort contract
-// for Pro models whose minimum supported effort is `medium`.
-// Other modern models translate `minimal` to `low`. (#71946)
-// Exported for unit-test coverage of the model-aware translation path.
+// Provider catalog metadata owns model-specific effort support. Keeping this
+// bridge model-agnostic prevents the picker and native runtime from drifting.
 export function resolveReasoningEffort(
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra",
   modelId: string,

@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
 import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
+import { formatCliJsonFailure } from "../failure-output.js";
+import { runCliWithExitFinalization } from "../one-shot-exit.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
-import { getSubCliEntries } from "./subcli-descriptors.js";
+import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
 const RESERVED_CATALOG_ROOTS = {
   tool: "reserved so plugin registration cannot claim this unregistered root",
@@ -28,6 +30,7 @@ const JSON_NOT_APPLICABLE = {
     reason: "command group only; reporting subcommands declare JSON output individually",
     commands: [
       "backup",
+      "backup git",
       "backup sqlite",
       "database",
       "database ownership",
@@ -128,6 +131,7 @@ const JSON_NOT_APPLICABLE = {
       "mcp serve",
       "node worker",
       "node run",
+      "connect",
       "worker",
       "fleet logs",
       "proxy start",
@@ -142,6 +146,8 @@ const JSON_NOT_APPLICABLE = {
     commands: [
       "reset",
       "uninstall",
+      "backup enable",
+      "backup disable",
       "config set",
       "mcp add",
       "mcp set",
@@ -181,10 +187,6 @@ const JSON_NOT_APPLICABLE = {
       "fleet restart",
       "fleet upgrade",
       "fleet rm",
-      "cron enable",
-      "cron disable",
-      "cron run",
-      "cron edit",
       "dns setup",
       "proxy purge",
       "pairing approve",
@@ -214,14 +216,6 @@ const JSON_NOT_APPLICABLE = {
   },
 } as const;
 
-// These subcommands intentionally consume --json from their parent and emit JSON.
-const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set([
-  "skills curator status",
-  "skills curator pin",
-  "skills curator unpin",
-  "skills curator restore",
-]);
-
 // Route-first parsing accepts JSON before Commander registration is reached.
 const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents"]);
 
@@ -233,7 +227,7 @@ async function registerAllBuiltInCommands(): Promise<Command> {
   for (const name of getCoreCliCommandNames()) {
     await registerCoreCliByName(program, ctx, name, argv);
   }
-  for (const entry of getSubCliEntries()) {
+  for (const entry of getSubCliEntriesCore()) {
     await registerSubCliByName(program, entry.name, argv, { purpose: "completion" });
   }
   return program;
@@ -243,26 +237,36 @@ function hasOwnJsonOption(command: Command): boolean {
   return command.options.some((option) => option.long === "--json");
 }
 
-function hasAncestorJsonOption(command: Command): boolean {
-  for (let parent = command.parent; parent; parent = parent.parent) {
-    if (hasOwnJsonOption(parent)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function supportsJsonOutput(path: string, command: Command): boolean {
   // `config set --json` is a legacy strict-input parser alias. Only its
   // `--dry-run --json` combination reports JSON, so the mutation stays N/A.
   if (path === "config set") {
     return false;
   }
-  return (
-    hasOwnJsonOption(command) ||
-    (JSON_OUTPUT_INHERITED_FROM_PARENT.has(path) && hasAncestorJsonOption(command)) ||
-    JSON_OUTPUT_ROUTE_FIRST.has(path)
-  );
+  return hasOwnJsonOption(command) || JSON_OUTPUT_ROUTE_FIRST.has(path);
+}
+
+function requiredCommandArgs(command: Command): string[] {
+  const args = command.registeredArguments.flatMap((argument) => {
+    if (!argument.required) {
+      return [];
+    }
+    return argument.variadic ? ["guard-value"] : ["guard-value"];
+  });
+  for (const option of command.options) {
+    if (!option.mandatory) {
+      continue;
+    }
+    const flag = option.long ?? option.short;
+    if (!flag) {
+      continue;
+    }
+    args.push(flag);
+    if (option.required || option.optional) {
+      args.push(option.argChoices?.[0] ?? "guard-value");
+    }
+  }
+  return args;
 }
 
 function collectRegisteredCommandPaths(...programs: Command[]): Set<string> {
@@ -295,7 +299,7 @@ describe("root command descriptions", () => {
       }
     }
 
-    const descriptors = [...getCoreCliCommandDescriptors(), ...getSubCliEntries()];
+    const descriptors = [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()];
     const missing: string[] = [];
     const mismatches: string[] = [];
     for (const descriptor of descriptors) {
@@ -411,15 +415,6 @@ describe("root command descriptions", () => {
       "remove stale JSON N/A entries after adding output support",
     ).toEqual([]);
 
-    const staleInheritedSupport = [...JSON_OUTPUT_INHERITED_FROM_PARENT].filter((path) => {
-      const command = registered.get(path);
-      return !command || hasOwnJsonOption(command) || !hasAncestorJsonOption(command);
-    });
-    expect(
-      staleInheritedSupport,
-      "inherited JSON entries must exist, lack their own flag, and inherit a parent flag",
-    ).toEqual([]);
-
     const staleRouteFirstSupport = [...JSON_OUTPUT_ROUTE_FIRST].filter((path) => {
       const command = registered.get(path);
       return !command || hasOwnJsonOption(command);
@@ -428,5 +423,40 @@ describe("root command descriptions", () => {
       staleRouteFirstSupport,
       "route-first JSON entries must exist and remain absent from Commander options",
     ).toEqual([]);
+  });
+
+  it("routes every registered JSON command failure through the canonical envelope", async () => {
+    const program = await registerAllBuiltInCommands();
+    const contexts = collectShellCompletionCommandTree(program).descendants.filter((context) => {
+      const path = context.pathVariants[0]?.join(" ") ?? "";
+      return supportsJsonOutput(path, context.command);
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    expect(contexts.length).toBeGreaterThan(0);
+    for (const context of contexts) {
+      const path = context.pathVariants[0]?.join(" ") ?? "";
+      const failure = new Error(`synthetic failure for ${path}`);
+      const payloads: unknown[] = [];
+      context.command.action(async () => {
+        throw failure;
+      });
+      const args = requiredCommandArgs(context.command);
+      if (hasOwnJsonOption(context.command)) {
+        args.push("--json");
+      }
+
+      await runCliWithExitFinalization({
+        runtime,
+        run: async () => {
+          await context.command.parseAsync(args, { from: "user" });
+        },
+        onError: (error) => {
+          payloads.push(formatCliJsonFailure(error));
+        },
+      });
+
+      expect(payloads, path).toEqual([formatCliJsonFailure(failure)]);
+    }
   });
 });

@@ -6,7 +6,7 @@ type ChatQueuePosition = Pick<ChatQueueItem, "createdAt" | "orderKey">;
  * Canonical queue position. `orderKey` is the operator-owned position; `createdAt`
  * is the arrival fact and stays the default so an untouched queue is FIFO.
  */
-function chatQueueOrderKey(item: ChatQueuePosition): number {
+export function chatQueueOrderKey(item: ChatQueuePosition): number {
   return item.orderKey ?? item.createdAt;
 }
 

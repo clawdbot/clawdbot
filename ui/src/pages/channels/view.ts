@@ -13,6 +13,7 @@ import type {
   TelegramStatus,
   WhatsAppStatus,
 } from "../../api/types.ts";
+import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/openclaw-mascot.ts";
 import {
@@ -23,8 +24,8 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { renderChannelArt } from "./hub-meta.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
 import { channelEnabled, resolveChannelDisplayState } from "./view.shared.ts";
@@ -38,7 +39,10 @@ export function renderChannels(props: ChannelsProps) {
   const connected = channelOrder.filter((key) => channelEnabled(key, props));
   const available = channelOrder.filter((key) => !channelEnabled(key, props));
   const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
-  const partialWarnings = props.snapshot?.warnings?.filter((warning) => warning.trim()) ?? [];
+  const partialWarnings =
+    props.snapshot?.warnings
+      ?.filter((warning) => warning.trim())
+      .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
 
@@ -232,7 +236,7 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
       class="settings-row settings-row--nav channels-item"
       @click=${() => props.onShowDetail(key)}
     >
-      ${renderChannelArt(key, label, "tile")}
+      ${renderChannelIcon(key, label, "tile")}
       <div class="settings-row__text">
         <span class="settings-row__title">${label}</span>
         <span class="settings-row__desc">${description}</span>
@@ -257,7 +261,7 @@ function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
         title=${t("channels.hub.openDetails")}
         @click=${() => props.onShowDetail(key)}
       >
-        ${renderChannelArt(key, label, "tile")}
+        ${renderChannelIcon(key, label, "tile")}
         <span class="settings-row__text">
           <span class="settings-row__title">${label}</span>
           <span class="settings-row__desc">${description}</span>

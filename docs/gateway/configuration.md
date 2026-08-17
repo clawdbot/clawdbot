@@ -390,7 +390,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         defaults: {
           heartbeat: {
             every: "30m",
-            target: "last",
+            target: "owner",
           },
         },
       },
@@ -398,7 +398,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable. Default: `30m`.
-    - `target`: `last` | `none` | `<channel-id>` (for example `discord`, `matrix`, `telegram`, or `whatsapp`)
+    - `target`: `owner` (default operator DM) | `last` (latest conversation, including groups) | `none` (internal only) | `<channel-id>`
     - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 

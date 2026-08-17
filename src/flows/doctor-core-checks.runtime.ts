@@ -10,7 +10,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
@@ -23,7 +23,7 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
-import { collectExplicitAllowlist, normalizeToolName } from "../agents/tool-policy.js";
+import { collectExplicitAllowlist, normalizeToolPolicyName } from "../agents/tool-policy.js";
 import {
   inspectRuntimeToolInputSchemas,
   type RuntimeToolSchemaDiagnostic,
@@ -53,7 +53,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../skills/discovery/status.js";
+import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime>>;
@@ -64,12 +64,10 @@ function formatGatewayHealthTarget(url: string): string {
   return redactSensitiveUrlLikeString(url);
 }
 
-export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[] {
-  const agentId = resolveDefaultAgentId(cfg);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+export function detectUnavailableSkills(cfg: OpenClawConfig, workspaceDir: string) {
   const report = buildWorkspaceSkillStatus(workspaceDir, {
     config: cfg,
-    agentId,
+    agentId: tryResolveSoleAgentId(cfg),
   });
   return collectUnavailableAgentSkills(report);
 }
@@ -618,14 +616,14 @@ function groupProviderCatalogsForDoctor(providers: readonly ProviderPlugin[]): {
 
 export async function collectProviderCatalogProjectionFindings(
   cfg: OpenClawConfig,
+  workspaceDir?: string,
 ): Promise<readonly HealthFinding[]> {
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
-  const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
+  const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
   const env = process.env;
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  let providers: Awaited<ReturnType<typeof resolvePluginProviders>>;
+  let providers: Awaited<ReturnType<typeof resolvePluginProvidersCore>>;
   try {
-    providers = resolvePluginProviders({
+    providers = resolvePluginProvidersCore({
       config: cfg,
       workspaceDir,
       env,
@@ -843,7 +841,6 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
       modelId: params.modelRef.model,
     }),
     warn: () => {},
-    toolPolicyAuditLogLevel: "debug",
   });
   return collectNormalizedToolSchemaFindings({
     agentId: params.agentId,
@@ -906,7 +903,6 @@ function collectAgentRuntimeToolSchemaFindings(params: {
       modelContextWindowTokens: params.model.contextWindow,
       allowGatewaySubagentBinding: true,
       emitBeforeToolCallDiagnostics: false,
-      toolPolicyAuditLogLevel: "debug",
     });
   } catch (error) {
     return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
@@ -979,8 +975,8 @@ function synthesizeBundleMcpAllowlistSentinelName(params: {
   safeServerName: string;
   allowlistEntry: string;
 }): string | undefined {
-  const normalized = normalizeToolName(params.allowlistEntry);
-  const serverPrefix = normalizeToolName(`${params.safeServerName}${TOOL_NAME_SEPARATOR}`);
+  const normalized = normalizeToolPolicyName(params.allowlistEntry);
+  const serverPrefix = normalizeToolPolicyName(`${params.safeServerName}${TOOL_NAME_SEPARATOR}`);
   if (normalized.startsWith(serverPrefix)) {
     return normalized;
   }
@@ -1056,7 +1052,6 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
         modelId: params.modelRef.model,
       }),
       warn: () => {},
-      toolPolicyAuditLogLevel: "debug",
     }).length > 0
   );
 }
@@ -1103,6 +1098,8 @@ export async function collectRuntimeToolSchemaFindings(
           config: cfg,
           agentId,
           agentDir: resolveAgentDir(cfg, agentId),
+          readOnly: true,
+          providerDiscoveryProviderIds: [],
         });
         const modelRef = resolveDefaultModelForAgent({
           cfg,

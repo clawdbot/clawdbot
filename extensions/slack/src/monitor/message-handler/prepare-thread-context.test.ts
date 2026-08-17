@@ -101,6 +101,7 @@ describe("resolveSlackThreadContextData", () => {
 
     const result = await resolveSlackThreadContextData({
       ctx,
+      agentId: "main",
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
       message: createThreadMessage(),
       isGroupDm: params.isGroupDm ?? false,
@@ -399,6 +400,7 @@ describe("resolveSlackThreadContextData", () => {
 
     const result = await resolveSlackThreadContextData({
       ctx,
+      agentId: "main",
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
       message: createThreadMessage(),
       isGroupDm: false,
@@ -446,6 +448,7 @@ describe("resolveSlackThreadContextData", () => {
 
     const result = await resolveSlackThreadContextData({
       ctx,
+      agentId: "main",
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 1 } }),
       message: createThreadMessage(),
       isGroupDm: false,
@@ -566,6 +569,7 @@ describe("resolveSlackThreadContextData", () => {
 
     const result = await resolveSlackThreadContextData({
       ctx,
+      agentId: "main",
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
       message: createThreadMessage({
         channel: "D123",

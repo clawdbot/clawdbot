@@ -229,13 +229,15 @@ vi.mock("./browser-tool.runtime.js", async () => {
   const { wrapExternalContent } = await vi.importActual<typeof import("./sdk-security-runtime.js")>(
     "./sdk-security-runtime.js",
   );
-  const readStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const readRawStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const normalizeMockOptionalString = (value: unknown) =>
+    readRawStringValue(value)?.trim() || undefined;
   const readStringParam = (
     params: Record<string, unknown>,
     key: string,
     opts?: { required?: boolean; label?: string },
   ) => {
-    const value = readStringValue(params[key])?.trim();
+    const value = readRawStringValue(params[key])?.trim();
     if (value) {
       return value;
     }
@@ -277,7 +279,7 @@ vi.mock("./browser-tool.runtime.js", async () => {
       details: result,
     }),
     listNodes: nodesUtilsMocks.listNodes,
-    normalizeOptionalString: (value: unknown) => readStringValue(value)?.trim() || undefined,
+    normalizeOptionalString: normalizeMockOptionalString,
     persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
     readPositiveIntegerParam: (
       params: Record<string, unknown>,
@@ -300,7 +302,7 @@ vi.mock("./browser-tool.runtime.js", async () => {
       return value;
     },
     readStringParam,
-    readStringValue,
+    readStringValue: readRawStringValue,
     resolveExistingUploadPaths: pathValidationMocks.resolveExistingUploadPaths,
     resolveNodeIdFromList: (nodes: Array<Record<string, unknown>>, requested: string) => {
       const node = nodes.find(
@@ -790,6 +792,20 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts.timeoutMs).toBeUndefined();
   });
 
+  it("preserves cancellation while listing host system profiles", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("agent turn cancelled");
+    browserClientMocks.browserSystemProfiles.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      throw abortError;
+    });
+
+    await expect(
+      createBrowserTool().execute?.("call-1", { action: "profiles" }, controller.signal),
+    ).rejects.toBe(abortError);
+    expect(browserClientMocks.browserProfiles).not.toHaveBeenCalled();
+  });
+
   it("uses a longer default timeout for existing-session profile status through node proxy", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
@@ -1249,6 +1265,7 @@ describe("browser tool snapshot maxChars", () => {
 
   it("compensates durable tracking failure on the automatic host fallback", async () => {
     const trackingError = new Error("sqlite unavailable");
+    const controller = new AbortController();
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool.mockRejectedValueOnce(
       new Error("Browser control host is not reachable on 127.0.0.1:18791."),
@@ -1265,25 +1282,36 @@ describe("browser tool snapshot maxChars", () => {
       },
     });
     sessionTabRegistryMocks.trackSessionBrowserTab.mockImplementationOnce(() => {
+      controller.abort(new Error("agent turn cancelled"));
       throw trackingError;
     });
     const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
 
     await expect(
-      tool.execute?.("call-1", {
-        action: "open",
-        profile: "work",
-        url: "https://example.com",
-      }),
+      tool.execute?.(
+        "call-1",
+        {
+          action: "open",
+          profile: "work",
+          url: "https://example.com",
+        },
+        controller.signal,
+      ),
     ).rejects.toBe(trackingError);
-    expect(toolCommonMocks.fetchBrowserJson).toHaveBeenLastCalledWith(
-      "/tabs/host-tab-compensate?profile=work-actual",
+    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
+      undefined,
+      "host-tab-compensate",
       {
-        method: "DELETE",
-        body: undefined,
+        profile: "work-actual",
         timeoutMs: undefined,
       },
     );
+    expect(toolCommonMocks.fetchBrowserJson).toHaveBeenLastCalledWith("/tabs/open?profile=work", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://example.com" }),
+      timeoutMs: undefined,
+      signal: controller.signal,
+    });
   });
 
   it("touches tabs used after automatic host fallback", async () => {
@@ -1518,6 +1546,92 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts.targetId).toBe("tab-1");
     expect(opts.timeoutMs).toBe(12_345);
   });
+
+  it.each([
+    ["doctor", { action: "doctor", target: "host" }, browserClientMocks.browserDoctor, 1],
+    ["status", { action: "status", target: "host" }, browserClientMocks.browserStatus, 1],
+    ["start", { action: "start", target: "host" }, browserClientMocks.browserStart, 1],
+    ["stop", { action: "stop", target: "host" }, browserClientMocks.browserStop, 1],
+    ["profiles", { action: "profiles", target: "host" }, browserClientMocks.browserProfiles, 1],
+    [
+      "importprofile",
+      { action: "importprofile", target: "host" },
+      browserClientMocks.browserImportProfile,
+      1,
+    ],
+    ["tabs", { action: "tabs", target: "host" }, browserClientMocks.browserTabs, 1],
+    [
+      "open",
+      { action: "open", target: "host", url: "about:blank" },
+      browserClientMocks.browserOpenTab,
+      2,
+    ],
+    [
+      "focus",
+      { action: "focus", target: "host", targetId: "tab-1" },
+      browserClientMocks.browserFocusTab,
+      2,
+    ],
+    [
+      "close",
+      { action: "close", target: "host", targetId: "tab-1" },
+      browserClientMocks.browserCloseTab,
+      2,
+    ],
+    ["snapshot", { action: "snapshot", target: "host" }, browserClientMocks.browserSnapshot, 1],
+    [
+      "screenshot",
+      { action: "screenshot", target: "host" },
+      browserActionsMocks.browserScreenshotAction,
+      1,
+    ],
+    [
+      "navigate",
+      { action: "navigate", target: "host", url: "about:blank" },
+      browserActionsMocks.browserNavigate,
+      1,
+    ],
+    ["pdf", { action: "pdf", target: "host" }, browserActionsMocks.browserPdfSave, 1],
+    [
+      "upload",
+      { action: "upload", target: "host", paths: ["/tmp/report.pdf"] },
+      browserActionsMocks.browserArmFileChooser,
+      1,
+    ],
+    [
+      "dialog",
+      { action: "dialog", target: "host", accept: true },
+      browserActionsMocks.browserArmDialog,
+      1,
+    ],
+    [
+      "console",
+      { action: "console", target: "host" },
+      browserActionsMocks.browserConsoleMessages,
+      1,
+    ],
+    [
+      "act",
+      { action: "act", target: "host", request: { kind: "click", ref: "e1" } },
+      browserActionsMocks.browserAct,
+      2,
+    ],
+  ] as const)(
+    "forwards the agent signal to local %s actions",
+    async (_name, args, mock, optionsIndex) => {
+      const controller = new AbortController();
+      pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
+        ok: true,
+        paths: ["/tmp/report.pdf"],
+      });
+
+      await createBrowserTool().execute?.("call-1", args, controller.signal);
+
+      expect(lastMockCallArg<{ signal?: AbortSignal }>(mock, optionsIndex).signal).toBe(
+        controller.signal,
+      );
+    },
+  );
 
   it("parses string screenshot timeoutMs values", async () => {
     const tool = createBrowserTool();
@@ -1912,6 +2026,41 @@ describe("browser tool snapshot maxChars", () => {
     expect(request.params?.method).toBe("GET");
     expect(request.params?.timeoutMs).toBe(45_000);
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "explicit node discovery",
+      params: { action: "status", target: "node" },
+      configureUserProfile: false,
+    },
+    {
+      name: "automatic user-browser discovery",
+      params: { action: "status", profile: "user" },
+      configureUserProfile: true,
+    },
+  ])("cancels $name with the agent signal", async ({ params, configureUserProfile }) => {
+    if (configureUserProfile) {
+      setResolvedBrowserProfiles({
+        user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      });
+    }
+    const controller = new AbortController();
+    const abortError = new Error("agent turn cancelled");
+    nodesUtilsMocks.listNodes.mockImplementationOnce(async (...args: unknown[]) => {
+      if (args[1] !== controller.signal) {
+        throw new Error("browser node discovery did not receive the agent signal");
+      }
+      controller.abort(abortError);
+      controller.signal.throwIfAborted();
+      return [];
+    });
+
+    await expect(createBrowserTool().execute?.("call-1", params, controller.signal)).rejects.toBe(
+      abortError,
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("falls back to the host for profile=user when node discovery errors", async () => {
@@ -2677,14 +2826,21 @@ describe("browser tool url alias support", () => {
       targetId: "nav-tab",
       url: "https://example.com/next",
     });
-    const abortError = new Error("This operation was aborted");
-    abortError.name = "AbortError";
-    browserClientMocks.browserSnapshot.mockRejectedValueOnce(abortError);
+    const controller = new AbortController();
+    const abortError = new Error("agent turn cancelled");
+    browserClientMocks.browserSnapshot.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      throw abortError;
+    });
     const tool = createBrowserTool();
 
     await expect(
-      tool.execute?.("call-1", { action: "navigate", url: "https://example.com/next" }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+      tool.execute?.(
+        "call-1",
+        { action: "navigate", url: "https://example.com/next" },
+        controller.signal,
+      ),
+    ).rejects.toBe(abortError);
   });
 
   it("degrades inline page state when the node proxy falls back to the host mid-call", async () => {
@@ -2794,6 +2950,24 @@ describe("browser tool url alias support", () => {
     });
   });
 
+  it("untracks the selected tab when close omits targetId", async () => {
+    browserActionsMocks.browserAct.mockResolvedValueOnce({
+      ok: true,
+      targetId: "selected-tab",
+      url: "https://example.com",
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute?.("call-1", { action: "close" });
+
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "selected-tab",
+      baseUrl: undefined,
+      profile: "openclaw",
+    });
+  });
+
   it("never creates tracking records from tab listing or focus", async () => {
     browserClientMocks.browserTabs.mockResolvedValueOnce([
       {
@@ -2814,6 +2988,41 @@ describe("browser tool url alias support", () => {
 
 describe("browser tool act compatibility", () => {
   registerBrowserToolAfterEachReset();
+
+  it.each([
+    {
+      name: "close",
+      request: { kind: "close", targetId: "closed-tab" },
+      result: { ok: true, targetId: "closed-tab", url: "https://example.com" },
+    },
+    {
+      name: "batch close",
+      request: {
+        kind: "batch",
+        targetId: "closed-tab",
+        actions: [{ kind: "close" }],
+      },
+      result: {
+        ok: true,
+        targetId: "closed-tab",
+        results: [{ ok: true }],
+        aborted: { reason: "closed", afterAction: 1, url: "https://example.com", skipped: 0 },
+      },
+    },
+  ])("retires session ownership after act:$name", async ({ request, result }) => {
+    browserActionsMocks.browserAct.mockResolvedValueOnce(result);
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute?.("call-1", { action: "act", request });
+
+    expect(sessionTabRegistryMocks.untrackSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "closed-tab",
+      baseUrl: undefined,
+      profile: "openclaw",
+    });
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).not.toHaveBeenCalled();
+  });
 
   it("adds a clear note when a batch aborts after navigation", async () => {
     browserActionsMocks.browserAct.mockResolvedValueOnce({
@@ -3679,6 +3888,29 @@ describe("browser tool act stale target recovery", () => {
     ).rejects.toThrow(/wait condition failed/);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves cancellation while refreshing a stale target", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("agent turn cancelled");
+    browserActionsMocks.browserAct.mockRejectedValueOnce(new Error("404: tab not found"));
+    browserClientMocks.browserTabs.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      throw abortError;
+    });
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.(
+        "call-1",
+        {
+          action: "act",
+          profile: "user",
+          request: { kind: "wait", targetId: "stale-tab", timeMs: 1 },
+        },
+        controller.signal,
+      ),
+    ).rejects.toBe(abortError);
   });
 
   it("retries stale targetIds returned through the node browser proxy", async () => {

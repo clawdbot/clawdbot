@@ -120,6 +120,7 @@ export async function configureGatewayForSetup(
               hint: t("wizard.gateway.bindCustomHint"),
             },
           ],
+          initialValue: quickstartGateway.bind,
         });
 
   let customBindHost = quickstartGateway.customBindHost;
@@ -149,7 +150,7 @@ export async function configureGatewayForSetup(
             },
             { value: "password", label: t("common.password") },
           ],
-          initialValue: "token",
+          initialValue: quickstartGateway.authMode,
         })) as GatewayAuthChoice);
 
   const tailscaleMode: GatewayWizardSettings["tailscaleMode"] =
@@ -158,6 +159,7 @@ export async function configureGatewayForSetup(
       : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
           message: t("wizard.gateway.tailscaleExposure"),
           options: getLocalizedTailscaleExposureOptions(),
+          initialValue: quickstartGateway.tailscaleMode,
         });
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
@@ -173,13 +175,8 @@ export async function configureGatewayForSetup(
     }
   }
 
-  let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(t("wizard.gatewayTailscale.docsNote"), "Tailscale");
-    tailscaleResetOnExit = await prompter.confirm({
-      message: t("wizard.gateway.tailscaleReset"),
-      initialValue: false,
-    });
   }
 
   // Safety + constraints:
@@ -207,11 +204,10 @@ export async function configureGatewayForSetup(
       value: quickstartGateway.token,
       defaults: nextConfig.secrets?.defaults,
     }).ref;
-    const tokenMode =
-      flow === "quickstart" && opts.secretInputMode !== "ref" // pragma: allowlist secret
-        ? quickstartTokenRef
-          ? "ref"
-          : "plaintext"
+    const tokenMode = quickstartTokenRef
+      ? "ref"
+      : flow === "quickstart" && opts.secretInputMode !== "ref" // pragma: allowlist secret
+        ? "plaintext"
         : await resolveSecretInputModeForEnvSelection({
             prompter,
             explicitMode: opts.secretInputMode,
@@ -224,7 +220,7 @@ export async function configureGatewayForSetup(
             },
           });
     if (tokenMode === "ref") {
-      if (flow === "quickstart" && quickstartTokenRef) {
+      if (quickstartTokenRef) {
         gatewayTokenInput = quickstartTokenRef;
         gatewayToken = await resolveSetupSecretInputString({
           config: nextConfig,
@@ -280,8 +276,13 @@ export async function configureGatewayForSetup(
   }
 
   if (authMode === "password") {
+    const existingPassword = normalizeSecretInputString(quickstartGateway.password);
+    const existingPasswordRef = resolveSecretInputRef({
+      value: quickstartGateway.password,
+      defaults: nextConfig.secrets?.defaults,
+    }).ref;
     let password: SecretInput | undefined =
-      flow === "quickstart" && quickstartGateway.password ? quickstartGateway.password : undefined;
+      flow === "quickstart" ? quickstartGateway.password : (existingPasswordRef ?? undefined);
     if (!password) {
       const selectedMode = await resolveSecretInputModeForEnvSelection({
         prompter,
@@ -305,13 +306,25 @@ export async function configureGatewayForSetup(
         });
         password = resolved.ref;
       } else {
-        password = normalizeWizardTextInput(
-          await prompter.text({
-            message: t("wizard.gateway.passwordPrompt"),
-            validate: validateGatewayPasswordInput,
-            sensitive: true,
-          }),
-        );
+        let passwordInput: string | undefined;
+        if (existingPassword) {
+          const keep = await prompter.confirm({
+            message: t("wizard.gateway.existingPasswordConfirm", {
+              password: maskApiKey(existingPassword),
+            }),
+            initialValue: true,
+          });
+          passwordInput = keep ? existingPassword : undefined;
+        }
+        password =
+          passwordInput ??
+          normalizeWizardTextInput(
+            await prompter.text({
+              message: t("wizard.gateway.passwordPrompt"),
+              validate: validateGatewayPasswordInput,
+              sensitive: true,
+            }),
+          );
       }
     }
     nextConfig = {
@@ -349,7 +362,6 @@ export async function configureGatewayForSetup(
       tailscale: {
         ...nextConfig.gateway?.tailscale,
         mode: tailscaleMode as GatewayTailscaleMode,
-        resetOnExit: tailscaleResetOnExit,
       },
     },
   };
@@ -372,7 +384,6 @@ export async function configureGatewayForSetup(
       authMode,
       gatewayToken,
       tailscaleMode: tailscaleMode as GatewayTailscaleMode,
-      tailscaleResetOnExit,
     },
   };
 }

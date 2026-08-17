@@ -15,6 +15,7 @@ import {
   buildEmbeddedAttemptToolRunContext,
   extractToolErrorMessage,
   getPluginToolMeta,
+  getPluginToolSideEffectOwnerKey,
   isSubagentSessionKey,
   isToolResultError,
   resolveAttemptSpawnWorkspaceDir,
@@ -23,6 +24,7 @@ import {
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
 
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
@@ -254,7 +256,7 @@ export async function createCopilotToolBridge(
     }
   } catch (error: unknown) {
     throw createError(
-      `[copilot-tool-bridge] createOpenClawCodingTools failed: ${toError(error).message}`,
+      `[copilot-tool-bridge] createOpenClawCodingTools failed: ${toCopilotToolError(error).message}`,
       error,
     );
   }
@@ -408,6 +410,7 @@ function buildOpenClawCodingToolsOptions(
       elevated: a.bashElevated,
     },
     messageProvider: a.messageProvider ?? a.messageChannel,
+    messageChannel: a.messageChannel,
     toolBindings: a.toolBindings,
     chatType: a.chatType,
     agentAccountId: a.agentAccountId,
@@ -522,6 +525,8 @@ function convertOpenClawToolToSdkTool(
     );
   }
 
+  const ownerKey = getPluginToolSideEffectOwnerKey(sourceTool);
+  const ownerMutation = ownerKey ? { ownerKey } : undefined;
   let sequentialLock = Promise.resolve();
   const notifyToolResult = (result: unknown, isError: boolean) => {
     try {
@@ -547,7 +552,7 @@ function convertOpenClawToolToSdkTool(
     error: unknown,
     executionStarted: boolean,
   ): ToolResultObject => {
-    const errorMessage = toError(error).message;
+    const errorMessage = toCopilotToolError(error).message;
     ctx.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
@@ -555,6 +560,7 @@ function convertOpenClawToolToSdkTool(
       executionStarted,
       outcome: "failure",
       failure: { error: errorMessage },
+      ...(ownerMutation ? { ownerMutation } : {}),
     });
     notifyToolResult(
       sanitizeToolResult({
@@ -595,7 +601,7 @@ function convertOpenClawToolToSdkTool(
         args,
         invocation,
         startedAt,
-        `[copilot-tool-bridge] beforeExecute failed for tool '${sourceTool.name}': ${toError(error).message}`,
+        `[copilot-tool-bridge] beforeExecute failed for tool '${sourceTool.name}': ${toCopilotToolError(error).message}`,
         error,
         false,
       );
@@ -609,7 +615,7 @@ function convertOpenClawToolToSdkTool(
         args,
         invocation,
         startedAt,
-        `[copilot-tool-bridge] prepareArguments failed for tool '${sourceTool.name}': ${toError(error).message}`,
+        `[copilot-tool-bridge] prepareArguments failed for tool '${sourceTool.name}': ${toCopilotToolError(error).message}`,
         error,
         false,
       );
@@ -628,7 +634,7 @@ function convertOpenClawToolToSdkTool(
         preparedArgs,
         invocation,
         startedAt,
-        `[copilot-tool-bridge] tool '${sourceTool.name}' failed: ${toError(error).message}`,
+        `[copilot-tool-bridge] tool '${sourceTool.name}' failed: ${toCopilotToolError(error).message}`,
         error,
         true,
       );
@@ -649,6 +655,7 @@ function convertOpenClawToolToSdkTool(
       executionStarted: true,
       outcome: resultIsError ? "failure" : "success",
       ...(resultIsError ? { failure: { error: resultError ?? "tool returned an error" } } : {}),
+      ...(ownerMutation ? { ownerMutation } : {}),
     });
     notifyToolResult(sanitizedResult, resultIsError);
     notifyToolCompleted({
@@ -712,6 +719,8 @@ async function executeCatalogTool(
   params: CatalogExecuteParams,
 ): Promise<Awaited<ReturnType<AnyAgentTool["execute"]>>> {
   const sourceTool = params.tool as AnyAgentTool;
+  const ownerKey = getPluginToolSideEffectOwnerKey(sourceTool);
+  const ownerMutation = ownerKey ? { ownerKey } : undefined;
   const startedAt = Date.now();
   let preparedArgs: unknown = params.input;
   let executionStarted = false;
@@ -740,6 +749,7 @@ async function executeCatalogTool(
       executionStarted,
       outcome: isError ? "failure" : "success",
       ...(error ? { failure: { error } } : {}),
+      ...(ownerMutation ? { ownerMutation } : {}),
     });
     input.attemptParams?.onAgentToolResult?.({
       toolName: params.toolName,
@@ -756,7 +766,7 @@ async function executeCatalogTool(
     });
     return result;
   } catch (error: unknown) {
-    const message = toError(error).message;
+    const message = toCopilotToolError(error).message;
     // Completion hooks can throw after the tool terminal outcome. Do not
     // rewrite that recorded outcome as a second, contradictory tool failure.
     if (!terminalObserved) {
@@ -767,6 +777,7 @@ async function executeCatalogTool(
         executionStarted,
         outcome: "failure",
         failure: { error: message },
+        ...(ownerMutation ? { ownerMutation } : {}),
       });
     }
     const failure = sanitizeToolResult({
@@ -801,7 +812,7 @@ function createFailureResult(message: string, error: unknown): ToolResultObject 
   // Error object would produce a non-serializable JSON-RPC payload, so we
   // surface the message string instead.
   return {
-    error: toError(error).message,
+    error: toCopilotToolError(error).message,
     resultType: "failure",
     textResultForLlm: message,
   };
@@ -910,8 +921,4 @@ function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
     .filter(([, count]) => count > 1)
     .map(([name]) => name)
     .toSorted();
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

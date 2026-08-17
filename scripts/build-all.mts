@@ -9,6 +9,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import prettyMilliseconds from "pretty-ms";
+import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import {
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
@@ -59,7 +60,6 @@ type BuildAllStepParams = {
   comSpec?: string;
 };
 type BuildAllCacheParams = { rootDir?: string; fs?: BuildAllFs; env?: NodeJS.ProcessEnv };
-const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 const BUILD_CACHE_VERSION = 4;
 const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const TSDOWN_SOURCE_EXTENSIONS = [
@@ -235,6 +235,7 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       },
     },
   },
+  tsxStep("external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"),
   tsxStep("check-cli-bootstrap-imports", "scripts/check-cli-bootstrap-imports.mts"),
   {
     label: "plugins:assets:copy",
@@ -289,6 +290,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
     "tsdown-ai",
     "tsdown-packages",
     "tsdown-unified",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -304,6 +306,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   ciArtifacts: [
     "plugins:assets:build",
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -318,6 +321,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   ],
   gatewayWatch: [
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "runtime-postbuild",
     "build-stamp",
@@ -326,6 +330,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   qaRuntime: [
     "plugins:assets:build",
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -335,6 +340,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   sourcePerformance: [
     "plugins:assets:build",
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -345,6 +351,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   ],
   cliStartup: [
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "runtime-postbuild",
     "build-stamp",
@@ -402,7 +409,7 @@ export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.Pr
   },
 };
 
-export function buildAllUsage() {
+function buildAllUsage() {
   return [
     "Usage: node --import tsx scripts/build-all.mts [profile]",
     "",
@@ -491,19 +498,12 @@ export function resolveBuildAllEnvironment(
   now: () => Date = () => new Date(),
   readGitCommit: () => string | null = readCurrentGitCommit,
 ) {
-  const explicitTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
-  const explicitCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
-  const checkedOutCommit = explicitCommit ? null : readGitCommit()?.trim();
-  // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
-  const commit = explicitCommit || checkedOutCommit || env.GITHUB_SHA?.trim();
-  if (commit && !FULL_GIT_COMMIT_RE.test(commit)) {
-    throw new Error("build commit must be a full 40-character hexadecimal SHA");
-  }
-  return {
-    ...env,
-    OPENCLAW_BUILD_TIMESTAMP: explicitTimestamp || now().toISOString(),
-    ...(commit ? { GIT_COMMIT: commit.toLowerCase() } : {}),
-  };
+  return resolveBuildIdentityEnvironment({
+    commitLabel: "build commit",
+    env,
+    now,
+    readGitCommit,
+  });
 }
 
 function resolveStepEnv(step: BuildAllStep, env: NodeJS.ProcessEnv, platform: NodeJS.Platform) {
@@ -860,6 +860,14 @@ export function restoreBuildAllStepCacheOutputs(
   }
   const fsImpl = params.fs ?? fs;
   const rootDir = params.rootDir ?? process.cwd();
+  const stampedOutputSet = new Set(cacheState.stampedOutputs);
+  // A restored snapshot owns its declared output set. Remove older checkout
+  // outputs first so cache hits cannot combine declarations from two builds.
+  for (const relativeFile of cacheState.relativeOutputFiles ?? []) {
+    if (!stampedOutputSet.has(normalizePortablePath(relativeFile))) {
+      fsImpl.rmSync(path.resolve(rootDir, relativeFile), { force: true });
+    }
+  }
   for (const relativeFile of cacheState.stampedOutputs) {
     copyFileSync(
       fsImpl,

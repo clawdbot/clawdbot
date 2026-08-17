@@ -52,7 +52,7 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
               navigationSurfaceHidden: true,
               onboarding: false,
               updateAvailable: null,
-              updateRunning: false,
+              updateBusy: false,
               onUpdate: () => undefined,
               refreshRequired: true,
               onRefresh: () => undefined,

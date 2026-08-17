@@ -1,5 +1,6 @@
 // Slack tests cover monitor.thread resolution plugin behavior.
 import {
+  WebClient,
   WebAPIHTTPError,
   WebAPIPlatformError,
   WebAPIRateLimitedError,
@@ -8,7 +9,10 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.js";
-import { createSlackThreadTsResolver } from "./thread-resolution.js";
+import {
+  createSlackThreadTsResolver,
+  isTransientSlackThreadLookupError,
+} from "./thread-resolution.js";
 
 type SlackThreadClient = Parameters<typeof createSlackThreadTsResolver>[0]["client"];
 
@@ -79,6 +83,59 @@ describe("createSlackThreadTsResolver", () => {
     expect(second["_ambiguousThreadReply"]).toBe(true);
     expect(historyMock).toHaveBeenCalledTimes(1);
   });
+
+  it("classifies an exhausted real WebClient 429 as transient", async () => {
+    const fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ ok: false, error: "ratelimited" }), {
+        headers: { "content-type": "application/json", "retry-after": "0" },
+        status: 429,
+      });
+    });
+    const client = new WebClient("xoxb-test", {
+      fetch,
+      retryConfig: { retries: 0 },
+      slackApiUrl: "https://slack.test/api/",
+    });
+
+    const error: unknown = await client.users
+      .info({ user: "U1" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(WebAPIRequestError);
+    if (!(error instanceof WebAPIRequestError)) {
+      throw new Error("expected exhausted Slack 429 to become WebAPIRequestError");
+    }
+    expect(error.original.message).toMatch(
+      /^A rate limit was exceeded \(url: .+, retry-after: 0\)$/,
+    );
+    expect(isTransientSlackThreadLookupError(error)).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["internal_error", "service_unavailable"])(
+    "classifies a real WebClient %s platform response as transient",
+    async (code) => {
+      const fetch = vi.fn(async () => {
+        return new Response(JSON.stringify({ ok: false, error: code }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        });
+      });
+      const client = new WebClient("xoxb-test", {
+        fetch,
+        retryConfig: { retries: 0 },
+        slackApiUrl: "https://slack.test/api/",
+      });
+
+      const error: unknown = await client.users
+        .info({ user: "U1" })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(WebAPIPlatformError);
+      expect(isTransientSlackThreadLookupError(error)).toBe(true);
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     {
@@ -225,6 +282,10 @@ describe("createSlackThreadTsResolver", () => {
     {
       label: "operator-canceled Slack request",
       error: new WebAPIRequestError(new DOMException("request was canceled", "AbortError")),
+    },
+    {
+      label: "uncoded Slack request failure",
+      error: new WebAPIRequestError(new Error("request failed without a transient signal")),
     },
   ])("preserves cached ambiguity for definitive $label", async ({ error }) => {
     const historyMock = vi.fn().mockRejectedValue(error);

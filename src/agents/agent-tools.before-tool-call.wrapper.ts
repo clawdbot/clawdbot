@@ -57,12 +57,18 @@ import {
   createInternalExecutionPreparer,
   readInternalExecutionControl,
 } from "./agent-tools.execution-preparer.js";
-import { validateToolExecutionParams } from "./agent-tools.execution-validation.js";
+import {
+  readInternalToolExecutionValidation,
+  validateToolExecutionParams,
+} from "./agent-tools.execution-validation.js";
 import {
   BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
   BEFORE_TOOL_CALL_WRAPPED,
+  clearBeforeToolCallWrappedMarker,
+  getBeforeToolCallHookContext,
+  getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
@@ -73,7 +79,7 @@ import {
 } from "./code-mode-control-tools.js";
 import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
@@ -301,9 +307,16 @@ export function wrapToolWithBeforeToolCallHook(
       if (prepareControl) {
         executionArgs.pop();
       }
+      const onUpdateValidation = readInternalToolExecutionValidation(onUpdate);
+      const internalValidation =
+        onUpdateValidation ?? readInternalToolExecutionValidation(executionArgs.at(-1));
+      const forwardedOnUpdate = onUpdateValidation ? undefined : onUpdate;
+      if (!onUpdateValidation && internalValidation) {
+        executionArgs.pop();
+      }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
-      const normalizedToolName = normalizeToolName(toolName || "tool");
+      const normalizedToolName = normalizeToolPolicyName(toolName || "tool");
       const trace =
         hookOptions.emitDiagnostics && ctx?.trace
           ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))
@@ -463,6 +476,9 @@ export function wrapToolWithBeforeToolCallHook(
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
         await validateToolExecutionParams(toolCallId, executeParams);
+        if (internalValidation?.toolCallId === toolCallId) {
+          await internalValidation.validate(executeParams);
+        }
         await reconcileLoopCallExecutionParams({
           ctx,
           toolName: normalizedToolName,
@@ -516,7 +532,7 @@ export function wrapToolWithBeforeToolCallHook(
             toolCallId,
             executeParams,
             signal,
-            onUpdate,
+            forwardedOnUpdate,
             ...executionArgs,
           );
         } catch (error) {
@@ -688,14 +704,8 @@ export function rewrapToolWithBeforeToolCallHook(
   ctx?: HookContext,
   options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
-  const wrappedContext = taggedTool[BEFORE_TOOL_CALL_HOOK_CONTEXT];
-  const preservedContext =
-    wrappedContext && typeof wrappedContext === "object"
-      ? (wrappedContext as HookContext)
-      : undefined;
-  const sourceTool = source && typeof source === "object" ? (source as AnyAgentTool) : tool;
+  const preservedContext = getBeforeToolCallHookContext(tool);
+  const sourceTool = getBeforeToolCallSourceTool(tool) ?? tool;
   if (sourceTool === tool) {
     return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
   }
@@ -704,7 +714,7 @@ export function rewrapToolWithBeforeToolCallHook(
     ...tool,
     execute: sourceTool.execute,
   };
-  delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
+  clearBeforeToolCallWrappedMarker(rewrapSource);
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
   copyToolTerminalPresentation(tool, rewrapSource);

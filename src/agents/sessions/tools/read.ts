@@ -17,7 +17,7 @@ import {
  *
  * Reads text and image files through local or injected operations with highlighting, resizing, and bounded output.
  */
-import { toPosixPath } from "../../../shared/ignore-rules.js";
+import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
@@ -275,7 +275,7 @@ function getOpenClawDocsClassification(
     return undefined;
   }
 
-  const label = toPosixPath(relativePath);
+  const label = normalizeNativePathSeparators(relativePath);
   if (label === "README.md" || label.startsWith("docs/") || label.startsWith("examples/")) {
     return { kind: "docs", label };
   }
@@ -441,7 +441,7 @@ export function createReadToolDefinition(
   return {
     name: "read",
     label: "read",
-    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Large/full file: continue offset/limit.`,
+    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Large/full file: continue offset/limit.`,
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files instead of cat or sed."],
     parameters: readSchema,

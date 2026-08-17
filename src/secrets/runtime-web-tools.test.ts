@@ -9,7 +9,7 @@ import type {
 import { listSecretResolutionErrorOwners } from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshotState,
-  clearSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshotState,
 } from "./runtime-state.js";
 
 type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
@@ -417,7 +417,7 @@ describe("runtime web tools resolution", () => {
   afterEach(() => {
     restoreResolveSecretRefValuesSpy?.();
     restoreResolveSecretRefValuesSpy = undefined;
-    clearSecretsRuntimeSnapshot();
+    clearSecretsRuntimeSnapshotState();
   });
 
   it("keeps web search inactive when only web fetch is configured", async () => {

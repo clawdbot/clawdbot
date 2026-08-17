@@ -81,12 +81,6 @@ export const overflowServerMiscCases = [
     expected: reason("timeout"),
   },
   {
-    id: "billing-openrouter-provider-returned",
-    source: billingSource,
-    signal: { provider: "openrouter", message: "Provider returned error" },
-    expected: reason("timeout"),
-  },
-  {
     id: "billing-generic-410",
     source: billingSource,
     signal: { message: "HTTP 410 Gone" },

@@ -8,8 +8,9 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   resolveExternalBestEffortDeliveryTarget,
@@ -53,8 +54,29 @@ const AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS = 1_000;
 const AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS =
   AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS * 1_000 + AGENT_FOLLOWUP_WAIT_TIMEOUT_MS;
 
+async function callExecApprovalFollowupGateway(
+  method: "agent" | "agent.wait",
+  timeoutMs: number,
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const gatewayRuntime = getGatewayRecoveryRuntime();
+  if (gatewayRuntime) {
+    return method === "agent"
+      ? await gatewayRuntime.dispatchAgent(
+          params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+          timeoutMs,
+        )
+      : await gatewayRuntime.waitForAgent(
+          params as Parameters<typeof gatewayRuntime.waitForAgent>[0],
+          timeoutMs,
+        );
+  }
+  return await callGatewayTool(method, { timeoutMs }, params);
+}
+
 type ExecApprovalFollowupParams = {
   approvalId: string;
+  agentId?: string;
   sessionKey?: string;
   /** Session UUID active when the approval was requested. Carried to the gateway
    *  so a followup whose session key was rebound by /new or /reset is dropped. */
@@ -123,6 +145,7 @@ function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boole
  * real result is never suppressed by accident.
  */
 function isExecApprovalFollowupDirectDeliveryStale(params: {
+  agentId: string | undefined;
   sessionKey: string | undefined;
   expectedSessionId: string | undefined;
   sessionStore: string | undefined;
@@ -133,11 +156,12 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
     return false;
   }
   try {
-    const storePath = resolveStorePath(normalizeOptionalString(params.sessionStore), {
-      agentId: resolveAgentIdFromSessionKey(sessionKey),
+    const storePath = resolveSessionStorePathCore(normalizeOptionalString(params.sessionStore), {
+      agentId: params.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
     });
     const resolvedSessionId = normalizeOptionalString(
       loadSessionEntryReadOnly({
+        agentId: params.agentId,
         storePath,
         sessionKey,
         clone: false,
@@ -259,14 +283,10 @@ async function waitForAgentFollowupRun(params: {
     const waitTimeoutMs = Math.max(1, Math.min(params.timeoutMs, remainingMs));
     let wait: Record<string, unknown>;
     try {
-      wait = await callGatewayTool(
-        "agent.wait",
-        { timeoutMs: waitTimeoutMs + 2_000 },
-        {
-          runId: params.runId,
-          timeoutMs: waitTimeoutMs,
-        },
-      );
+      wait = await callExecApprovalFollowupGateway("agent.wait", waitTimeoutMs + 2_000, {
+        runId: params.runId,
+        timeoutMs: waitTimeoutMs,
+      });
     } catch {
       // The accepted run remains the sole delivery owner. Keep observing
       // across bounded gateway reconnects instead of racing it with direct delivery.
@@ -318,6 +338,7 @@ function canDirectSendDeniedFollowup(sessionError: unknown): boolean {
 
 function buildAgentFollowupArgs(params: {
   approvalId: string;
+  agentId?: string;
   sessionKey: string;
   expectedSessionId?: string;
   resultText: string;
@@ -337,6 +358,7 @@ function buildAgentFollowupArgs(params: {
   const fallbackChannel = sessionOnlyOriginChannel ?? params.turnSourceChannel;
   const isDenied = isExecDeniedResultText(params.resultText.trim());
   return {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey,
     message: isDenied
       ? buildExecApprovalFollowupPrompt(params.resultText)
@@ -371,6 +393,7 @@ function buildAgentFollowupArgs(params: {
 
 async function sendDirectFollowupFallback(params: {
   approvalId: string;
+  agentId?: string;
   deliveryTarget: ExternalBestEffortDeliveryTarget;
   resultText: string;
   sessionError: unknown;
@@ -397,19 +420,29 @@ async function sendDirectFollowupFallback(params: {
           Math.max(0, directText.length - Math.max(1, availableBodyUnits)),
         )}`;
   const deliveryIntentId = `exec-approval-followup:${params.approvalId}`;
-  await sendMessage({
+  const sendResult = await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
     accountId: params.deliveryTarget.accountId,
     threadId: params.deliveryTarget.threadId,
     content,
-    agentId: undefined,
+    agentId: params.agentId,
     gatewayOwnedDelivery: true,
     idempotencyKey: deliveryIntentId,
     deliveryIntentId,
     reusePendingDeliveryIntent: true,
     completionRetention: DIRECT_FOLLOWUP_COMPLETION_RETENTION,
   });
+  if (sendResult.deliveryStatus === "suppressed") {
+    if (sendResult.suppressionReason === "adapter_returned_no_identity") {
+      throw new Error(
+        "exec approval followup delivery could not be confirmed: adapter returned no identity",
+      );
+    }
+    throw new Error(
+      `exec approval followup delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+    );
+  }
   return true;
 }
 
@@ -460,6 +493,7 @@ export async function sendExecApprovalFollowup(
     try {
       const agentArgs = buildAgentFollowupArgs({
         approvalId: params.approvalId,
+        agentId: params.agentId,
         sessionKey,
         expectedSessionId: params.expectedSessionId,
         resultText,
@@ -472,7 +506,7 @@ export async function sendExecApprovalFollowup(
         internalRuntimeHandoffId,
         idempotencyKey,
       });
-      const accepted = await callGatewayTool("agent", { timeoutMs: 60_000 }, agentArgs);
+      const accepted = await callExecApprovalFollowupGateway("agent", 60_000, agentArgs);
       const status = readGatewayStatus(accepted);
       if (isSuccessfulFollowupStatus(status)) {
         return true;
@@ -516,6 +550,7 @@ export async function sendExecApprovalFollowup(
   if (isDenied) {
     if (
       isExecApprovalFollowupDirectDeliveryStale({
+        agentId: params.agentId,
         sessionKey,
         expectedSessionId: params.expectedSessionId,
         sessionStore: params.sessionStore,
@@ -535,6 +570,7 @@ export async function sendExecApprovalFollowup(
     if (
       await sendDirectFollowupFallback({
         approvalId: params.approvalId,
+        agentId: params.agentId,
         deliveryTarget,
         resultText,
         sessionError,
@@ -551,6 +587,7 @@ export async function sendExecApprovalFollowup(
 
   if (
     isExecApprovalFollowupDirectDeliveryStale({
+      agentId: params.agentId,
       sessionKey,
       expectedSessionId: params.expectedSessionId,
       sessionStore: params.sessionStore,
@@ -571,6 +608,7 @@ export async function sendExecApprovalFollowup(
   if (
     await sendDirectFollowupFallback({
       approvalId: params.approvalId,
+      agentId: params.agentId,
       deliveryTarget,
       resultText,
       sessionError,

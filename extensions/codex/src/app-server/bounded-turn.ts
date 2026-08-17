@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
 import {
@@ -13,6 +16,7 @@ import {
   isTerminalTurnStatus,
   readCodexNotificationItem,
 } from "./attempt-notifications.js";
+import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
@@ -42,7 +46,7 @@ import {
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
-  assertCodexRestrictedToolSurfaceHasNoManagedHooks,
+  assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
@@ -94,7 +98,10 @@ class CodexBoundedTurnTimeoutError extends Error {
 type CodexBoundedTurnParams = {
   config?: OpenClawConfig;
   model: CodexBoundedTurnModelSelection;
+  modelProvider?: string;
   profile?: string;
+  preparedAuth?: CodexAppServerPreparedAuth;
+  authRequirement?: CodexAppServerAuthRequirement;
   timeoutMs: number;
   signal?: AbortSignal;
   agentDir?: string;
@@ -162,14 +169,24 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   // Hosted search needs a private Codex home and cwd so inherited native tools
   // cannot escape the bounded turn. Media calls retain configured transport
   // compatibility while still using an isolated ephemeral thread.
-  const startOptions = workspace.codexHome
+  const isolatedStartOptions = workspace.codexHome
     ? buildPrivateCodexAppServerStartOptions(appServer.start, workspace.codexHome)
     : appServer.start;
+  // A prepared credential is scoped to the fresh private home even when the
+  // operator's configured app-server normally points at their user home.
+  const startOptions =
+    workspace.codexHome && params.preparedAuth
+      ? { ...isolatedStartOptions, homeScope: "agent" as const }
+      : isolatedStartOptions;
   const ownsClient = !params.options.clientFactory;
+  const authSelection = params.preparedAuth
+    ? { preparedAuth: params.preparedAuth }
+    : { authProfileId: params.profile };
   const client = params.options.clientFactory
     ? await params.options.clientFactory({
         startOptions,
-        authProfileId: params.profile,
+        ...authSelection,
+        authRequirement: params.authRequirement,
         agentDir,
         config: params.config,
         timeoutMs,
@@ -179,7 +196,8 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         createIsolatedCodexAppServerClient({
           startOptions,
           timeoutMs,
-          authProfileId: params.profile,
+          ...authSelection,
+          authRequirement: params.authRequirement,
           agentDir,
           authProfileStore: params.authProfileStore,
           config: params.config,
@@ -232,7 +250,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
     if (params.requireNoExternalCapabilities) {
-      await assertCodexRestrictedToolSurfaceHasNoManagedHooks(client, abortController.signal);
+      await assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+        client,
+        { restrictedToolSurface: true },
+        abortController.signal,
+      );
     }
     const threadConfig = buildCodexRuntimeThreadConfig(
       resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
@@ -243,7 +265,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         "thread/start",
         {
           model,
-          modelProvider: "openai",
+          ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
           cwd: workspace.cwd,
           approvalPolicy: "on-request",
           sandbox: "read-only",
@@ -338,7 +360,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     params.signal?.removeEventListener("abort", abortFromCaller);
     await interruptPromise;
     if (ownsClient) {
-      client.close();
+      await closeCodexStartupClientBestEffort(client);
     }
   }
   if (retrySelection) {
@@ -497,10 +519,7 @@ function createCodexBoundedTurnCollector(
   const completedItems = new Map<string, CodexThreadItem>();
   const assistantTextByItem = new Map<string, string>();
   const assistantItemOrder: string[] = [];
-  let resolveCompletion: (() => void) | undefined;
-  const completion = new Promise<void>((resolve) => {
-    resolveCompletion = resolve;
-  });
+  const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
 
   const rememberAssistantText = (itemId: string, text: string) => {
     if (!text) {
@@ -549,7 +568,7 @@ function createCodexBoundedTurnCollector(
     if (notification.method === "turn/completed") {
       completedTurn =
         readCodexTurnCompletedNotification(notification.params)?.turn ?? completedTurn;
-      resolveCompletion?.();
+      resolveCompletion();
       return;
     }
     if (notification.method === "error") {
@@ -559,7 +578,7 @@ function createCodexBoundedTurnCollector(
       promptError =
         readCodexErrorNotification(notification.params)?.error.message ??
         `codex app-server ${taskLabel} turn failed`;
-      resolveCompletion?.();
+      resolveCompletion();
     }
   };
 
@@ -670,9 +689,4 @@ function collectAssistantTextFromItems(items: CodexThreadItem[] | undefined): st
     .filter(Boolean)
     .join("\n\n")
     .trim();
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }

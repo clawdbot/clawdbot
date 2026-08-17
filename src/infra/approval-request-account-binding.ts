@@ -1,6 +1,6 @@
 // Matches approval requests against channel account and session bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,7 +12,10 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
-import type { ApprovalRequestChannelRouteClass } from "./approval-types.js";
+import {
+  resolveApprovalRequestKind,
+  type ApprovalRequestChannelRouteClass,
+} from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
@@ -30,7 +33,9 @@ function resolveApprovalForwardAccountIds(params: {
   defaultAccountId?: string | null;
 }): string[] {
   const forwarding =
-    "command" in params.request.request ? params.cfg.approvals?.exec : params.cfg.approvals?.plugin;
+    resolveApprovalRequestKind(params.request) === "exec"
+      ? params.cfg.approvals?.exec
+      : params.cfg.approvals?.plugin;
   const channel = normalizeOptionalChannel(params.channel);
   if (!forwarding?.enabled || (forwarding.mode !== "targets" && forwarding.mode !== "both")) {
     return [];
@@ -60,7 +65,9 @@ function hasApprovalForwardTarget(params: {
   channel?: string | null;
 }): boolean {
   const forwarding =
-    "command" in params.request.request ? params.cfg.approvals?.exec : params.cfg.approvals?.plugin;
+    resolveApprovalRequestKind(params.request) === "exec"
+      ? params.cfg.approvals?.exec
+      : params.cfg.approvals?.plugin;
   if (
     !forwarding?.enabled ||
     (forwarding.mode !== "targets" && forwarding.mode !== "both") ||
@@ -123,7 +130,7 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   }
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
   const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
@@ -259,6 +266,10 @@ export function doesApprovalRequestSelectChannelAccount(params: {
     return true;
   }
   if (boundAccountId || forwardAccountIds.length > 0) {
+    return false;
+  }
+  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
+  if (turnSourceChannel && turnSourceChannel !== normalizeOptionalChannel(params.channel)) {
     return false;
   }
   const eligibleAccountIds = params.eligibleAccountIds

@@ -9,12 +9,12 @@ const fingerprintPluginAutoEnableConfigMock = vi.fn((config: OpenClawConfig) =>
   JSON.stringify(config),
 );
 const fingerprintPluginAutoEnableEnvMock = vi.fn((env: NodeJS.ProcessEnv) => JSON.stringify(env));
-const resolveAgentWorkspaceDirMock = vi.fn<
-  typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
->(() => "/resolved-workspace");
-const resolveDefaultAgentIdMock = vi.fn<
-  typeof import("../../agents/agent-scope.js").resolveDefaultAgentId
->(() => "default");
+const resolvePluginControlPlaneWorkspaceMock = vi.fn(
+  (params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv; workspaceDir?: string }) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected" as const,
+  }),
+);
 const manifestRegistry = { diagnostics: [], plugins: [] };
 const metadataSnapshot = {
   configFingerprint: "fingerprint",
@@ -27,6 +27,10 @@ const metadataSnapshot = {
 };
 type MetadataSnapshotMock = typeof metadataSnapshot & { pluginIds?: readonly string[] };
 const loadPluginMetadataSnapshotMock = vi.fn((): MetadataSnapshotMock => metadataSnapshot);
+const rebasePluginMetadataSnapshotManifestRegistryMock = vi.fn(
+  (snapshot: MetadataSnapshotMock) => snapshot,
+);
+const resolveConfigWidePluginManifestRegistryMock = vi.fn(() => manifestRegistry);
 const isPluginMetadataSnapshotCompatibleMock = vi.fn(() => true);
 const getCurrentPluginMetadataSnapshotMock = vi.fn(() => undefined);
 const setCurrentPluginMetadataSnapshotMock = vi.fn();
@@ -51,14 +55,18 @@ vi.mock("../../config/plugin-auto-enable.apply.js", () => ({
   fingerprintPluginAutoEnableEnv: fingerprintPluginAutoEnableEnvMock,
 }));
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
-  resolveDefaultAgentId: resolveDefaultAgentIdMock,
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: resolvePluginControlPlaneWorkspaceMock,
+}));
+
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: resolveConfigWidePluginManifestRegistryMock,
 }));
 
 vi.mock("../plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
   loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+  rebasePluginMetadataSnapshotManifestRegistry: rebasePluginMetadataSnapshotManifestRegistryMock,
   resolvePluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
 }));
 
@@ -84,10 +92,11 @@ describe("resolvePluginRuntimeLoadContext", () => {
     isPluginMetadataSnapshotCompatibleMock.mockReset();
     isPluginMetadataSnapshotCompatibleMock.mockReturnValue(true);
     loadPluginMetadataSnapshotMock.mockClear();
+    rebasePluginMetadataSnapshotManifestRegistryMock.mockClear();
+    resolveConfigWidePluginManifestRegistryMock.mockClear();
     getCurrentPluginMetadataSnapshotMock.mockClear();
     setCurrentPluginMetadataSnapshotMock.mockClear();
-    resolveAgentWorkspaceDirMock.mockClear();
-    resolveDefaultAgentIdMock.mockClear();
+    resolvePluginControlPlaneWorkspaceMock.mockClear();
 
     loadConfigMock.mockReturnValue({ plugins: {} });
     applyPluginAutoEnableMock.mockImplementation((params) => ({
@@ -153,8 +162,20 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
       workspaceDir: "/resolved-workspace",
     });
-    expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(resolvedConfig);
-    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(resolvedConfig, "default");
+    expect(resolvePluginControlPlaneWorkspaceMock).toHaveBeenNthCalledWith(1, {
+      config: rawConfig,
+      env,
+      workspaceDir: undefined,
+    });
+    expect(resolvePluginControlPlaneWorkspaceMock).toHaveBeenNthCalledWith(2, {
+      config: resolvedConfig,
+      env,
+      workspaceDir: undefined,
+    });
+    expect(resolveConfigWidePluginManifestRegistryMock).toHaveBeenCalledWith({
+      config: rawConfig,
+      env,
+    });
   });
 
   it("reuses a prepared metadata snapshot without resolving metadata again", () => {
@@ -268,7 +289,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       ...metadataSnapshot,
       index: {
         installRecords: {
-          demo: { source: "registry", version: "1.0.0" },
+          demo: { source: "npm", version: "1.0.0" },
         },
         plugins: [],
         policyHash: "policy",
@@ -282,10 +303,10 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
 
     expect(context.installRecords).toEqual({
-      demo: { source: "registry", version: "1.0.0" },
+      demo: { source: "npm", version: "1.0.0" },
     });
     expect(buildPluginRuntimeLoadOptions(context).installRecords).toEqual({
-      demo: { source: "registry", version: "1.0.0" },
+      demo: { source: "npm", version: "1.0.0" },
     });
   });
 

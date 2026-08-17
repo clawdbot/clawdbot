@@ -51,6 +51,7 @@ export type MediaGenerationTaskHandle = {
   taskId: string;
   runId: string;
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   taskLabel: string;
 };
@@ -62,7 +63,10 @@ export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => vo
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
 /** Returns whether a media generation request should detach for a session. */
-export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
+export function shouldDetachMediaGenerationTask(
+  sessionKey: string | undefined,
+  requesterAgentId?: string,
+): boolean {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
     return false;
@@ -73,6 +77,7 @@ export function shouldDetachMediaGenerationTask(sessionKey: string | undefined):
   try {
     const entry = loadSessionEntryReadOnly({
       sessionKey: normalizedSessionKey,
+      agentId: requesterAgentId,
       clone: false,
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",
@@ -105,6 +110,7 @@ type MediaGenerationExecutionResult = {
 
 type CreateMediaGenerationTaskRunParams = {
   sessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
   providerId?: string;
@@ -193,12 +199,14 @@ function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
   registerGeneratedMediaTaskActivity(handle.runId, handle.requesterSessionKey);
   registerAgentRunContext(handle.runId, {
     sessionKey: handle.requesterSessionKey,
+    agentId: handle.requesterAgentId,
     lastActiveAt: Date.now(),
   });
 }
 
 function createMediaGenerationTaskRun(params: {
   sessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
   providerId?: string;
@@ -216,7 +224,7 @@ function createMediaGenerationTaskRun(params: {
     // Pin the complete requester route when detached work starts. Completion-time
     // session state can move to another peer while generation is still running.
     const requesterOrigin = resolveAnnounceOrigin(
-      loadRequesterSessionEntry(sessionKey).entry,
+      loadRequesterSessionEntry(sessionKey, params.requesterAgentId).entry,
       params.requesterOrigin,
     );
     const task = createRunningTaskRun({
@@ -224,6 +232,7 @@ function createMediaGenerationTaskRun(params: {
       taskKind: params.taskKind,
       sourceId: params.providerId ? `${params.toolName}:${params.providerId}` : params.toolName,
       requesterSessionKey: sessionKey,
+      requesterAgentId: params.requesterAgentId,
       ownerKey: sessionKey,
       scopeKind: "session",
       requesterOrigin,
@@ -244,6 +253,7 @@ function createMediaGenerationTaskRun(params: {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
+      requesterAgentId: params.requesterAgentId,
       requesterOrigin,
       taskLabel: params.prompt,
     };
@@ -385,13 +395,13 @@ function buildMediaGenerationReplyInstruction(params: {
   if (params.status === "ok") {
     return [
       `The ${params.completionLabel} is ready for the original chat.`,
-      'Use the current visible-reply contract: if this session requires message-tool replies, call message(action="send") with a short caption and every structured attachment from the internal event, then reply only NO_REPLY.',
-      "Otherwise, write the normal final reply and attach every generated media path with final-reply MEDIA lines.",
+      "Follow the current visible-reply contract with a short user-facing caption and every structured generated attachment from this event.",
+      "Keep internal task/session details private and do not copy the internal event text verbatim.",
     ].join(" ");
   }
   return [
     `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
-    'Use the current visible-reply contract: call message(action="send") when message-tool replies are required, otherwise write the normal final reply.',
+    "Follow the current visible-reply contract with a concise user-facing failure message.",
     "Keep internal task/session details private and do not copy the internal event text verbatim.",
   ].join(" ");
 }
@@ -649,6 +659,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     `A ${params.completionLabel} generation task finished. Process the completion update now.`;
   const delivery = await deliverSubagentAnnouncement({
     requesterSessionKey: params.handle.requesterSessionKey,
+    requesterAgentId: params.handle.requesterAgentId,
     targetRequesterSessionKey: params.handle.requesterSessionKey,
     announceId,
     triggerMessage,

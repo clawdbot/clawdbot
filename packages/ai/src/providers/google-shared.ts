@@ -14,6 +14,8 @@ import {
   ThinkingLevel,
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
+import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
 import {
   assignTransportErrorDetails,
   coerceTransportToolCallArguments,
@@ -43,7 +45,6 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
 
@@ -589,7 +590,11 @@ function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(model: Model<T
     return { thinkingLevel: ThinkingLevel.LOW };
   }
   if (isGemini3FlashModel(model)) {
-    return { thinkingLevel: ThinkingLevel.MINIMAL };
+    return {
+      thinkingLevel: googleFlashSupportsMinimalThinking(model.id)
+        ? ThinkingLevel.MINIMAL
+        : ThinkingLevel.LOW,
+    };
   }
   if (isGemma4Model(model) || model.id.toLowerCase().includes("gemini-2.5-pro")) {
     return {};
@@ -639,7 +644,9 @@ function getGoogleThinkingLevel<T extends GoogleApiType>(
   }
   switch (effort) {
     case "minimal":
-      return ThinkingLevel.MINIMAL;
+      return isGemini3FlashModel(model) && !googleFlashSupportsMinimalThinking(model.id)
+        ? ThinkingLevel.LOW
+        : ThinkingLevel.MINIMAL;
     case "low":
       return ThinkingLevel.LOW;
     case "medium":

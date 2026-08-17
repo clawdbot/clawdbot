@@ -231,6 +231,23 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
     expect(result).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
   });
+  it("uses prepared provider ownership for billing classification", () => {
+    const provider = "custom-openrouter";
+    const model = "anthropic/claude-sonnet-4";
+    const result = formatAssistantErrorText(
+      makeAssistantError("HTTP 403: API key budget limit exceeded"),
+      {
+        provider,
+        providerOwner: {
+          id: "openrouter",
+          classifyFailoverReason: ({ provider: owner, errorMessage }) =>
+            owner === "openrouter" && errorMessage.includes("budget limit") ? "billing" : undefined,
+        },
+        model,
+      },
+    );
+    expect(result).toBe(formatBillingErrorMessage(provider, model));
+  });
   it("returns generic billing message when provider is not given", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg);
@@ -307,14 +324,6 @@ describe("formatAssistantErrorText", () => {
       model: "custom-model",
     });
     expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
-  });
-  it("keeps OpenRouter 429 key budget failures on billing copy", () => {
-    const msg = makeAssistantError("429 API key budget limit exceeded");
-    const result = formatAssistantErrorText(msg, {
-      provider: "openrouter",
-      model: "openai/gpt-5.5",
-    });
-    expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
@@ -562,13 +571,6 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).not.toBe(
       "LLM request failed: proxy or tunnel configuration blocked the provider request.",
-    );
-  });
-
-  it("sanitizes transport-classified malformed streaming fragments (#59076)", () => {
-    const msg = makeAssistantError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM streaming response contained a malformed fragment. Please try again.",
     );
   });
 

@@ -1,5 +1,6 @@
 /** Best-effort durable signal log for session state changes. */
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable, Selectable } from "kysely";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -88,22 +89,8 @@ function normalizeOptionalSqliteNumber(
   return value === undefined ? undefined : normalizeSqliteNumber(value);
 }
 
-function parsePayload(value: string | null): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function rowToSessionStateEvent(row: SessionStateEventRow): SessionStateEventRecord {
-  const payload = parsePayload(row.payload_json);
+  const payload = row.payload_json ? safeParseJsonRecord(row.payload_json) : undefined;
   return {
     sequence: normalizeSqliteNumber(row.sequence) ?? 0,
     sessionKey: row.session_key,
@@ -921,6 +908,7 @@ export function registerMainSessionGroupWatch(
     agentId: string;
     entry?: SessionEntry;
     dmScope: DmScope;
+    mainKey?: string;
   },
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): boolean {
@@ -929,7 +917,11 @@ export function registerMainSessionGroupWatch(
   }
   const watcherSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
+    mainKey: params.mainKey,
   });
+  if (params.sessionKey === watcherSessionKey) {
+    return false;
+  }
   const now = options.now ?? Date.now();
   try {
     const { db: readDb } = openOpenClawStateDatabase(options);

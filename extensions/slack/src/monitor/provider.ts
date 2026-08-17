@@ -15,8 +15,8 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { warn } from "openclaw/plugin-sdk/runtime-env";
 import {
+  warn,
   computeBackoff,
   createNonExitingRuntime,
   sleepWithAbort,
@@ -24,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
+  asNonArrayRecord,
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -253,10 +254,7 @@ function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }):
   authToken: string;
   gatewayId: string;
 } {
-  const relay =
-    params.relay && typeof params.relay === "object" && !Array.isArray(params.relay)
-      ? (params.relay as Record<string, unknown>)
-      : {};
+  const relay = asNonArrayRecord(params.relay);
   const url = normalizeOptionalString(relay.url);
   const authToken = normalizeResolvedSecretInputString({
     value: relay.authToken,

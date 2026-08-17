@@ -605,7 +605,7 @@ final class GatewayProcessManager {
         return hasListener || published || !self.isCurrentGatewayStart(startGeneration)
     }
 
-    static func profileAllowsExistingGatewayAttachment(
+    nonisolated static func profileAllowsExistingGatewayAttachment(
         profile: AppProfile,
         listenerPID: Int32?,
         managedServicePID: Int32?) -> Bool

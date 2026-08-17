@@ -284,7 +284,7 @@
   font-size: 10px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .memory-import__backfill-dates,
   .memory-import__backfill-actions {
     justify-content: flex-start;

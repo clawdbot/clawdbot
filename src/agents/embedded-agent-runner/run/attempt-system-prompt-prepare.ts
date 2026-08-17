@@ -10,8 +10,8 @@ import {
 } from "../../../plugins/provider-runtime.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
-import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
+import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
@@ -37,6 +37,7 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
 import { prepareWatchedSessionsPrompt } from "../../watched-sessions-prompt.js";
@@ -201,8 +202,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     attempt.promptMode ??
     (params.isRawModelRun ? "none" : resolvePromptModeForSession(attempt.sessionKey));
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(attempt.sessionKey);
-  const effectivePromptMode = attempt.toolsAllow?.length ? ("minimal" as const) : promptMode;
-  const effectiveSkillsPrompt = attempt.toolsAllow?.length ? undefined : params.skillsPrompt;
+  const toolPolicyRestricted = toolPolicyRestrictsTools({ allow: attempt.toolsAllow });
+  const effectivePromptMode = toolPolicyRestricted ? ("minimal" as const) : promptMode;
+  const effectiveSkillsPrompt = toolPolicyRestricted ? undefined : params.skillsPrompt;
   const openClawReferences = await resolveOpenClawReferencePaths({
     workspaceDir: params.effectiveWorkspace,
     argv1: process.argv[1],

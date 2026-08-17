@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { resolveDynamicSessionMutationRequiredScope } from "./session-method-scopes.js";
 
 describe("resolveDynamicSessionMutationRequiredScope", () => {
+  it("keeps explicit restart recovery at write scope", () => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.recover")).toBe("operator.write");
+  });
+
   it.each([
     { agentId: "main", message: "hello", worktree: true },
     { agentId: "main", message: "hello", projectId: "openclaw" },
@@ -33,6 +37,8 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   it.each([
     { name: "model set", patch: { model: "openai/gpt-5.6-luna" } },
     { name: "model reset", patch: { model: null } },
+    { name: "icon set", patch: { icon: "🦞" } },
+    { name: "icon reset", patch: { icon: null } },
     {
       name: "safe mixed patch",
       patch: { label: "Renamed", archived: true, model: "openai/gpt-5.6-luna" },
@@ -78,7 +84,13 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
             expectedLifecycleRevision: "revision-1",
           },
         ],
-        patch: { label: "Renamed", archived: true, unread: false, model: "openai/gpt-5.6-luna" },
+        patch: {
+          label: "Renamed",
+          icon: "🦞",
+          archived: true,
+          unread: false,
+          model: "openai/gpt-5.6-luna",
+        },
       }),
     ).toBe("operator.write");
     expect(
@@ -112,21 +124,32 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
         key: "agent:main:archived",
         deleteTranscript: true,
         archivedOnly: true,
+        expectedSessionId: "session-1",
       }),
     ).toBe("operator.write");
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
-        key: "agent:main:active",
-        deleteTranscript: true,
-      }),
-    ).toBe("operator.admin");
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
+    for (const params of [
+      undefined,
+      null,
+      [],
+      { key: "agent:main:active", deleteTranscript: true },
+      { key: "agent:main:archived", archivedOnly: "yes" },
+      {
         key: "agent:main:archived",
         archivedOnly: true,
+        expectedSessionId: "session-1",
         emitLifecycleHooks: false,
-      }),
-    ).toBe("operator.admin");
+      },
+      {
+        key: "agent:main:archived",
+        archivedOnly: true,
+        expectedSessionId: "session-1",
+        futureField: true,
+      },
+    ]) {
+      expect(resolveDynamicSessionMutationRequiredScope("sessions.delete", params)).toBe(
+        "operator.admin",
+      );
+    }
   });
 
   it("does not duplicate static method policy from the core descriptor table", () => {

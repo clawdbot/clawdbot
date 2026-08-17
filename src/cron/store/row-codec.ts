@@ -2,13 +2,18 @@
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "../scheduled-tool-policy.js";
 import type {
   CronJobState,
   CronPacing,
@@ -19,9 +24,14 @@ import type {
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
 import { bindPayloadColumns, payloadFromRow } from "./payload-codec.js";
-import { booleanToInteger, integerToBoolean, normalizeNumber } from "./scalar-codec.js";
+import {
+  booleanToInteger,
+  integerToBoolean,
+  normalizeNumber,
+  tryParseJsonObject,
+} from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
-import { getCronStoreKysely } from "./schema.js";
+import { ensureCronStoreEpochSchema, getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
 import { bindTriggerColumns, triggerFromRow } from "./trigger-codec.js";
 import type { LoadedCronStore } from "./types.js";
@@ -94,9 +104,15 @@ function bindScheduleColumns(
 }
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
-  const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
+  const {
+    runtimeAuthority: _runtimeAuthority,
+    runtimeAuthorityRecoveryRequired: _runtimeAuthorityRecoveryRequired,
+    state: _state,
+    updatedAtMs: _updatedAtMs,
+    ...rest
+  } = job;
   // job_json stores config shape only; runtime state lives in split columns and
-  // state_json so state-only writes never rewrite public job config.
+  // state_json. Runtime authority has its own downgrade-stable companion row.
   return { ...rest, state: {} };
 }
 
@@ -180,13 +196,13 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
     job_json: JSON.stringify(stripJobRuntimeFields(job)),
     state_json: JSON.stringify(job.state ?? {}),
     runtime_updated_at_ms: job.updatedAtMs,
-    schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>) ?? null,
+    schedule_identity: tryCronScheduleIdentity({ ...job }) ?? null,
     sort_order: sortOrder,
   };
 }
 
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStoredJob | null {
-  const raw = structuredClone(job) as unknown as Record<string, unknown>;
+  const raw: Record<string, unknown> = { ...structuredClone(job) };
   const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
   normalizeCronJobIdentityFields(raw);
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
@@ -289,7 +305,13 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     isRecord(jobJson.toolsAllowProvenance) &&
     jobJson.toolsAllowProvenance.version === 1 &&
     jobJson.toolsAllowProvenance.source === "final-executable-surface"
-      ? ({ version: 1, source: "final-executable-surface" } as const)
+      ? ({
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: normalizeCronScheduledToolCallerOrigin(
+            jobJson.toolsAllowProvenance.callerOrigin,
+          ),
+        } as const)
       : undefined;
   if (!schedule || !payload) {
     return null;
@@ -361,6 +383,67 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   ).rows;
 }
 
+function incrementCronStoreEpoch(db: DatabaseSync, storeKey: string): void {
+  ensureCronStoreEpochSchema(db);
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .insertInto("cron_store_epochs")
+      .values({ store_key: storeKey, store_epoch: 0 })
+      .onConflict((conflict) => conflict.column("store_key").doNothing()),
+  );
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .updateTable("cron_store_epochs")
+      .set((eb) => ({ store_epoch: eb("store_epoch", "+", 1) }))
+      .where("store_key", "=", storeKey),
+  );
+}
+
+/** Materializes retired ownership; the caller's transaction commits row and epoch updates together. */
+export function materializeCronRowAgentOwners(
+  db: DatabaseSync,
+  storeKey: string,
+  legacyDefaultAgentId: string,
+): number {
+  const agentId = normalizeAgentId(legacyDefaultAgentId);
+  let rewritten = 0;
+  for (const row of loadCronRows(db, storeKey)) {
+    const jobJson = tryParseJsonObject(row.job_json);
+    const jsonSessionAgentId = parseAgentSessionKey(
+      normalizeOptionalString(jobJson?.sessionKey),
+    )?.agentId;
+    if (
+      normalizeOptionalString(row.agent_id) ||
+      normalizeOptionalString(jobJson?.agentId) ||
+      parseAgentSessionKey(row.session_key)?.agentId ||
+      jsonSessionAgentId
+    ) {
+      continue;
+    }
+    if (jobJson) {
+      jobJson.agentId = agentId;
+    }
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .updateTable("cron_jobs")
+        .set({
+          agent_id: agentId,
+          ...(jobJson ? { job_json: JSON.stringify(jobJson) } : {}),
+        })
+        .where("store_key", "=", storeKey)
+        .where("job_id", "=", row.job_id),
+    );
+    rewritten += 1;
+  }
+  if (rewritten > 0) {
+    incrementCronStoreEpoch(db, storeKey);
+  }
+  return rewritten;
+}
+
 export type CronJobFamilyIdentity = {
   declarationKey: string;
   name: string;
@@ -403,8 +486,12 @@ export function deleteStaleCronJobFamilyRows(
   return staleRows.length;
 }
 
-/** Replaces all persisted cron rows for one store key from the config store snapshot. */
-export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronStoreFile): void {
+/** Replaces all persisted cron rows and returns the canonical jobs that were written. */
+export function replaceCronRows(
+  db: DatabaseSync,
+  storeKey: string,
+  store: CronStoreFile,
+): CronStoredJob[] {
   const existingRows = executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
@@ -412,10 +499,11 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
       .select("job_id")
       .where("store_key", "=", storeKey),
   ).rows;
-  const nextJobIds = new Set(store.jobs.map((job) => job.id));
+  const normalizedJobs: CronStoredJob[] = [];
   for (const [index, job] of store.jobs.entries()) {
-    upsertCronJobRow(db, storeKey, job, index);
+    normalizedJobs.push(upsertCronJobRow(db, storeKey, job, index));
   }
+  const nextJobIds = new Set(normalizedJobs.map((job) => job.id));
   for (const row of existingRows) {
     if (nextJobIds.has(row.job_id)) {
       continue;
@@ -430,6 +518,7 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
         .where("job_id", "=", row.job_id),
     );
   }
+  return normalizedJobs;
 }
 
 /** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
@@ -438,7 +527,7 @@ export function upsertCronJobRow(
   storeKey: string,
   job: CronStoredJob,
   sortOrder: number,
-): void {
+): CronStoredJob {
   const normalized = normalizeCronJobForSqlite(job);
   if (!normalized) {
     throw new Error(`Cannot persist invalid cron job ${job.id}`);
@@ -450,6 +539,28 @@ export function upsertCronJobRow(
       .insertInto("cron_jobs")
       .values(values)
       .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
+  );
+  return normalized;
+}
+
+export function deleteCronJobRowInDatabase(
+  db: DatabaseSync,
+  storeKey: string,
+  jobId: string,
+): void {
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .deleteFrom("cron_job_scratch")
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", jobId),
+  );
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .deleteFrom("cron_jobs")
+      .where("store_key", "=", storeKey)
+      .where("job_id", "=", jobId),
   );
 }
 
@@ -468,7 +579,7 @@ export function updateCronRuntimeRows(
           ...bindStateColumns(job.state ?? {}),
           state_json: JSON.stringify(job.state ?? {}),
           runtime_updated_at_ms: job.updatedAtMs,
-          schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
+          schedule_identity: tryCronScheduleIdentity({ ...job }),
         })
         .where("store_key", "=", storeKey)
         .where("job_id", "=", job.id),

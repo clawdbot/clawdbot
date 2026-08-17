@@ -6,7 +6,10 @@ import { normalizeAccountId, type OpenClawConfig } from "openclaw/plugin-sdk/acc
 // Imessage plugin module implements accounts behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageAccountConfig } from "./account-types.js";
 import {
   expandIMessageUserPath,
@@ -45,9 +48,7 @@ function resolveIMessageAccountConfig(
 type IMessageStreamingConfig = NonNullable<IMessageAccountConfig["streaming"]>;
 
 function asStreamingConfigObject(value: unknown): IMessageStreamingConfig | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as IMessageStreamingConfig)
-    : undefined;
+  return asOptionalRecord(value) as IMessageStreamingConfig | undefined;
 }
 
 function mergeIMessageStreamingConfig(

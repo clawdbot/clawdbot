@@ -8,7 +8,7 @@ import type {
   PromptResponse,
   StopReason,
 } from "@agentclientprotocol/sdk";
-import { readBool, readNonNegativeInteger, readString } from "@openclaw/acp-core/meta";
+import { readBool, readMetadataString, readNonNegativeInteger } from "@openclaw/acp-core/meta";
 import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { normalizeLowercaseStringOrEmpty as normalizedChatSendAckStatus } from "@openclaw/normalization-core/string-coerce";
@@ -26,6 +26,9 @@ import type { AcpTranslatorSessionUpdates } from "./translator.session-updates.j
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
+// Shutdown owns only a brief best-effort abort window so EOF and signals cannot
+// inherit the Gateway client's normal request timeout before process teardown.
+const ACP_SHUTDOWN_ABORT_TIMEOUT_MS = 1_000;
 
 type ChatSendAck = {
   runId?: unknown;
@@ -123,8 +126,20 @@ export class AcpTranslatorPromptStream {
     );
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     this.disconnects.shutdown();
+    await Promise.all(
+      [...this.pendingPrompts.values()].map((pending) =>
+        this.cancelSessionWork(
+          {
+            sessionId: pending.sessionId,
+            sessionKey: pending.sessionKey,
+            activeRunId: pending.idempotencyKey,
+          },
+          ACP_SHUTDOWN_ABORT_TIMEOUT_MS,
+        ),
+      ),
+    );
   }
 
   handleGatewayReconnect(): void {
@@ -192,7 +207,7 @@ export class AcpTranslatorPromptStream {
       message,
       attachments: attachments.length > 0 ? attachments : undefined,
       idempotencyKey: runId,
-      thinking: readString(params["_meta"], ["thinking", "thinkingLevel"]),
+      thinking: readMetadataString(params["_meta"], ["thinking", "thinkingLevel"]),
       deliver: readBool(params["_meta"], ["deliver"]),
       timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
     };
@@ -310,11 +325,14 @@ export class AcpTranslatorPromptStream {
     await this.cancelSessionWork(session);
   }
 
-  async cancelSessionWork(session: {
-    sessionId: string;
-    sessionKey: string;
-    activeRunId: string | null;
-  }): Promise<void> {
+  async cancelSessionWork(
+    session: {
+      sessionId: string;
+      sessionKey: string;
+      activeRunId: string | null;
+    },
+    abortTimeoutMs?: number,
+  ): Promise<void> {
     // Capture runId before cancelActiveRun clears session.activeRunId.
     const activeRunId = session.activeRunId;
 
@@ -324,10 +342,13 @@ export class AcpTranslatorPromptStream {
 
     if (scopedRunId) {
       try {
-        await this.gateway.request("chat.abort", {
+        const abortParams = {
           sessionKey: session.sessionKey,
           runId: scopedRunId,
-        });
+        };
+        await (abortTimeoutMs === undefined
+          ? this.gateway.request("chat.abort", abortParams)
+          : this.gateway.request("chat.abort", abortParams, { timeoutMs: abortTimeoutMs }));
       } catch (err) {
         this.log(`cancel error: ${String(err)}`);
       }

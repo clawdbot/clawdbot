@@ -3,8 +3,8 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 6,
-      "agent": 16
+      "state": 9,
+      "agent": 17
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -29,6 +29,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "node-version.mjs",
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",
@@ -58,6 +59,7 @@
     "!dist/plugin-sdk/browser-config.d.ts",
     "!dist/plugin-sdk/bundled-channel-config-schema.d.ts",
     "!dist/plugin-sdk/channel-activity-runtime.d.ts",
+    "!dist/plugin-sdk/channel-config-ui-hints.d.ts",
     "!dist/plugin-sdk/channel-config-writes.d.ts",
     "!dist/plugin-sdk/channel-contract-testing.js",
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
@@ -125,6 +127,7 @@
     "!dist/plugin-sdk/migration.d.ts",
     "!dist/plugin-sdk/migration-runtime.d.ts",
     "!dist/plugin-sdk/music-generation.d.ts",
+    "!dist/plugin-sdk/native-hook-relay-runtime.d.ts",
     "!dist/plugin-sdk/node-host.d.ts",
     "!dist/plugin-sdk/number-runtime.d.ts",
     "!dist/plugin-sdk/outbound-media.d.ts",
@@ -207,7 +210,6 @@
     "!dist/plugin-sdk/sqlite-runtime-testing.js",
     "!dist/plugin-sdk/sqlite-runtime-testing.d.ts",
     "!dist/plugin-sdk/ssrf-dispatcher.d.ts",
-    "!dist/plugin-sdk/ssrf-runtime-internal.js",
     "!dist/plugin-sdk/ssrf-runtime-internal.d.ts",
     "!dist/plugin-sdk/string-normalization-runtime.d.ts",
     "!dist/plugin-sdk/system-event-runtime.d.ts",
@@ -240,7 +242,6 @@
     "!dist/plugin-sdk/tts-runtime.d.ts",
     "!dist/plugin-sdk/types.d.ts",
     "!dist/plugin-sdk/video-generation.d.ts",
-    "!dist/plugin-sdk/video-generation-core.d.ts",
     "!dist/plugin-sdk/video-generation-runtime.d.ts",
     "!dist/plugin-sdk/web-content-extractor.d.ts",
     "!dist/plugin-sdk/webhook-targets.d.ts",
@@ -311,7 +312,6 @@
     "!dist/extensions/parallel/**",
     "!dist/extensions/perplexity/**",
     "!dist/extensions/qianfan/**",
-    "!dist/extensions/qqbot/**",
     "!dist/extensions/raft/**",
     "!dist/extensions/pixverse/**",
     "!dist/extensions/qa-channel/**",
@@ -451,10 +451,6 @@
     "./plugin-sdk/channel-setup": {
       "types": "./dist/plugin-sdk/channel-setup.d.ts",
       "default": "./dist/plugin-sdk/channel-setup.js"
-    },
-    "./plugin-sdk/channel-streaming": {
-      "types": "./dist/plugin-sdk/channel-streaming.d.ts",
-      "default": "./dist/plugin-sdk/channel-streaming.js"
     },
     "./plugin-sdk/channel-streaming-config": {
       "types": "./dist/plugin-sdk/channel-streaming-config.d.ts",
@@ -670,6 +666,9 @@
       "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
       "default": "./dist/plugin-sdk/ssrf-runtime.js"
     },
+    "./plugin-sdk/ssrf-runtime-internal": {
+      "default": "./dist/plugin-sdk/ssrf-runtime-internal.js"
+    },
     "./plugin-sdk/media-runtime": {
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
@@ -704,10 +703,6 @@
     },
     "./plugin-sdk/thread-bindings-session-runtime": {
       "default": "./dist/plugin-sdk/thread-bindings-session-runtime.js"
-    },
-    "./plugin-sdk/text-runtime": {
-      "types": "./dist/plugin-sdk/text-runtime.d.ts",
-      "default": "./dist/plugin-sdk/text-runtime.js"
     },
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
@@ -746,10 +741,6 @@
       "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-secret-basic-runtime.js"
     },
-    "./plugin-sdk/channel-secret-runtime": {
-      "types": "./dist/plugin-sdk/channel-secret-runtime.d.ts",
-      "default": "./dist/plugin-sdk/channel-secret-runtime.js"
-    },
     "./plugin-sdk/channel-secret-tts-runtime": {
       "default": "./dist/plugin-sdk/channel-secret-tts-runtime.js"
     },
@@ -784,6 +775,9 @@
     },
     "./plugin-sdk/codex-mcp-projection": {
       "default": "./dist/plugin-sdk/codex-mcp-projection.js"
+    },
+    "./plugin-sdk/native-hook-relay-runtime": {
+      "default": "./dist/plugin-sdk/native-hook-relay-runtime.js"
     },
     "./plugin-sdk/codex-session-transcript-runtime": {
       "default": "./dist/plugin-sdk/codex-session-transcript-runtime.js"
@@ -882,10 +876,6 @@
     "./plugin-sdk/account-resolution-runtime": {
       "default": "./dist/plugin-sdk/account-resolution-runtime.js"
     },
-    "./plugin-sdk/agent-config-primitives": {
-      "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
-      "default": "./dist/plugin-sdk/agent-config-primitives.js"
-    },
     "./plugin-sdk/access-groups": {
       "default": "./dist/plugin-sdk/access-groups.js"
     },
@@ -948,10 +938,6 @@
       "types": "./dist/plugin-sdk/discord.d.ts",
       "default": "./dist/plugin-sdk/discord.js"
     },
-    "./plugin-sdk/matrix": {
-      "types": "./dist/plugin-sdk/matrix.d.ts",
-      "default": "./dist/plugin-sdk/matrix.js"
-    },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
       "default": "./dist/plugin-sdk/device-bootstrap.js"
@@ -971,6 +957,9 @@
     "./plugin-sdk/channel-config-helpers": {
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
+    },
+    "./plugin-sdk/channel-config-ui-hints": {
+      "default": "./dist/plugin-sdk/channel-config-ui-hints.js"
     },
     "./plugin-sdk/channel-config-writes": {
       "default": "./dist/plugin-sdk/channel-config-writes.js"
@@ -1020,10 +1009,6 @@
     "./plugin-sdk/channel-inbound-debounce": {
       "types": "./dist/plugin-sdk/channel-inbound-debounce.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound-debounce.js"
-    },
-    "./plugin-sdk/channel-logging": {
-      "types": "./dist/plugin-sdk/channel-logging.d.ts",
-      "default": "./dist/plugin-sdk/channel-logging.js"
     },
     "./plugin-sdk/channel-mention-gating": {
       "default": "./dist/plugin-sdk/channel-mention-gating.js"
@@ -1080,6 +1065,10 @@
     "./plugin-sdk/node-host": {
       "default": "./dist/plugin-sdk/node-host.js"
     },
+    "./plugin-sdk/computer-use": {
+      "types": "./dist/plugin-sdk/computer-use.d.ts",
+      "default": "./dist/plugin-sdk/computer-use.js"
+    },
     "./plugin-sdk/response-limit-runtime": {
       "default": "./dist/plugin-sdk/response-limit-runtime.js"
     },
@@ -1126,10 +1115,6 @@
     "./plugin-sdk/group-activation": {
       "default": "./dist/plugin-sdk/group-activation.js"
     },
-    "./plugin-sdk/group-access": {
-      "types": "./dist/plugin-sdk/group-access.d.ts",
-      "default": "./dist/plugin-sdk/group-access.js"
-    },
     "./plugin-sdk/global-singleton": {
       "default": "./dist/plugin-sdk/global-singleton.js"
     },
@@ -1157,9 +1142,6 @@
     },
     "./plugin-sdk/video-generation-runtime": {
       "default": "./dist/plugin-sdk/video-generation-runtime.js"
-    },
-    "./plugin-sdk/video-generation-core": {
-      "default": "./dist/plugin-sdk/video-generation-core.js"
     },
     "./plugin-sdk/reply-history": {
       "types": "./dist/plugin-sdk/reply-history.d.ts",
@@ -1194,10 +1176,6 @@
     "./plugin-sdk/media-understanding-runtime": {
       "types": "./dist/plugin-sdk/media-understanding-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-understanding-runtime.js"
-    },
-    "./plugin-sdk/messaging-targets": {
-      "types": "./dist/plugin-sdk/messaging-targets.d.ts",
-      "default": "./dist/plugin-sdk/messaging-targets.js"
     },
     "./plugin-sdk/request-url": {
       "default": "./dist/plugin-sdk/request-url.js"
@@ -1341,6 +1319,10 @@
     "./plugin-sdk/provider-http": {
       "default": "./dist/plugin-sdk/provider-http.js"
     },
+    "./plugin-sdk/provider-binary-stream": {
+      "types": "./dist/plugin-sdk/provider-binary-stream.d.ts",
+      "default": "./dist/plugin-sdk/provider-binary-stream.js"
+    },
     "./plugin-sdk/provider-model-types": {
       "default": "./dist/plugin-sdk/provider-model-types.js"
     },
@@ -1408,6 +1390,10 @@
       "types": "./dist/plugin-sdk/secret-input-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-input-runtime.js"
     },
+    "./plugin-sdk/secret-ref-readonly": {
+      "types": "./dist/plugin-sdk/secret-ref-readonly.d.ts",
+      "default": "./dist/plugin-sdk/secret-ref-readonly.js"
+    },
     "./plugin-sdk/channel-status": {
       "types": "./dist/plugin-sdk/channel-status.d.ts",
       "default": "./dist/plugin-sdk/channel-status.js"
@@ -1473,10 +1459,6 @@
       "types": "./dist/plugin-sdk/web-media.d.ts",
       "default": "./dist/plugin-sdk/web-media.js"
     },
-    "./plugin-sdk/zod": {
-      "types": "./dist/plugin-sdk/zod.d.ts",
-      "default": "./dist/plugin-sdk/zod.js"
-    },
     "./plugin-sdk/agent-core": {
       "default": "./dist/plugin-sdk/agent-core.js"
     },
@@ -1497,8 +1479,8 @@
     "android:install:third-party": "node --import tsx scripts/run-android-gradle.mts :app:installThirdPartyDebug",
     "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck",
     "android:lint:android": "node --import tsx scripts/run-android-gradle.mts :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug",
-    "android:run": "node --import tsx scripts/run-android-gradle.mts :app:installPlayDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
-    "android:run:third-party": "node --import tsx scripts/run-android-gradle.mts :app:installThirdPartyDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
+    "android:run": "node --import tsx scripts/run-android-gradle.mts :app:runPlayDebug",
+    "android:run:third-party": "node --import tsx scripts/run-android-gradle.mts :app:runThirdPartyDebug",
     "android:release": "bash scripts/android-release.sh",
     "android:release:archive": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android play_store_archive'",
     "android:release:auth:check": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android auth_check'",
@@ -1531,10 +1513,12 @@
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node --import tsx scripts/check.mts",
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
+    "check:assertion-safety": "node --import tsx scripts/check-assertion-safety-ratchet.mts",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
     "check:changelog-attributions": "node --import tsx scripts/check-changelog-attributions.mts",
+    "check:coercion-helpers": "node --import tsx scripts/check-coercion-helper-declarations.mts",
     "check:database-first-legacy-stores": "node --import tsx scripts/check-database-first-legacy-stores.mts",
     "check:deprecated-api-usage": "node --import tsx scripts/check-deprecated-api-usage.mts",
     "check:deprecated-jsdoc": "node --import tsx scripts/check-deprecated-jsdoc.mts",
@@ -1551,10 +1535,10 @@
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
     "check:runtime-sidecar-loaders": "node --import tsx scripts/check-runtime-sidecar-loaders.mts",
+    "check:script-erasability": "node --disable-warning=ExperimentalWarning scripts/check-script-erasability.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import tsx scripts/check-wrapper-shadowing.mts",
-    "check:wrapper-shadowing:gen": "node --import tsx scripts/check-wrapper-shadowing.mts --update-debt-baseline",
     "check:test-types": "pnpm tsgo:test",
     "check:timed": "node --import tsx scripts/check-timed.mts",
     "check:timed:all-types": "node --import tsx scripts/check-timed.mts --include-test-types",
@@ -1563,6 +1547,7 @@
     "ci:full-release": "node scripts/full-release-validation-at-sha.mjs",
     "ci:timings": "node scripts/ci-run-timings.mjs --latest-main",
     "ci:timings:recent": "node scripts/ci-run-timings.mjs --recent 10",
+    "ci:timings:trend": "node scripts/ci-run-timings.mjs --trend-hours 72 --compare-hours 12",
     "clean:dist": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
     "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
     "codex-app-server:protocol:sync": "node --import tsx scripts/sync-codex-app-server-protocol.ts",
@@ -1582,7 +1567,7 @@
     "deadcode:exports": "node --import tsx scripts/check-deadcode-exports.mts",
     "deadcode:full": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --no-config-hints --exclude duplicates && pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.all-exports.config.ts --no-progress --reporter compact --no-config-hints --exports --exclude duplicates",
     "deadcode:knip": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
-    "deadcode:report": "pnpm deadcode:full; pnpm deadcode:exports",
+    "deadcode:report": "pnpm deadcode:full && pnpm deadcode:exports",
     "deadcode:unused-files": "node --import tsx scripts/check-deadcode-unused-files.mts",
     "deps:root-ownership": "node --import tsx scripts/root-dependency-ownership-audit.mts",
     "deps:root-ownership:check": "node --import tsx scripts/root-dependency-ownership-audit.mts --check",
@@ -1611,9 +1596,9 @@
     "docs:spellcheck:fix": "bash scripts/docs-spellcheck.sh --write",
     "maturity:check": "node --import tsx scripts/qa/render-maturity-docs.ts --check",
     "maturity:render": "node --import tsx scripts/qa/render-maturity-docs.ts",
-    "dup:check": "node --import tsx scripts/check-duplicates.mts",
-    "dup:check:coverage": "node --import tsx scripts/check-duplicates.mts --coverage",
-    "dup:check:json": "node --import tsx scripts/check-duplicates.mts --json",
+    "dup:check": "node scripts/check-duplicates.mjs",
+    "dup:check:coverage": "node scripts/check-duplicates.mjs --coverage",
+    "dup:check:json": "node scripts/check-duplicates.mjs --json",
     "format": "oxfmt --write --threads=1",
     "format:all": "pnpm format && pnpm format:swift",
     "format:check": "oxfmt --check",
@@ -1655,7 +1640,7 @@
     "lint:apps": "pnpm lint:swift",
     "lint:auth:no-pairing-store-group": "node --import tsx scripts/check-no-pairing-store-group-auth.mts",
     "lint:auth:pairing-account-scope": "node --import tsx scripts/check-pairing-account-scope.mts",
-    "lint:core": "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core",
+    "lint:core": "node --import tsx scripts/run-oxlint-shards.mts --only=core",
     "lint:docker-e2e": "node --import tsx scripts/check-docker-e2e-boundaries.mts",
     "lint:kysely": "node --import tsx scripts/check-kysely-guardrails.mts",
     "lint:docs": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc",
@@ -1664,7 +1649,7 @@
     "lint:extensions:telegram-grammy-types": "node --import tsx scripts/check-telegram-grammy-types-imports.mts",
     "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions",
     "lint:extensions:no-guarded-wildcard-reexports": "node --import tsx scripts/check-extension-wildcard-reexports.mts",
-    "lint:extensions:no-plugin-sdk-internal": "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=plugin-sdk-internal",
+    "lint:extensions:no-normalization-core-bypass": "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=normalization-core-bypass",
     "lint:extensions:no-plugin-sdk-wildcard-reexports": "node --import tsx scripts/check-plugin-sdk-wildcard-reexports.mts",
     "lint:extensions:no-relative-outside-package": "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=relative-outside-package",
     "lint:extensions:no-src-outside-plugin-sdk": "node --import tsx scripts/check-extension-plugin-sdk-boundary.mts --mode=src-outside-plugin-sdk",
@@ -1675,12 +1660,13 @@
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import tsx scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
     "lint:plugins:no-register-http-handler": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions",
     "lint:plugins:plugin-sdk-subpaths-exported": "node --import tsx scripts/check-plugin-sdk-subpath-exports.mts",
+    "lint:no-chained-type-assertions": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src",
+    "lint:no-widen-then-assert": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src",
     "lint:scripts": "pnpm lint:docker-e2e && pnpm lint:tmp:no-raw-http2-imports && node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts",
     "lint:swift": "./scripts/lint-swift.sh",
     "lint:tmp:channel-agnostic-boundaries": "node --import tsx scripts/check-channel-agnostic-boundaries.mts",
     "lint:tmp:dynamic-import-warts": "node --import tsx scripts/check-dynamic-import-warts.mts",
     "lint:tmp:export-name-collisions": "node --import tsx scripts/check-export-name-collisions.mts",
-    "lint:tmp:export-name-collisions:gen": "node --import tsx scripts/check-export-name-collisions.mts --update-debt-baseline",
     "lint:tmp:no-random-messaging": "node --import tsx scripts/check-no-random-messaging-tmp.mts",
     "lint:tmp:no-raw-channel-fetch": "node --import tsx scripts/check-no-raw-channel-fetch.mts",
     "lint:tmp:no-raw-http2-imports": "node --import tsx scripts/check-no-raw-http2-imports.mts",
@@ -1694,7 +1680,6 @@
     "lint:ui:no-raw-window-open": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json ui/src",
     "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/src/**/*.ts\"",
     "lint:web-fetch-provider-boundaries": "node --import tsx scripts/check-web-fetch-provider-boundaries.mts",
-    "lint:web-search-provider-boundaries": "node --import tsx scripts/check-web-search-provider-boundaries.mts",
     "lint:webhook:no-low-level-body-read": "node --import tsx scripts/check-webhook-auth-body-order.mts",
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "bash scripts/package-mac-app.sh",
@@ -1707,8 +1692,7 @@
     "perf:web-fetch": "node --import tsx scripts/bench-web-fetch.ts",
     "perf:kova:summary": "node --import tsx scripts/kova-ci-summary.mts",
     "perf:source:summary": "node --import tsx scripts/openclaw-performance-source-summary.mts",
-    "plugin-sdk:api:check": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
-    "plugin-sdk:api:gen": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write",
+    "plugin-sdk:api:diff": "node --max-old-space-size=8192 --import tsx scripts/plugin-sdk-api-diff.mts",
     "plugin-sdk:check-exports": "node --import tsx scripts/sync-plugin-sdk-exports.mts --check",
     "plugin-sdk:surface": "node --max-old-space-size=8192 --import tsx scripts/plugin-sdk-surface-report.mts",
     "plugin-sdk:surface:check": "node --max-old-space-size=8192 --import tsx scripts/plugin-sdk-surface-report.mts --check",
@@ -1716,7 +1700,7 @@
     "plugin-sdk:usage": "node --max-old-space-size=8192 --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "policy:config-coverage": "node --import tsx scripts/check-policy-config-coverage.ts",
     "plugins:boundary-report": "node --import tsx scripts/plugin-boundary-report.ts",
-    "plugins:boundary-report:ci": "node --import tsx scripts/plugin-boundary-report.ts --summary --fail-on-cross-owner --fail-on-unclassified-unused-reserved --fail-on-eligible-compat",
+    "plugins:boundary-report:ci": "node --import tsx scripts/plugin-boundary-report.ts --summary --fail-on-eligible-compat",
     "plugins:boundary-report:json": "node --import tsx scripts/plugin-boundary-report.ts --json",
     "plugins:boundary-report:summary": "node --import tsx scripts/plugin-boundary-report.ts --summary",
     "plugins:assets:build": "node --import tsx scripts/bundled-plugin-assets.mts --phase build",
@@ -1825,6 +1809,7 @@
     "test:docker:live-build": "bash scripts/test-live-build-docker.sh",
     "test:docker:live-cli-backend": "bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 bash scripts/test-live-cli-backend-docker.sh",
+    "test:docker:live-cli-backend:claude:cache": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude-subscription": "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=0 OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1 OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=0 OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=0 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude:mcp": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=1 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude:resume": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1 bash scripts/test-live-cli-backend-docker.sh",
@@ -1870,7 +1855,7 @@
     "test:docker:plugin-lifecycle-matrix": "bash scripts/e2e/plugin-lifecycle-matrix-docker.sh",
     "test:docker:plugin-update": "bash scripts/e2e/plugin-update-unchanged-docker.sh",
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
-    "test:docker:published-upgrade-survivor": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:docker:published-upgrade-survivor": "node --import tsx scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor -- node scripts/test-docker-all.mjs",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:docker:rerun": "node --import tsx scripts/docker-e2e-rerun.mts",
     "test:docker:root-managed-vps-upgrade": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.5.7} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
@@ -1921,7 +1906,7 @@
     "test:live:media:music": "node --import tsx test/e2e/qa-lab/media/hosted-media-provider-live.ts music",
     "test:live:media:video": "node --import tsx test/e2e/qa-lab/media/hosted-media-provider-live.ts video",
     "test:live:models-profiles": "node --import tsx scripts/test-live.mts -- src/agents/models.profiles.live.test.ts",
-    "test:macos:ci": "node --import tsx scripts/test-projects.mts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts",
+    "test:macos:ci": "node --import tsx scripts/test-projects.mts src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/gateway/worker-environments/workspace-rsync-path.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts src/process/supervisor/adapters/child.service-lifecycle.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts test/scripts/codesign-mac-app.test.ts test/scripts/notarize-mac-artifact.test.ts test/scripts/mac-elevation-host.test.ts",
     "test:max": "node --import tsx scripts/test-projects-max.mts",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
@@ -1965,16 +1950,18 @@
     "test:unit:fast:audit": "node --import tsx scripts/test-unit-fast-audit.mts",
     "test:voicecall:closedloop": "node --import tsx scripts/test-voicecall-closedloop.mts",
     "test:watch": "node --import tsx scripts/test-projects.mts --watch",
-    "test:windows:ci": "node --import tsx scripts/test-projects.mts src/shared/runtime-import.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/media/local-media-path.windows.test.ts src/infra/sqlite-snapshot.test.ts src/infra/ssh-client.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/executable-path.test.ts src/infra/process-env.test.ts src/infra/fs-safe-remove.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/commands/backup-verify.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/test-utils/openclaw-test-state.test.ts src/agents/sessions/windows-git-bash-path.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/utils.test.ts src/commands/agents.commands.list.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts packages/terminal-core/src/display-string.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/daemon/schtasks.startup-fallback.test.ts src/media/web-media.file-url.windows.test.ts extensions/lobster/src/lobster-runner.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ts-topology.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
+    "test:windows:ci": "pnpm test:windows:ci:1 && pnpm test:windows:ci:2",
+    "test:windows:ci:1": "node --import tsx scripts/test-projects.mts src/state/openclaw-state-ownership.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/node-host/node-worker-transfer-client.test.ts packages/terminal-core/src/display-string.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/commands/backup-verify.test.ts src/commands/agents.commands.list.test.ts src/shared/runtime-import.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts src/agents/tools/media-tool-file-url.windows.test.ts extensions/memory-core/src/memory-extra-file-path.windows.test.ts src/daemon/schtasks.startup-fallback.test.ts src/plugin-sdk/node-host.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts extensions/lobster/src/lobster-runner.test.ts",
+    "test:windows:ci:2": "node --import tsx scripts/test-projects.mts src/infra/sqlite-snapshot.test.ts src/infra/ports.test.ts src/infra/advertised-lan-host.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/executable-path.test.ts src/infra/fs-safe-remove.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/infra/windows-install-roots.test.ts src/infra/ssh-client.windows.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/process-env.test.ts src/agents/sessions/windows-git-bash-path.test.ts test/scripts/npm-runner.test.ts test/scripts/ts-topology.test.ts src/test-utils/openclaw-test-state.test.ts src/utils.test.ts src/media/local-media-path.windows.test.ts src/media/web-media.file-url.windows.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/process/windows-command.test.ts src/process/terminal-pty.test.ts src/tui/tui.resolve-codex-bin.test.ts src/media-understanding/attachments.file-url.windows.test.ts src/cli/daemon-cli/status.print.test.ts src/cli/mcp-cli.path-case.windows.test.ts src/auto-reply/usage-bar/template.windows.test.ts src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts src/agents/provider-local-service.env-case.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/agents/agent-tools.read.windows.test.ts src/agents/agent-tools.read.host-operations.test.ts src/agents/sandbox/fs-paths.test.ts src/agents/sessions/tools/render-utils.test.ts src/agents/sessions/tools/path-utils.test.ts extensions/msteams/src/media-helpers.test.ts extensions/msteams/src/messenger.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts",
     "test:windows:schtasks:integration": "node --import tsx scripts/run-with-env.mts CI_WINDOWS_SCHTASKS_INTEGRATION=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs src/daemon/schtasks.integration.e2e.test.ts",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
     "tsgo": "pnpm tsgo:core",
-    "tsgo:all": "node scripts/run-tsgo.mjs -b tsconfig.projects.json",
+    "tsgo:all": "pnpm tsgo:core:all && pnpm tsgo:extensions:all && pnpm tsgo:scripts && pnpm tsgo:test:root",
     "tsgo:core": "node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo",
-    "tsgo:core:all": "node scripts/run-tsgo.mjs -b tsconfig.core.projects.json",
-    "tsgo:core:test": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo",
+    "tsgo:core:all": "pnpm tsgo:core && pnpm tsgo:ui && pnpm tsgo:core:test",
+    "tsgo:core:test": "node scripts/run-tsgo-core-test-shards.mjs",
     "tsgo:extensions": "node scripts/run-tsgo.mjs -p tsconfig.extensions.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions.tsbuildinfo",
     "tsgo:extensions:all": "node scripts/run-tsgo.mjs -b tsconfig.extensions.projects.json",
     "tsgo:extensions:test": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo",
@@ -1983,10 +1970,10 @@
     "tsgo:scripts": "node scripts/run-tsgo.mjs -p tsconfig.scripts.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/scripts.tsbuildinfo",
     "tsgo:test": "pnpm tsgo:core:test && pnpm tsgo:extensions:test && pnpm tsgo:test:root",
     "tsgo:test:extensions": "pnpm tsgo:extensions:test",
-    "tsgo:test:packages": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.packages.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-packages.tsbuildinfo",
+    "tsgo:test:packages": "node scripts/run-tsgo-core-test-shards.mjs packages",
     "tsgo:test:root": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-root.tsbuildinfo",
-    "tsgo:test:src": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.src.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-src.tsbuildinfo",
-    "tsgo:test:ui": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.ui.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-ui.tsbuildinfo",
+    "tsgo:test:src": "node scripts/run-tsgo-core-test-shards.mjs src",
+    "tsgo:test:ui": "node scripts/run-tsgo-core-test-shards.mjs ui",
     "tsgo:ui": "node scripts/run-tsgo.mjs -p tsconfig.ui.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/ui.tsbuildinfo",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "node --import tsx scripts/run-with-env.mts OPENCLAW_PROFILE=dev -- node scripts/run-node.mjs --dev tui",
@@ -1994,13 +1981,14 @@
     "tui:pty:test:watch:all": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode all",
     "tui:pty:test:watch:fake": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode fake",
     "tui:pty:test:watch:local": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode local",
-    "ui:build": "node scripts/ui.js build && node --import tsx scripts/check-control-ui-precompressed-assets.mts && node --import tsx scripts/check-control-ui-performance.mts",
+    "ui:build": "node scripts/ui.js build",
     "ui:dev": "node scripts/ui.js dev",
     "ui:i18n:baseline": "node --import tsx scripts/control-ui-i18n-verify.ts baseline",
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:i18n:verify": "node --import tsx scripts/control-ui-i18n-verify.ts verify",
+    "ui:proof:workboard": "node --import tsx scripts/capture-workboard-ui-proof.mts",
     "native:i18n:baseline": "node --import tsx scripts/native-app-i18n.ts baseline --write",
     "native:i18n:check": "node --import tsx scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import tsx scripts/native-app-i18n.ts sync --write",
@@ -2025,10 +2013,10 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.5.4",
+    "@openclaw/fs-safe": "0.5.5",
     "@openclaw/proxyline": "0.3.4",
     "@silvia-odwyer/photon-node": "0.3.4",
-    "@trycua/cua-driver": "0.14.1",
+    "@trycua/cua-driver": "0.19.3",
     "acorn": "8.17.0",
     "chalk": "6.0.0",
     "chokidar": "5.0.0",
@@ -2058,7 +2046,7 @@
     "p-limit": "7.3.1",
     "p-map": "7.0.6",
     "partial-json": "0.1.7",
-    "playwright-core": "1.62.0",
+    "playwright-core": "1.62.1",
     "pretty-ms": "9.3.0",
     "qrcode": "1.5.4",
     "quickjs-wasi": "3.2.0",
@@ -2110,7 +2098,7 @@
     "oxfmt": "0.60.0",
     "oxlint": "1.75.0",
     "oxlint-tsgolint": "7.0.2001",
-    "playwright": "1.62.0",
+    "playwright": "1.62.1",
     "postcss-lit": "1.4.1",
     "shiki": "4.3.1",
     "signal-utils": "0.21.1",

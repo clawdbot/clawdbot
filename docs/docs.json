@@ -1086,6 +1086,7 @@
               {
                 "group": "Maintenance",
                 "pages": [
+                  "install/backups",
                   "install/updating",
                   {
                     "group": "Migrating",
@@ -1114,6 +1115,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/cloudflare",
                   "install/daytona",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
@@ -1723,6 +1725,7 @@
                       "network",
                       "gateway/pairing",
                       "gateway/discovery",
+                      "gateway/portals",
                       "gateway/bonjour"
                     ]
                   }
@@ -1856,6 +1859,7 @@
                       "cli/browser",
                       "cli/cron",
                       "cli/flows",
+                      "cli/connect",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox",

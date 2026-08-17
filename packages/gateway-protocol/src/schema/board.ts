@@ -157,11 +157,15 @@ export const BoardOpSchema = Type.Union([
 ]);
 export type BoardOp = Static<typeof BoardOpSchema>;
 
-export const BoardGetParamsSchema = closedObject({ sessionKey: NonEmptyString });
+export const BoardGetParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
 export type BoardGetParams = Static<typeof BoardGetParamsSchema>;
 
 export const BoardUpdateParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   ops: Type.Array(BoardOpSchema),
 });
 export type BoardUpdateParams = Static<typeof BoardUpdateParamsSchema>;
@@ -218,6 +222,7 @@ export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
 
 export const BoardWidgetPutParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   content: BoardWidgetPutContentSchema,
@@ -246,6 +251,7 @@ export type BoardWidgetPutResult = Static<typeof BoardWidgetPutResultSchema>;
 
 export const BoardWidgetGrantParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   decision: Type.Union([Type.Literal("granted"), Type.Literal("rejected")]),
   revision: Type.Integer({ minimum: 1 }),
@@ -255,6 +261,7 @@ export type BoardWidgetGrantParams = Static<typeof BoardWidgetGrantParamsSchema>
 
 export const BoardWidgetAppViewParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   revision: Type.Integer({ minimum: 1 }),
   instanceId: NonEmptyString,
@@ -271,6 +278,7 @@ export const BoardViewTicketSchema = Type.String({ minLength: 1, maxLength: 2048
 
 export const BoardLegacyEventParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   widget: BoardWidgetNameSchema,
   payload: Type.Unknown(),
 });

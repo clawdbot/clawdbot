@@ -1,5 +1,5 @@
 import { modelKey } from "../../agents/model-ref-shared.js";
-import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+import { shouldSuppressBuiltInModelCore } from "../../agents/model-suppression.js";
 /** Registry-loading adapters for model-list row construction. */
 import { loadPreparedAgentModelRegistry as loadAgentModelRegistry } from "../../agents/prepared-model-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,7 +37,7 @@ function findConfiguredRegistryModel(params: {
     return undefined;
   }
   if (
-    shouldSuppressBuiltInModel({
+    shouldSuppressBuiltInModelCore({
       provider: model.provider,
       id: model.id,
       baseUrl: model.baseUrl,

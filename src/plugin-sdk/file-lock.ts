@@ -6,6 +6,7 @@ import {
   drainFileLockManagerForTest,
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isLockOwnerDefinitelyStale,
   shouldRemoveDeadOwnerOrExpiredLock,
@@ -86,9 +87,7 @@ function createCurrentProcessLockPayload(): Record<string, unknown> {
 }
 
 function asLockPayload(payload: unknown): Record<string, unknown> | null {
-  return payload && typeof payload === "object" && !Array.isArray(payload)
-    ? (payload as Record<string, unknown>)
-    : null;
+  return asNullableRecord(payload);
 }
 
 function sameStatValue(left: number | bigint, right: number | bigint): boolean {

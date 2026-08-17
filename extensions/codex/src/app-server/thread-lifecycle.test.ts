@@ -14,11 +14,13 @@ import {
   type CodexDynamicToolFunctionSpec,
 } from "./protocol.js";
 import {
+  createCodexAppServerBindingStore,
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
   type CodexAppServerPendingSupervisionBranch,
 } from "./session-binding.js";
 import {
+  createCodexTestBindingStateStore,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
@@ -59,6 +61,33 @@ describe("Codex incognito thread persistence", () => {
 
     expect(build(persistent)).not.toHaveProperty("ephemeral");
     expect(build(incognito)).toMatchObject({ ephemeral: true });
+  });
+});
+
+describe("Codex context window config", () => {
+  it("forwards only a prepared cap on thread start and resume (#124702)", () => {
+    const appServer = createAppServerOptions() as never;
+    const capped = createAttemptParams({ provider: "openai" });
+    capped.authoredContextTokenCap = 32_000;
+    const uncapped = createAttemptParams({ provider: "openai" });
+    const build = (params: EmbeddedRunAttemptParams) => [
+      buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+      }),
+      buildThreadResumeParams(params, {
+        appServer,
+        threadId: "thread-1",
+      }),
+    ];
+
+    for (const request of build(capped)) {
+      expect(request.config?.model_context_window).toBe(32_000);
+    }
+    for (const request of build(uncapped)) {
+      expect(request.config).not.toHaveProperty("model_context_window");
+    }
   });
 });
 
@@ -232,6 +261,36 @@ describe("Codex delegation capability", () => {
       expect(request.config?.["features.multi_agent"]).toBe(false);
       expect(request.config?.["features.multi_agent_v2"]).toBe(false);
       expect(request.config?.["features.goals"]).toBe(false);
+    }
+  });
+
+  it("disables only native image generation for an audited image_generate deny", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicySafeDeniedTools = ["image_generate"];
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.image_generation": true,
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+    };
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      config,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      threadId: "thread-1",
+      config,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.image_generation"]).toBe(false);
+      expect(request.config?.["features.multi_agent"]).toBe(true);
+      expect(request.config?.["features.multi_agent_v2"]).toBe(true);
+      expect(request.config?.["agents.enabled"]).toBeUndefined();
     }
   });
 
@@ -1046,7 +1105,7 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain("## Skill Workshop");
     expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
     expect(instructions).toContain("`skill_workshop`");
-    expect(instructions).toContain("Generated = pending proposal");
+    expect(instructions).toContain("Other generated work = pending proposal");
     expect(instructions).toContain("only explicit user ask");
   });
 
@@ -1081,7 +1140,7 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("For progress, set `final=false`.");
-    expect(instructions).toContain("set `final=true`");
+    expect(instructions).toContain("Set `final=true`, or omit it,");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
@@ -2174,6 +2233,46 @@ describe("Codex plugin binding recovery", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
+  it("rechecks scheduled current policy against the exact existing thread", async () => {
+    const sessionFile = path.join(tempDir, "session-current-policy.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-current-policy");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-current-policy");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const build = vi.fn(async (_options?: { threadId?: string }) => ({
+      enabled: true,
+      configPatch: { apps: { _default: { enabled: false } } },
+      fingerprint: "plugin-config-current-policy",
+      inputFingerprint: "plugin-input-current-policy",
+      policyContext: { fingerprint: "plugin-policy-current", apps: {}, pluginAppIds: {} },
+      diagnostics: [],
+    }));
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      pluginThreadConfig: {
+        enabled: true,
+        requiresCurrentPolicyCheck: true,
+        inputFingerprint: "plugin-input-current-policy",
+        build,
+      },
+    };
+
+    await startOrResumeThread(common);
+    await startOrResumeThread(common);
+
+    expect(build).toHaveBeenNthCalledWith(1);
+    expect(build).toHaveBeenNthCalledWith(2, { threadId: "thread-current-policy" });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
   it("rebuilds once when a settled negative binding still enables the plugin", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2248,6 +2347,127 @@ describe("Codex plugin binding recovery", () => {
       "thread/start",
       "thread/resume",
     ]);
+  });
+
+  it("rotates warm bindings across scheduled authority changes and resumes after store restart", async () => {
+    const sessionFile = path.join(tempDir, "session-authority.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-authority");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const stateStore = createCodexTestBindingStateStore();
+    let bindingStore = createCodexAppServerBindingStore(stateStore);
+    let threadSequence = 0;
+    const threadStarts: Array<Record<string, unknown>> = [];
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        threadSequence += 1;
+        threadStarts.push(requestParams as Record<string, unknown>);
+        return threadStartResult(`thread-authority-${threadSequence}`);
+      }
+      if (method === "thread/resume") {
+        const threadId = (requestParams as { threadId?: string })?.threadId;
+        return threadStartResult(threadId ?? "thread-resumed");
+      }
+      if (method === "app/installed") {
+        return {
+          apps: [{ id: "calendar", runtimeName: "Calendar", enabled: true, callable: true }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const provider = (inputFingerprint: string, destructive: boolean) => {
+      const base = createProvisionalPluginThreadConfigProvider("calendar");
+      return {
+        ...base,
+        requiresCurrentPolicyCheck: true,
+        inputFingerprint,
+        build: vi.fn(async () => {
+          const config = await base.build();
+          const apps = config.configPatch?.apps as Record<string, Record<string, unknown>>;
+          return {
+            ...config,
+            inputFingerprint,
+            fingerprint: `${inputFingerprint}:${destructive}`,
+            configPatch: {
+              ...config.configPatch,
+              apps: {
+                ...apps,
+                calendar: {
+                  ...apps.calendar,
+                  destructive_enabled: destructive,
+                  tools: {
+                    edit: { approval_mode: destructive ? "approve" : "prompt" },
+                  },
+                },
+              },
+            },
+          };
+        }),
+      };
+    };
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("unrestricted", true),
+    });
+    const revokedProvider = provider("unrestricted", true);
+    revokedProvider.build.mockRejectedValueOnce(new Error("calendar revoked by current policy"));
+    await expect(
+      startOrResumeThreadImpl({
+        ...common,
+        bindingStore,
+        pluginThreadConfig: revokedProvider,
+      }),
+    ).rejects.toThrow("calendar revoked by current policy");
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("scheduled-cap-1", false),
+    });
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("unrestricted", true),
+    });
+    bindingStore = createCodexAppServerBindingStore(stateStore);
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("unrestricted", true),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "app/installed",
+      "thread/start",
+      "app/installed",
+      "thread/start",
+      "app/installed",
+      "thread/resume",
+    ]);
+    expect(threadStarts).toHaveLength(3);
+    expect(threadStarts[1]?.config).toMatchObject({
+      apps: { calendar: { destructive_enabled: false } },
+    });
+    expect(threadStarts[2]?.config).toMatchObject({
+      apps: { calendar: { destructive_enabled: true } },
+    });
+    const resumeCall = request.mock.calls.find(([method]) => method === "thread/resume");
+    expect((resumeCall?.[1] as { config?: unknown })?.config).toMatchObject({
+      apps: {
+        calendar: {
+          destructive_enabled: true,
+          tools: { edit: { approval_mode: "approve" } },
+        },
+      },
+    });
   });
 });
 
@@ -4504,113 +4724,41 @@ describe("Codex app-server thread lifecycle timing", () => {
 });
 
 describe("resolveReasoningEffort (#71946)", () => {
-  describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
-    it.each([
-      "gpt-5.6",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.3-codex-spark",
-    ] as const)(
-      "translates 'minimal' -> 'low' for %s so the first request is accepted",
-      (modelId) => {
-        expect(resolveReasoningEffort("minimal", modelId)).toBe("low");
-      },
-    );
+  const standardEfforts = ["low", "medium", "high", "xhigh"];
+  const maxEfforts = [...standardEfforts, "max"];
+  const ultraEfforts = [...maxEfforts, "ultra"];
 
-    it.each([
-      "gpt-5.6",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.3-codex-spark",
-    ] as const)(
-      "passes 'low' / 'medium' / 'high' / 'xhigh' through unchanged for %s",
-      (modelId) => {
-        expect(resolveReasoningEffort("low", modelId)).toBe("low");
-        expect(resolveReasoningEffort("medium", modelId)).toBe("medium");
-        expect(resolveReasoningEffort("high", modelId)).toBe("high");
-        expect(resolveReasoningEffort("xhigh", modelId)).toBe("xhigh");
-      },
-    );
+  it.each([
+    { requested: "minimal", supported: standardEfforts, expected: "low" },
+    { requested: "low", supported: standardEfforts, expected: "low" },
+    { requested: "medium", supported: standardEfforts, expected: "medium" },
+    { requested: "high", supported: standardEfforts, expected: "high" },
+    { requested: "xhigh", supported: standardEfforts, expected: "xhigh" },
+    { requested: "minimal", supported: ["medium", "high", "xhigh"], expected: "medium" },
+    { requested: "low", supported: ["medium", "high", "xhigh"], expected: "medium" },
+    { requested: "max", supported: ["medium", "high", "xhigh"], expected: "xhigh" },
+    { requested: "max", supported: maxEfforts, expected: "max" },
+    { requested: "ultra", supported: maxEfforts, expected: "max" },
+    { requested: "ultra", supported: ultraEfforts, expected: "ultra" },
+  ] as const)(
+    "maps $requested to $expected using provider-supported efforts",
+    ({ requested, supported, expected }) => {
+      expect(resolveReasoningEffort(requested, "catalog-model", supported)).toBe(expected);
+    },
+  );
 
-    it("normalizes case-variant model ids", () => {
-      expect(resolveReasoningEffort("minimal", "GPT-5.5")).toBe("low");
-      expect(resolveReasoningEffort("minimal", " gpt-5.4-mini ")).toBe("low");
-    });
-
-    it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
-      "uses the %s minimum effort when metadata is unavailable",
-      (modelId) => {
-        expect(resolveReasoningEffort("minimal", modelId)).toBe("medium");
-        expect(resolveReasoningEffort("low", modelId)).toBe("medium");
-        expect(resolveReasoningEffort("medium", modelId)).toBe("medium");
-        expect(resolveReasoningEffort("max", modelId)).toBe("xhigh");
-      },
-    );
-
-    it("honors stricter app-server reasoning metadata", () => {
-      const supported = ["medium", "high", "xhigh"];
-
-      expect(resolveReasoningEffort("minimal", "gpt-5.5-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("low", "gpt-5.5-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("medium", "gpt-5.5-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("max", "gpt-5.5-pro", supported)).toBe("xhigh");
-    });
+  it("preserves legacy compatibility when metadata is unavailable", () => {
+    expect(resolveReasoningEffort("minimal", "gpt-5.5")).toBe("low");
+    expect(resolveReasoningEffort("minimal", "gpt-4o")).toBe("minimal");
+    expect(resolveReasoningEffort("low", "gpt-5.5-pro")).toBe("medium");
+    expect(resolveReasoningEffort("max", "gpt-5.5-pro")).toBe("xhigh");
+    expect(resolveReasoningEffort("max", "gpt-5.6-sol")).toBeNull();
+    expect(resolveReasoningEffort("ultra", "gpt-5.6-sol")).toBeNull();
   });
 
-  describe("legacy / non-modern Codex models", () => {
-    it.each(["gpt-5", "gpt-4o", "o3-mini", "codex-mini-latest"] as const)(
-      "preserves 'minimal' for %s — pre-modern enum still supports it",
-      (modelId) => {
-        expect(resolveReasoningEffort("minimal", modelId)).toBe("minimal");
-      },
-    );
-
-    it("preserves 'minimal' for empty / unknown model ids (conservative default)", () => {
-      expect(resolveReasoningEffort("minimal", "")).toBe("minimal");
-      expect(resolveReasoningEffort("minimal", "unknown-model-xyz")).toBe("minimal");
-    });
-  });
-
-  describe("non-effort thinkLevel values", () => {
-    it("returns null for 'off'", () => {
-      expect(resolveReasoningEffort("off", "gpt-5.5")).toBeNull();
-      expect(resolveReasoningEffort("off", "gpt-4o")).toBeNull();
-    });
-
-    it("returns null for 'adaptive' (non-effort enum value)", () => {
-      expect(resolveReasoningEffort("adaptive", "gpt-5.5")).toBeNull();
-      expect(resolveReasoningEffort("adaptive", "gpt-4o")).toBeNull();
-    });
-
-    it("passes max only for known native GPT-5.6 models", () => {
-      expect(resolveReasoningEffort("max", "gpt-5.6-sol")).toBe("max");
-      expect(resolveReasoningEffort("max", "gpt-5.6-terra")).toBe("max");
-      expect(resolveReasoningEffort("max", "gpt-5.6-luna")).toBe("max");
-      expect(resolveReasoningEffort("max", "gpt-5.6")).toBeNull();
-      expect(resolveReasoningEffort("max", "gpt-5.6-sol-oai")).toBeNull();
-      expect(resolveReasoningEffort("max", "gpt-5.5")).toBeNull();
-      expect(resolveReasoningEffort("max", "gpt-4o")).toBeNull();
-    });
-
-    it("uses known GPT-5.6 fallbacks when app-server metadata is unavailable", () => {
-      const ultraEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
-      const maxEfforts = ["low", "medium", "high", "xhigh", "max"];
-
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-sol", ultraEfforts)).toBe("ultra");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-terra", ultraEfforts)).toBe("ultra");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-luna", maxEfforts)).toBe("max");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-sol")).toBe("ultra");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-terra")).toBe("ultra");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-luna")).toBe("max");
-    });
+  it("omits non-effort think levels", () => {
+    expect(resolveReasoningEffort("off", "catalog-model", ultraEfforts)).toBeNull();
+    expect(resolveReasoningEffort("adaptive", "catalog-model", ultraEfforts)).toBeNull();
   });
 });
 

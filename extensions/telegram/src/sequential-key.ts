@@ -247,7 +247,10 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     }
     return "telegram:approval";
   }
-  const threadSpec = msg ? resolveTelegramMessageThreadSpec(msg) : undefined;
+  // Raw durable-ingress fixtures and malformed updates can carry a partial
+  // message. Treat missing chat identity as an unknown lane instead of
+  // crashing before the queue records the update.
+  const threadSpec = msg?.chat ? resolveTelegramMessageThreadSpec(msg) : undefined;
   const threadId =
     threadSpec?.scope === "dm"
       ? shouldUseTelegramDmThreadSession({

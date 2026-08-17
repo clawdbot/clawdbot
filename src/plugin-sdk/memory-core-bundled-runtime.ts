@@ -3,7 +3,7 @@ import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider
 import { getRuntimeConfig } from "../config/config.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderCreateOptions,
@@ -285,7 +285,7 @@ export type RepairDreamingArtifactsResult = {
 };
 
 function loadApiFacadeModule(): ApiFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSync<ApiFacadeModule>({
+  const module = loadBundledPluginPublicSurfaceModuleSyncCore<ApiFacadeModule>({
     dirName: "memory-core",
     artifactBasename: "api.js",
   });
@@ -296,7 +296,7 @@ function loadApiFacadeModule(): ApiFacadeModule {
 }
 
 function loadRuntimeFacadeModule(): RuntimeFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSync<RuntimeFacadeModule>({
+  const module = loadBundledPluginPublicSurfaceModuleSyncCore<RuntimeFacadeModule>({
     dirName: "memory-core",
     artifactBasename: "runtime-api.js",
   });

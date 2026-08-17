@@ -3,7 +3,6 @@ import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
 import OpenClawKit
-import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -41,12 +40,31 @@ struct OnboardingViewSmokeTests {
                 "2 gateways found on your network — click to choose one.")
     }
 
-    @Test func `onboarding view builds body`() {
-        let state = AppState(preview: true)
-        let view = OnboardingView(
-            state: state,
-            discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
-        _ = view.body
+    @Test func `foreign local listener is not advertised as attachable`() {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"])
+        let foreign = OnboardingView.LocalGatewayProbe(
+            port: profile.defaultGatewayPort,
+            pid: 1402,
+            command: "node",
+            profile: profile,
+            managedServicePID: 2380)
+        let managed = OnboardingView.LocalGatewayProbe(
+            port: profile.defaultGatewayPort,
+            pid: 2380,
+            command: "node",
+            profile: profile,
+            managedServicePID: 2380)
+        let inactiveUnexpected = OnboardingView.LocalGatewayProbe(
+            port: 18789,
+            pid: 3301,
+            command: "python",
+            profile: AppProfile(environment: [:]),
+            managedServicePID: nil)
+
+        #expect(foreign.subtitle ==
+            "Port 55636 already in use (node pid 1402). Choose a different Gateway port for profile p2380.")
+        #expect(managed.subtitle == "Existing gateway detected (node pid 2380). Will attach.")
+        #expect(inactiveUnexpected.subtitle == "Port 18789 already in use (python pid 3301). Will attach.")
     }
 
     @Test func `onboarding window resizes vertically and gives the page the extra height`() {

@@ -218,9 +218,10 @@ suite.define(() => {
       },
       sessionKey: "agent:main:main",
     });
-    const dialogs: string[] = [];
+    // Control UI confirms in-app; a native dialog here would be a regression.
+    const nativeDialogs: string[] = [];
     page.on("dialog", (dialog) => {
-      dialogs.push(dialog.message());
+      nativeDialogs.push(dialog.message());
       void dialog.dismiss();
     });
 
@@ -265,7 +266,8 @@ suite.define(() => {
           .toBeLessThanOrEqual(0);
       };
       const hiddenActionCounts = async () => ({
-        dialogs: dialogs.length,
+        confirms: await page.locator("openclaw-modal-dialog .exec-approval-actions").count(),
+        nativeDialogs: nativeDialogs.length,
         patches: (await gateway.getRequests("sessions.patch")).length,
       });
       const expectHiddenShortcutsInert = async (
@@ -562,7 +564,7 @@ suite.define(() => {
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
       await gateway.deferNext("sessions.subscribe");
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", { includeLastMessage: true });
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect
@@ -581,8 +583,12 @@ suite.define(() => {
 
       await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
-        .toBeGreaterThan(initialListCount);
+        .poll(async () =>
+          (await gateway.getRequests("sessions.list"))
+            .slice(initialListCount)
+            .some((request) => requireRecord(request.params).includeLastMessage === true),
+        )
+        .toBe(true);
       await gateway.resolveDeferred(
         "sessions.list",
         sessionsListResponse([
@@ -673,7 +679,7 @@ suite.define(() => {
     }
   });
 
-  it("pins a session dropped into the interleaved sidebar zone", async () => {
+  it("pins a session dropped below an existing row in the interleaved sidebar zone", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -721,9 +727,17 @@ suite.define(() => {
         .poll(() => trimmedTextContents(pinnedEntry.locator(".sidebar-recent-session__name")))
         .toEqual(["Already pinned"]);
       await captureUiProof(page, "sidebar-session-before-pinned-drop.png");
+      const pinnedBox = await pinnedEntry.boundingBox();
+      if (!pinnedBox) {
+        throw new Error("expected the pinned row to be laid out");
+      }
+      // The drop slot is decided by which half of the row the pointer is in, so
+      // aim below its midpoint instead of the default centre landing on the edge.
       await researchGroup
         .locator('.sidebar-recent-session[data-session-key="agent:main:candidate"]')
-        .dragTo(pinnedEntry);
+        .dragTo(pinnedEntry, {
+          targetPosition: { x: pinnedBox.width / 2, y: pinnedBox.height - 2 },
+        });
 
       const pinPatch = await waitForPatch(
         gateway,
@@ -742,6 +756,13 @@ suite.define(() => {
         )
         .toEqual(["Already pinned", "Pin me"]);
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
+
+      const pinnedCandidate = page.locator(
+        '[data-sidebar-entry="session:agent:main:candidate"] .sidebar-recent-session',
+      );
+      await pinnedCandidate.click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Unpin session" }).waitFor();
+      expect(await page.getByRole("menuitem", { name: "Reset pinned items" }).count()).toBe(0);
       await captureUiProof(page, "sidebar-session-dropped-into-pinned.png");
     } finally {
       await context.close();

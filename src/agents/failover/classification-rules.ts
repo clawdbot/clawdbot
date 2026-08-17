@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractLeadingHttpStatus,
   parseApiErrorInfo,
@@ -9,18 +10,9 @@ import {
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-const TIMEOUT_ERROR_CODES = new Set([
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNRESET",
-  "ECONNABORTED",
-  "ECONNREFUSED",
-  "ENETUNREACH",
-  "EHOSTUNREACH",
+const FAILOVER_TIMEOUT_ERROR_CODES = new Set([
   "EHOSTDOWN",
   "ENETRESET",
-  "EPIPE",
-  "EAI_AGAIN",
   "ERR_STREAM_PREMATURE_CLOSE",
 ]);
 const NO_BODY_HTTP_WRAPPER_RE =
@@ -240,8 +232,8 @@ export function classifyFailoverClassificationFromHttpStatus(
     if (message && isAuthPermanentErrorMessage(message)) {
       return toReasonClassification("auth_permanent");
     }
-    // billing message on 401/403 takes precedence over generic auth (e.g. OpenRouter
-    // "Key limit exceeded" 401/403 should trigger model fallback, not auth)
+    // Provider-owned billing classifications on ambiguous 401/403 responses
+    // take precedence over generic auth.
     if (messageReason === "billing") {
       return toReasonClassification("billing");
     }
@@ -342,7 +334,10 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
     case "OVERLOADED_ERROR":
       return "overloaded";
     default:
-      return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
+      return FAILOVER_TIMEOUT_ERROR_CODES.has(normalized) ||
+        isTransientNetworkError({ code: normalized })
+        ? "timeout"
+        : null;
   }
 }
 export function classifyCoreFailoverReasonFromErrorType(
@@ -406,23 +401,6 @@ export function isBilling429MessageForProvider(raw: string, provider: string | u
 // instead of returning the bare string to the user (#71620).
 export function isGenericUnknownStreamErrorMessage(raw: string): boolean {
   return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
-}
-export function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
-  return (
-    isProvider(provider, "openrouter") &&
-    (normalizeOptionalLowercaseString(raw)?.includes("provider returned error") ?? false)
-  );
-}
-export function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): boolean {
-  return (
-    isProvider(provider, "openrouter") && /\bkey\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
-  );
-}
-export function isOpenRouterKeyBudgetLimitExceededError(raw: string, provider?: string): boolean {
-  return (
-    isProvider(provider, "openrouter") &&
-    /\bapi\s+key\s+budget\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
-  );
 }
 export function isExactUnknownNoDetailsError(raw: string): boolean {
   return (

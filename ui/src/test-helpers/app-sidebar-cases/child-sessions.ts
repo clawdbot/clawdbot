@@ -427,17 +427,26 @@ describe("AppSidebar agent chip", () => {
   });
 
   it("nests the selected child under its parent and reveals the active path", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: { key?: string }) => {
       if (method === "sessions.describe") {
         return {
-          session: {
-            key: "agent:worker:child",
-            parentSessionKey: "agent:main:parent",
-            kind: "direct" as const,
-            label: "Selected child",
-            updatedAt: 2,
-            status: "running" as const,
-          },
+          session:
+            params?.key === "agent:main:parent"
+              ? {
+                  key: "agent:main:parent",
+                  kind: "direct" as const,
+                  label: "Parent task",
+                  updatedAt: 1,
+                  childSessions: ["agent:worker:child"],
+                }
+              : {
+                  key: "agent:worker:child",
+                  parentSessionKey: "agent:main:parent",
+                  kind: "direct" as const,
+                  label: "Selected child",
+                  updatedAt: 2,
+                  status: "running" as const,
+                },
         };
       }
       return undefined;
@@ -474,9 +483,9 @@ describe("AppSidebar agent chip", () => {
     await waitForFast(() =>
       expect(sidebar.querySelectorAll('[data-session-key="agent:worker:child"]')).toHaveLength(1),
     );
-    await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
-
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(2);
+    await waitForFast(() =>
+      expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(2),
+    );
     expect(sidebar.querySelectorAll('[data-session-key="agent:worker:child"]')).toHaveLength(1);
     expect(
       sidebar

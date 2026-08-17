@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
-  patchSessionEntry,
-  upsertSessionEntry,
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { applySqliteSessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createGatewayMethodRegistry,
@@ -104,6 +104,34 @@ describe("gateway method authorization", () => {
         requiredScopes: ["operator.write"],
       },
     });
+  });
+
+  it("allows read-only projects.list to reach its redacting handler", async () => {
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { projects: [] }));
+    const respond = vi.fn();
+
+    await handleGatewayRequest({
+      req: { type: "req", id: "req-projects-read", method: "projects.list", params: {} },
+      respond,
+      client: {
+        connId: "conn-projects-read",
+        connect: {
+          role: "operator",
+          scopes: ["operator.read"],
+          client: { id: "test", version: "1", platform: "test", mode: "test" },
+          minProtocol: 1,
+          maxProtocol: 1,
+        },
+      } as Parameters<typeof handleGatewayRequest>[0]["client"],
+      isWebchatConnect: () => false,
+      context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
+        typeof handleGatewayRequest
+      >[0]["context"],
+      extraHandlers: { "projects.list": handler },
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, { projects: [] });
   });
 
   it("rejects every node RPC when its connection no longer owns the pairing generation", async () => {
@@ -257,7 +285,7 @@ describe("gateway method authorization", () => {
   it("rejects a mutation when its authorized session instance is replaced before commit", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:commit-bound-authorization";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-shared",
@@ -323,7 +351,7 @@ describe("gateway method authorization", () => {
       });
 
       await handlerStarted;
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-draft-replacement",
@@ -332,7 +360,7 @@ describe("gateway method authorization", () => {
           createdActor: { type: "human", id: "owner" },
         },
       );
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
         visibility: "draft",
       }));
       continueHandler();
@@ -370,7 +398,7 @@ describe("sessions.patchMany orchestration", () => {
   it("preserves request-order outcomes while isolating expected-identity failures", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       for (let index = 0; index < 3; index += 1) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:batch-${index}` },
           {
             sessionId: `session-${index}`,
@@ -401,6 +429,7 @@ describe("sessions.patchMany orchestration", () => {
           key: "agent:main:batch-1",
           error: {
             code: "INVALID_REQUEST",
+            details: { reason: "session-changed" },
             message: "Session agent:main:batch-1 changed before patch. Retry.",
           },
         },
@@ -438,7 +467,7 @@ describe("sessions.patchMany orchestration", () => {
   it("projects non-archive patches in request order against prior successes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       for (let index = 0; index < 2; index += 1) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:label-${index}` },
           { sessionId: `session-label-${index}`, updatedAt: 1 },
         );
@@ -474,7 +503,7 @@ describe("sessions.patchMany orchestration", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKeys = [0, 1].map((index) => `agent:main:label-race-${index}`);
       for (const [index, sessionKey] of sessionKeys.entries()) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           { sessionId: `session-label-race-${index}`, updatedAt: 1 },
         );
@@ -534,11 +563,11 @@ describe("sessions.patchMany orchestration", () => {
 
   it("checks labels against untouched sessions in the store snapshot", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:label-owner" },
         { label: "Existing label", sessionId: "session-label-owner", updatedAt: 1 },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:label-target" },
         { sessionId: "session-label-target", updatedAt: 1 },
       );
@@ -574,12 +603,12 @@ describe("sessions.patchMany orchestration", () => {
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";
       const siblingKeys = ["agent:main:alias-race-before", "agent:main:alias-race-after"];
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: canonicalKey },
         { sessionId: "session-alias-race-canonical", updatedAt: 1 },
       );
       for (const [index, sessionKey] of siblingKeys.entries()) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           { sessionId: `session-alias-race-sibling-${index}`, updatedAt: 1 },
         );
@@ -589,9 +618,9 @@ describe("sessions.patchMany orchestration", () => {
         cfg,
         key: conflictingAlias,
       }).storePath;
-      const writerStarted = createDeferred();
-      const insertConflictingAlias = createDeferred();
-      const writer = applySqliteSessionEntryCanonicalReplacements({
+      const writerStarted = createDeferredCore();
+      const insertConflictingAlias = createDeferredCore();
+      const writer = applySessionEntryCanonicalReplacements({
         agentId: "main",
         sessionKeys: [conflictingAlias],
         storePath,
@@ -612,7 +641,7 @@ describe("sessions.patchMany orchestration", () => {
       });
       await writerStarted.promise;
 
-      const preflightCompleted = createDeferred();
+      const preflightCompleted = createDeferredCore();
       const respond = vi.fn();
       const request = sessionMutationHandlers["sessions.patchMany"]!({
         params: {
@@ -677,7 +706,7 @@ describe("sessions.patchMany orchestration", () => {
       } satisfies OpenClawConfig;
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: canonicalKey },
         { sessionId: "session-single-alias-race-canonical", updatedAt: 1 },
       );
@@ -686,9 +715,9 @@ describe("sessions.patchMany orchestration", () => {
         cfg,
         key: conflictingAlias,
       }).storePath;
-      const writerStarted = createDeferred();
-      const insertConflictingAlias = createDeferred();
-      const writer = applySqliteSessionEntryCanonicalReplacements({
+      const writerStarted = createDeferredCore();
+      const insertConflictingAlias = createDeferredCore();
+      const writer = applySessionEntryCanonicalReplacements({
         agentId: "main",
         sessionKeys: [conflictingAlias],
         storePath,
@@ -709,7 +738,7 @@ describe("sessions.patchMany orchestration", () => {
       });
       await writerStarted.promise;
 
-      const preflightCompleted = createDeferred();
+      const preflightCompleted = createDeferredCore();
       const respond = vi.fn();
       const request = sessionMutationHandlers["sessions.patch"]!({
         params: { key: conflictingAlias, pinned: true },
@@ -755,7 +784,7 @@ describe("sessions.patchMany orchestration", () => {
   it("isolates a target authorization race from sibling patches", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       for (let index = 0; index < 3; index += 1) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:race-${index}` },
           { sessionId: `session-race-${index}`, updatedAt: 1 },
         );
@@ -817,7 +846,7 @@ describe("sessions.patchMany orchestration", () => {
   it("isolates archive preparation authorization per target and continues in input order", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       for (let index = 0; index < 3; index += 1) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:archive-auth-${index}` },
           { sessionId: `session-archive-auth-${index}`, updatedAt: 1 },
         );
@@ -839,6 +868,7 @@ describe("sessions.patchMany orchestration", () => {
         params: {
           targets: [0, 1, 2].map((index) => ({
             key: `agent:main:archive-auth-${index}`,
+            expectedSessionId: `session-archive-auth-${index}`,
           })),
           patch: { archived: true },
         },
@@ -889,7 +919,7 @@ describe("sessions.patchMany orchestration", () => {
   it("converts an unexpected target exception into an ordered isolated failure", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       for (let index = 0; index < 3; index += 1) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:throw-${index}` },
           { sessionId: `session-throw-${index}`, updatedAt: 1 },
         );

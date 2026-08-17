@@ -5,11 +5,13 @@ import {
   buildPairingConnectErrorDetails,
   buildPairingConnectErrorMessage,
   classifyGatewayConnectFailure,
+  ConnectErrorDetailCodes,
   describePairingConnectRequirement,
   formatConnectErrorMessage,
   formatConnectPairingRequiredMessage,
   normalizePairingConnectRequestId,
   readConnectErrorDetailCode,
+  readControlUiBuildMismatchId,
   readConnectErrorRecoveryAdvice,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
@@ -39,6 +41,38 @@ describe("readConnectErrorDetailCode", () => {
   it("returns null for invalid detail payloads", () => {
     expect(readConnectErrorDetailCode(null)).toBeNull();
     expect(readConnectErrorDetailCode("AUTH_TOKEN_MISMATCH")).toBeNull();
+  });
+});
+
+describe("readControlUiBuildMismatchId", () => {
+  it.each([
+    ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+  ])("returns a bounded reload target for %s", (code) => {
+    expect(
+      readControlUiBuildMismatchId({
+        code,
+        gatewayBuildId: "gateway-build",
+        reloadRequired: true,
+      }),
+    ).toBe("gateway-build");
+  });
+
+  it.each([
+    {},
+    { code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH },
+    {
+      code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+      gatewayBuildId: "x".repeat(97),
+      reloadRequired: true,
+    },
+    {
+      code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+      gatewayBuildId: "gateway-build",
+      reloadRequired: false,
+    },
+  ])("rejects malformed details", (details) => {
+    expect(readControlUiBuildMismatchId(details)).toBeNull();
   });
 });
 
@@ -229,6 +263,18 @@ describe("classifyGatewayConnectFailure", () => {
 describe("resolveAuthConnectErrorDetailCode", () => {
   it("maps device token scope mismatches to a dedicated auth detail", () => {
     expect(resolveAuthConnectErrorDetailCode("scope_mismatch")).toBe("AUTH_SCOPE_MISMATCH");
+  });
+
+  it("keeps trusted-proxy identity rejection distinct from generic unauthorized auth", () => {
+    expect(
+      resolveAuthConnectErrorDetailCode("trusted_proxy_missing_header_cf-access-jwt-assertion"),
+    ).toBe("AUTH_IDENTITY_HEADER_REQUIRED");
+  });
+
+  it("keeps non-header trusted-proxy rejection generic", () => {
+    expect(resolveAuthConnectErrorDetailCode("trusted_proxy_local_interface_check_failed")).toBe(
+      "AUTH_UNAUTHORIZED",
+    );
   });
 });
 

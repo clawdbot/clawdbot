@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../src/state/openclaw-state-db.generated.js";
 import {
@@ -10,6 +11,7 @@ import {
   type WorkerResult,
   type WorkerScenario,
 } from "./bench-agent-concurrency.js";
+import { classifyBoundedUnsignedDecimal } from "./lib/arg-utils.mts";
 
 type WorkerOptions = {
   scenario: WorkerScenario;
@@ -32,14 +34,14 @@ const SCENARIOS = new Set<WorkerScenario>([
 ]);
 
 function parseInteger(raw: string | undefined, flag: string, min: number, max: number): number {
-  if (!raw || !/^\d+$/u.test(raw)) {
+  const result = classifyBoundedUnsignedDecimal(raw, min, max);
+  if (result.kind === "syntax") {
     throw new Error(`${flag} must be an integer`);
   }
-  const value = Number(raw);
-  if (value < min || value > max) {
+  if (result.kind !== "value") {
     throw new Error(`${flag} must be between ${min} and ${max}`);
   }
-  return value;
+  return result.value;
 }
 
 function parseOptions(argv: string[]): WorkerOptions {
@@ -69,10 +71,6 @@ function parseOptions(argv: string[]): WorkerOptions {
 
 function processMaxRssBytes(): number {
   return Math.max(0, Math.round(process.resourceUsage().maxRSS * 1024));
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 async function waitForCondition(check: () => boolean): Promise<boolean> {
@@ -206,7 +204,7 @@ async function configureSpawnRuntime(
       return undefined;
     },
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
-    runSubagentAnnounceFlow: async () => false,
+    runSubagentAnnounceFlow: async () => "retryable" as const,
     maybeWakeRequesterAfterAllChildrenSettled: async () => false,
     ensureContextEnginesInitialized: () => {},
     loadAgentRuntimePluginRegistryHandle: () => undefined,
@@ -481,7 +479,7 @@ async function runSpawnSample(
     }
   }
   if (failure) {
-    throw toError(failure);
+    throw toErrorObject(failure, "Agent concurrency benchmark failed");
   }
   const postTeardownTasks = await listBenchmarkTaskMemory();
   const postTeardownRegistryRows = registry.subagentRuns.size;
@@ -639,6 +637,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     resumeRequesterSettleWake: () => {},
     startSubagentAnnounceCleanupFlow: () => true,
     completeCleanupBookkeeping: () => {},
+    discardTerminalDelivery: () => {},
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: async () => {},
     callGateway: (async <T>() => {
@@ -809,7 +808,7 @@ async function main(): Promise<void> {
     }
   }
   if (failure) {
-    throw toError(failure);
+    throw toErrorObject(failure, "Agent concurrency benchmark failed");
   }
   if (!result) {
     throw new Error("benchmark worker completed without a result");

@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
+import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import {
   listConfiguredSessionStoreAgentIds,
@@ -35,7 +36,7 @@ import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   existsDir,
-  fileExists,
+  migrationFileExists,
   parseSessionStoreJson5,
   readSessionStoreJson5,
   safeReadDir,
@@ -242,7 +243,8 @@ export function normalizeSessionEntry(
   entry: SessionEntryLike,
   sessionKey?: string,
 ): SessionEntry | null {
-  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
+  const { room, ...entryWithoutRoom } = entry;
+  const shaped = normalizePersistedSessionEntryShape(entryWithoutRoom, { sessionKey });
   if (!shaped) {
     return null;
   }
@@ -253,11 +255,9 @@ export function normalizeSessionEntry(
         ? normalized.updatedAt
         : Date.now();
   }
-  const rec = normalized as unknown as Record<string, unknown>;
-  if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
-    rec.groupChannel = rec.room;
+  if (typeof normalized.groupChannel !== "string" && typeof room === "string") {
+    normalized.groupChannel = room;
   }
-  delete rec.room;
   return normalized;
 }
 
@@ -267,7 +267,7 @@ function resolveUpdatedAt(entry: SessionEntryLike): number {
     : 0;
 }
 
-export function mergeSessionEntry(params: {
+export function selectNewerSessionEntry(params: {
   existing: SessionEntryLike | undefined;
   incoming: SessionEntryLike;
   preferIncomingOnTie?: boolean;
@@ -407,14 +407,18 @@ export function resolveStaleLegacySessionFile(params: {
     ? path.resolve(rawSessionFile)
     : path.resolve(params.legacyDir, rawSessionFile);
   const relative = path.relative(path.resolve(params.legacyDir), legacySessionFile);
-  if (relative.startsWith("..") || path.isAbsolute(relative) || fileExists(legacySessionFile)) {
+  if (
+    relative.startsWith("..") ||
+    path.isAbsolute(relative) ||
+    migrationFileExists(legacySessionFile)
+  ) {
     return undefined;
   }
   const legacyBackupHasTranscript = safeReadDir(path.dirname(params.legacyDir)).some(
     (dirent) =>
       dirent.isDirectory() &&
       dirent.name.startsWith(`${path.basename(params.legacyDir)}.legacy-`) &&
-      fileExists(
+      migrationFileExists(
         path.join(path.dirname(params.legacyDir), dirent.name, path.basename(legacySessionFile)),
       ),
   );
@@ -432,7 +436,7 @@ export function resolveStaleLegacySessionFile(params: {
     return undefined;
   }
   const targetSessionFile = path.join(params.targetDir, path.basename(legacySessionFile));
-  if (!fileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
+  if (!migrationFileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
     return undefined;
   }
   const readFirstLine = () => {
@@ -610,6 +614,13 @@ export async function migrateOrphanedSessionKeys(params: {
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(params.cfg);
+  const persistedStoreAgentId =
+    persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined;
+  const persistedStorePath =
+    persistedStoreAgentId && storeConfig
+      ? resolveStorePathFromTemplate(storeConfig, persistedStoreAgentId, env)
+      : undefined;
   const pluginAgentIds =
     params.additionalAgentIds ??
     listPluginDoctorSessionStoreAgentIds({
@@ -625,6 +636,12 @@ export async function migrateOrphanedSessionKeys(params: {
   const storeMap = new Map<string, Set<string>>();
   const storeAliasCandidates = new Map<string, Set<string>>();
   const addToStoreMap = (p: string, id: string) => {
+    // A fixed-store owner is durable migration provenance. Keep other configured
+    // agents from making that store's unscoped rows look ambiguous.
+    const ownerId =
+      persistedStoreAgentId && persistedStorePath && sessionStorePathsMatch(p, persistedStorePath)
+        ? persistedStoreAgentId
+        : id;
     // Existing aliases are one ownership surface. Group them before any atomic
     // rewrite can replace one pathname and hide their original identity.
     const storePath =
@@ -634,9 +651,9 @@ export async function migrateOrphanedSessionKeys(params: {
     storeAliasCandidates.set(storePath, aliasCandidates);
     const existing = storeMap.get(storePath);
     if (existing) {
-      existing.add(id);
+      existing.add(ownerId);
     } else {
-      storeMap.set(storePath, new Set([id]));
+      storeMap.set(storePath, new Set([ownerId]));
     }
   };
   // Configured ownership includes normal agents plus ACP runtime/default hints.
@@ -678,7 +695,7 @@ export async function migrateOrphanedSessionKeys(params: {
     // An unknown relationship may have grouped a readable store behind an
     // inaccessible pathname. Read from a usable alias so the group still gets
     // the unresolved-identity warning before any rewrite is attempted.
-    const storePath = [...storePaths].find((candidate) => fileExists(candidate));
+    const storePath = [...storePaths].find((candidate) => migrationFileExists(candidate));
     if (!storePath) {
       continue;
     }
@@ -854,7 +871,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   }> = [];
 
   for (const target of targets) {
-    if (!fileExists(target.storePath)) {
+    if (!migrationFileExists(target.storePath)) {
       continue;
     }
     const group = storeGroups.find(({ target: existing }) =>
@@ -1048,7 +1065,7 @@ function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
   if (!agentsDir) {
     return true;
   }
-  if (!fileExists(resolvedStorePath)) {
+  if (!migrationFileExists(resolvedStorePath)) {
     return true;
   }
 

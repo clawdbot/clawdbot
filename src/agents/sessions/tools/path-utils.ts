@@ -3,9 +3,9 @@
  *
  * Expands user/file URL inputs and resolves read/write paths against the active cwd with macOS filename variants.
  */
-import * as os from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import { expandHomePrefix, resolveOsHomeDir } from "../../../infra/home-dir.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -21,6 +21,19 @@ function normalizeAtPrefix(filePath: string): string {
   return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
+/** Expand OS-home syntax without treating a POSIX backslash as a separator. */
+export function expandOsHomePrefix(filePath: string): string {
+  const isHomePath =
+    filePath === "~" ||
+    filePath.startsWith("~/") ||
+    (process.platform === "win32" && filePath.startsWith("~\\"));
+  if (!isHomePath) {
+    return filePath;
+  }
+  const home = resolveOsHomeDir();
+  return home ? expandHomePrefix(filePath, { home }) : filePath;
+}
+
 function expandPath(filePath: string, normalizeSpaces = true): string {
   const withoutAtPrefix = normalizeAtPrefix(filePath);
   const normalized = normalizeSpaces ? normalizeUnicodeSpaces(withoutAtPrefix) : withoutAtPrefix;
@@ -31,13 +44,7 @@ function expandPath(filePath: string, normalizeSpaces = true): string {
       return normalized;
     }
   }
-  if (normalized === "~") {
-    return os.homedir();
-  }
-  if (normalized.startsWith("~/")) {
-    return os.homedir() + normalized.slice(1);
-  }
-  return normalized;
+  return expandOsHomePrefix(normalized);
 }
 
 /**
@@ -66,7 +73,11 @@ export function getReadPathVariants(filePath: string): string[] {
     const curlyQuotes = spaced.replace(/['\u2018]/g, "\u2019");
     for (const quoted of [straightQuotes, curlyQuotes]) {
       variants.add(quoted.normalize("NFC"));
-      variants.add(quoted.normalize("NFD"));
+      // macOS filesystems resolve NFC/NFD spellings to the same entry; probing both
+      // makes one file look ambiguous. Other platforms can store both distinctly.
+      if (process.platform !== "darwin") {
+        variants.add(quoted.normalize("NFD"));
+      }
     }
   }
   variants.delete(filePath);

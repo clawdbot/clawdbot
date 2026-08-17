@@ -6,6 +6,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -24,7 +25,7 @@ import {
   jsonResult,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import {
   assertCronToolAgentFieldMatchesScope,
@@ -76,7 +77,7 @@ function isMissingOrEmptyObject(value: unknown): boolean {
 }
 
 function readCronJobIdParam(params: Record<string, unknown>) {
-  return readStringParam(params, "jobId") ?? readStringParam(params, "id");
+  return readToolStringParam(params, "jobId") ?? readToolStringParam(params, "id");
 }
 
 const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
@@ -166,23 +167,30 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
   );
 }
 
-export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
-  const callGateway = deps?.callGatewayTool ?? callGatewayTool;
-  const tool: AnyAgentTool = {
-    label: "Automations",
-    name: AUTOMATIONS_TOOL_NAME,
-    displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
-    description: `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.
+function buildCronToolDescription(params: { triggersEnabled: boolean }): string {
+  const addFields = params.triggersEnabled
+    ? "{name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}"
+    : "{name?,schedule,payload,sessionTarget?,pacing?,delivery?,enabled?}";
+  const streamScheduleLine = params.triggersEnabled
+    ? '\n- {kind:"stream",command:[argv],mode?:"line"|"match",match?}: fires on supervised process output; needs cron.triggers.enabled.'
+    : "";
+  const scriptPayloadLine = params.triggersEnabled
+    ? '\n- script {kind:"script",script,timeoutSeconds?,toolBudget?}: main|isolated only; needs cron.triggers.enabled.'
+    : "";
+  const triggerSection = params.triggersEnabled
+    ? `TRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.enabled — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call("exec",{command:"..."}).`
+    : `TRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.`;
+  const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
+  return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
 ACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
-ADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.
+ADD: ${addFields}. Required: schedule+payload.
 
 SCHEDULE:
 - {kind:"at",at:"ISO-8601"} one-shot; no tz=UTC; auto-deletes after run.
 - {kind:"every",everyMs}.
-- {kind:"cron",expr,tz?:"IANA"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:"0 18 * * *",tz:"Asia/Shanghai"}.
-- {kind:"stream",command:[argv],mode?:"line"|"match",match?}: fires on supervised process output; needs cron.triggers.enabled.
+- {kind:"cron",expr,tz?:"IANA"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:"0 18 * * *",tz:"Asia/Shanghai"}.${streamScheduleLine}
 
 TARGET+PAYLOAD:
 - "current" (agentTurn default) = this conversation: run carries this chat's context, result lands here. Self-wakeup/"continue later"/loop = at|every + agentTurn + current.
@@ -190,21 +198,41 @@ TARGET+PAYLOAD:
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" = named session.
 - agentTurn {kind:"agentTurn",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.
-- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.
-- script {kind:"script",script,timeoutSeconds?,toolBudget?}: main|isolated only; needs cron.triggers.enabled.
+- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.${scriptPayloadLine}
 
 PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least one). Inside its run, job calls next_check in:"<dur>" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.
 
-TRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.enabled — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call("exec",{command:"..."}).
+${triggerSection}
 
-DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:"none". webhook posts finished-run event to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
+DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run).${silentWatcherCue} webhook posts finished-run event to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
 
-Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`,
-    parameters: createCronToolSchema(),
+Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`;
+}
+
+// Trigger-gated surfaces stay advertised for config-less callers; only an
+// explicit runtime config with cron.triggers.enabled !== true narrows the
+// model-facing surface, matching the scheduler's own gate in
+// cron/service/jobs-validation.ts.
+function resolveCronTriggersEnabled(config?: OpenClawConfig): boolean {
+  if (!config) {
+    return true;
+  }
+  return config.cron?.triggers?.enabled === true;
+}
+
+export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
+  const callGateway = deps?.callGatewayTool ?? callGatewayTool;
+  const triggersEnabled = resolveCronTriggersEnabled(opts?.config);
+  const tool: AnyAgentTool = {
+    label: "Automations",
+    name: AUTOMATIONS_TOOL_NAME,
+    displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
+    description: buildCronToolDescription({ triggersEnabled }),
+    parameters: createCronToolSchema({ triggersEnabled }),
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       const params = args as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       assertCronSelfRemoveScope(opts, action, params);
       const parsedGatewayOpts = readGatewayCallOptions(params);
       const gatewayOpts: GatewayCallOptions = {
@@ -452,6 +480,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
               if (typeof payload.text === "string" && payload.text.trim()) {
                 const contextLines = await buildReminderContextLines({
                   agentSessionKey: opts?.agentSessionKey,
+                  agentId: callerScope?.agentId,
                   gatewayOpts,
                   contextMessages,
                   callGatewayTool: callGateway,
@@ -596,7 +625,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             if (!jobId || !runId) {
               throw new Error("cron next_check is only available to the currently running job");
             }
-            const rawDuration = readStringParam(params, "in", { required: true });
+            const rawDuration = readToolStringParam(params, "in", { required: true });
             let delayMs: number;
             try {
               delayMs = parseDurationMs(rawDuration);
@@ -610,7 +639,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             return jsonResult({ ok: true, delayMs });
           }
           case "wake": {
-            const text = readStringParam(params, "text", { required: true });
+            const text = readToolStringParam(params, "text", { required: true });
             const mode =
               params.mode === "now" || params.mode === "next-heartbeat"
                 ? params.mode
@@ -627,8 +656,8 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             // calling agent.
             const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
-            const explicitSessionKey = readStringParam(params, "sessionKey");
-            const explicitAgentId = readStringParam(params, "agentId");
+            const explicitSessionKey = readToolStringParam(params, "sessionKey");
+            const explicitAgentId = readToolStringParam(params, "agentId");
             if (callerScope) {
               assertCronToolAgentFieldMatchesScope({
                 value: explicitAgentId,
@@ -641,7 +670,11 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
               : undefined;
             const inferredAgentId = opts?.agentSessionKey
-              ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+              ? resolveSessionAgentId({
+                  sessionKey: opts.agentSessionKey,
+                  config: cfg,
+                  agentId: opts.agentId,
+                })
               : undefined;
             const sessionKey = explicitSessionKey ?? inferredSessionKey;
             // When a caller supplies an explicit cross-agent sessionKey without

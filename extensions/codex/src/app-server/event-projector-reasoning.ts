@@ -1,9 +1,9 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentPlanStep, AgentPlanStepStatus } from "openclaw/plugin-sdk/channel-outbound";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readNonNegativeInteger,
   readNullableString,
-  readString,
   splitPlanText,
 } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
@@ -18,6 +18,7 @@ type ReasoningTextGroup = {
 };
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
+type PlanUpdateSource = "codex-app-server" | "openclaw";
 
 export class CodexReasoningProjection {
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
@@ -75,7 +76,7 @@ export class CodexReasoningProjection {
     });
   }
 
-  handleTurnPlanUpdated(params: JsonObject): void {
+  handleTurnPlanUpdated(params: JsonObject, source: PlanUpdateSource = "codex-app-server"): void {
     const explanation = readNullableString(params, "explanation");
     const plan = Array.isArray(params.plan)
       ? params.plan.flatMap((entry) => {
@@ -101,10 +102,13 @@ export class CodexReasoningProjection {
       // non-empty update so the terminal transcript proves planning occurred.
       this.turnPlanText = planText;
     }
-    this.emitPlanUpdate({
-      explanation,
-      steps: plan,
-    });
+    this.emitPlanUpdate(
+      {
+        explanation,
+        steps: plan,
+      },
+      source,
+    );
   }
 
   recordItem(item: CodexThreadItem | undefined): void {
@@ -138,7 +142,10 @@ export class CodexReasoningProjection {
     );
   }
 
-  private emitPlanUpdate(params: { explanation?: string | null; steps?: AgentPlanStep[] }): void {
+  private emitPlanUpdate(
+    params: { explanation?: string | null; steps?: AgentPlanStep[] },
+    source: PlanUpdateSource = "codex-app-server",
+  ): void {
     if (!params.explanation && (!params.steps || params.steps.length === 0)) {
       return;
     }
@@ -147,7 +154,7 @@ export class CodexReasoningProjection {
       data: {
         phase: "update",
         title: "Plan updated",
-        source: "codex-app-server",
+        source,
         ...(params.explanation ? { explanation: params.explanation } : {}),
         ...(params.steps && params.steps.length > 0 ? { steps: params.steps } : {}),
       },

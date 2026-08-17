@@ -16,7 +16,7 @@ import { onAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
-import { normalizeToolName } from "../tool-policy.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
@@ -84,7 +84,7 @@ function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[]
   if (!params.toolsAllow || params.toolsAllow.length === 0) {
     return undefined;
   }
-  const names = params.toolsAllow.map((name) => normalizeToolName(name));
+  const names = params.toolsAllow.map((name) => normalizeToolPolicyName(name));
   if (names.some((name) => !name || name === "*" || name.includes("*"))) {
     return undefined;
   }
@@ -159,7 +159,7 @@ async function runEmbeddedAgentViaCliBackend(
     if (!rawName) {
       return;
     }
-    const toolName = normalizeToolName(stripOpenClawMcpToolPrefix(rawName));
+    const toolName = normalizeToolPolicyName(stripOpenClawMcpToolPrefix(rawName));
     const toolCallId = typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined;
     if (phase === "start") {
       transcript.noteToolEvent({
@@ -224,9 +224,12 @@ async function runEmbeddedAgentViaCliBackend(
       config: params.config,
       prompt: params.prompt,
       imagePrompt: params.prompt,
+      images: params.images,
+      imageOrder: params.imageOrder,
       media: params.media,
       provider: dispatch.provider,
       model: params.model,
+      modelHasVision: params.modelHasVision,
       thinkLevel: params.thinkLevel,
       timeoutMs: params.timeoutMs,
       runTimeoutOverrideMs: params.runTimeoutOverrideMs ?? params.timeoutMs,

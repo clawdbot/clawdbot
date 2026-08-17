@@ -433,7 +433,7 @@ function readField(value: unknown, key: string): unknown {
   return (value as Record<string, unknown>)[key];
 }
 
-function readStringField(value: unknown, key: string): string | undefined {
+function readErrorStringField(value: unknown, key: string): string | undefined {
   const field = readField(value, key);
   return typeof field === "string" ? field : undefined;
 }
@@ -452,17 +452,17 @@ function readMissingToolResultMarker(err: unknown): true | undefined {
     return true;
   }
   for (const key of ["code", "reason", "status"] as const) {
-    const value = readStringField(err, key);
+    const value = readErrorStringField(err, key);
     if (value && isMissingToolResultMarker(value)) {
       return true;
     }
   }
-  const output = readStringField(err, "output");
+  const output = readErrorStringField(err, "output");
   if (output && isMissingToolResultMessage(output)) {
     return true;
   }
-  const resultReason = readStringField(readField(err, "result"), "reason");
-  const detailReason = readStringField(readField(err, "detail"), "reason");
+  const resultReason = readErrorStringField(readField(err, "result"), "reason");
+  const detailReason = readErrorStringField(readField(err, "detail"), "reason");
   if (resultReason === MISSING_TOOL_RESULT_REASON || detailReason === MISSING_TOOL_RESULT_REASON) {
     return true;
   }
@@ -481,11 +481,21 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
   );
 }
 
-function hasGatewayDrainingFailure(err: unknown): boolean {
+function errorGraphHasName(err: unknown, name: string): boolean {
   return collectErrorGraphCandidates(err, (candidate) => {
     const errors = candidate.errors;
     return [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
-  }).some((candidate) => readErrorName(candidate) === "GatewayDrainingError");
+  }).some((candidate) => readErrorName(candidate) === name);
+}
+
+function hasGatewayDrainingFailure(err: unknown): boolean {
+  return errorGraphHasName(err, "GatewayDrainingError");
+}
+
+function hasWorkerRunnerCoordinationFailure(err: unknown): boolean {
+  return ["WorkerRunnerUnavailableError", "WorkerRunnerCapacityError"].some((name) =>
+    errorGraphHasName(err, name),
+  );
 }
 
 function hasDirectProviderFailureIdentity(err: unknown): boolean {
@@ -883,7 +893,7 @@ export function resolveModelFallbackError(
   }
   // Gateway admission can fail before any provider turn starts. Preserve that
   // identity through wrappers and aggregates so fallback cannot blame a model.
-  if (hasGatewayDrainingFailure(err)) {
+  if (hasGatewayDrainingFailure(err) || hasWorkerRunnerCoordinationFailure(err)) {
     return { kind: "coordination", error: err };
   }
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);

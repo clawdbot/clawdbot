@@ -11,6 +11,7 @@ import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
 export type PreparedEmbeddedRunInput = {
   runParams: RunEmbeddedAgentParamsWithSessionFile;
+  contextEngineAgentId?: string;
   provider: string;
   modelId: string;
   agentDir: string;
@@ -30,6 +31,6 @@ export type PreparedEmbeddedRunInput = {
   progressController: ReturnType<typeof createEmbeddedRunProgressController>;
   laneController: ReturnType<typeof createEmbeddedRunLaneController>;
   lifecycleGeneration: NonNullable<RunEmbeddedAgentParams["lifecycleGeneration"]>;
-  suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
+  suspendForFailure: (params: SessionSuspensionParams) => void;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 };

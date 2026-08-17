@@ -10,3 +10,5 @@ export const MIN_PROMPT_BUDGET_TOKENS = 8_000;
  * content after reserve tokens are subtracted.
  */
 export const MIN_PROMPT_BUDGET_RATIO = 0.5;
+
+export const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;

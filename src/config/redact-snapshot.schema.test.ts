@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore } from "./schema.js";
 
 describe("realredactConfigSnapshot_real", () => {
   it("main schema redact works (samples)", () => {
@@ -50,7 +50,7 @@ describe("realredactConfigSnapshot_real", () => {
   });
 
   it("redacts bundled channel private keys from generated schema hints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const snapshot = makeSnapshot({
       channels: {
         nostr: {
@@ -73,7 +73,7 @@ describe("realredactConfigSnapshot_real", () => {
   });
 
   it("redacts Discord Activity client secrets registered on plain string schemas", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     expect(hints["channels.discord.activities.clientSecret"]?.sensitive).toBe(true);
     const snapshot = makeSnapshot({
       channels: {
@@ -93,7 +93,7 @@ describe("realredactConfigSnapshot_real", () => {
   });
 
   it("redacts and restores web fetch operator headers from generated schema hints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     expect(hints["tools.web.fetch.headers.*"]?.sensitive).toBe(true);
     const snapshot = makeSnapshot({
       tools: {

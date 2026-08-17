@@ -63,21 +63,49 @@ const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent_v2": false,
 };
 
+// Exact Codex 0.147 registry features that can expose a model-visible tool or
+// host capability. One list owns both the thread deny patch and requirement pin rejection.
+const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
+  "apps",
+  "artifact",
+  "browser_use",
+  "browser_use_external",
+  "browser_use_full_cdp_access",
+  "chronicle",
+  "code_mode",
+  "code_mode_only",
+  "computer_use",
+  "current_time_reminder",
+  "default_mode_request_user_input",
+  "deferred_executor",
+  "goals",
+  "hooks",
+  "image_generation",
+  "memories",
+  "multi_agent",
+  "multi_agent_v2",
+  "plugins",
+  "request_permissions_tool",
+  "skill_search",
+  "shell_tool",
+  "standalone_web_search",
+  "token_budget",
+  "unified_exec",
+  "view_image",
+  "web_search_cached",
+  "web_search_request",
+  "workspace_dependencies",
+]);
+
 const CODEX_RING_ZERO_THREAD_CONFIG: JsonObject = {
   ...CODEX_DELEGATION_DISABLED_THREAD_CONFIG,
-  "features.apps": false,
-  "features.current_time_reminder": false,
-  "features.deferred_executor": false,
-  "features.enable_fanout": false,
-  "features.goals": false,
-  "features.hooks": false,
-  "features.image_generation": false,
-  "features.memories": false,
-  "features.plugins": false,
-  "features.standalone_web_search": false,
-  "features.token_budget": false,
+  ...Object.fromEntries(
+    [...CODEX_RING_ZERO_RESTRICTED_FEATURES].map((feature) => [`features.${feature}`, false]),
+  ),
   "orchestrator.mcp.enabled": false,
   "orchestrator.skills.enabled": false,
+  "skills.bundled.enabled": false,
+  "skills.include_instructions": false,
   "tools.experimental_request_user_input.enabled": false,
   "tools.update_plan.enabled": false,
   hooks: {
@@ -97,22 +125,13 @@ const CODEX_RING_ZERO_THREAD_CONFIG: JsonObject = {
   web_search: "disabled",
 };
 
-const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
-  "apps",
-  "code_mode",
-  "code_mode_only",
-  "current_time_reminder",
-  "deferred_executor",
-  "enable_fanout",
-  "goals",
-  "hooks",
-  "image_generation",
-  "memories",
-  "multi_agent",
-  "multi_agent_v2",
-  "plugins",
-  "standalone_web_search",
-  "token_budget",
+const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
+  ["connectors", "apps"],
+  ["imagegenext", "image_generation"],
+  ["collab", "multi_agent"],
+  ["memory_tool", "memories"],
+  ["telepathy", "chronicle"],
+  ["codex_hooks", "hooks"],
 ]);
 
 const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
@@ -407,6 +426,9 @@ export function buildCodexRuntimeThreadConfigForRun(
     mergeCodexThreadConfigs(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
+      params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate")
+        ? { "features.image_generation": false }
+        : undefined,
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
         : undefined,
@@ -420,6 +442,9 @@ export function buildCodexRuntimeThreadConfigForRun(
             options.hostSystemAgentActive,
             restrictedToolSurfaceMcpServerNames,
           ),
+      params.authoredContextTokenCap === undefined
+        ? undefined
+        : { model_context_window: params.authoredContextTokenCap },
     ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
@@ -505,8 +530,12 @@ export async function readCodexInheritedMcpServerNames(
   return Object.keys(configuredServers).toSorted();
 }
 
-export async function assertCodexRestrictedToolSurfaceHasNoManagedHooks(
+export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   client: Pick<CodexAppServerClient, "request">,
+  options: {
+    restrictedToolSurface: boolean;
+    additionalDeniedFeatures?: readonly string[];
+  },
   signal?: AbortSignal,
 ): Promise<void> {
   const response: CodexConfigRequirementsReadResponse = await client.request(
@@ -523,18 +552,21 @@ export async function assertCodexRestrictedToolSurfaceHasNoManagedHooks(
   if (!isJsonObject(response.requirements)) {
     throw new Error("Codex configRequirements/read returned invalid requirements");
   }
-  for (const key of ["hooks", "managedHooks", "managed_hooks"] as const) {
-    const hooks = response.requirements[key];
-    if (hooks === undefined || hooks === null) {
-      continue;
-    }
-    if (!isJsonObject(hooks)) {
-      throw new Error("Codex configRequirements/read returned invalid managed hooks");
-    }
-    if (hasNonEmptyJsonValue(hooks)) {
-      throw new Error("Codex restricted tool surface cannot override managed hooks");
+  if (options.restrictedToolSurface) {
+    for (const key of ["hooks", "managedHooks", "managed_hooks"] as const) {
+      const hooks = response.requirements[key];
+      if (hooks === undefined || hooks === null) {
+        continue;
+      }
+      if (!isJsonObject(hooks)) {
+        throw new Error("Codex configRequirements/read returned invalid managed hooks");
+      }
+      if (hasNonEmptyJsonValue(hooks)) {
+        throw new Error("Codex restricted tool surface cannot override managed hooks");
+      }
     }
   }
+  const additionalDeniedFeatures = new Set(options.additionalDeniedFeatures);
   for (const key of ["featureRequirements", "feature_requirements"] as const) {
     const requirements = response.requirements[key];
     if (requirements === undefined || requirements === null) {
@@ -547,10 +579,13 @@ export async function assertCodexRestrictedToolSurfaceHasNoManagedHooks(
       if (typeof enabled !== "boolean") {
         throw new Error("Codex configRequirements/read returned invalid feature requirements");
       }
-      if (enabled && CODEX_RING_ZERO_RESTRICTED_FEATURES.has(feature)) {
-        throw new Error(
-          `Codex restricted tool surface cannot override required feature ${feature}`,
-        );
+      const canonicalFeature = CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES.get(feature) ?? feature;
+      const deniedByToolPolicy =
+        (options.restrictedToolSurface &&
+          CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature)) ||
+        additionalDeniedFeatures.has(canonicalFeature);
+      if (enabled && deniedByToolPolicy) {
+        throw new Error(`Codex tool policy cannot override required feature ${feature}`);
       }
     }
   }

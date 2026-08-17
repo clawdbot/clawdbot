@@ -1,6 +1,7 @@
 // Lightweight TTS settings resolution shared by agent prompts, status, and speech runtime.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { asNonArrayRecord, isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -123,19 +124,11 @@ export function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function asProviderConfig(value: unknown): SpeechProviderConfig {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? withSpeakerSelectionCompat(value as SpeechProviderConfig)
-    : {};
+  return withSpeakerSelectionCompat(asNonArrayRecord(value));
 }
 
 export function asProviderConfigMap(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-export function hasOwnProperty(value: object, key: string): boolean {
-  return Object.hasOwn(value, key);
+  return asNonArrayRecord(value);
 }
 
 function normalizeProviderConfigMap(
@@ -158,7 +151,7 @@ function collectTtsPersonas(raw: TtsConfig): Record<string, ResolvedTtsPersona> 
   const personas: Record<string, ResolvedTtsPersona> = {};
   for (const [id, value] of Object.entries(rawPersonas)) {
     const normalizedId = normalizeTtsPersonaId(id);
-    if (!normalizedId || typeof value !== "object" || value === null || Array.isArray(value)) {
+    if (!normalizedId || !isRecord(value)) {
       continue;
     }
     const persona = value as Omit<ResolvedTtsPersona, "id">;
@@ -197,7 +190,7 @@ function collectDirectProviderConfigEntries(raw: TtsConfig): Record<string, Spee
     if (reservedKeys.has(key)) {
       continue;
     }
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    if (!isRecord(value)) {
       continue;
     }
     const normalized = normalizeConfiguredSpeechProviderId(key) ?? key;
@@ -246,9 +239,7 @@ export function readTtsPrefs(prefsPath: string): TtsUserPrefs {
       return {};
     }
     const parsed: unknown = JSON.parse(readFileSync(prefsPath, "utf8"));
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as TtsUserPrefs)
-      : {};
+    return asNonArrayRecord(parsed) as TtsUserPrefs;
   } catch {
     return {};
   }
@@ -281,7 +272,7 @@ function resolveTtsPersonaIdFromPrefs(
   config: ResolvedTtsConfig,
   prefs: TtsUserPrefs,
 ): string | undefined {
-  if (prefs.tts && hasOwnProperty(prefs.tts, "persona")) {
+  if (prefs.tts && Object.hasOwn(prefs.tts, "persona")) {
     return normalizeTtsPersonaId(prefs.tts.persona);
   }
   return normalizeTtsPersonaId(config.persona);
@@ -359,16 +350,20 @@ export function resolveTtsSettingsSnapshot(params: {
 export function buildTtsSystemPromptHint(
   cfg: OpenClawConfig,
   agentId?: string,
+  options?: { messageToolOnly?: boolean },
 ): string | undefined {
   const settings = resolveTtsSettingsSnapshot({ cfg, agentId });
   if (settings.autoMode === "off") {
     return undefined;
   }
+  const structured = options?.messageToolOnly === true;
   const autoHint =
     settings.autoMode === "inbound"
       ? "Only use TTS when the user's last message includes audio/voice."
       : settings.autoMode === "tagged"
-        ? "Only use TTS when you include [[tts:key=value]] directives or a [[tts:text]]...[[/tts:text]] block."
+        ? structured
+          ? "Use TTS only through message(action=send) speech fields."
+          : "Only use TTS when you include [[tts:key=value]] directives or a [[tts:text]]...[[/tts:text]] block."
         : undefined;
   return [
     "Voice (TTS) is enabled.",
@@ -377,8 +372,12 @@ export function buildTtsSystemPromptHint(
       ? `Active TTS persona: ${settings.persona.label ?? settings.persona.id}${settings.persona.description ? ` - ${settings.persona.description}` : ""}.`
       : undefined,
     `Keep spoken text ≤${settings.maxLength} chars to avoid auto-summary (summary ${settings.summarize ? "on" : "off"}).`,
-    "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
-    "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+    structured
+      ? "If workspace context (especially MEMORY.md) tells you not to use TTS or to use a local voice workflow, follow that workspace instruction instead."
+      : "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
+    structured
+      ? "Use message(action=send) with voiceText and optional voiceProvider/voiceId."
+      : "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
   ]
     .filter(Boolean)
     .join("\n");

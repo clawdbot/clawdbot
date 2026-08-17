@@ -4,6 +4,7 @@ import {
   isBrowserEvaluateDisabledError,
   readBrowserPageMetrics,
   type BrowserPageMetrics,
+  type BrowserPanelTab,
 } from "./browser-client.ts";
 
 export interface BrowserPanelControllerHost extends ReactiveControllerHost {
@@ -25,11 +26,6 @@ type BrowserPanelInvocation = {
   isCurrent(): boolean;
 };
 
-type BrowserNavigationCommit = {
-  committed: number;
-  reconciled: number;
-};
-
 export type BrowserPanelSnapshotOutcome = "accepted" | "rejected" | "failed";
 
 /** Owns the panel lifecycle, tab snapshots, captures, and pointer operations. */
@@ -45,10 +41,7 @@ export class BrowserPanelOperationOwnership {
     GatewayBrowserClient,
     Map<string, Promise<unknown>>
   >();
-  private readonly navigationCommits = new WeakMap<
-    GatewayBrowserClient,
-    Map<string, BrowserNavigationCommit>
-  >();
+  private readonly navigationCommits = new WeakMap<GatewayBrowserClient, Set<string>>();
 
   constructor(private readonly host: BrowserPanelControllerHost) {}
 
@@ -105,27 +98,75 @@ export class BrowserPanelOperationOwnership {
   }
 
   /** A committed document still needs its first owner-authoritative screenshot. */
-  hasUnreconciledNavigation(client: GatewayBrowserClient, targetId: string): boolean {
-    const state = this.navigationCommits.get(client)?.get(targetId);
-    return state !== undefined && state.committed !== state.reconciled;
+  hasUnreconciledNavigation(client: GatewayBrowserClient | null, targetId: string | null): boolean {
+    if (!client || !targetId) {
+      return false;
+    }
+    return this.navigationCommits.get(client)?.has(targetId) ?? false;
+  }
+
+  hasPendingNavigation(client: GatewayBrowserClient | null, targetId: string | null): boolean {
+    return Boolean(
+      client &&
+      targetId &&
+      (this.hasQueuedNavigation(client, targetId) ||
+        this.hasUnreconciledNavigation(client, targetId)),
+    );
   }
 
   markNavigationCommitted(client: GatewayBrowserClient, targetId: string): void {
     let commits = this.navigationCommits.get(client);
     if (!commits) {
-      commits = new Map();
+      commits = new Set();
       this.navigationCommits.set(client, commits);
     }
-    const state = commits.get(targetId) ?? { committed: 0, reconciled: 0 };
-    state.committed += 1;
-    commits.set(targetId, state);
+    commits.add(targetId);
   }
 
   markNavigationReconciled(client: GatewayBrowserClient, targetId: string): void {
-    const state = this.navigationCommits.get(client)?.get(targetId);
-    if (state) {
-      state.reconciled = state.committed;
+    this.forgetNavigation(client, targetId);
+  }
+
+  forgetNavigation(client: GatewayBrowserClient, targetId: string): void {
+    const commits = this.navigationCommits.get(client);
+    commits?.delete(targetId);
+    if (commits?.size === 0) {
+      this.navigationCommits.delete(client);
     }
+  }
+
+  retainTabSnapshot(client: GatewayBrowserClient, tabs: BrowserPanelTab[]): BrowserPanelTab[] {
+    const commits = this.navigationCommits.get(client);
+    if (!commits) {
+      return tabs;
+    }
+    const liveTargetIds = new Set(tabs.map((tab) => tab.id));
+    for (const targetId of commits.keys()) {
+      if (!liveTargetIds.has(targetId)) {
+        commits.delete(targetId);
+      }
+    }
+    if (commits.size === 0) {
+      this.navigationCommits.delete(client);
+    }
+    return tabs;
+  }
+
+  capturedTabs(
+    tabs: BrowserPanelTab[],
+    targetId: string,
+    metrics: BrowserPageMetrics | null,
+    screenshotUrl: string,
+  ): BrowserPanelTab[] {
+    const tab = tabs.find((entry) => entry.id === targetId);
+    if (!tab) {
+      return tabs;
+    }
+    const title = metrics?.title ?? tab.title;
+    const url = metrics?.url || screenshotUrl || tab.url;
+    return title === tab.title && url === tab.url
+      ? tabs
+      : tabs.map((entry) => (entry.id === targetId ? { ...entry, title, url } : entry));
   }
 
   /** Remote navigations for one gateway tab must commit in user-intent order. */

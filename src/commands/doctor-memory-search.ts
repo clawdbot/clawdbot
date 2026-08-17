@@ -3,7 +3,6 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import { formatByteSize } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
@@ -19,7 +18,7 @@ import {
 } from "../agents/auth-profiles.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import {
-  resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore,
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
@@ -43,7 +42,7 @@ import {
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
-  getActiveMemorySearchManager,
+  getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
@@ -82,37 +81,27 @@ type MemoryEmbeddingProviderDoctorMetadata = {
   autoSelectPriority?: number;
 };
 
-function formatRuntimeBytes(bytes: number): string {
-  return formatByteSize(bytes, {
-    style: "legacy-binary",
-    maxUnit: "tera",
-    separator: " ",
-    fractionDigits: (value, unit) => (unit === "byte" ? null : value >= 10 ? 0 : 1),
-  });
-}
-
 function formatLocalRuntimeDoctorNote(facts: DoctorMemoryEmbeddingRuntimePayload): string {
   const backend = facts.backend ?? "unknown";
-  const build = facts.buildType ? `, ${facts.buildType}` : "";
-  const devices = facts.deviceNames?.length ? `\nDevices: ${facts.deviceNames.join(", ")}` : "";
-  const memory = facts.memory
-    ? `\nVRAM snapshot: ${formatRuntimeBytes(facts.memory.usedBytes)} used, ${formatRuntimeBytes(facts.memory.freeBytes)} free, ${formatRuntimeBytes(facts.memory.totalBytes)} total${
-        facts.memory.unifiedBytes > 0
-          ? `, ${formatRuntimeBytes(facts.memory.unifiedBytes)} unified`
-          : ""
-      } (${new Date(facts.memory.observedAtMs).toISOString()})`
+  const build = facts.buildInfo ? `, ${facts.buildInfo}` : "";
+  const model = facts.model?.id
+    ? `\nModel: ${facts.model.id}${facts.model.path ? ` (${facts.model.path})` : ""}`
     : "";
-  const offload =
-    typeof facts.offload?.offloadedLayers === "number" &&
-    typeof facts.offload.totalLayers === "number"
-      ? `\nGPU offload: ${facts.offload.offloadedLayers}/${facts.offload.totalLayers} layers`
-      : facts.offload
-        ? `\nGPU offload: ${facts.offload.supported ? "supported" : "unsupported"}`
-        : "";
-  const context = facts.context ? `\nRequested context: ${facts.context.requestedSize} tokens` : "";
+  const capabilities = facts.capabilities
+    ? `\nCapabilities: ${
+        [facts.capabilities.vision ? "vision" : null, facts.capabilities.draft ? "draft" : null]
+          .filter(Boolean)
+          .join(", ") || "text only"
+      }`
+    : "";
+  const endpoints = facts.endpoints
+    ? `\nEndpoints: ${Object.entries(facts.endpoints)
+        .map(([name, status]) => `${name}=${status}`)
+        .join(" ")}`
+    : "";
   const loadError = facts.loadError ? `\nLoad error: ${facts.loadError}` : "";
   const state = facts.state === "ready" ? "" : ` (${facts.state})`;
-  return `llama.cpp runtime: ${backend}${build}${state}${devices}${memory}${offload}${context}${loadError}`;
+  return `llama.cpp server: ${backend}${build}${state}${model}${capabilities}${endpoints}${loadError}`;
 }
 
 const BUNDLED_MEMORY_EMBEDDING_PROVIDER_DOCTOR_METADATA: MemoryEmbeddingProviderDoctorMetadata[] = [
@@ -258,7 +247,7 @@ async function resolveRuntimeMemoryAuditContext(
   cfg: OpenClawConfig,
   agentId: string,
 ): Promise<RuntimeMemoryAuditContext | null> {
-  const result = await getActiveMemorySearchManager({
+  const result = await getActiveMemorySearchManagerCore({
     cfg,
     agentId,
     purpose: "status",
@@ -840,7 +829,7 @@ async function hasApiKeyForProvider(
     return false;
   }
   try {
-    await resolveApiKeyForProvider({
+    await resolveApiKeyForProviderCore({
       provider: authProviderId,
       cfg,
       agentDir,

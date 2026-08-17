@@ -1,8 +1,8 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Gateway channel health monitor.
 // Periodically evaluates channel account health and restarts stale runtimes.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,

@@ -190,7 +190,7 @@ describe("detectChangedScope", () => {
     });
     expect(detectChangedScope(["apps/ios/Sources/RootTabs.swift"])).toEqual({
       runNode: false,
-      runMacos: true,
+      runMacos: false,
       runIosBuild: true,
       runAndroid: false,
       runWindows: false,
@@ -1043,7 +1043,7 @@ describe("detectChangedScope", () => {
 
     const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
     expect(Object.keys(output).toSorted()).toEqual(
-      "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_macos run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
+      "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
         " ",
       ),
     );

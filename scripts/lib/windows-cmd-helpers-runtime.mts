@@ -2,12 +2,12 @@
 const runtimeSpecifier = "../windows-cmd-helpers.mjs";
 const runtime: unknown = await import(runtimeSpecifier);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isRuntimeRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function runtimeFunction(name: string): (...args: unknown[]) => unknown {
-  if (!isRecord(runtime) || !(name in runtime)) {
+  if (!isRuntimeRecord(runtime) || !(name in runtime)) {
     throw new Error(`windows command helper is missing ${name}`);
   }
   const value = runtime[name];

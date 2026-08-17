@@ -7,6 +7,7 @@ import officialExternalPluginCatalog from "../../scripts/lib/official-external-p
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
+  getOfficialExternalChannelSecretContract,
   type HostedOfficialExternalPluginCatalogSnapshot,
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type OfficialExternalPluginCatalogEntry,
@@ -312,7 +313,6 @@ describe("official external plugin catalog", () => {
     const contracts = getOfficialExternalPluginCatalogManifest(entry)?.contracts;
 
     expect(contracts?.embeddingProviders).toEqual(["deepinfra"]);
-    expect(contracts?.memoryEmbeddingProviders).toBeUndefined();
   });
 
   it("does not allow malformed feed wrappers to count as feed documents", () => {
@@ -1918,6 +1918,8 @@ describe("official external plugin catalog", () => {
     const wecomByChannel = expectCatalogEntry("wecom");
     const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");
     const yuanbaoByChannel = expectCatalogEntry("yuanbao");
+    const qqbotByChannel = expectCatalogEntry("qqbot");
+    const qqbotByPlugin = expectCatalogEntry("openclaw-qqbot");
 
     expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
@@ -1928,6 +1930,27 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
       "openclaw-plugin-yuanbao@2.15.0",
     );
+    expect(resolveOfficialExternalPluginId(qqbotByChannel)).toBe("openclaw-qqbot");
+    expect(qqbotByPlugin).toBe(qqbotByChannel);
+    expect(
+      getOfficialExternalPluginCatalogManifest(qqbotByChannel)?.channel?.doctorCapabilities,
+    ).toEqual({ openDmRequiresAllowFromWildcard: false });
+    expect(resolveOfficialExternalPluginInstall(qqbotByChannel)).toEqual({
+      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      defaultChoice: "npm",
+      expectedIntegrity:
+        "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
+    });
+    expect(getOfficialExternalChannelSecretContract("qqbot")).toEqual({
+      channelId: "qqbot",
+      fields: [
+        {
+          field: "clientSecret",
+          activationField: "appId",
+          activationEnv: "QQBOT_APP_ID",
+        },
+      ],
+    });
   });
 
   it("keeps official launch package specs on the production package names", () => {
@@ -2060,7 +2083,7 @@ describe("official external plugin catalog", () => {
     ]);
   });
 
-  it("lists Voyage as an official external memory embedding provider", () => {
+  it("lists Voyage as an official external embedding provider", () => {
     const voyage = expectCatalogEntry("voyage");
     const manifest = getOfficialExternalPluginCatalogManifest(voyage);
 
@@ -2071,7 +2094,7 @@ describe("official external plugin catalog", () => {
       defaultChoice: "npm",
       minHostVersion: ">=2026.7.2",
     });
-    expect(manifest?.contracts?.memoryEmbeddingProviders).toEqual(["voyage"]);
+    expect(manifest?.contracts?.embeddingProviders).toEqual(["voyage"]);
     expect(manifest?.providers).toEqual([
       expect.objectContaining({
         id: "voyage",
@@ -2225,7 +2248,7 @@ describe("official external plugin catalog", () => {
       }),
     ]);
     expect(manifest?.contracts).toMatchObject({
-      memoryEmbeddingProviders: ["mistral"],
+      embeddingProviders: ["mistral"],
       mediaUnderstandingProviders: ["mistral"],
       realtimeTranscriptionProviders: ["mistral"],
     });
@@ -2341,7 +2364,7 @@ describe("official external plugin catalog", () => {
     ).toEqual(["groq", "moonshot", "zai"]);
     expect(
       resolveOfficialExternalProviderContractPluginIds({
-        contract: "memoryEmbeddingProviders",
+        contract: "embeddingProviders",
         providerIds: new Set(["voyage"]),
       }),
     ).toEqual(["voyage"]);

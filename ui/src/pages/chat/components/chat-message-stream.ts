@@ -154,14 +154,14 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
 
 /**
  * Collapsed-turn rollup header: one slim "Worked for X" disclosure standing in
- * for the turn's intermediate work once the run is done. The check/x icon is
+ * for the turn's intermediate work once the run is done. The check icon is
  * the turn's done indicator; the expanded groups render after this row.
  */
 export function renderWorkGroupSummary(
-  item: { key: string; durationMs: number | null; hasError: boolean },
+  item: { key: string; durationMs: number | null },
   opts: { expanded: boolean; onToggle: () => void },
 ) {
-  const duration = formatDurationCompact(item.durationMs, { spaced: true });
+  const duration = formatDurationCompact(item.durationMs);
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
   return html`
     <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
@@ -169,29 +169,18 @@ export function renderWorkGroupSummary(
       <div class="chat-group-messages">
         <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
           <button
-            class="chat-activity-group__summary ${item.hasError
-              ? "chat-activity-group__summary--error"
-              : ""}"
+            class="chat-inline-disclosure chat-activity-group__summary"
             type="button"
             aria-expanded=${String(opts.expanded)}
-            aria-label=${item.hasError
-              ? duration
-                ? t("chat.workRun.workedForError", { duration })
-                : t("chat.workRun.workedError")
-              : nothing}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
                 opts.onToggle();
               }
             }}
           >
-            <span class="chat-activity-group__icon">
-              ${item.hasError ? icons.x : icons.check}
-            </span>
+            <span class="chat-activity-group__icon">${icons.check}</span>
             <span class="chat-activity-group__label" title=${label}>${label}</span>
-            <span
-              class="collapse-chevron ${opts.expanded ? "" : "collapse-chevron--collapsed"}"
-              aria-hidden="true"
+            <span class="chat-inline-disclosure__chevron" aria-hidden="true"
               >${icons.chevronDown}</span
             >
           </button>

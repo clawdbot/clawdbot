@@ -4,7 +4,10 @@ import {
   type TranscriptTurnBoundary,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import {
+  supportsContextEngineDurableTurnAdvancement,
+  type ContextEngineHostSupport,
+} from "../../context-engine/host-compat.js";
 import type {
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
@@ -63,9 +66,7 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
   if (
     (!params.admission && !params.recorder) ||
     params.lease.degraded ||
-    params.lease.engine.info.transcriptSemantics?.turnAdvancementIdempotency !==
-      "atomic-idempotent-v1" ||
-    typeof params.lease.engine.commitTurn !== "function"
+    !supportsContextEngineDurableTurnAdvancement(params.lease.engine)
   ) {
     return;
   }
@@ -198,9 +199,10 @@ export async function finalizeAcceptedContextEngineTurn(params: {
   warn?: (message: string) => void;
 }): Promise<void> {
   const declaresDurableAdvancement =
-    params.lease.engine.info.transcriptSemantics?.turnAdvancementIdempotency ===
-    "atomic-idempotent-v1";
-  const implementsDurableAdvancement = typeof params.lease.engine.commitTurn === "function";
+    params.lease.engine.info.transcriptSemantics?.turnAdvancementIdempotency !== undefined;
+  const implementsDurableAdvancement = supportsContextEngineDurableTurnAdvancement(
+    params.lease.engine,
+  );
   // Legacy leaves persistence to SessionManager and owns neither side of this contract.
   // Partial durable declarations remain invariant failures in the guarded path below.
   if (!declaresDurableAdvancement && !implementsDurableAdvancement) {
@@ -254,7 +256,6 @@ export async function finalizeAcceptedContextEngineTurn(params: {
         boundary: params.facts.boundary,
         isHeartbeat: params.facts.isHeartbeat === true,
         messages: closedTurn.messages,
-        prePromptMessageCount: closedTurn.prePromptMessageCount,
       },
     });
     await drainContextEngineTurnOutbox({

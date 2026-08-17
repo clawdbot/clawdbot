@@ -32,6 +32,7 @@ const excludedHandles = new Set([
   "claude",
   "codex",
   "hugin-bot",
+  "roboclaw-bot",
   "steipete",
   "steipete-oai",
 ]);

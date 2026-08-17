@@ -21,8 +21,8 @@ import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
-import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
+import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import {
@@ -477,21 +477,23 @@ export function prependSystemPromptAddition(params: {
 // shifted the cacheable prefix turn-to-turn and broke prompt caching (#85203).
 export function resolveAttemptMediaTaskSystemPromptAddition(params: {
   sessionKey?: string;
+  agentId?: string;
   trigger?: EmbeddedRunAttemptParams["trigger"];
 }): string | undefined {
   if (params.trigger !== "user" && params.trigger !== "manual") {
     return undefined;
   }
   return joinPresentTextSegments([
-    buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
-    buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
-    buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
+    buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey, params.agentId),
+    buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey, params.agentId),
+    buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey, params.agentId),
   ]);
 }
 
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "sessionTarget"
+  | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
   | "messageChannel"
@@ -600,7 +602,7 @@ export function buildAfterTurnRuntimeContext(params: {
     ...resolveContextEngineCapabilities({
       config: params.attempt.config,
       sessionKey: params.attempt.sessionKey,
-      agentId: params.activeAgentId,
+      explicitAgentId: params.attempt.contextEngineAgentId,
       authProfileId: params.attempt.authProfileId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.after-turn",

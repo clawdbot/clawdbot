@@ -6,15 +6,12 @@ import {
   filterCodeModePayloadTools,
   isCodeModeModelVisibleToolName,
   readCodeModePayloadToolName,
-} from "@openclaw/ai/transports";
-import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
-} from "@openclaw/ai/transports";
-import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
@@ -131,14 +128,6 @@ function isCodeModeEnabled(config?: OpenClawConfig): boolean {
     codeMode &&
     typeof codeMode === "object" &&
     (codeMode as { enabled?: unknown }).enabled === true,
-  );
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof (value as { then?: unknown }).then === "function"
   );
 }
 
@@ -315,39 +304,8 @@ function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
   if (typeof value === "function") {
     return normalizeOpenAIFastMode((value as () => unknown)());
   }
-  if (typeof value === "boolean") {
-    return value;
-  }
   const fastMode = normalizeFastMode(value);
-  if (fastMode === "auto") {
-    return undefined;
-  }
-  if (typeof fastMode === "boolean") {
-    return fastMode;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "on" ||
-    normalized === "true" ||
-    normalized === "yes" ||
-    normalized === "1" ||
-    normalized === "fast"
-  ) {
-    return true;
-  }
-  if (
-    normalized === "off" ||
-    normalized === "false" ||
-    normalized === "no" ||
-    normalized === "0" ||
-    normalized === "normal"
-  ) {
-    return false;
-  }
-  return undefined;
+  return fastMode === "auto" ? undefined : fastMode;
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */

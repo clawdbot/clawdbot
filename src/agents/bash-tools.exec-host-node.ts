@@ -472,6 +472,7 @@ export async function executeNodeHostCommand(
       } else {
         const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
           approvalId,
+          agentId: params.agentId,
           sessionKey: params.notifySessionKey ?? params.sessionKey,
           expectedSessionId: params.sessionId,
           sessionStore: params.sessionStore,

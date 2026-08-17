@@ -46,8 +46,17 @@ describe("toSanitizedMarkdownHtml", () => {
       ].join("\n"),
     );
     expect(html).toBe(
-      '&lt;script&gt;alert(1)&lt;/script&gt;\n\n<p><a>x</a></p>\n<p><a href="https://example.com" rel="noreferrer noopener" target="_blank">ok</a></p>\n',
+      '&lt;script&gt;alert(1)&lt;/script&gt;\n\n<p>x</p>\n<p><a href="https://example.com" rel="noreferrer noopener" target="_blank">ok</a></p>\n',
     );
+  });
+
+  it("does not stamp presentation classes on links whose href contains 'tail'", () => {
+    const fragment = htmlFragment(
+      toSanitizedMarkdownHtml("[tailscale docs](https://docs.openclaw.ai/tailscale)"),
+    );
+    const link = fragment.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("https://docs.openclaw.ai/tailscale");
+    expect(link?.classList.contains("chat-link-tail-blur")).toBe(false);
   });
 
   it("strips unsupported citation control markers before display", () => {
@@ -139,30 +148,52 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   describe("images", () => {
-    it("flattens remote images to alt text", () => {
-      const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/img.png)");
-      expect(html).toBe("<p>Alt text</p>\n");
+    it("shows an explicit opt-in placeholder for remote images", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![Alt text](https://example.com/img.png)"),
+      );
+      const placeholder = fragment.querySelector(".markdown-external-image");
+      const link = placeholder?.querySelector("a");
+
+      expect(placeholder?.textContent).toBe("External image not loaded: Alt text Open image");
+      expect(link?.getAttribute("href")).toBe("https://example.com/img.png");
+      expect(link?.getAttribute("target")).toBe("_blank");
+      expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
+      expect(fragment.querySelector("img")).toBeNull();
     });
 
     it("marks assistant-authored transcript roles in visible image labels", () => {
-      const html = toSanitizedMarkdownHtml(
-        "![**user**[Thu 2026-07-02] release diagram](https://example.com/img.png)",
-        { assistantTranscriptRoleHeaders: true },
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "![**user**[Thu 2026-07-02] release diagram](https://example.com/img.png)",
+          { assistantTranscriptRoleHeaders: true },
+        ),
       );
 
-      expect(html).toBe(
-        '<p><code class="assistant-transcript-role">user[Thu 2026-07-02]</code> release diagram</p>\n',
+      expect(
+        fragment.querySelector(".markdown-external-image .assistant-transcript-role")?.textContent,
+      ).toBe("user[Thu 2026-07-02]");
+      expect(fragment.querySelector(".markdown-external-image")?.textContent).toContain(
+        "release diagram",
       );
     });
 
     it("preserves markdown formatting in alt text", () => {
-      const html = toSanitizedMarkdownHtml("![**Build log**](https://example.com/img.png)");
-      expect(html).toBe("<p>**Build log**</p>\n");
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![**Build log**](https://example.com/img.png)"),
+      );
+      expect(fragment.querySelector(".markdown-external-image > span")?.textContent).toContain(
+        "**Build log**",
+      );
     });
 
     it("preserves code formatting in alt text", () => {
-      const html = toSanitizedMarkdownHtml("![`error.log`](https://example.com/img.png)");
-      expect(html).toBe("<p>`error.log`</p>\n");
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![`error.log`](https://example.com/img.png)"),
+      );
+      expect(fragment.querySelector(".markdown-external-image > span")?.textContent).toContain(
+        "`error.log`",
+      );
     });
 
     it("preserves base64 data URI images (#15437)", () => {
@@ -194,6 +225,22 @@ describe("toSanitizedMarkdownHtml", () => {
 
       expect(fragment.querySelector("a img.markdown-inline-image")).not.toBeNull();
       expect(fragment.querySelector("a button")).toBeNull();
+    });
+
+    it("preserves rich authored links around remote image placeholders", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[Before ![Preview](https://example.com/image.png) after](https://example.com/full.png)",
+        ),
+      );
+      const links = fragment.querySelectorAll("a");
+      const placeholder = links[0]?.querySelector(".markdown-external-image");
+
+      expect(links).toHaveLength(1);
+      expect(links[0]?.getAttribute("href")).toBe("https://example.com/full.png");
+      expect(placeholder?.textContent).toBe("External image not loaded: Preview");
+      expect(placeholder?.querySelector("a")).toBeNull();
+      expect(fragment.querySelector("img")).toBeNull();
     });
 
     it("tracks linked and standalone images across one inline token stream", () => {
@@ -234,13 +281,20 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("uses fallback label for unlabeled images", () => {
-      const html = toSanitizedMarkdownHtml("![](https://example.com/image.png)");
-      expect(html).toBe("<p>image</p>\n");
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("![](https://example.com/image.png)"));
+      expect(fragment.querySelector(".markdown-external-image > span")?.textContent).toBe(
+        "External image not loaded: image",
+      );
     });
   });
 
   describe("code blocks", () => {
     const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
+    const jsonBlock = (lineCount: number) => {
+      const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
+      values[values.length - 1] = values.at(-1)?.slice(0, -1) ?? "";
+      return `\`\`\`json\n[\n${values.join("\n")}\n]\n\`\`\``;
+    };
 
     it("renders raw block art as a whitespace-preserving code block", () => {
       const html = toSanitizedMarkdownHtml(blockArt);
@@ -343,15 +397,28 @@ PY
       );
     });
 
-    it("highlights collapsed JSON code blocks", () => {
-      const html = toSanitizedMarkdownHtml('```json\n{"ok": true}\n```');
+    it("keeps short JSON code blocks visible and highlighted", () => {
+      const html = toSanitizedMarkdownHtml(jsonBlock(6));
       const fragment = htmlFragment(html);
-      const details = fragment.querySelector("details.json-collapse");
-      const code = details?.querySelector("pre code");
+      const code = fragment.querySelector(".code-block-wrapper pre code");
 
-      expect(details?.querySelector("summary")?.textContent).toBe("JSON · 2 lines");
-      expect(code?.textContent).toBe('{"ok": true}\n');
+      expect(fragment.querySelector("details.json-collapse")).toBeNull();
+      expect(code?.textContent?.split("\n")).toHaveLength(7);
       expect(code?.innerHTML).toContain("hljs-");
+    });
+
+    it("collapses JSON only above 40 lines and uses one copyable header", () => {
+      const atLimit = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(40)));
+      const overLimit = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
+      const details = overLimit.querySelector("details.json-collapse");
+      const summary = details?.querySelector("summary");
+
+      expect(atLimit.querySelector("details.json-collapse")).toBeNull();
+      expect(summary?.textContent).toContain("JSON · 41 lines");
+      expect(summary?.querySelector(".code-block-copy")).toBeInstanceOf(HTMLButtonElement);
+      expect(details?.querySelectorAll(".code-block-header")).toHaveLength(1);
+      expect(summary?.classList.contains("code-block-header")).toBe(true);
+      expect(details?.querySelector("pre code")?.innerHTML).toContain("hljs-");
     });
 
     it("localizes collapsed JSON line counts", async () => {
@@ -364,8 +431,8 @@ PY
       });
       await i18n.setLocale("pt-BR");
       try {
-        const fragment = htmlFragment(toSanitizedMarkdownHtml('```json\n{"ok": true}\n```'));
-        expect(fragment.querySelector("summary")?.textContent).toBe("JSON · 2 linhas");
+        const fragment = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
+        expect(fragment.querySelector("summary")?.textContent).toContain("JSON · 41 linhas");
       } finally {
         await i18n.setLocale("en");
       }
@@ -529,9 +596,16 @@ PY
   });
 
   describe("security", () => {
-    it("blocks javascript: in links via DOMPurify", () => {
-      const html = toSanitizedMarkdownHtml("[click me](javascript:alert(1))");
-      expect(html).toBe("<p><a>click me</a></p>\n");
+    it.each([
+      ["javascript:", "[JavaScript link](javascript:alert(1))", "JavaScript link"],
+      ["data:", "[Data link](data:text/html,test)", "Data link"],
+      ["vbscript:", "[VBScript link](vbscript:msgbox(1))", "VBScript link"],
+      ["file:", "[File link](file:///etc/passwd)", "File link"],
+    ])("renders disallowed %s links as plain text", (_scheme, markdown, label) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(markdown));
+
+      expect(fragment.querySelector("a")).toBeNull();
+      expect(fragment.querySelector("p")?.textContent).toBe(label);
     });
 
     it("shows alt text for javascript: images", () => {
@@ -547,19 +621,9 @@ PY
       expect(html2).toBe("<p>Alt2</p>\n");
     });
 
-    it("renders non-image data: URIs as inert links (marked.js compat)", () => {
-      const html = toSanitizedMarkdownHtml("[x](data:text/html,<script>alert(1)</script>)");
-      expect(html).toBe("<p><a>x</a></p>\n");
-    });
-
     it("does not auto-link bare file:// URIs", () => {
       const html = toSanitizedMarkdownHtml("Check file:///etc/passwd");
       expect(html).toBe("<p>Check file:///etc/passwd</p>\n");
-    });
-
-    it("strips href from explicit file:// links via DOMPurify", () => {
-      const html = toSanitizedMarkdownHtml("[click](file:///etc/passwd)");
-      expect(html).toBe("<p><a>click</a></p>\n");
     });
 
     it("strips href from host-local absolute file paths", () => {

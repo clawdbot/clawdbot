@@ -16,9 +16,8 @@ import {
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
-  hasExplicitPluginConfig as hasExplicitPluginConfigShared,
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
-  normalizePluginsConfigWithResolver,
+  normalizePluginsConfigWithResolverCore,
   type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
@@ -83,7 +82,7 @@ export function normalizePluginId(id: string): string {
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
+  return normalizePluginsConfigWithResolverCore(config, createScopedPluginIdNormalizer());
 };
 
 /** Resolves the enabled plugin selected to own the context-engine slot. */
@@ -156,8 +155,30 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.entries && Object.hasOwn(plugins.entries, defaultSlotIdForKey("memory")));
 
-export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
-  hasExplicitPluginConfigShared(plugins);
+export function hasExplicitPluginConfig(plugins?: OpenClawConfig["plugins"]): boolean {
+  if (!plugins) {
+    return false;
+  }
+  if (typeof plugins.enabled === "boolean") {
+    return true;
+  }
+  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
+    return true;
+  }
+  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
+    return true;
+  }
+  if (plugins.load?.paths && Array.isArray(plugins.load.paths) && plugins.load.paths.length > 0) {
+    return true;
+  }
+  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
+    return true;
+  }
+  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
+    return true;
+  }
+  return false;
+}
 
 export function applyTestPluginDefaults(
   cfg: OpenClawConfig,
@@ -230,7 +251,7 @@ export function resolvePluginActivationState(params: {
           plugins: params.config,
         }),
       allowBundledChannelExplicitBypassesAllowlist: true,
-      isBundledChannelEnabledByChannelConfig,
+      isBundledChannelEnabledByChannelConfig: isBundledChannelEnabledByChannelConfigShared,
     }),
   );
 }
@@ -239,8 +260,6 @@ export const resolveEnableState = createPluginEnableStateResolver<
   NormalizedPluginsConfig,
   PluginOrigin
 >(resolvePluginActivationState);
-
-export const isBundledChannelEnabledByChannelConfig = isBundledChannelEnabledByChannelConfigShared;
 
 type EffectiveActivationParams = {
   id: string;

@@ -1,8 +1,10 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import { resolveDeviceWorkerAvailability } from "./worker-environments/device-provider.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -15,15 +17,19 @@ afterEach(async () => {
 });
 
 test(
-  "profiles-disabled startup publishes lightweight placement ownership to real session RPCs",
+  "profiles-disabled startup publishes core worker placement ownership to real session RPCs",
   { timeout: 30_000 },
   async () => {
     // The shared server harness defaults to its minimal mode, which deliberately skips all
-    // worker stores. Exercise the production startup path while keeping profiles unconfigured.
+    // worker stores. Exercise the production startup path while keeping plugin profiles unconfigured;
+    // the core device provider still owns the worker service.
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     harness = await startGatewayServerHarness();
     const context = getFallbackGatewayContext();
-    expect(context?.workerEnvironmentService).toBeUndefined();
+    expect(context?.workerEnvironmentService).toBeDefined();
+    await expect(
+      resolveDeviceWorkerAvailability(context?.workerEnvironmentService, "missing-device"),
+    ).resolves.toEqual({ available: false, unavailableReason: "unpaired" });
     const placements = context?.workerSessionPlacementService as
       | WorkerSessionPlacementStore
       | undefined;
@@ -99,7 +105,38 @@ test(
       lifecycleRevision: resetLifecycleRevision,
     });
     expect(placements.get(resetSessionId)).toBeUndefined();
-    expect(getFallbackGatewayContext()?.workerEnvironmentService).toBeUndefined();
+
+    const createdForExternalDelete = await rpcReq<{ key?: string; sessionId?: string }>(
+      ws,
+      "sessions.create",
+      { agentId: "main", key: "startup-placement-external-delete" },
+    );
+    const externalSessionId = createdForExternalDelete.payload?.sessionId;
+    const externalSessionKey = createdForExternalDelete.payload?.key;
+    if (!externalSessionId || !externalSessionKey) {
+      throw new Error("external-delete session creation did not return placement identity");
+    }
+    const externalClaim = placements.claimTurn({
+      sessionId: externalSessionId,
+      sessionKey: externalSessionKey,
+      agentId: "main",
+      owner: { kind: "local" },
+      claimId: "startup-placement-external-delete-claim",
+      runId: "startup-placement-external-delete-run",
+    });
+    placements.releaseTurn(externalClaim);
+    const externalTarget = loadSessionEntry(externalSessionKey);
+    await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      storePath: externalTarget.storePath,
+      target: {
+        canonicalKey: externalTarget.canonicalKey,
+        storeKeys: externalTarget.storeKeys,
+      },
+    });
+    await vi.waitFor(() => expect(placements.get(externalSessionId)).toBeUndefined());
+
+    expect(getFallbackGatewayContext()?.workerEnvironmentService).toBeDefined();
     ws.close();
   },
 );

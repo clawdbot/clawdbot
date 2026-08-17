@@ -1,7 +1,7 @@
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import {
   resetSubagentRegistryForTests,
@@ -55,7 +55,7 @@ describe("swarm tools integration", () => {
   });
 
   it("spawns three mock-model collectors and drains them in first-completion order", async () => {
-    await withTempDir({ prefix: "openclaw-swarm-tools-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-swarm-tools-" }, async (stateDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const publicToGateway = new Map<string, string>();
       const resultTextBySession = new Map<string, string>();
@@ -129,7 +129,7 @@ describe("swarm tools integration", () => {
         persistSubagentRunsToDiskOrThrow: vi.fn(),
         resolveAgentTimeoutMs: () => 1_000,
         restoreSubagentRunsFromDisk: vi.fn(() => 0),
-        runSubagentAnnounceFlow: vi.fn(async () => true),
+        runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
         ensureContextEnginesInitialized: vi.fn(),
         loadAgentRuntimePluginRegistryHandle: vi.fn(),
         resolveContextEngine: vi.fn(async () => ({

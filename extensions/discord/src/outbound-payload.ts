@@ -18,7 +18,11 @@ import {
 } from "./outbound-components.js";
 import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
 import { hasDiscordMessageCreateAmbiguity } from "./retry.js";
-import { createDiscordSendReceipt, createDiscordSendReceiptFromResults } from "./send.receipt.js";
+import {
+  createDiscordSendReceipt,
+  createDiscordSendReceiptFromResults,
+  toDiscordOutboundDeliveryResult,
+} from "./send.receipt.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
 
@@ -30,7 +34,9 @@ type DiscordPayloadSendContext = Awaited<ReturnType<typeof createDiscordPayloadS
 function resolveDiscordDeliveryProgress(ctx: DiscordOutboundPayloadContext) {
   return ctx.onDeliveryResult
     ? async (result: Awaited<ReturnType<DiscordPayloadSendContext["send"]>>) => {
-        await ctx.onDeliveryResult?.(attachChannelToResult("discord", result));
+        await ctx.onDeliveryResult?.(
+          attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
+        );
       }
     : undefined;
 }
@@ -57,6 +63,7 @@ function resolveDiscordDeliveryOptions(
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
   };
 }
 
@@ -138,7 +145,9 @@ export async function sendDiscordOutboundPayload(params: {
       }
     }
     if (deliveredVoice) {
-      await ctx.onDeliveryResult?.(attachChannelToResult("discord", lastResult));
+      await ctx.onDeliveryResult?.(
+        attachChannelToResult("discord", toDiscordOutboundDeliveryResult(lastResult)),
+      );
     }
     if (deliveredVoice && payload.text?.trim()) {
       lastResult = await sendContext.send(sendContext.target, payload.text, {
@@ -154,7 +163,7 @@ export async function sendDiscordOutboundPayload(params: {
         onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
       });
     }
-    return attachChannelToResult("discord", lastResult);
+    return attachChannelToResult("discord", toDiscordOutboundDeliveryResult(lastResult));
   }
 
   const componentSpec = await resolveDiscordComponentSpec(payload);
@@ -196,7 +205,7 @@ export async function sendDiscordOutboundPayload(params: {
             onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
       });
-      return attachChannelToResult("discord", result);
+      return attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result));
     }
     const payloadContext = { ...ctx, payload };
     const deliveredResults: DiscordSendResult[] = [];
@@ -209,10 +218,10 @@ export async function sendDiscordOutboundPayload(params: {
         payloadContext.threadId = threadId;
         createdThreadId = threadId;
       }
-      if (createdThreadId && result.channelId && result.receipt) {
+      if (createdThreadId && result.target?.kind === "channel" && result.receipt) {
         deliveredResults.push({
           messageId: result.messageId,
-          channelId: result.channelId,
+          channelId: result.target.id,
           receipt: result.receipt,
         });
       }
@@ -257,5 +266,5 @@ export async function sendDiscordOutboundPayload(params: {
       });
     },
   });
-  return attachChannelToResult("discord", result);
+  return attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result));
 }

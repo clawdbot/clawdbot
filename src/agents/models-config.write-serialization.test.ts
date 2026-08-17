@@ -58,7 +58,7 @@ installModelsConfigTestHooks();
 
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
 let planOpenClawModelsJsonSource: typeof import("./models-config.js").planOpenClawModelsJsonSource;
-let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-state.js").clearCurrentPluginMetadataSnapshot;
+let clearPluginMetadataLifecycleCaches: typeof import("../plugins/plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 
 function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
@@ -161,14 +161,14 @@ beforeAll(async () => {
     };
   });
   ({ ensureOpenClawModelsJson, planOpenClawModelsJsonSource } = await import("./models-config.js"));
-  ({ clearCurrentPluginMetadataSnapshot } =
-    await import("../plugins/current-plugin-metadata-state.js"));
+  ({ clearPluginMetadataLifecycleCaches } =
+    await import("../plugins/plugin-metadata-lifecycle.js"));
   ({ setCurrentPluginMetadataSnapshot } =
     await import("../plugins/current-plugin-metadata-snapshot.js"));
 });
 
 beforeEach(() => {
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
   writePrivateStoreTextWriteMock
     .mockReset()
     .mockImplementation(

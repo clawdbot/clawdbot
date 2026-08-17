@@ -30,7 +30,7 @@ import {
   type DeviceIdentity,
 } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readPositiveIntegerParam, readStringParam } from "./common.js";
+import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 
@@ -46,8 +46,8 @@ type GatewayOverrideTarget = "local" | "remote";
 /** Reads common gateway options from tool parameters while preserving explicit token whitespace. */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
-    gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-    gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
+    gatewayUrl: readToolStringParam(params, "gatewayUrl", { trim: false }),
+    gatewayToken: readToolStringParam(params, "gatewayToken", { trim: false }),
     timeoutMs: readPositiveIntegerParam(params, "timeoutMs"),
   };
 }
@@ -401,6 +401,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   opts: GatewayCallOptions;
   target: "local" | "remote";
   turnCapability?: string;
+  turnCapabilitySessionKey?: string;
   runId?: string;
   sessionId?: string;
   sourceReplyFinal?: boolean;
@@ -426,11 +427,13 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   if (usesUntrustedGatewayContext && !terminalSourceReply) {
     return undefined;
   }
+  const turnCapabilitySessionKey =
+    normalizeOptionalString(params.turnCapabilitySessionKey) ?? identity.sessionKey;
   const messageActionContext = resolveMessageActionTurnCapability({
     token: params.turnCapability,
     agentId: identity.agentId,
     runId: params.runId,
-    sessionKey: identity.sessionKey,
+    sessionKey: turnCapabilitySessionKey,
     sessionId: params.sessionId,
   });
   if (!messageActionContext) {
@@ -472,6 +475,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
       };
   return await mintAgentRuntimeIdentityToken({
     ...identity,
+    sessionKey: turnCapabilitySessionKey,
     operationalRunInstance: identity.operationalRunInstance,
     messageActionContext: resolvedMessageActionContext,
   });

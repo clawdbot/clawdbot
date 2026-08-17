@@ -43,10 +43,16 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import {
+  createFollowupRunToolAuthorityProjector,
+  resolveFollowupRunToolAuthorityFingerprint,
+} from "./reply-tool-authority.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import {
   isDuplicateRestartRecoverySource,
@@ -77,7 +83,6 @@ export async function runReplyAgent(
     runtimePolicySessionKey,
     storePath,
     defaultModel,
-    agentCfgContextTokens,
     resolvedVerboseLevel,
     toolProgressDetail,
     isNewSession,
@@ -132,6 +137,31 @@ export async function runReplyAgent(
     });
   const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
   const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
+  const incomingToolAuthorityFingerprint = resolveFollowupRunToolAuthorityFingerprint(followupRun);
+  const activeReplyOperation = sessionKey
+    ? (replyRunRegistry.get(sessionKey) ?? providedReplyOperation)
+    : providedReplyOperation;
+  const activeToolAuthorityFingerprint = activeReplyOperation?.toolAuthorityFingerprint;
+  const incomingAuthorityAtActiveRoute = activeReplyOperation?.toolAuthorityRoute
+    ? resolveFollowupRunToolAuthorityFingerprint(
+        followupRun,
+        activeReplyOperation.toolAuthorityRoute,
+      )
+    : undefined;
+  const hasAuthorityMismatch =
+    activeReplyOperation !== undefined &&
+    activeToolAuthorityFingerprint !== incomingToolAuthorityFingerprint;
+  const hasRouteOnlyAuthorityMismatch =
+    hasAuthorityMismatch &&
+    activeToolAuthorityFingerprint !== undefined &&
+    incomingAuthorityAtActiveRoute === activeToolAuthorityFingerprint;
+  const shouldQueueAuthorityMismatch =
+    effectiveShouldSteer && isActive && hasAuthorityMismatch && !hasRouteOnlyAuthorityMismatch;
+  if (shouldQueueAuthorityMismatch) {
+    logVerbose(
+      `queue: active session ${activeReplyOperation?.sessionId ?? followupRun.run.sessionId} has different or unknown tool authority; queuing instead of steering`,
+    );
+  }
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
@@ -218,11 +248,15 @@ export async function runReplyAgent(
     sessionKey,
     storePath,
     defaultModel,
-    agentCfgContextTokens,
     toolProgressDetail,
   });
 
-  if (effectiveShouldSteer && isActive && opts?.messageInjectionAttempted !== true) {
+  if (
+    effectiveShouldSteer &&
+    isActive &&
+    !shouldQueueAuthorityMismatch &&
+    opts?.messageInjectionAttempted !== true
+  ) {
     replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
     await runActiveReplySteer({
       followupRun,
@@ -239,6 +273,10 @@ export async function runReplyAgent(
       touchActiveSessionEntry,
       typing,
       typingSignals,
+      toolAuthorityFingerprint: incomingToolAuthorityFingerprint,
+      pendingInputAuthorityFingerprint: hasRouteOnlyAuthorityMismatch
+        ? activeToolAuthorityFingerprint
+        : undefined,
     });
     return undefined;
   }
@@ -247,7 +285,7 @@ export async function runReplyAgent(
     queueAdmissionState,
     isActive,
     isHeartbeat,
-    shouldFollowup: effectiveShouldFollowup,
+    shouldFollowup: effectiveShouldFollowup || shouldQueueAuthorityMismatch,
     queueMode: activeRunQueueMode,
     resetTriggered: effectiveResetTriggered,
   });
@@ -280,10 +318,10 @@ export async function runReplyAgent(
     }
     // The queue must stay dormant while the active owner can still collect
     // messages. Registering after enqueue closes the owner-clear race.
-    const activeReplyOperation = replyRunRegistry.get(queueKey);
-    if (activeReplyOperation) {
+    const queuedOperationOwner = replyRunRegistry.get(queueKey) ?? activeReplyOperation;
+    if (queuedOperationOwner) {
       scheduleFollowupDrainAfterReplyOperationClear({
-        operation: activeReplyOperation,
+        operation: queuedOperationOwner,
         queueKey,
         runFollowup: queuedRunFollowupTurn,
       });
@@ -337,12 +375,13 @@ export async function runReplyAgent(
   });
   const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
-    ? async (phase: CompactionNoticePhase) => {
+    ? async (phase: CompactionNoticePhase, text?: string) => {
         if (!opts?.onBlockReply) {
           return;
         }
         const noticePayload = createCompactionNoticePayload({
           phase,
+          text,
           currentMessageId: compactionNoticeMessageId,
           applyReplyToMode,
         });
@@ -395,7 +434,6 @@ export async function runReplyAgent(
       routeThreadId: replyRouteThreadId,
       originatingLeafEntryId: turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: opts?.abortSignal,
-      onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     });
     if (replyOperationRunState) {
       replyOperationRunState.admission =
@@ -441,6 +479,10 @@ export async function runReplyAgent(
       }
     }
   }
+  replyOperation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(followupRun));
+  replyOperation.bindToolAuthorityFingerprint(
+    resolveFollowupRunToolAuthorityFingerprint(followupRun),
+  );
   bindReplyOperationTyping(replyOperation, typing);
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
@@ -512,7 +554,6 @@ export async function runReplyAgent(
     return await executePreparedReplyAgentRun({
       activeSessionStore,
       admitUserTurn,
-      agentCfgContextTokens,
       applyReplyToMode,
       beginBeforeAgentReply,
       blockReplyChunking,
@@ -566,6 +607,11 @@ export async function runReplyAgent(
       typingSignals,
     });
   } catch (error) {
+    recordReplyOperationAgentTurn(
+      replyOperationRunState,
+      isReplyOperationSuperseded(replyOperation) ? "superseded" : "failed",
+      replyOperation,
+    );
     return await handleReplyAgentRunError(error, {
       blockReplyPipeline,
       cfg,

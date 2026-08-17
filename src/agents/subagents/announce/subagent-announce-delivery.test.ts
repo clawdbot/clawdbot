@@ -2,7 +2,10 @@
 // runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
+import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import { OutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
+import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -32,11 +35,10 @@ import {
   taskCompletionEvents,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import {
-  callGateway as runtimeCallGateway,
-  dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess,
-  sendMessage as runtimeSendMessage,
-} from "./subagent-announce-delivery.runtime.js";
-import { testing, deliverSubagentAnnouncement } from "./subagent-announce-delivery.test-support.js";
+  testing,
+  deliverSubagentAnnouncement,
+  loadRequesterSessionEntry,
+} from "./subagent-announce-delivery.test-support.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -58,8 +60,8 @@ vi.mock("../completion/subagent-completion-delivery.js", async (importOriginal) 
     sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery(params.payload, 125_000),
 }));
 
-vi.mock("../../../infra/session-delivery-queue.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../infra/session-delivery-queue.js")>()),
+vi.mock("../../../infra/session-delivery-queue-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/session-delivery-queue-storage.js")>()),
   enqueueClaimedSessionDelivery: sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery,
   releaseSessionDeliveryClaim: sessionDeliveryQueueMocks.releaseSessionDeliveryClaim,
 }));
@@ -184,7 +186,7 @@ const longChildCompletionOutput = [
   "34/34 tests pass, clean build. Now docker repro:",
   "Root cause: the requester's announce delivery accepted a prefix-only assistant payload as delivered.",
   "PR: https://github.com/openclaw/openclaw/pull/12345",
-  "Verification: pnpm test src/agents/subagent-announce-delivery.test.ts passed with the regression enabled.",
+  "Verification: pnpm test src/agents/subagents/announce/subagent-announce-delivery.test.ts passed with the regression enabled.",
 ].join("\n");
 
 const committedSessionSpawnEvidence = {
@@ -313,6 +315,9 @@ async function deliverDiscordDirectMessageCompletion(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
+  requesterSessionKey?: string;
+  requesterAgentId?: string;
+  runtimeConfig?: Record<string, unknown>;
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceSessionKey?: string;
   sourceTool?: string;
@@ -325,13 +330,14 @@ async function deliverDiscordDirectMessageCompletion(params: {
     to: "dm:U123",
     accountId: "acct-1",
   };
+  const requesterSessionKey = params.requesterSessionKey ?? "agent:main:discord:dm:U123";
   testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
       isActive: params.isActive === true,
     }),
-    getRuntimeConfig: () => ({}) as never,
+    getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
       ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
@@ -339,8 +345,9 @@ async function deliverDiscordDirectMessageCompletion(params: {
   });
 
   return deliverSubagentAnnouncement({
-    requesterSessionKey: "agent:main:discord:dm:U123",
-    targetRequesterSessionKey: "agent:main:discord:dm:U123",
+    requesterSessionKey,
+    requesterAgentId: params.requesterAgentId,
+    targetRequesterSessionKey: requesterSessionKey,
     triggerMessage: "child done",
     steerMessage: "child done",
     requesterOrigin: origin,
@@ -656,6 +663,32 @@ describe("resolveSubagentCompletionOrigin", () => {
 });
 
 describe("deliverSubagentAnnouncement active requester steering", () => {
+  it("loads a custom main alias through its canonical requester key", () => {
+    const loadSessionEntry = vi.fn(() => ({ sessionId: "research-main", updatedAt: 1 }));
+    testing.setDepsForTest({
+      getRuntimeConfig: () =>
+        ({
+          session: { mainKey: "work", store: "/stores/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        }) as never,
+      loadSessionEntry,
+    });
+
+    expect(loadRequesterSessionEntry("work", "research")).toMatchObject({
+      canonicalKey: "agent:research:work",
+      entry: { sessionId: "research-main" },
+    });
+    expect(loadSessionEntry).toHaveBeenCalledWith({
+      agentId: "research",
+      clone: false,
+      sessionKey: "agent:research:work",
+      storePath: "/stores/shared.sqlite",
+    });
+  });
+
   async function deliverSteeredAnnouncement(params: {
     mode?: "followup" | "collect" | "interrupt";
     announceTimeoutMs?: number;
@@ -762,6 +795,263 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledOnce();
     },
   );
+
+  it("uses the requester agent when bare session keys collide", async () => {
+    const cfg = {
+      session: { scope: "global" },
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(
+      (_requesterSessionKey: string, requesterAgentId?: string) => ({
+        sessionId: requesterAgentId === "research" ? "research-session" : "ops-session",
+        isActive: true,
+      }),
+    );
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadRequesterSessionEntry: (sessionKey: string) => ({
+        cfg,
+        entry: undefined,
+        canonicalKey: sessionKey,
+      }),
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "global",
+      requesterAgentId: "research",
+      targetRequesterSessionKey: "global",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-bare-key-agent-owner",
+    });
+
+    expectDeliveryPath(result, "steered");
+    expect(getRequesterSessionActivity).toHaveBeenCalledWith("global", "research");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
+      "research-session",
+      "child done",
+      expect.objectContaining({ steeringMode: "all" }),
+    );
+  });
+
+  it("fails closed for a restored bare requester key without an owner", async () => {
+    const cfg = {
+      session: { scope: "global" },
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(() => ({
+      sessionId: "ops-session",
+      isActive: true,
+    }));
+    const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadSessionEntry,
+      queueEmbeddedAgentMessageWithOutcome,
+      callGateway: vi.fn(async () => {
+        throw new Error("requester owner unavailable");
+      }),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "global",
+      targetRequesterSessionKey: "global",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-ownerless-restored-entry",
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+  });
+
+  it("uses the persisted fixed-store owner for a restored bare requester key", async () => {
+    const cfg = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(() => ({
+      sessionId: "ops-session",
+      isActive: true,
+    }));
+    const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadSessionEntry,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "global",
+      targetRequesterSessionKey: "global",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-retained-restored-entry",
+    });
+
+    expectDeliveryPath(result, "steered");
+    expect(getRequesterSessionActivity).toHaveBeenCalledWith("global", "ops");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
+      "ops-session",
+      "child done",
+      expect.objectContaining({ steeringMode: "all" }),
+    );
+  });
+
+  it("loads a persisted custom bare requester under its durable storage key", async () => {
+    const cfg = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(() => ({
+      sessionId: "ops-incident-session",
+      isActive: true,
+    }));
+    const loadSessionEntry = vi.fn(() => ({
+      sessionId: "ops-incident-session",
+      updatedAt: 1,
+    }));
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadSessionEntry,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "incident-42",
+      targetRequesterSessionKey: "incident-42",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-persisted-bare-requester",
+    });
+
+    expectDeliveryPath(result, "steered");
+    expect(loadSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "ops", sessionKey: "incident-42" }),
+    );
+    expect(getRequesterSessionActivity).toHaveBeenCalledWith("incident-42", "ops");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
+      "ops-incident-session",
+      "child done",
+      expect.objectContaining({ steeringMode: "all" }),
+    );
+  });
+
+  it("rejects a restored bare requester whose explicit agent conflicts with the store owner", async () => {
+    const cfg = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(() => ({
+      sessionId: "ops-session",
+      isActive: true,
+    }));
+    const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadSessionEntry,
+      queueEmbeddedAgentMessageWithOutcome,
+      callGateway: vi.fn(async () => {
+        throw new Error("requester owner conflict");
+      }),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "global",
+      requesterAgentId: "research",
+      targetRequesterSessionKey: "global",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-conflicting-restored-entry",
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for a restored bare requester key with a retired store owner", async () => {
+    const cfg = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "retired" } },
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(() => ({
+      sessionId: "ops-session",
+      isActive: true,
+    }));
+    const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadSessionEntry,
+      queueEmbeddedAgentMessageWithOutcome,
+      callGateway: vi.fn(async () => {
+        throw new Error("requester owner unavailable");
+      }),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "global",
+      targetRequesterSessionKey: "global",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-retired-restored-entry",
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+  });
 
   it("preserves best-effort steering for active runtimes without transcript wait support", async () => {
     const queueEmbeddedAgentMessageWithOutcome = vi
@@ -1311,6 +1601,77 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         sourceReplyDeliveryMode: "message_tool_only",
       });
     }
+  });
+
+  it.each([
+    {
+      name: "intentional suppression",
+      suppressionReason: "cancelled_by_message_sending_hook",
+      disposition: "intentional_non_delivery",
+    },
+    {
+      name: "adapter ambiguity",
+      suppressionReason: "adapter_returned_no_identity",
+      disposition: "ambiguous",
+    },
+  ] as const)("reports $name from direct text completion fallback", async (testCase) => {
+    const callGateway = createPayloadGatewayMock();
+    const onDeliveryResult = vi.fn();
+    const sendMessage = vi.fn(async () => ({
+      channel: "discord",
+      to: "dm:U123",
+      via: "direct" as const,
+      mediaUrl: null,
+      deliveryStatus: "suppressed" as const,
+      suppressionReason: testCase.suppressionReason,
+    })) as unknown as typeof runtimeSendMessage;
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+      onDeliveryResult,
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      disposition: testCase.disposition,
+    });
+    expect(onDeliveryResult).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the caller owner for direct completion delivery to a bare requester key", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      requesterSessionKey: "global",
+      requesterAgentId: "research",
+      runtimeConfig: {
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+        },
+      },
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "global",
+        agentId: "research",
+        mirror: expect.objectContaining({
+          sessionKey: "global",
+          agentId: "research",
+        }),
+      }),
+    );
   });
 
   it("sanitizes and bounds text before direct completion fallback delivery", async () => {
@@ -2816,7 +3177,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("no-ops stale isolated cron run text completions", async () => {
+  it("records stale isolated cron run text completions as intentional non-delivery", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
@@ -2832,9 +3193,20 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: true,
+      delivered: false,
       path: "none",
-      phases: [{ phase: "direct-primary", delivered: true, path: "none", error: undefined }],
+      reason: "completion_handoff_pending",
+      terminal: true,
+      disposition: "intentional_non_delivery",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "none",
+          reason: "completion_handoff_pending",
+          error: undefined,
+        },
+      ],
     });
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     expect(callGateway).not.toHaveBeenCalled();

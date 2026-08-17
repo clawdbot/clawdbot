@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CommandInteraction, CommandWithSubcommands } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import { createDiscordVoiceCommand } from "./command.js";
-import type { DiscordVoiceManager } from "./manager.js";
+import type { DiscordVoiceManager } from "./voice-runtime.js";
 
 function findVoiceSubcommand(command: CommandWithSubcommands, name: string) {
   const subcommands = (

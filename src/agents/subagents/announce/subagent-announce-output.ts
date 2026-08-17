@@ -10,9 +10,12 @@ import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/se
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromWaitResult,
+  classifyAgentRunTerminalOutcome,
+} from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
-import { extractAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
+import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
 import {
   isAnnounceSkip,
   selectDeliverableSessionsReply,
@@ -25,10 +28,10 @@ import {
 import {
   callGateway,
   getRuntimeConfig,
-  readSessionEntry,
+  readSubagentSessionEntry,
   readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
-  resolveStorePath,
+  resolveSessionStorePathCore,
 } from "./subagent-announce.runtime.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 
@@ -47,19 +50,19 @@ const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
-  readSessionEntry: typeof readSessionEntry;
+  readSubagentSessionEntry: typeof readSubagentSessionEntry;
   readSessionMessagesAsync: typeof readSessionMessagesAsync;
   resolveAgentIdFromSessionKey: typeof resolveAgentIdFromSessionKey;
-  resolveStorePath: typeof resolveStorePath;
+  resolveSessionStorePathCore: typeof resolveSessionStorePathCore;
 };
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
   getRuntimeConfig,
-  readSessionEntry,
+  readSubagentSessionEntry,
   readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
-  resolveStorePath,
+  resolveSessionStorePathCore,
 };
 
 let subagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = defaultSubagentAnnounceOutputDeps;
@@ -130,7 +133,7 @@ function extractSubagentAssistantText(message: unknown): string {
   if (typeof content === "string") {
     return sanitizeTextContent(content);
   }
-  return extractAssistantText(message) ?? "";
+  return extractStoredAssistantText(message) ?? "";
 }
 
 function countAssistantToolCalls(message: unknown): number {
@@ -340,23 +343,23 @@ export function applySubagentWaitOutcome(params: {
   const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(params.wait);
   let outcome = next.outcome;
   // Capture/announcement callers can pass raw wait snapshots that bypass the
-  // primary normalizers, so preserve the shared timeout/cancel precedence here.
-  if (terminalOutcome?.status === "timeout") {
-    outcome = { status: "timeout" };
-  } else if (
-    terminalOutcome?.reason === "aborted" ||
-    terminalOutcome?.reason === "cancelled" ||
-    terminalOutcome?.reason === "superseded"
-  ) {
-    outcome = { status: "error", error: "subagent run terminated" };
-  } else if (
-    terminalOutcome?.reason === "blocked" ||
-    terminalOutcome?.reason === "abandoned" ||
-    terminalOutcome?.reason === "failed"
-  ) {
-    outcome = { status: "error", error: terminalOutcome.error ?? waitError };
-  } else if (terminalOutcome?.reason === "completed") {
-    outcome = { status: "ok" };
+  // primary normalizers, so apply the canonical classification here instead
+  // of re-enumerating reason groups.
+  if (terminalOutcome) {
+    switch (classifyAgentRunTerminalOutcome(terminalOutcome)) {
+      case "timeout":
+        outcome = { status: "timeout" };
+        break;
+      case "cancellation":
+        outcome = { status: "error", error: "subagent run terminated" };
+        break;
+      case "failure":
+        outcome = { status: "error", error: terminalOutcome.error ?? waitError };
+        break;
+      case "success":
+        outcome = { status: "ok" };
+        break;
+    }
   }
   next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
   return next;
@@ -588,6 +591,7 @@ export function filterCurrentDirectChildCompletionRows(
     runId: string;
     childSessionKey: string;
     requesterSessionKey: string;
+    requesterAgentId?: string;
     task: string;
     label?: string;
     createdAt: number;
@@ -600,10 +604,12 @@ export function filterCurrentDirectChildCompletionRows(
   }>,
   params: {
     requesterSessionKey: string;
+    requesterAgentId?: string;
     getLatestSubagentRunByChildSessionKey?: (childSessionKey: string) =>
       | {
           runId: string;
           requesterSessionKey: string;
+          requesterAgentId?: string;
         }
       | null
       | undefined;
@@ -618,7 +624,9 @@ export function filterCurrentDirectChildCompletionRows(
       return true;
     }
     return (
-      latest.runId === child.runId && latest.requesterSessionKey === params.requesterSessionKey
+      latest.runId === child.runId &&
+      latest.requesterSessionKey === params.requesterSessionKey &&
+      (!params.requesterAgentId || latest.requesterAgentId === params.requesterAgentId)
     );
   });
 }
@@ -649,8 +657,10 @@ export async function buildCompactAnnounceStatsLine(params: {
 }) {
   const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = subagentAnnounceOutputDeps.resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = subagentAnnounceOutputDeps.resolveStorePath(cfg.session?.store, { agentId });
-  let entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
+  const storePath = subagentAnnounceOutputDeps.resolveSessionStorePathCore(cfg.session?.store, {
+    agentId,
+  });
+  let entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     const hasTokenData =
@@ -665,7 +675,7 @@ export async function buildCompactAnnounceStatsLine(params: {
         setTimeout(resolve, 150);
       });
     }
-    entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
+    entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   }
 
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;

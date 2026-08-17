@@ -1,11 +1,15 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -52,10 +56,7 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(min, Math.min(max, Math.floor(value as number)));
+  return resolveIntegerOption(value, fallback, { min, max });
 }
 
 function normalizeTranscriptDir(value: unknown): string {
@@ -132,13 +133,8 @@ function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawCo
   );
 }
 
-function normalizePromptConfigText(value: unknown): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text ? text : undefined;
-}
-
 function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
-  const raw = asRecord(pluginConfig);
+  const raw = asOptionalRecord(pluginConfig);
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
 }
 
@@ -239,8 +235,8 @@ function normalizePluginConfig(
     fastMode: normalizeActiveMemoryFastMode(raw.fastMode),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
     toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
-    promptOverride: normalizePromptConfigText(raw.promptOverride),
-    promptAppend: normalizePromptConfigText(raw.promptAppend),
+    promptOverride: normalizeOptionalString(raw.promptOverride),
+    promptAppend: normalizeOptionalString(raw.promptAppend),
     timeoutMs: clampInt(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,

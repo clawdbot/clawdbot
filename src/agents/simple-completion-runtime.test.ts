@@ -70,8 +70,8 @@ vi.mock("./model-auth.js", () => ({
     (auth: { source: string; mode: string }, provider: string) =>
       `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
   ),
-  getApiKeyForModel: hoisted.getApiKeyForModelMock,
-  resolveApiKeyForProvider: hoisted.getApiKeyForModelMock,
+  getApiKeyForModelCore: hoisted.getApiKeyForModelMock,
+  resolveApiKeyForProviderCore: hoisted.getApiKeyForModelMock,
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
@@ -478,7 +478,7 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.model.baseUrl).toBe("https://api.copilot.enterprise.example");
   });
 
-  it("returns error when getApiKeyForModel throws", async () => {
+  it("returns error when getApiKeyForModelCore throws", async () => {
     hoisted.getApiKeyForModelMock.mockRejectedValueOnce(new Error("Profile not found: copilot"));
 
     const result = await prepareSimpleCompletionModel({
@@ -716,6 +716,10 @@ describe("prepareSimpleCompletionModelForAgent", () => {
   it("materializes a derived utility model on the Platform route for API-key auth", async () => {
     const cfg = {
       agents: {
+        entries: {
+          main: {},
+          other: {},
+        },
         defaults: {
           model: "openai/gpt-5.5",
           models: {
@@ -756,6 +760,11 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     expect(
       (callArg(hoisted.getApiKeyForModelMock, 1) as { model?: { api?: string } }).model?.api,
     ).toBe("openai-responses");
+    // Route materialization re-resolves the model on a multi-agent config; both
+    // calls must keep the authorized agentId or the second falls back to
+    // resolveDefaultAgentId, which throws on a multi-agent config.
+    expect(modelResolver.mock.calls[0]?.[4]).toMatchObject({ agentId: "main" });
+    expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
   });
 
   it("keeps the Codex route for OAuth auth", async () => {

@@ -1,11 +1,21 @@
 import CoreLocation
 import OpenClawIPC
 import Testing
+import UserNotifications
 @testable import OpenClaw
 
 @Suite(.serialized)
 @MainActor
 struct PermissionManagerTests {
+    @Test func `notification authorization accepts provisional delivery`() throws {
+        #expect(PermissionManager.isNotificationAuthorized(status: .authorized))
+        #expect(PermissionManager.isNotificationAuthorized(status: .provisional))
+        #expect(!PermissionManager.isNotificationAuthorized(status: .notDetermined))
+        #expect(!PermissionManager.isNotificationAuthorized(status: .denied))
+        let ephemeral = try #require(UNAuthorizationStatus(rawValue: 4))
+        #expect(!PermissionManager.isNotificationAuthorized(status: ephemeral))
+    }
+
     @Test func `voice wake permission helpers match status`() async {
         let direct = PermissionManager.voiceWakePermissionsGranted()
         let ensured = await PermissionManager.ensureVoiceWakePermissions(interactive: false)

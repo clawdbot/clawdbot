@@ -3,7 +3,6 @@
  * Covers output caps, finished-session retention, cleanup, and PTY cursor mode
  * state for background exec sessions.
  */
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
@@ -48,7 +47,6 @@ describe("bash process registry", () => {
     return createProcessSessionFixture({
       id: params.id ?? "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       maxOutputChars: params.maxOutputChars,
       pendingMaxOutputChars: params.pendingMaxOutputChars,
       backgrounded: params.backgrounded,
@@ -108,9 +106,9 @@ describe("bash process registry", () => {
     appendOutput(session, "stdout", payload);
 
     const drained = drainSession(session);
-    expect(drained.stdout).toBe("b".repeat(20_000));
+    expect(drained.output).toBe("b".repeat(20_000));
     expect(drained.outputDropped).toBe(true);
-    expect(session.pendingStdout).toHaveLength(0);
+    expect(session.pendingOutput).toHaveLength(0);
     expect(session.pendingStdoutChars).toBe(0);
     expect(drainSession(session).outputDropped).toBe(false);
     expect(session.truncated).toBe(true);
@@ -127,7 +125,7 @@ describe("bash process registry", () => {
     appendOutput(session, "stdout", "x".repeat(10_000));
 
     const drained = drainSession(session);
-    expect(drained.stdout.length).toBe(5_000);
+    expect(drained.output.length).toBe(5_000);
     expect(session.truncated).toBe(true);
   });
 
@@ -144,9 +142,29 @@ describe("bash process registry", () => {
     appendOutput(session, "stderr", "c".repeat(12));
 
     const drained = drainSession(session);
-    expect(drained.stdout).toBe("a".repeat(4) + "b".repeat(6));
-    expect(drained.stderr).toBe("c".repeat(10));
+    expect(drained.output).toBe("a".repeat(4) + "b".repeat(6) + "c".repeat(10));
     expect(session.truncated).toBe(true);
+  });
+
+  it("keeps independently capped stream chunks in callback order", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 10,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    appendOutput(session, "stdout", "a".repeat(6));
+    appendOutput(session, "stderr", "ERR-safe\n");
+    appendOutput(session, "stdout", "b".repeat(6));
+
+    expect(session.pendingStdoutChars).toBe(10);
+    expect(session.pendingStderrChars).toBe(9);
+    const drained = drainSession(session);
+    expect(drained.output).toBe(`${"a".repeat(4)}ERR-safe\n${"b".repeat(6)}`);
+    expect(drained.outputDropped).toBe(true);
+    expect(session.pendingStdoutChars).toBe(0);
+    expect(session.pendingStderrChars).toBe(0);
   });
 
   it("keeps aggregate, pending, and tail suffix cuts on UTF-16 boundaries", () => {
@@ -161,7 +179,7 @@ describe("bash process registry", () => {
 
     expect(session.aggregated).toBe("bc");
     expect(session.pendingStdoutChars).toBe(2);
-    expect(drainSession(session).stdout).toBe("bc");
+    expect(drainSession(session).output).toBe("bc");
     expect(tail("a🎉bc", 3)).toBe("bc");
   });
 
@@ -177,7 +195,7 @@ describe("bash process registry", () => {
     appendOutput(session, "stdout", "bc");
 
     expect(session.pendingStdoutChars).toBe(2);
-    expect(drainSession(session).stdout).toBe("bc");
+    expect(drainSession(session).output).toBe("bc");
   });
 
   it("only persists finished sessions when backgrounded", () => {
@@ -212,7 +230,7 @@ describe("bash process registry", () => {
         tail: "",
         truncated: false,
         totalOutputChars: 0,
-        unreadOutput: { stdout: "", stderr: "", outputDropped: false },
+        unreadOutput: { output: "", outputDropped: false },
       },
     ]);
   });
@@ -230,9 +248,9 @@ describe("bash process registry", () => {
 
     const finished = getFinishedSessionForProcess(session);
     expect(finished).toBe(getFinishedSession(session.id));
-    expect(finished && drainFinishedSession(finished).stdout).toBe("terminal output\n");
-    expect(finished && drainFinishedSession(finished).stdout).toBe("");
-    expect(drainSession(session).stdout).toBe("");
+    expect(finished && drainFinishedSession(finished).output).toBe("terminal output\n");
+    expect(finished && drainFinishedSession(finished).output).toBe("");
+    expect(drainSession(session).output).toBe("");
   });
 
   it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {
@@ -433,7 +451,6 @@ describe("cursorKeyMode", () => {
     return createProcessSessionFixture({
       id: params.id ?? "sess",
       command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
       maxOutputChars: params.maxOutputChars,
       pendingMaxOutputChars: params.pendingMaxOutputChars,
       backgrounded: params.backgrounded,

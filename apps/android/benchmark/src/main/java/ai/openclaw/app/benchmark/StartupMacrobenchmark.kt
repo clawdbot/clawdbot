@@ -18,7 +18,8 @@ class StartupMacrobenchmark {
   @get:Rule
   val benchmarkRule = MacrobenchmarkRule()
 
-  private val packageName = "ai.openclaw.app"
+  private val packageName: String
+    get() = InstrumentationRegistry.getInstrumentation().targetContext.packageName
 
   @Test
   fun coldStartup() {

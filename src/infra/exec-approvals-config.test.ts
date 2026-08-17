@@ -2,7 +2,8 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { makeTempDir } from "./exec-approvals-test-helpers.js";
+import { tryParsePersistedExecApprovals } from "./exec-approvals-config.js";
+import { makeExecApprovalsTempDir } from "./exec-approvals-test-helpers.js";
 import {
   isSafeBinUsage,
   matchAllowlist,
@@ -20,7 +21,7 @@ describe.sequential("exec approval temp fixture cleanup", () => {
   let cleanupProbeRoot = "";
 
   it("creates a disposable fixture root", () => {
-    cleanupProbeRoot = makeTempDir();
+    cleanupProbeRoot = makeExecApprovalsTempDir();
     expect(existsSync(cleanupProbeRoot)).toBe(true);
   });
 
@@ -31,7 +32,7 @@ describe.sequential("exec approval temp fixture cleanup", () => {
 
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
 
     try {
@@ -68,6 +69,7 @@ describe("exec approvals node host allowlist check", () => {
   it.each([
     {
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "python3",
         resolvedPath: "/usr/bin/python3",
         resolvedRealPath: "/usr/bin/python3",
@@ -80,6 +82,7 @@ describe("exec approvals node host allowlist check", () => {
       // Simulates symlink resolution:
       // /opt/homebrew/bin/python3 -> /opt/homebrew/opt/python@3.14/bin/python3.14
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "python3",
         resolvedPath: "/opt/homebrew/opt/python@3.14/bin/python3.14",
         executableName: "python3.14",
@@ -89,6 +92,7 @@ describe("exec approvals node host allowlist check", () => {
     },
     {
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "unknown-tool",
         resolvedPath: "/usr/local/bin/unknown-tool",
         executableName: "unknown-tool",
@@ -106,6 +110,7 @@ describe("exec approvals node host allowlist check", () => {
 
   it("does not treat unknown tools as safe bins", () => {
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "unknown-tool",
       resolvedPath: "/usr/local/bin/unknown-tool",
       executableName: "unknown-tool",
@@ -120,6 +125,7 @@ describe("exec approvals node host allowlist check", () => {
 
   it("satisfies via safeBins even when not in allowlist", () => {
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "head",
       resolvedPath: "/usr/bin/head",
       executableName: "head",
@@ -170,6 +176,36 @@ describe("exec approvals default agent migration", () => {
     expect(resolved.agent.ask).toBe("always");
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
+  });
+});
+
+describe("persisted exec approvals schema", () => {
+  it("keeps legacy string allowlist entries while normalizing them", () => {
+    const parsed = tryParsePersistedExecApprovals(
+      JSON.stringify({
+        version: 1,
+        agents: { main: { allowlist: ["  ls  ", { pattern: "cat", source: "legacy" }] } },
+      }),
+    );
+    expect(parsed?.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
+    expect(parsed?.agents?.main?.allowlist?.[1]).toEqual(
+      expect.objectContaining({ pattern: "cat", source: undefined }),
+    );
+  });
+
+  it.each([
+    { name: "version", value: { version: 2 } },
+    { name: "socket token", value: { version: 1, socket: { token: 42 } } },
+    { name: "policy enum", value: { version: 1, defaults: { security: "none" } } },
+    {
+      name: "allowlist metadata",
+      value: {
+        version: 1,
+        agents: { main: { allowlist: [{ pattern: "ls", lastUsedAt: "now" }] } },
+      },
+    },
+  ])("rejects invalid persisted $name", ({ value }) => {
+    expect(tryParsePersistedExecApprovals(JSON.stringify(value))).toBeNull();
   });
 });
 

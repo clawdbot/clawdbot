@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
-  loadBundledPluginPublicSurfaceModuleSync: vi.fn(),
+  loadBundledPluginPublicSurfaceModuleSyncCore: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -10,7 +10,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("../plugin-sdk/facade-loader.js", () => ({
-  loadBundledPluginPublicSurfaceModuleSync: mocks.loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore: mocks.loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
 import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
@@ -26,7 +26,7 @@ describe("worker Browser runtime", () => {
       tool: { name: "browser" },
       dispose,
     });
-    mocks.loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    mocks.loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       createAttachedBrowserToolRuntime,
     });
     mocks.execFile.mockImplementation(
@@ -51,7 +51,7 @@ describe("worker Browser runtime", () => {
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(mocks.loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "browser",
       artifactBasename: "runtime-api.js",
       trackedPluginId: "browser",
@@ -82,12 +82,33 @@ describe("worker Browser runtime", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  it("uses the build-composed Browser runtime without filesystem discovery", async () => {
+    const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({
+      tool: { name: "browser" },
+      dispose: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await createWorkerBrowserToolRuntime({
+      descriptor: {
+        cdpUrl: "http://127.0.0.1:9222",
+        launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      },
+      sessionKey: "worker:session-1",
+      stateDir: "/tmp/worker-state",
+      workspaceDir: "/tmp/workspace",
+      runtime: { createAttachedBrowserToolRuntime },
+    });
+
+    expect(createAttachedBrowserToolRuntime).toHaveBeenCalledOnce();
+    expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
+  });
+
   it("surfaces launcher failure without loading another browser route", async () => {
     const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({
       tool: { name: "browser" },
       dispose: vi.fn().mockResolvedValue(undefined),
     });
-    mocks.loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    mocks.loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       createAttachedBrowserToolRuntime,
     });
     mocks.execFile.mockImplementation(
@@ -117,6 +138,6 @@ describe("worker Browser runtime", () => {
     await expect(ensureAttachTarget()).rejects.toThrow(
       "Worker Browser launcher failed: launcher timed out",
     );
-    expect(mocks.loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledOnce();
+    expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledOnce();
   });
 });

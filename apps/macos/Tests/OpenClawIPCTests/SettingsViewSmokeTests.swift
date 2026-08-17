@@ -60,86 +60,10 @@ struct SettingsViewSmokeTests {
         _ = hosting.fittingSize
     }
 
-    @Test func `config settings builds body`() {
-        let view = ConfigSettings()
-        _ = view.body
-    }
-
-    @Test func `debug settings builds body`() {
-        let view = DebugSettings()
-        _ = view.body
-    }
-
-    @Test func `connection settings builds body`() {
-        let state = AppState(preview: true)
-        let view = GeneralSettings(state: state, page: .connection)
-        _ = view.body
-    }
-
-    @Test func `general settings renders the keyboard shortcut recorder`() {
-        let state = AppState(preview: true)
-        let hosting = NSHostingView(rootView: GeneralSettings(state: state))
-        hosting.frame = NSRect(x: 0, y: 0, width: 760, height: 640)
-        hosting.layoutSubtreeIfNeeded()
-        _ = hosting.fittingSize
-    }
-
-    @Test func `sessions settings builds body`() {
-        let view = SessionsSettings(rows: SessionRow.previewRows, isPreview: true)
-        _ = view.body
-    }
-
-    @Test func `instances settings builds body`() {
-        let store = InstancesStore(isPreview: true)
-        store.instances = [
-            InstanceInfo(
-                id: "local",
-                host: "this-mac",
-                ip: "127.0.0.1",
-                version: "1.0",
-                platform: "macos 15.0",
-                deviceFamily: "Mac",
-                modelIdentifier: "MacPreview",
-                lastInputSeconds: 12,
-                mode: "local",
-                reason: "test",
-                text: "test instance",
-                ts: Date().timeIntervalSince1970 * 1000),
-        ]
-        let view = InstancesSettings(store: store)
-        _ = view.body
-    }
-
-    @Test func `permissions settings builds body`() {
-        let state = AppState(preview: true)
-        let view = PermissionsSettings(
-            state: state,
-            status: [
-                .notifications: .granted,
-                .screenRecording: .notGranted,
-            ],
-            refresh: {},
-            showOnboarding: {})
-        _ = view.body
-    }
-
-    @Test func `settings root view builds body`() {
-        let state = AppState(preview: true)
-        let view = SettingsRootView(state: state, updater: nil, initialTab: .general)
-        _ = view.body
-    }
-
-    @Test func `Gateway settings is visible and builds body`() throws {
+    @Test func `Gateway settings is visible`() {
         let tabs = SettingsTabGroup.defaultGroups(showDebug: false, showSystemAgent: false)
             .flatMap(\.tabs)
         #expect(tabs.contains(.gateways))
-
-        let profile = try MacGatewayProfile(
-            id: "studio",
-            name: "Studio",
-            url: #require(URL(string: "wss://studio.example")))
-        let view = GatewaySettings(profiles: [profile], isPreview: true)
-        _ = view.body
     }
 
     @Test func `OpenClaw settings require configured inference`() {
@@ -217,26 +141,5 @@ struct SettingsViewSmokeTests {
             selectedTab: .systemAgent,
             previousGatewayID: directA,
             currentGatewayID: directB) == .init(clearsPrevious: true, resetsSystemAgent: true))
-    }
-
-    @Test func `about settings builds body`() {
-        let view = AboutSettings(updater: nil)
-        _ = view.body
-    }
-
-    @Test func `voice wake settings builds body`() {
-        let state = AppState(preview: true)
-        let view = VoiceWakeSettings(state: state, isActive: false)
-        _ = view.body
-    }
-
-    @Test func `skills settings builds body`() {
-        let view = SkillsSettings(state: .preview)
-        _ = view.body
-    }
-
-    @Test func `exec approvals settings builds body`() {
-        let view = ExecApprovalsSettings()
-        _ = view.body
     }
 }

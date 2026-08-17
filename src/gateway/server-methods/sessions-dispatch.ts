@@ -4,16 +4,18 @@ import {
   ErrorCodes,
   errorShape,
   validateSessionsDispatchParams,
+  validateSessionsMoveParams,
   validateSessionsReclaimParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
-  isWorkerPlacementSessionRuntimeSupported,
+  resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
 import type { WorkerPlacementDispatchContract } from "../worker-environments/service-contract.js";
@@ -42,6 +44,8 @@ function resolveWorkerSessionTarget(params: {
   key: string;
   agentId?: string;
   profileId?: string;
+  deviceId?: string;
+  machineClass?: string;
   context: GatewayRequestContext;
   respond: RespondFn;
 }) {
@@ -51,14 +55,14 @@ function resolveWorkerSessionTarget(params: {
     params.respond(false, undefined, requestedAgent.error);
     return undefined;
   }
-  if (
-    params.profileId !== undefined &&
-    !Object.hasOwn(cfg.cloudWorkers?.profiles ?? {}, params.profileId)
-  ) {
-    respondInvalidWorkerSession(
-      params.respond,
-      `cloud worker profile is not configured: ${params.profileId}`,
-    );
+  const destination = resolveWorkerPlacementDestination({
+    cfg,
+    profileId: params.profileId,
+    deviceId: params.deviceId,
+    machineClass: params.machineClass,
+  });
+  if (!destination.ok) {
+    respondInvalidWorkerSession(params.respond, destination.error);
     return undefined;
   }
   const target = loadAccessorSessionEntryForGatewayTarget({
@@ -72,13 +76,13 @@ function resolveWorkerSessionTarget(params: {
     respondInvalidWorkerSession(params.respond, `session not found: ${params.key}`);
     return undefined;
   }
-  return { cfg, target, entry, sessionId };
+  return { cfg, target, entry, sessionId, dispatchTarget: destination.value };
 }
 
 function hasManagedSessionWorktree(params: {
   entry: NonNullable<ReturnType<typeof loadAccessorSessionEntryForGatewayTarget>["entry"]>;
   sessionKey: string;
-  method: "sessions.dispatch" | "sessions.reclaim";
+  method: "sessions.dispatch" | "sessions.move" | "sessions.reclaim";
   respond: RespondFn;
 }): boolean {
   const worktree = managedWorktrees.findLiveByOwner("session", params.sessionKey);
@@ -111,6 +115,27 @@ function respondWorkerPlacement(params: {
       key: params.key,
       sessionId: params.sessionId,
       placement: projectWorkerSessionPlacement(params.placement),
+    },
+    undefined,
+  );
+}
+
+function respondWorkerMove(params: {
+  respond: RespondFn;
+  key: string;
+  sessionId: string;
+  placement: Extract<WorkerSessionPlacementRecord, { state: "local" | "active" }>;
+}): void {
+  params.respond(
+    true,
+    {
+      ok: true,
+      key: params.key,
+      sessionId: params.sessionId,
+      placement: {
+        state: params.placement.state,
+        generation: params.placement.generation,
+      },
     },
     undefined,
   );
@@ -149,13 +174,19 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       key,
       agentId: params.agentId,
       profileId: params.profileId,
+      deviceId: params.deviceId,
+      machineClass: params.machineClass,
       context,
       respond,
     });
     if (!resolved) {
       return;
     }
-    const { cfg, target, entry, sessionId } = resolved;
+    const { cfg, target, entry, sessionId, dispatchTarget } = resolved;
+    if (!dispatchTarget) {
+      respondInvalidWorkerSession(respond, "worker dispatch target is missing");
+      return;
+    }
     if (entry.archivedAt !== undefined) {
       respondInvalidWorkerSession(respond, "cannot dispatch an archived session");
       return;
@@ -166,10 +197,11 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       agentId: target.target.agentId,
       sessionKey: target.canonicalKey,
     });
-    if (!isWorkerPlacementSessionRuntimeSupported(sessionRuntime)) {
+    const executionMode = resolveWorkerPlacementExecutionMode(sessionRuntime);
+    if (!executionMode) {
       respondInvalidWorkerSession(
         respond,
-        `cloud worker dispatch requires the OpenClaw runtime, not ${sessionRuntime}`,
+        `runtime ${sessionRuntime} lacks cloud placement support`,
       );
       return;
     }
@@ -218,7 +250,8 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           sessionId,
           sessionKey: target.canonicalKey,
           agentId: target.target.agentId,
-          profileId: params.profileId,
+          executionMode,
+          ...dispatchTarget,
         },
         () =>
           emitSessionsChanged(context, {
@@ -228,6 +261,79 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       );
       respondWorkerPlacement({ respond, key: target.canonicalKey, sessionId, placement });
     } catch (error) {
+      respondWorkerDispatchError(error, respond);
+    }
+  },
+  "sessions.move": async ({ params, respond, context, sessionMutationAuthorization }) => {
+    if (!assertValidParams(params, validateSessionsMoveParams, "sessions.move", respond)) {
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
+    if (!key) {
+      return;
+    }
+    const placementService = context.workerPlacementDispatchService;
+    const placementReader = context.workerSessionPlacementService;
+    if (!placementService?.move || !placementReader) {
+      respondInvalidWorkerSession(respond, "session placement move is not configured");
+      return;
+    }
+    const resolved = resolveWorkerSessionTarget({
+      key,
+      agentId: params.agentId,
+      context,
+      respond,
+    });
+    if (!resolved) {
+      return;
+    }
+    const { target, entry, sessionId } = resolved;
+    if (entry.archivedAt !== undefined) {
+      respondInvalidWorkerSession(respond, "cannot move an archived session");
+      return;
+    }
+    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    if (existingPlacement?.state !== "active" && existingPlacement?.state !== "draining") {
+      respondInvalidWorkerSession(
+        respond,
+        `session cannot move from placement ${existingPlacement?.state ?? "local"}`,
+      );
+      return;
+    }
+    if (
+      !hasManagedSessionWorktree({
+        entry,
+        sessionKey: target.canonicalKey,
+        method: "sessions.move",
+        respond,
+      })
+    ) {
+      return;
+    }
+    try {
+      sessionMutationAuthorization?.assertCurrent();
+      const placement = await placementService.move(
+        {
+          sessionId,
+          sessionKey: target.canonicalKey,
+          agentId: target.target.agentId,
+          source: params.expected,
+          target: params.target,
+        },
+        () =>
+          emitSessionsChanged(context, {
+            reason: "move",
+            sessionKey: target.canonicalKey,
+          }),
+      );
+      respondWorkerMove({
+        respond,
+        key: target.canonicalKey,
+        sessionId,
+        placement,
+      });
+    } catch (error) {
+      emitSessionsChanged(context, { reason: "move", sessionKey: target.canonicalKey });
       respondWorkerDispatchError(error, respond);
     }
   },
@@ -265,7 +371,11 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    if (existingPlacement?.state !== "active") {
+    if (
+      existingPlacement?.state !== "active" &&
+      existingPlacement?.state !== "draining" &&
+      existingPlacement?.state !== "failed"
+    ) {
       respondInvalidWorkerSession(
         respond,
         `session cannot stop cloud worker from placement ${existingPlacement?.state ?? "local"}`,

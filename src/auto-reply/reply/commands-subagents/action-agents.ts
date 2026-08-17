@@ -1,8 +1,6 @@
 // Lists available agents for subagent spawn and focus commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagents/registry/subagent-registry-state.js";
+import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
@@ -27,8 +25,7 @@ function supportsConversationBindings(channel: string): boolean {
 
 export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
   const { params, requesterKey, runs } = ctx;
-  const runsSnapshot = getSubagentRunsSnapshotForRead(subagentRuns);
-  const readIndex = buildSubagentRunReadIndexFromRuns({ runs: runsSnapshot });
+  const readIndex = buildSubagentRunReadIndex();
   const channel = resolveCommandSurfaceChannel(params);
   const accountId = resolveChannelAccountId(params);
   const currentConversationBindingsSupported = supportsConversationBindings(channel);

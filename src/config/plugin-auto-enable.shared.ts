@@ -824,6 +824,14 @@ function disableImplicitPreferredOverPlugin(params: {
   if (isPluginExplicitlySelected(params.originalConfig, params.pluginId)) {
     return params.config;
   }
+  // A built-in channel id can remain in the static channel catalog after its
+  // bundled plugin has been externalized. Do not synthesize a disabled entry
+  // for that owner unless it is still present in the runtime manifest set.
+  // Otherwise registry alias normalization can fold the stale channel id back
+  // onto the external owner and override its explicit enabled entry.
+  if (!params.manifestRegistry.plugins.some((plugin) => plugin.id === params.pluginId)) {
+    return params.config;
+  }
   if (
     !normalizeChatChannelId(params.pluginId) &&
     !isKnownPluginId(params.pluginId, params.manifestRegistry)

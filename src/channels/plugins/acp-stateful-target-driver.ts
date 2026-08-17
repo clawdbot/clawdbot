@@ -4,7 +4,7 @@
  * Ensures ACP-backed bound sessions exist, are ready, and can be reset by Gateway.
  */
 import {
-  ensureConfiguredAcpBindingReady,
+  ensureConfiguredAcpBindingReadyCore,
   ensureConfiguredAcpBindingSession,
 } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
@@ -86,7 +86,7 @@ async function ensureAcpTargetReady(params: {
       error: "Configured ACP binding unavailable",
     };
   }
-  return await ensureConfiguredAcpBindingReady({
+  return await ensureConfiguredAcpBindingReadyCore({
     cfg: params.cfg,
     configuredBinding: {
       spec: configuredBinding,

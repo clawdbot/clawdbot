@@ -1,9 +1,13 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
-import fs from "node:fs";
 import path from "node:path";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
+import {
+  type CustomElementTracking,
+  dropRepoOwnedCustomElements,
+  trackCustomElementRegistry,
+} from "./jsdom-custom-elements.ts";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -34,6 +38,8 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
 );
 const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
+// Shared-worker scoped: the registry lives on the worker global, not in the module graph.
+const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
 const nativeTimerGlobals = {
   setTimeout: globalThis.setTimeout,
   clearTimeout: globalThis.clearTimeout,
@@ -86,6 +92,48 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
   process.env.XDG_DATA_HOME = path.join(testHome, ".local", "share");
   process.env.XDG_STATE_HOME = path.join(testHome, ".local", "state");
   process.env.XDG_CACHE_HOME = path.join(testHome, ".cache");
+}
+
+function customElementTrackingStore(): Record<PropertyKey, unknown> & {
+  customElements?: CustomElementRegistry;
+  [CUSTOM_ELEMENT_TRACKING]?: CustomElementTracking;
+} {
+  return globalThis;
+}
+
+function installCustomElementTracking(): void {
+  const globalStore = customElementTrackingStore();
+  const registry = globalStore.customElements;
+  // Re-track when the lane switches back to a fresh jsdom window: the previous
+  // tracking would hold a dead definitions array and stop dropping stale classes.
+  if (!registry || globalStore[CUSTOM_ELEMENT_TRACKING]?.registry === registry) {
+    return;
+  }
+  globalStore[CUSTOM_ELEMENT_TRACKING] = trackCustomElementRegistry(registry);
+}
+
+function dropTrackedRepoOwnedCustomElements(): void {
+  const tracking = customElementTrackingStore()[CUSTOM_ELEMENT_TRACKING];
+  if (tracking) {
+    dropRepoOwnedCustomElements(tracking);
+  }
+}
+
+// The shared jsdom window keeps whatever the previous file mounted. Test helpers
+// that look up `document.body.querySelector(...)` then answer the earlier file's
+// leaked dialog instead of the one under test, and focus assertions read its stale
+// activeElement. File-scoped DOM has to die with the file, like the module graph.
+// `document.head` is left alone: externalized dependency styles register once per
+// worker and cannot be replayed.
+function resetSharedDocumentBody(): void {
+  const body = (globalThis as { document?: Document }).document?.body;
+  if (!body) {
+    return;
+  }
+  body.replaceChildren();
+  for (const attribute of body.getAttributeNames()) {
+    body.removeAttribute(attribute);
+  }
 }
 
 function restoreRealTimers(): void {
@@ -320,6 +368,9 @@ export function serializeMockerResolveMocks(
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   override onCollectStart(file: RunnerTestFile) {
     super.onCollectStart(file);
+    if (!this.config.isolate) {
+      installCustomElementTracking();
+    }
     const internals = this as unknown as TestRunnerInternals;
     if (internals.moduleRunner?.mocker) {
       serializeMockerResolveMocks(internals.moduleRunner.mocker);
@@ -327,10 +378,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     restoreRealTimers();
     restoreNativeTimerGlobals();
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
-    const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
-    if (orderLogPath) {
-      fs.appendFileSync(orderLogPath, `START ${file.filepath}\n`);
-    }
   }
 
   override async onBeforeRunTask(test: RunnerTask) {
@@ -352,17 +399,10 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   // the next file's vi.mock factories silently never applied. The worker loop
   // calls startTests per file, so this hook runs after every file regardless
   // of its collect/run outcome.
-  override onAfterRunFiles(files?: RunnerTestFile[]) {
+  override onAfterRunFiles() {
     super.onAfterRunFiles();
     if (this.config.isolate) {
       return;
-    }
-
-    const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
-    if (orderLogPath) {
-      for (const file of files ?? []) {
-        fs.appendFileSync(orderLogPath, `END ${file.filepath}\n`);
-      }
     }
 
     // Mirror the missing cleanup from Vitest isolate mode so shared workers do
@@ -381,6 +421,8 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     // Named plugin runtimes intentionally survive duplicate module evaluation in production.
     // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
     clearNamedPluginRuntimeStoresForTest();
+    dropTrackedRepoOwnedCustomElements();
+    resetSharedDocumentBody();
     vi.resetModules();
     const internals = this as unknown as TestRunnerInternals;
     internals.moduleRunner?.mocker?.reset?.();

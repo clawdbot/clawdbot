@@ -283,7 +283,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("keeps aggregate cache billing buckets out of the context total", async () => {
+  it("includes compaction iterations in billed usage while keeping final context usage", async () => {
     const client = createAnthropicSseClient([
       {
         type: "message_start",
@@ -339,23 +339,130 @@ describe("Anthropic provider", () => {
     ]);
 
     const result = await streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      }),
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       { apiKey: "sk-ant-provider", client: client as never },
     ).result();
 
     expect(result.usage).toMatchObject({
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
+      input: 24,
+      output: 16_104,
+      cacheRead: 968_523,
       cacheWrite: 93_130,
       contextUsage: {
         state: "available",
         promptTokens: 148_874,
         totalTokens: 163_978,
       },
-      totalTokens: 927_907,
+      totalTokens: 1_077_781,
     });
+    expect(result.usage.cost.total).toBeCloseTo(1.469044, 6);
+  });
+
+  it("captures and replays streamed Anthropic compaction blocks", async () => {
+    const firstClient = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_compaction",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 50_001, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "compaction", content: null },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "compaction_delta", content: "summary checkpoint" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "Done." },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "compaction" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    const replayOptions = {
+      anthropicServerCompaction: true,
+      authProfileId: "anthropic:work",
+      sessionId: "session-1",
+    } as const;
+    const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
+    const first = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [firstUser] },
+      {
+        apiKey: "sk-ant-provider",
+        client: firstClient as never,
+        ...replayOptions,
+      },
+    ).result();
+
+    expect(first.stopReason).toBe("stop");
+    expect(first.providerReplay).toMatchObject({
+      type: "anthropic-compaction",
+      data: "summary checkpoint",
+      replayIndex: 0,
+    });
+
+    let replayPayload: Record<string, unknown> | undefined;
+    const secondClient = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_replay",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    await streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [firstUser, first, { role: "user", content: "new question", timestamp: 2 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        client: secondClient as never,
+        ...replayOptions,
+        onPayload: (payload) => {
+          replayPayload = payload as Record<string, unknown>;
+        },
+      },
+    ).result();
+
+    const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
+    expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expect(replayMessages[0]?.content).toEqual([
+      { type: "compaction", content: "summary checkpoint" },
+      { type: "text", text: "Done." },
+    ]);
   });
 
   it("ignores a message_delta whose usage object is omitted", async () => {

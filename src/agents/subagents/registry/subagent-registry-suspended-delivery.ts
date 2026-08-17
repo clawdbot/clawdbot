@@ -1,15 +1,11 @@
-import {
-  ensureCompletionState,
-  ensureDeliveryState,
-  getDeliveryLastError,
-  isDeliverySuspended,
-} from "./subagent-delivery-state.js";
+import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -32,6 +28,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   resumedRuns: Set<string>;
   clearPendingLifecycleError: (runId: string) => void;
   clearPendingLifecycleTimeout: (runId: string) => void;
+  discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
   completeCleanupBookkeeping: (params: {
     runId: string;
     entry: SubagentRunRecord;
@@ -53,32 +50,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   const { runId, entry, now, reason, resumedRuns } = params;
   const snapshot = structuredClone(entry);
   const wasResumed = resumedRuns.has(runId);
-  const delivery = ensureDeliveryState(entry);
-  const payload = delivery.payload;
-  delivery.status = "discarded";
-  delivery.discardedAt = now;
-  delivery.discardReason = reason;
-  delivery.discardedPayloadSummary = {
-    requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
-    childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
-    childRunId: payload?.childRunId ?? entry.runId,
-    endedAt: payload?.endedAt ?? entry.execution.endedAt,
-    status: payload?.outcome?.status ?? entry.execution.outcome?.status,
-    lastError: getDeliveryLastError(entry) ?? null,
-  };
-  delivery.payload = undefined;
-  delivery.createdAt = undefined;
-  delivery.lastAttemptAt = undefined;
-  delivery.attemptCount = undefined;
-  delivery.lastError = undefined;
-  delivery.suspendedAt = undefined;
-  delivery.suspendedReason = undefined;
-  entry.wakeOnDescendantSettle = undefined;
-  const completion = ensureCompletionState(entry);
-  completion.fallbackResultText = undefined;
-  completion.fallbackCapturedAt = undefined;
-  entry.cleanupHandled = true;
-  delivery.announcedAt = undefined;
+  params.discardTerminalDelivery(entry, now, reason);
   const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
   const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
   try {
@@ -90,9 +62,8 @@ export async function discardSuspendedPendingFinalDelivery(params: {
       skipRequesterSettleWake: true,
     });
   } catch (error) {
-    const mutableEntry = entry as unknown as Record<string, unknown>;
-    for (const key of Object.keys(mutableEntry)) {
-      delete mutableEntry[key];
+    for (const key of Object.keys(entry)) {
+      Reflect.deleteProperty(entry, key);
     }
     Object.assign(entry, snapshot);
     if (wasResumed) {

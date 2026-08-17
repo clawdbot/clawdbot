@@ -11,7 +11,7 @@ import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.r
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
 import {
   isPathInsideContainerRoot,
-  normalizeContainerPath,
+  normalizeContainerPathCore,
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
 
@@ -189,7 +189,7 @@ export class SandboxFsPathGuard {
     if (!basename || basename === "." || basename === "/") {
       throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
     }
-    const parentPath = normalizeContainerPath(path.posix.dirname(target.containerPath));
+    const parentPath = normalizeContainerPathCore(path.posix.dirname(target.containerPath));
     const mount = this.resolveRequiredMount(parentPath, action);
     return this.finalizePinnedEntry({
       mount,
@@ -208,7 +208,7 @@ export class SandboxFsPathGuard {
     if (!basename || basename === "." || basename === "/") {
       throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
     }
-    const parentPath = normalizeContainerPath(path.posix.dirname(target.containerPath));
+    const parentPath = normalizeContainerPathCore(path.posix.dirname(target.containerPath));
     const canonicalParentPath = await this.resolveCanonicalContainerPath({
       containerPath: parentPath,
       allowFinalSymlinkForUnlink: false,
@@ -262,9 +262,9 @@ export class SandboxFsPathGuard {
   }
 
   private resolveMountByContainerPath(containerPath: string): SandboxFsMount | null {
-    const normalized = normalizeContainerPath(containerPath);
+    const normalized = normalizeContainerPathCore(containerPath);
     for (const mount of this.mountsByContainer) {
-      if (isPathInsideContainerRoot(normalizeContainerPath(mount.containerRoot), normalized)) {
+      if (isPathInsideContainerRoot(normalizeContainerPathCore(mount.containerRoot), normalized)) {
         return mount;
       }
     }
@@ -301,6 +301,6 @@ export class SandboxFsPathGuard {
     if (!canonical.startsWith("/")) {
       throw new Error(`Failed to resolve canonical sandbox path: ${params.containerPath}`);
     }
-    return normalizeContainerPath(canonical);
+    return normalizeContainerPathCore(canonical);
   }
 }

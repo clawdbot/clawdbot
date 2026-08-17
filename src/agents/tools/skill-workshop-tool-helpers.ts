@@ -9,7 +9,7 @@ import type {
   SkillProposalSupportFileInput,
   SkillWorkshopProposalReviewCompletion,
 } from "../../skills/workshop/types.js";
-import { readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
+import { readPositiveIntegerParam, readToolStringParam, ToolInputError } from "./common.js";
 
 export function skillWorkshopAgentEventActor(agentId?: string) {
   return { type: "agent" as const, ...(agentId ? { id: agentId } : {}) };
@@ -124,7 +124,7 @@ export function proposalResult(
 }
 
 export function readLifecycleProposalIdParam(params: Record<string, unknown>): string {
-  return readStringParam(params, "proposal_id", {
+  return readToolStringParam(params, "proposal_id", {
     required: true,
     label: "proposal_id",
   });
@@ -136,7 +136,7 @@ export async function readProposalForInspect(
   env?: NodeJS.ProcessEnv,
   agentId?: string,
 ): Promise<SkillProposalReadResult> {
-  const proposalId = readStringParam(params, "proposal_id", { label: "proposal_id" });
+  const proposalId = readToolStringParam(params, "proposal_id", { label: "proposal_id" });
   if (proposalId) {
     const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir, env });
     if (!proposal) {
@@ -145,7 +145,7 @@ export async function readProposalForInspect(
     return proposal;
   }
   const resolved = await resolvePendingSkillProposal({
-    name: readStringParam(params, "name", { required: true }),
+    name: readToolStringParam(params, "name", { required: true }),
     workspaceDir,
     env,
     agentId,
@@ -165,7 +165,7 @@ export function readProposalStatusParam(
   params: Record<string, unknown>,
   statuses: readonly SkillProposalStatus[],
 ): SkillProposalStatus | undefined {
-  const status = readStringParam(params, "status");
+  const status = readToolStringParam(params, "status");
   if (!status) {
     return undefined;
   }

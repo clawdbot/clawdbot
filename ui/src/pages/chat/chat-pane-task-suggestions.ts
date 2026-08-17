@@ -7,13 +7,14 @@ import type {
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   taskSuggestionAcceptParams,
   type TaskSuggestionAcceptMode,
 } from "../../lib/task-suggestion-acceptance.ts";
-import { discoverCloudProfiles } from "../new-session/cloud-profile-discovery.ts";
+import { discoverPlaceCatalog } from "../new-session/cloud-profile-discovery.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 
@@ -49,7 +50,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       return;
     }
     try {
-      const profiles = await discoverCloudProfiles(scope.client, true);
+      const { profiles } = await discoverPlaceCatalog(scope.client, true);
       if (!this.isConnectionScopeCurrent(scope)) {
         return;
       }
@@ -171,7 +172,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const operation = Symbol();
+    const operation = Symbol("task-suggestion-operation");
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) &&
       scope.state.sessionKey === sessionKey &&
@@ -201,7 +202,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       if (!isCurrent()) {
         return;
       }
-      scope.state.lastError = error instanceof Error ? error.message : String(error);
+      scope.state.lastError = formatUiError(error);
       scope.state.chatError = scope.state.lastError;
     } finally {
       if (this.taskSuggestionOperations.get(suggestion.id) === operation) {

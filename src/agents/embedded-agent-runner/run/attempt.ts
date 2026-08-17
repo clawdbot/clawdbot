@@ -85,7 +85,6 @@ export async function runEmbeddedAttempt(
 
   let restoreSkillEnv: (() => void) | undefined;
   const executionState: EmbeddedAttemptExecutionState = {
-    beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
     terminal: params.abortSignal?.aborted
       ? { kind: "aborted", source: "external" }
@@ -100,6 +99,7 @@ export async function runEmbeddedAttempt(
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
+  let runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
       clearToolSearchCatalog({
@@ -229,11 +229,13 @@ export async function runEmbeddedAttempt(
       computerContextEpoch,
       localModelLeanEnabled,
       replaySafetyOptions,
+      runCleanups: preparedRunCleanups,
       toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,
       toolsEnabled,
       toolsRaw,
     } = preparedToolBase;
+    runCleanups = preparedRunCleanups;
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
     const preparedBootstrap = await measureEmbeddedAgentPreparation(
@@ -523,7 +525,6 @@ export async function runEmbeddedAttempt(
         emitDiagnosticRunCompleted,
         readState: () => ({
           ...projectAgentRunAttemptTerminal(executionState.terminal),
-          beforeAgentRunBlocked: executionState.beforeAgentRunBlocked,
           beforeAgentRunBlockedBy: executionState.beforeAgentRunBlockedBy,
         }),
       });
@@ -538,6 +539,19 @@ export async function runEmbeddedAttempt(
     }
     throw error;
   } finally {
+    const cleanupTerminal = projectAgentRunAttemptTerminal(executionState.terminal);
+    const cleanupReason =
+      cleanupTerminal.timedOut ||
+      cleanupTerminal.timedOutDuringCompaction ||
+      cleanupTerminal.timedOutDuringToolExecution
+        ? "timeout"
+        : cleanupTerminal.aborted
+          ? "cancel"
+          : cleanupTerminal.failed
+            ? "error"
+            : "completion";
+    const cleanups = runCleanups.splice(0);
+    await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
     externalAbortController.dispose();
     clearToolActivityRun(params.runId);
     try {

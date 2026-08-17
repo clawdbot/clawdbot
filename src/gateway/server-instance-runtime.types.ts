@@ -11,7 +11,11 @@ export type GatewayApprovalEventPublisher = {
 };
 
 export type GatewayRecoveryRuntime = {
-  dispatchAgent: <T = unknown>(params: AgentRunRequest, timeoutMs?: number) => Promise<T>;
+  dispatchAgent: <T = unknown>(
+    params: AgentRunRequest,
+    timeoutMs?: number,
+    options?: { allowModelOverride?: boolean; scopes?: string[] },
+  ) => Promise<T>;
   waitForAgent: <T = unknown>(params: AgentWaitParams, timeoutMs?: number) => Promise<T>;
   sendRecoveryNotice: (params: {
     channel: string;
@@ -20,7 +24,10 @@ export type GatewayRecoveryRuntime = {
     threadId?: string | number;
     text: string;
     idempotencyKey: string;
-  }) => Promise<void>;
+  }) => Promise<{
+    /** True when delivery produced zero platform results (policy/channel suppression). */
+    suppressed: boolean;
+  }>;
 };
 
 export type GatewayInstanceRuntime = {

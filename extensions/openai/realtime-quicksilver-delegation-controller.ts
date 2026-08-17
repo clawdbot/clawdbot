@@ -1,3 +1,4 @@
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceAgentConsultRunner } from "openclaw/plugin-sdk/realtime-voice";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
@@ -36,12 +37,8 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   signal: AbortSignal;
 };
 
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
 function shortFailureReason(error: unknown): string {
-  return toError(error).message.replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
+  return formatErrorMessage(error).replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
 }
 
 function readWireEventType(payload: string): string | undefined {
@@ -185,7 +182,9 @@ export class OpenAIQuicksilverDelegationController {
     this.activeDelegationId = delegation.id;
     const signal = AbortSignal.any([this.options.signal, controller.signal]);
     void this.runDelegation(delegation, signal)
-      .catch((error: unknown) => this.fail(toError(error)))
+      .catch((error: unknown) =>
+        this.fail(toErrorObject(error, "OpenAI GPT-Live delegation failed")),
+      )
       .finally(() => {
         if (this.consultController !== controller) {
           return;

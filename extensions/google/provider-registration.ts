@@ -13,8 +13,13 @@ import {
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
-import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 import {
+  isGoogleNativeVideoModelId,
+  isModernGoogleModel,
+  resolveGoogleGeminiForwardCompatModel,
+} from "./provider-models.js";
+import {
+  isOfficialGoogleAiStudioBaseUrl,
   isGoogleVertexBaseUrl,
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiTransport,
@@ -24,6 +29,18 @@ import {
   createGoogleVertexTransportStreamFn,
 } from "./transport-stream.js";
 import { resolveGoogleVertexConfigApiKey } from "./vertex-adc.js";
+
+function normalizeGoogleVideoInput(
+  ctx: Parameters<NonNullable<ProviderPlugin["normalizeResolvedModel"]>>[0],
+) {
+  const input = (ctx.model.input as string[]).filter((type) => type !== "video");
+  const supportsVideo =
+    ctx.provider === "google" &&
+    ctx.model.api === "google-generative-ai" &&
+    isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
+    isGoogleNativeVideoModelId(ctx.modelId);
+  return { ...ctx.model, input: supportsVideo ? [...input, "video"] : input } as typeof ctx.model;
+}
 
 function resolveGoogleReasoningOutputMode(
   ctx: ProviderReasoningOutputModeContext,
@@ -100,6 +117,7 @@ export function buildGoogleProvider(): ProviderPlugin {
       },
     },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
+    normalizeResolvedModel: normalizeGoogleVideoInput,
     resolveDynamicModel: (ctx) =>
       resolveGoogleGeminiForwardCompatModel({
         providerId: ctx.provider,

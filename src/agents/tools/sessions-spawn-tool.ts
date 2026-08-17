@@ -45,9 +45,10 @@ import {
   jsonResult,
   normalizeToolModelOverride,
   readNonNegativeIntegerParam,
-  readStringParam,
+  readToolStringParam,
   ToolInputError,
 } from "./common.js";
+import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
@@ -161,7 +162,12 @@ function createSessionsSpawnToolSchema(params: {
     thinking: Type.Optional(
       Type.String({ description: "Thinking override; unavailable with visible=true." }),
     ),
-    cwd: Type.Optional(Type.String()),
+    cwd: Type.Optional(
+      Type.String({
+        description:
+          "Working directory for the child. With visible=true, paths outside configured agent workspaces require operator.admin; omit to use the target agent workspace.",
+      }),
+    ),
     ...(params.threadAvailable
       ? {
           thread: Type.Optional(
@@ -282,6 +288,9 @@ export function createSessionsSpawnTool(
     requesterAgentIdOverride?: string;
     requesterRunId?: string;
     swarmCollector?: boolean;
+    /** Backend-derived parent incarnation; never sourced from model arguments. */
+    expectedParentSessionId?: string;
+    signal?: AbortSignal;
   } & VisibleSessionsSpawnDeps &
     SpawnedToolContext,
 ): AnyAgentTool {
@@ -302,6 +311,7 @@ export function createSessionsSpawnTool(
   const { restrictToSpawned } = resolveSandboxedSessionToolContext({
     cfg: visibilityCfg,
     agentSessionKey: opts?.agentSessionKey,
+    requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
   return {
@@ -367,7 +377,7 @@ export function createSessionsSpawnTool(
           `sessions_spawn does not support "${unsupportedTimeoutParam}". Use "runTimeoutSeconds" for a per-run timeout.`,
         );
       }
-      const task = readStringParam(params, "task", { required: true });
+      const task = readToolStringParam(params, "task", { required: true });
       const runTimeoutSeconds = readNonNegativeIntegerParam(params, "runTimeoutSeconds");
       const taskNameResult = normalizeSubagentTaskName(params.taskName);
       if (taskNameResult.error) {
@@ -377,16 +387,16 @@ export function createSessionsSpawnTool(
         });
       }
       const taskName = taskNameResult.taskName;
-      const label = readStringParam(params, "label") ?? "";
+      const label = readToolStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       if (collect && runtime === "acp") {
         throw new ToolInputError('sessions_spawn collect=true supports runtime="subagent" only.');
       }
-      const requestedAgentId = readStringParam(params, "agentId");
-      const resumeSessionId = readStringParam(params, "resumeSessionId");
-      const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
-      const thinkingOverrideRaw = readStringParam(params, "thinking");
-      const cwd = readStringParam(params, "cwd");
+      const requestedAgentId = readToolStringParam(params, "agentId");
+      const resumeSessionId = readToolStringParam(params, "resumeSessionId");
+      const modelOverride = normalizeToolModelOverride(readToolStringParam(params, "model"));
+      const thinkingOverrideRaw = readToolStringParam(params, "thinking");
+      const cwd = readToolStringParam(params, "cwd");
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
@@ -405,17 +415,31 @@ export function createSessionsSpawnTool(
           ...roleContext,
         });
       }
-      const visibleResult = await maybeSpawnVisibleSession({
-        raw: params,
-        task,
-        taskName,
-        label,
-        runtime,
-        requestedAgentId,
-        runTimeoutSeconds,
-        sandbox,
-        options: opts,
-      });
+      const expectedParentSessionKey = opts?.agentSessionKey?.trim();
+      if (opts?.expectedParentSessionId && !expectedParentSessionKey) {
+        throw new Error("Exact parent session access requires a session key");
+      }
+      const spawnVisible = async () =>
+        await maybeSpawnVisibleSession({
+          raw: params,
+          task,
+          taskName,
+          label,
+          runtime,
+          requestedAgentId,
+          runTimeoutSeconds,
+          sandbox,
+          options: opts,
+        });
+      const visibleResult = opts?.expectedParentSessionId
+        ? await runWithScopedSessionAccess({
+            cfg: visibilityCfg,
+            expectedSessionId: opts.expectedParentSessionId,
+            ...(opts.signal ? { signal: opts.signal } : {}),
+            targetSessionKey: expectedParentSessionKey!,
+            run: spawnVisible,
+          })
+        : await spawnVisible();
       if (visibleResult) {
         return jsonResult(
           addRoleToFailureResult(visibleResult as { status: string }, requestedAgentId),
@@ -539,7 +563,7 @@ export function createSessionsSpawnTool(
             params.fastMode === true || params.fastMode === false || params.fastMode === "auto"
               ? params.fastMode
               : undefined,
-          groupId: readStringParam(params, "groupId"),
+          groupId: readToolStringParam(params, "groupId"),
           swarmLaunchReplayKey:
             typeof params[SWARM_CODE_MODE_IDEMPOTENCY_KEY] === "string"
               ? params[SWARM_CODE_MODE_IDEMPOTENCY_KEY]
@@ -559,7 +583,7 @@ export function createSessionsSpawnTool(
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
-              ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
+              ? readToolStringParam(params.attachAs as Record<string, unknown>, "mountPath")
               : undefined,
         },
         {

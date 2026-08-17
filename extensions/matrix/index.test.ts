@@ -12,7 +12,6 @@ const runtimeMocks = vi.hoisted(() => ({
   ensureMatrixCryptoRuntime: vi.fn(async () => {}),
   handleMatrixSubagentDeliveryTarget: vi.fn(() => "delivery-target"),
   handleMatrixSubagentEnded: vi.fn(async () => {}),
-  handleMatrixSubagentSpawning: vi.fn(async () => "spawned"),
   handleVerificationBootstrap: vi.fn(async () => {}),
   handleVerificationStatus: vi.fn(async () => {}),
   handleVerifyRecoveryKey: vi.fn(async () => {}),

@@ -61,7 +61,6 @@ import {
 } from "../gateway/server-methods/chat-history-pages.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
@@ -73,9 +72,9 @@ import {
   getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   loadSessionEntry,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
@@ -627,7 +626,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
+    const { cfg, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
       opts.sessionKey,
       { ...loadOptions, includeStoreChildEntries: true },
     );
@@ -670,8 +669,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       maxSingleMessageBytes: perMessageHardCap,
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-    const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
-    const messages = bounded.messages;
+    const messages = capped;
     const newestInFlightRun = [...this.runs.entries()].findLast(
       ([, run]) =>
         !run.isBtw &&
@@ -732,7 +730,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+    const { storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
       agentId: opts?.agentId,
       projection: "list",
     });
@@ -797,7 +795,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ok: true as const,
       path: target.storePath,
       key: target.canonicalKey ?? opts.key,
-      entry: applied.entry as unknown as Record<string, unknown>,
+      entry: { ...applied.entry },
       resolved: {
         modelProvider: resolved.provider,
         model: resolved.model,
@@ -807,7 +805,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
     await this.ready;
-    if (loadSessionEntryReadOnly(key, opts).entry?.incognito === true) {
+    if (loadGatewaySessionEntryReadOnly(key, opts).entry?.incognito === true) {
       throw new Error("Incognito sessions cannot reset in place.");
     }
     const result = await performGatewaySessionReset({

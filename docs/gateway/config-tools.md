@@ -38,7 +38,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:sessions`   | `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `suggest_task`, `dismiss_task` |
 | `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
-| `group:ui`         | `browser`, `screen`, `terminal`, `canvas`, `show_widget`                                                                                                                                                                                                 |
+| `group:ui`         | `browser`, `screen`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                          |
 | `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                                                                                                   |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
@@ -345,8 +345,8 @@ Configures inbound media understanding (image/audio/video):
 
 Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
 
-Default: `tree` (current session + sessions spawned by it, such as subagents, plus ambient
-watched group sessions for the same agent).
+Default: `tree` (current session + sessions spawned by it, such as subagents;
+the main session can reach every session of the same agent).
 
 ```json5
 {
@@ -362,10 +362,11 @@ watched group sessions for the same agent).
 <AccordionGroup>
   <Accordion title="Visibility scopes">
     - `self`: only the current session key.
-    - `tree`: current session + sessions spawned by the current session (subagents). For read operations, it also includes same-agent group sessions that the current session watches through ambient group awareness.
+    - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the canonical main session, it includes every same-agent session for list, history, search, send, and status.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
-    - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
+    - `self` remains strict for main. Incognito denial remains absolute, and cross-agent access still requires `all` plus `tools.agentToAgent` policy.
+    - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), access stays limited to spawned sessions even if the caller is main or `tools.sessions.visibility="all"`.
     - When not `all`, `sessions_list` includes a compact `visibility` field
       describing the effective mode and a warning that some sessions may be
       omitted outside the current scope.
@@ -373,11 +374,11 @@ watched group sessions for the same agent).
   </Accordion>
 </AccordionGroup>
 
-With the default `session.dmScope: "main"`, human activity in a group makes that same-agent group
-session ambiently visible to the agent's main session. In a multi-user setup, `"main"` also shares
-one DM session across users, so each user routed there can read from ambiently watched groups,
-including through session-memory `memory_search`. Use a per-peer `dmScope` for DM isolation, or set
-`tools.sessions.visibility: "self"` to opt out of ambient watched-session reads.
+Ambient group watches still queue activity notices and tell the main session
+where something happened. They do not grant access: main's same-agent access is
+built into `tree`. In a multi-user setup, `session.dmScope: "main"` shares that
+main session across users; use a per-peer DM scope for isolation, or set
+`tools.sessions.visibility: "self"` for strict current-session access.
 
 ### `tools.sessions_spawn`
 
@@ -526,8 +527,6 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `openai-chatgpt-responses`, `anthropic-messages`, `google-generative-ai`, `google-vertex`, `github-copilot`, `bedrock-converse-stream`, `ollama`, `azure-openai-responses`). For self-hosted `/v1/chat/completions` backends such as MLX, vLLM, SGLang, and most OpenAI-compatible local servers, use `openai-completions`. A custom provider with `baseUrl` but no `api` defaults to `openai-completions`; set `openai-responses` only when the backend supports `/v1/responses`.
     - `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).
     - `models.providers.*.auth`: auth strategy (`api-key`, `token`, `oauth`, `aws-sdk`).
-    - `models.providers.*.contextWindow`: default native context window for models under this provider when the model entry does not set `contextWindow`.
-    - `models.providers.*.contextTokens`: default effective runtime context cap for models under this provider when the model entry does not set `contextTokens`.
     - `models.providers.*.maxTokens`: default output-token cap for models under this provider when the model entry does not set `maxTokens`.
     - `models.providers.*.timeoutSeconds`: optional per-provider model HTTP request timeout in seconds, including connect, headers, body, and total request abort handling.
     - `models.providers.*.injectNumCtxForOpenAICompat`: for Ollama + `openai-completions`, inject `options.num_ctx` into requests (default: `true`).
@@ -549,8 +548,8 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
   <Accordion title="Model catalog entries">
     - `models.providers.*.models`: explicit provider model catalog entries.
     - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
-    - `models.providers.*.models.*.contextWindow`: native model context window metadata. This overrides provider-level `contextWindow` for that model.
-    - `models.providers.*.models.*.contextTokens`: optional runtime context cap. This overrides provider-level `contextTokens`; use it when you want a smaller effective context budget than the model's native `contextWindow`; `openclaw models list` shows both values when they differ.
+    - `models.providers.*.models.*.contextWindow`: native context-window metadata for that model.
+    - `models.providers.*.models.*.contextTokens`: optional active-input cap for that model; use it when you want an effective budget distinct from the model's native `contextWindow`; `openclaw models list` shows both when they differ.
 
     #### Custom provider capability declarations
 

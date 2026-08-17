@@ -59,11 +59,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "config-runtime";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "@noble/ed25519") ||
-    moduleIdIncludesPackage(id, "@noble/hashes") ||
-    moduleIdIncludesPackage(id, "ipaddr.js")
-  ) {
+  // @noble/hashes stays out of this startup chunk deliberately: it is only
+  // dynamically imported as the insecure-context fallback digest provider.
+  if (moduleIdIncludesPackage(id, "@noble/ed25519") || moduleIdIncludesPackage(id, "ipaddr.js")) {
     return "gateway-runtime";
   }
 
@@ -83,10 +81,9 @@ export const controlUiCodeSplitting = {
         normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
       tags: ["$initial"] as ["$initial"],
       priority: 10,
-      // 512 KiB packs the grown core graph into fewer chunks; the previous
-      // 448 KiB boundary split one core chunk in two, costing ~1.9 KiB startup
-      // gzip (same tradeoff as the earlier 400->448 bump).
-      maxSize: 512 * 1024,
+      // 576 KiB keeps the shared normalization graph in one chunk; the previous
+      // 512 KiB boundary split it in two, adding a startup request and ~700 B gzip.
+      maxSize: 576 * 1024,
     },
   ],
 };

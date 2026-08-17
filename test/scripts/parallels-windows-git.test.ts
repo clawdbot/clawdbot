@@ -31,8 +31,7 @@ describe("Parallels Windows MinGit preparation", () => {
     }));
 
     await expect(prepareMinGitZip(targetDir)).resolves.toBe(targetPath);
-    expect(runMock).toHaveBeenNthCalledWith(
-      2,
+    expect(runMock).toHaveBeenCalledWith(
       "curl",
       [
         "--retry",

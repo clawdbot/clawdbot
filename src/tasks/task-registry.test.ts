@@ -14,6 +14,11 @@ import {
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import {
+  createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+  sweepExpiredPluginStateEntries,
+} from "../plugin-state/plugin-state-store.js";
+import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -21,7 +26,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
@@ -33,6 +38,7 @@ import {
   requestFlowCancel,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { getTaskActivitySnapshot } from "./task-registry-activity.js";
 import {
   cancelTaskById,
   deleteTaskRecordById,
@@ -464,7 +470,7 @@ async function withTaskRegistryTempDir<T>(
   run: (root: string) => Promise<T>,
   options?: { durableStore?: boolean },
 ): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+  return await withTestDir({ prefix: "openclaw-task-registry-" }, async (root) => {
     return await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
@@ -552,6 +558,29 @@ describe("task-registry", () => {
     hoisted.cancelBackgroundExecSessionMock.mockReset();
     hoisted.cancelActiveCronTaskRunMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
+  });
+
+  it("sweeps expired plugin state after restart before a plugin namespace reopens", async () => {
+    await withTaskRegistryTempDir(async () => {
+      try {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const store = createPluginStateKeyedStore<{ value: string }>("fixture-plugin", {
+          namespace: "maintenance-restart",
+          maxEntries: 10,
+        });
+        await store.register("expired", { value: "stale" }, { ttlMs: 100 });
+
+        // Close plugin-state's process-local handle while preserving the shared SQLite file.
+        resetPluginStateStoreForTests();
+        vi.setSystemTime(1_200);
+        await runTaskRegistryMaintenance();
+
+        expect(sweepExpiredPluginStateEntries()).toBe(0);
+      } finally {
+        resetPluginStateStoreForTests();
+      }
+    });
   });
 
   it("updates task status from lifecycle events", async () => {
@@ -788,6 +817,67 @@ describe("task-registry", () => {
       expectRecordFields(requireTaskByRunId("run-tools"), {
         toolUseCount: 2,
         lastToolName: "exec",
+      });
+    });
+  });
+
+  it("folds Codex native child activity under its canonical thread run id", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const runId = "codex-thread:019fef4-native-child";
+      const task = createTaskFixture("subagent", {
+        childSessionKey: runId,
+        runId,
+        task: "Inspect the ACP runtime",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { delta: "Editing the native child path" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: { phase: "start", name: "bash", toolCallId: "cmd-1" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "apply_patch",
+          toolCallId: "patch-1",
+          args: {
+            changes: [
+              {
+                path: "src/tasks/task-registry.ts",
+                kind: "update",
+                stat: { added: 5, removed: 2 },
+              },
+              {
+                path: "src/tasks/task-registry.test.ts",
+                kind: "update",
+                stat: { added: 8, removed: 0 },
+              },
+            ],
+          },
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: { phase: "result", name: "apply_patch", toolCallId: "patch-1", isError: false },
+      });
+
+      expectRecordFields(requireTaskByRunId(runId), {
+        toolUseCount: 2,
+        lastToolName: "apply_patch",
+      });
+      expect(getTaskActivitySnapshot(task.taskId)).toEqual({
+        lastActivity: "Editing the native child path",
+        diffStat: { files: 2, added: 13, removed: 2 },
       });
     });
   });
@@ -2204,6 +2294,41 @@ describe("task-registry", () => {
         expect(events).toHaveLength(1);
         expect(events[0]).toContain("Background task failed: ACP background task");
       });
+    });
+  });
+
+  it.each([
+    {
+      name: "intentional suppression queues the session fallback",
+      suppressionReason: "cancelled_by_message_sending_hook",
+      expectedFallbackCount: 1,
+    },
+    {
+      name: "adapter ambiguity avoids a duplicate session fallback",
+      suppressionReason: "adapter_returned_no_identity",
+      expectedFallbackCount: 0,
+    },
+  ] as const)("records terminal non-delivery when $name", async (testCase) => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+        deliveryStatus: "suppressed",
+        suppressionReason: testCase.suppressionReason,
+      });
+      const task = createTaskFixture("acp", {
+        requesterOrigin: NOTIFYCHAT_ORIGIN,
+        runId: `run-terminal-${testCase.suppressionReason}`,
+        task: "Investigate suppressed delivery",
+        deliveryStatus: "pending",
+      });
+      markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 250 });
+
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+      expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "failed" });
+      expect(peekSystemEvents("agent:main:main")).toHaveLength(testCase.expectedFallbackCount);
     });
   });
 
@@ -3900,6 +4025,43 @@ describe("task-registry", () => {
       });
       await maybeDeliverTaskStateChangeUpdate(task.taskId);
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it.each([
+    {
+      name: "retries intentional suppression",
+      suppressionReason: "cancelled_by_message_sending_hook",
+      expectedSendCount: 2,
+    },
+    {
+      name: "does not retry adapter ambiguity",
+      suppressionReason: "adapter_returned_no_identity",
+      expectedSendCount: 1,
+    },
+  ] as const)("$name for the same state-change event", async (testCase) => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "guildchat",
+        to: "guildchat:123",
+        via: "direct",
+        deliveryStatus: "suppressed",
+        suppressionReason: testCase.suppressionReason,
+      });
+      const task = createTaskFixture("acp", {
+        deliveryStatus: undefined,
+        requesterOrigin: GUILDCHAT_ORIGIN,
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-state-change-suppressed",
+        task: "Investigate suppressed state change",
+        notifyPolicy: "state_changes",
+      });
+      const event = { at: 250, kind: "progress" as const, summary: "Still working." };
+
+      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(testCase.expectedSendCount);
     });
   });
 

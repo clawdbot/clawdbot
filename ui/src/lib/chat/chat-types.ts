@@ -3,6 +3,7 @@
  */
 
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type BrowserAnnotationAttachment = {
@@ -84,11 +85,20 @@ export type ChatQueueItem = {
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
-  | { kind: "notice"; key: string; text: string; timestamp: number }
+  | {
+      kind: "notice";
+      key: string;
+      text: string;
+      timestamp: number;
+      icon?: keyof typeof toolIcons;
+      label?: string;
+      startsTurn?: true;
+    }
   | {
       kind: "divider";
       key: string;
       label: string;
+      icon?: keyof typeof toolIcons;
       metric?: string;
       description?: string;
       action?: { kind: "session-checkpoints"; label: string };
@@ -115,6 +125,21 @@ export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }):
   return !streamSegmentHasItemId(segment);
 }
 
+/** Advance the accumulated-text tracker only when the segment genuinely
+    extends it. A standalone (itemId-less) preamble whose text is not part of
+    the cumulative run text must not become the prefix baseline: the next
+    cumulative snapshot would fail the startsWith check and re-render every
+    earlier segment's text. */
+export function advanceAccumulatedStreamText(
+  previousText: string | null,
+  text: string,
+): string | null {
+  if (!text.trim()) {
+    return previousText;
+  }
+  return previousText === null || text.startsWith(previousText) ? text : previousText;
+}
+
 export function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
   if (!previousText || !text.startsWith(previousText)) {
     return text;
@@ -133,7 +158,6 @@ export type MessageGroup = {
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
-  turnSucceeded?: boolean;
 };
 
 /** Content item types in a normalized message */
@@ -175,6 +199,7 @@ export type NormalizedMessage = {
   senderLabel?: string | null;
   sender?: SenderIdentity;
   audioAsVoice?: boolean;
+  replyPreview?: { text: string; senderLabel?: string | null };
   replyTarget?:
     | {
         kind: "current";

@@ -31,7 +31,7 @@ describe("agents_list", () => {
 
   function createTool() {
     return createAgentsListTool({
-      agentSessionKey: "main",
+      agentSessionKey: "agent:main:main",
     });
   }
 

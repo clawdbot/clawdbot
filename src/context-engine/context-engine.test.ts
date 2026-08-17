@@ -8,7 +8,7 @@ import {
   createContextEngineLogicalTurnLease,
   selectContextEngineForTranscriptHost,
 } from "../agents/harness/context-engine-logical-turn.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -67,16 +67,16 @@ function registerTestContextEngine(id: string, factory: ContextEngineFactory) {
   });
 }
 
-const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
-  compactEmbeddedAgentSessionDirectMock: vi.fn(),
+const { compactEmbeddedAgentSessionOnDemandMock } = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionOnDemandMock: vi.fn(),
 }));
 
 vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
-  compactEmbeddedAgentSessionDirect: compactEmbeddedAgentSessionDirectMock,
+  compactEmbeddedAgentSessionOnDemand: compactEmbeddedAgentSessionOnDemandMock,
 }));
 
 function installCompactRuntimeSpy() {
-  return compactEmbeddedAgentSessionDirectMock.mockResolvedValue({
+  return compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({
     ok: true,
     compacted: false,
     reason: "mock compaction",
@@ -91,7 +91,7 @@ function installCompactRuntimeSpy() {
 }
 
 function requireCompactRuntimeParams(callIndex: number): Record<string, unknown> {
-  const params = compactEmbeddedAgentSessionDirectMock.mock.calls[callIndex]?.[0] as
+  const params = compactEmbeddedAgentSessionOnDemandMock.mock.calls[callIndex]?.[0] as
     | Record<string, unknown>
     | undefined;
   if (!params) {
@@ -247,7 +247,7 @@ class MockContextEngine implements ContextEngine {
 describe("Engine contract tests", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    compactEmbeddedAgentSessionDirectMock.mockReset();
+    compactEmbeddedAgentSessionOnDemandMock.mockReset();
     clearMemoryPluginState();
   });
 
@@ -325,7 +325,7 @@ describe("Engine contract tests", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-successor-target-"));
     const storePath = path.join(root, "openclaw-agent.sqlite");
     try {
-      compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
         ok: true,
         compacted: true,
         reason: undefined,
@@ -370,15 +370,15 @@ describe("Engine contract tests", () => {
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:successor";
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         { sessionId: "before-compaction", updatedAt: 1 },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:aaa-successor-alias", storePath },
         { sessionId: "after-compaction", updatedAt: 2 },
       );
-      compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
         ok: true,
         compacted: true,
         reason: undefined,
@@ -431,7 +431,7 @@ describe("Engine contract tests", () => {
   });
 
   it("rejects a successor marker that changes the caller store", async () => {
-    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
       result: {
@@ -456,7 +456,7 @@ describe("Engine contract tests", () => {
   });
 
   it("rejects contradictory marker and top-level successor identities", async () => {
-    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
       result: {
@@ -493,7 +493,7 @@ describe("Engine contract tests", () => {
   });
 
   it("rejects a legacy successor marker for another caller agent", async () => {
-    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
       reason: undefined,

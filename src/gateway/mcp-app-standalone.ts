@@ -276,12 +276,12 @@ function runStandaloneMcpAppHost(config: {
   let sandboxOrigin: string | undefined;
   let teardownId: JsonRpcId | undefined;
 
-  const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+  const asStandaloneRecord = (value: unknown): Record<string, unknown> | undefined =>
     value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : undefined;
   const errorMessage = (error: unknown, timeoutMessage: string) =>
-    asRecord(error)?.name === "TimeoutError"
+    asStandaloneRecord(error)?.name === "TimeoutError"
       ? timeoutMessage
       : error instanceof Error
         ? error.message
@@ -380,23 +380,23 @@ function runStandaloneMcpAppHost(config: {
     }
     initialized = true;
     notify("ui/notifications/tool-input", {
-      arguments: asRecord(payload.toolInput) ?? {},
+      arguments: asStandaloneRecord(payload.toolInput) ?? {},
     });
     notify("ui/notifications/tool-result", payload.toolResult);
   };
   const isValidInitialize = (params: unknown) => {
-    const record = asRecord(params);
-    const appInfo = asRecord(record?.appInfo);
+    const record = asStandaloneRecord(params);
+    const appInfo = asStandaloneRecord(record?.appInfo);
     return (
       typeof record?.protocolVersion === "string" &&
       typeof appInfo?.name === "string" &&
       typeof appInfo?.version === "string" &&
-      asRecord(record?.appCapabilities) !== undefined
+      asStandaloneRecord(record?.appCapabilities) !== undefined
     );
   };
 
   browser.addEventListener("message", (event) => {
-    const message = asRecord(event.data) as JsonRpcMessage | undefined;
+    const message = asStandaloneRecord(event.data) as JsonRpcMessage | undefined;
     if (
       event.source !== frame?.contentWindow ||
       event.origin !== sandboxOrigin ||
@@ -453,7 +453,7 @@ function runStandaloneMcpAppHost(config: {
       return;
     }
     if (message.method === "ui/notifications/size-changed") {
-      const height = asRecord(message.params)?.height;
+      const height = asStandaloneRecord(message.params)?.height;
       if (frame && typeof height === "number" && Number.isFinite(height)) {
         frame.style.height = `${Math.min(1200, Math.max(160, Math.round(height)))}px`;
       }

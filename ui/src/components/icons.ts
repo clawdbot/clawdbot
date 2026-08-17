@@ -53,12 +53,21 @@ export const icons = {
     <path d="M9 10h6" />
     <path d="M12 13V7" />
     <path d="M9 17h6" />`),
+  diff: strokeIcon(svg` <path d="M12 3v14" />
+    <path d="M5 10h14" />
+    <path d="M5 21h14" />`),
   braces: strokeIcon(svg` <path
       d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"
     />
     <path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" />`),
   mail: strokeIcon(svg` <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
     <polyline points="22,6 12,13 2,6" />`),
+  // Outbox tray (Lucide inbox with the roof swapped for a rising arrow):
+  // queued-to-send messages. Keep the clock for automations/cron only.
+  outbox: strokeIcon(svg` <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+    <path d="M2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6" />
+    <path d="M12 10V3" />
+    <path d="m8 6 4-4 4 4" />`),
   star: strokeIcon(
     svg`<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />`,
   ),
@@ -159,6 +168,11 @@ export const icons = {
     <path d="M16 3.13a4 4 0 0 1 0 7.75" />`),
   shieldCheck: strokeIcon(svg` <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z" />
     <path d="m9 12 2 2 4-4" />`),
+  shieldQuestion: strokeIcon(svg` <path
+      d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+    />
+    <path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3" />
+    <path d="M12 17h.01" />`),
 
   // UI icons
   menu: strokeIcon(svg` <line x1="4" x2="20" y1="12" y2="12" />

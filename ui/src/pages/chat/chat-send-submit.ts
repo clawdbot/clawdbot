@@ -5,6 +5,7 @@ import type { ChatAttachment, ChatQueueSkillWorkshopRevision } from "../../lib/c
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
+import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   getChatAttachmentDataUrl,
@@ -16,7 +17,7 @@ import {
   requireChatSessionAction,
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
-import { loadChatHistory, type ChatState } from "./chat-history.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   admitQueuedMessageForSession,
   enqueueChatMessage,
@@ -56,6 +57,7 @@ import {
   resetChatInputHistoryNavigation,
 } from "./input-history.ts";
 import { controlUiNowMs } from "./performance.ts";
+import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queued-message-edit.ts";
 import {
   handleAbortChat,
   hasAbortableSessionRun,
@@ -68,7 +70,8 @@ import {
   sendQueuedChatMessageWithQueueMode as sendQueuedChatMessageWithQueueModeLifecycle,
 } from "./steer-lifecycle.ts";
 
-type ChatSendOptions = {
+type ChatSendSubmitOptions = {
+  followUpMode?: ControlUiFollowUpMode;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
   /** Lets request-scoped UI actions recover from rejected local commands. */
@@ -160,15 +163,10 @@ async function sendDetachedCommandMessage(
     runId?: string;
   },
 ) {
-  const ack = await sendChatMessageWithGeneratedRunId(
-    host as unknown as ChatState,
-    message,
-    opts?.attachments,
-    {
-      canApplyError: () => submittedCommandScopeIsVisible(host, opts.recovery),
-      runId: opts.runId,
-    },
-  );
+  const ack = await sendChatMessageWithGeneratedRunId(host, message, opts?.attachments, {
+    canApplyError: () => submittedCommandScopeIsVisible(host, opts.recovery),
+    runId: opts.runId,
+  });
   const sendAck = ack && !("kind" in ack) ? ack : null;
   const ok =
     sendAck?.status === "ok" || sendAck?.status === "started" || sendAck?.status === "in_flight";
@@ -187,10 +185,7 @@ async function sendDetachedCommandMessage(
       clearOwnedCommandComposerFallback(host, opts.recovery);
     }
     if (submittedScopeIsVisible) {
-      setLastActiveSessionKey(
-        host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
-        host.sessionKey,
-      );
+      setLastActiveSessionKey(host, host.sessionKey);
     }
     if (!commandComposerFallbackRetainsAttachments(host, opts.recovery)) {
       releaseChatAttachmentPayloads(excludeComposerAttachments(host, opts.attachments));
@@ -201,13 +196,13 @@ async function sendDetachedCommandMessage(
 export async function handleSendChat(
   host: ChatHost,
   messageOverride?: string,
-  opts?: ChatSendOptions,
+  opts?: ChatSendSubmitOptions,
 ) {
   const previousDraft = host.chatMessage;
   const userMessage = (messageOverride ?? host.chatMessage).trim();
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
-  let expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
+  let expectedLeafEntryId = resolveDisplayedLeafEntryId(host);
   const attachmentsToSend =
     messageOverride == null ? snapshotChatAttachments(host.chatAttachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
@@ -256,6 +251,45 @@ export async function handleSendChat(
         await host.openSessionCompanion?.(question);
       });
       return;
+    }
+    const clientPresentation = parsed?.command.clientPresentation;
+    const dispatchClientPresentation = host.dispatchClientPresentation;
+    if (
+      host.connected &&
+      parsed?.args === "" &&
+      clientPresentation?.when === "no-arguments" &&
+      !hasAttachments &&
+      host.chatReplyTarget == null &&
+      dispatchClientPresentation
+    ) {
+      const submitKey = chatSubmitKey(host, "local", message, []);
+      const presentationResult = await withChatSubmitGuard(host, submitKey, async () => {
+        if (host.sessionKey !== submittedSessionKey) {
+          return "not-handled" as const;
+        }
+        let handled = false;
+        try {
+          handled = await dispatchClientPresentation(clientPresentation.action);
+        } catch {
+          // Presentation failures retain the established remote command path.
+        }
+        if (!handled) {
+          return "not-handled" as const;
+        }
+        // The awaited action may outlive its submitted session; never mutate a newly selected one.
+        if (host.sessionKey !== submittedSessionKey) {
+          return "handled" as const;
+        }
+        if (messageOverride == null) {
+          clearSubmittedComposerState(host, previousDraft, attachmentsToSend);
+          recordNonTranscriptInputHistory(host, message);
+        }
+        return "handled" as const;
+      });
+      // An in-flight identical submit is already deciding whether to handle or fall through.
+      if (presentationResult !== "not-handled") {
+        return;
+      }
     }
     // /approve bypasses the run whose approval it resolves.
     if (parsed?.command.key === "approve" && isChatBusy(host)) {
@@ -422,10 +456,10 @@ export async function handleSendChat(
     if (host.chatLoading) {
       // A terminal event can render before its authoritative leaf arrives.
       // Reuse the in-flight history request before fencing the follow-up send.
-      if (!(await loadChatHistory(host as unknown as ChatState))) {
+      if (!(await loadChatHistory(host))) {
         return;
       }
-      expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
+      expectedLeafEntryId = resolveDisplayedLeafEntryId(host);
     }
     if (host.sessionKey !== submittedSessionKey) {
       return;
@@ -445,6 +479,9 @@ export async function handleSendChat(
 
     const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
     const waitingForSettings = Boolean(pendingSettings);
+    // The edited row hands its place to the replacement and is retired by the same
+    // store write, so a rejected write leaves the original queued and editable.
+    const resumedEdit = activeQueuedMessageEdit(host);
     const queued = enqueuePendingSendMessage(
       host,
       effectiveMessage,
@@ -454,13 +491,23 @@ export async function handleSendChat(
       waitingForSettings ? "waiting-model" : reconnectSafeQueuedSendState(host),
       skillWorkshopRevision,
       replyToId,
+      resumedEdit?.orderKey,
     );
     if (!queued) {
       return;
     }
-    const admittedDurably = admitQueuedMessageForSession(host, submittedSessionKey, queued);
+    const admittedDurably = admitQueuedMessageForSession(
+      host,
+      submittedSessionKey,
+      queued,
+      resumedEdit?.id,
+    );
+    retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments);
     const canSendFromMemory =
       !admittedDurably &&
+      // A still-open edit means its stored source outlived the rejected write;
+      // sending the replacement from memory would strand the original as a duplicate.
+      !activeQueuedMessageEdit(host) &&
       (skillWorkshopRevision
         ? isSkillWorkshopRevisionConnectionCurrent(host, queued)
         : !waitingForSettings && canSendVolatileQueueItem(host, queued, submittedSessionKey));
@@ -493,7 +540,9 @@ export async function handleSendChat(
       recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
       // Only an explicit browser override replaces inherited Gateway policy.
       const followUpMode =
-        host.chatFollowUpMode ?? normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
+        opts?.followUpMode ??
+        host.chatFollowUpMode ??
+        normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
       if (
         !skillWorkshopRevision &&
         followUpMode !== "queue" &&

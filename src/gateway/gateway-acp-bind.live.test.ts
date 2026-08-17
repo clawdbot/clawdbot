@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -194,12 +195,6 @@ function resolveLiveParentModel(): string {
       process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() ||
       DEFAULT_LIVE_PARENT_MODEL,
   );
-}
-
-function resolveModelObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 async function prepareCodexHomeForLiveBindTest(tempRoot: string): Promise<void> {
@@ -681,7 +676,7 @@ describeLive("gateway live (ACP bind)", () => {
           defaults: {
             ...cfg.agents?.defaults,
             model: {
-              ...resolveModelObject(cfg.agents?.defaults?.model),
+              ...asNonArrayRecord(cfg.agents?.defaults?.model),
               primary: parentModel,
             },
             models: {

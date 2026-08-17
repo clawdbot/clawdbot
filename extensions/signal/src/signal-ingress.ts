@@ -7,8 +7,11 @@ import {
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeNullableString as normalizeRawString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  isRecord,
+  normalizeNullableString as normalizeRawString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
@@ -52,7 +55,7 @@ const SignalIngressPermanentError = createChannelIngressError<
 >("SignalIngressPermanentError", { withReason: true });
 
 function normalizeTimestamp(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+  return asPositiveSafeInteger(value) ?? null;
 }
 
 function parseReceiveEnvelope(event: SignalSseEvent): SignalIngressEnvelope | null {

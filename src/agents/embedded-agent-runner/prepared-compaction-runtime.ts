@@ -16,7 +16,7 @@ import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
-import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -27,8 +27,9 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { createOpenClawCodingTools, resolveProcessToolScopeKey } from "../agent-tools.js";
+import { createOpenClawCodingTools } from "../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
+import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
@@ -170,7 +171,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
-    const skillsPrompt = resolveSkillsPromptForRun({
+    const skillsPrompt = resolveSkillsPrompt({
       skillsSnapshot: skillsSnapshotForRun,
       entries: promptSkillEntries,
       config: params.config,
@@ -289,6 +290,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       sandboxToolPolicy: sandbox?.tools,
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: params.trustedInternalHandoff,
+      pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
     const toolsRaw = toolsEnabled
@@ -337,6 +339,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           skillsSnapshot: skillsSnapshotForRun,
           skillUsagePaths,
           conversationCapabilityProfile: runtimeCapabilityProfile,
+          preparedModelRuntime: params.preparedModelRuntime,
           modelAuthMode: resolveModelAuthMode(effectiveModel.provider, params.config, undefined, {
             workspaceDir: effectiveWorkspace,
           }),

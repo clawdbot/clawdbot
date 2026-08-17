@@ -7,7 +7,7 @@ import {
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
-import { isFailoverError } from "../../agents/failover-error.js";
+import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -262,6 +262,11 @@ export async function handleAgentExecutionError(params: {
         }),
       }),
     };
+  }
+  // The CLI boundary records this fact even when phase callbacks do not arrive.
+  // Replaying an observed turn may duplicate already-started side effects.
+  if (findCliTimeoutError(err)?.cliTimeout.observedActivity === true) {
+    markOverloadRetryUnsafeToReplay(params.overloadRetryState);
   }
   if (
     isOverloaded &&

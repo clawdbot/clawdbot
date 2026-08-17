@@ -24,6 +24,10 @@ function normalizeTooltipText(text: string) {
   return text.replace(/\s+/gu, " ").trim();
 }
 
+function isHtmlElement(element: Element): element is HTMLElement {
+  return element.namespaceURI === "http://www.w3.org/1999/xhtml";
+}
+
 class TooltipProvider extends OpenClawLitElement {
   @property({ type: Number }) delay = HOVER_DELAY;
   @property({ type: Number }) skipDelay = SKIP_DELAY;
@@ -189,9 +193,7 @@ class Tooltip extends OpenClawLitElement {
 
   private attachTrigger() {
     const slot = this.renderRoot.querySelector<HTMLSlotElement>("slot:not([name])");
-    const trigger = slot
-      ?.assignedElements({ flatten: true })
-      .find((element): element is HTMLElement => element instanceof HTMLElement);
+    const trigger = slot?.assignedElements({ flatten: true }).find(isHtmlElement);
     if (trigger === this.triggerElement) {
       return;
     }
@@ -411,9 +413,12 @@ class Tooltip extends OpenClawLitElement {
     }
     const content = normalizeTooltipText(this.content);
     const triggerText = normalizeTooltipText(trigger.textContent ?? "");
-    const clipsContent = [trigger, ...trigger.querySelectorAll("*")].some(
-      (element) => element instanceof HTMLElement && element.scrollWidth > element.clientWidth,
-    );
+    const clipsContent =
+      trigger.matches("[data-tooltip-overflow]") ||
+      trigger.querySelector("[data-tooltip-overflow]") !== null ||
+      [trigger, ...trigger.querySelectorAll("*")].some(
+        (element) => isHtmlElement(element) && element.scrollWidth > element.clientWidth,
+      );
     return Boolean(content && triggerText && triggerText.includes(content) && !clipsContent);
   }
 
@@ -428,7 +433,9 @@ class Tooltip extends OpenClawLitElement {
       this.descriptionCaptured = true;
     }
     if (!this.descriptionElement) {
-      const description = document.createElement("span");
+      // ownerDocument, not the global: slotchange can fire after a test
+      // environment tears down its window, where bare `document` throws.
+      const description = this.ownerDocument.createElement("span");
       description.id = this.descriptionId;
       description.hidden = true;
       this.append(description);

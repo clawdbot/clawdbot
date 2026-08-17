@@ -12,11 +12,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  approveDevicePairing,
-  ensureDeviceToken,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { ensureDeviceToken } from "../infra/device-pairing-tokens.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -27,6 +25,7 @@ import { buildAssistantMediaContentDisposition } from "./assistant-media-content
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  createAuthRateLimiter,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -227,6 +226,7 @@ describe("handleControlUiHttpRequest", () => {
     headers?: IncomingMessage["headers"];
     config?: OpenClawConfig;
     rateLimiter?: AuthRateLimiter;
+    remoteAddress?: string;
     trustedProxies?: string[];
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
@@ -238,7 +238,7 @@ describe("handleControlUiHttpRequest", () => {
         url,
         method: "GET",
         headers: params.headers ?? {},
-        socket: { remoteAddress: "127.0.0.1" },
+        socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
       } as IncomingMessage,
       res,
       {
@@ -334,6 +334,7 @@ describe("handleControlUiHttpRequest", () => {
     return {
       host: "gateway.example.com",
       "x-forwarded-user": "nick@example.com",
+      "x-forwarded-for": "203.0.113.10",
       "x-forwarded-proto": "https",
       ...extraHeaders,
     };
@@ -529,7 +530,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
@@ -563,7 +564,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
@@ -584,11 +585,15 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
-        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
-          root: { kind: "resolved", path: tmp },
-          config: { gateway: { terminal: { enabled: true } } },
-          terminalEnabled: false,
-        });
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { gateway: { terminal: { enabled: true } } },
+            terminalEnabled: false,
+          },
+        );
         const csp = setHeader.mock.calls.findLast(
           (call) => call[0] === "Content-Security-Policy",
         )?.[1];
@@ -1484,9 +1489,11 @@ describe("handleControlUiHttpRequest", () => {
       indexHtml: html,
       fn: async (tmp) => {
         const { res, setHeader } = makeMockHttpResponse();
-        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
-          root: { kind: "resolved", path: tmp },
-        });
+        await handleControlUiHttpRequest(
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
         const cspCalls = setHeader.mock.calls.filter(
           (call) => call[0] === "Content-Security-Policy",
         );
@@ -1504,7 +1511,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
+          { url: "/", method: "GET", headers: { host: "gateway.example.test" } } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
@@ -1530,7 +1537,11 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/openclaw/chat", method: "GET" } as IncomingMessage,
+          {
+            url: "/openclaw/chat",
+            method: "GET",
+            headers: { host: "gateway.example.test" },
+          } as IncomingMessage,
           res,
           {
             basePath: "/openclaw",
@@ -1578,7 +1589,11 @@ describe("handleControlUiHttpRequest", () => {
         fn: async (tmp) => {
           const { res, end } = makeMockHttpResponse();
           const handled = await handleControlUiHttpRequest(
-            { url: requestPath, method: "GET" } as IncomingMessage,
+            {
+              url: requestPath,
+              method: "GET",
+              headers: { host: "gateway.example.test" },
+            } as IncomingMessage,
             res,
             {
               ...(basePath ? { basePath } : {}),
@@ -2339,7 +2354,7 @@ describe("handleControlUiHttpRequest", () => {
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
             );
-            expect(rateLimiter.reset).toHaveBeenCalledWith(
+            expect(rateLimiter.reset).not.toHaveBeenCalledWith(
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
             );
@@ -2385,7 +2400,7 @@ describe("handleControlUiHttpRequest", () => {
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
             );
-            expect(rateLimiter.reset).toHaveBeenCalledWith(
+            expect(rateLimiter.reset).not.toHaveBeenCalledWith(
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
             );
@@ -2393,6 +2408,41 @@ describe("handleControlUiHttpRequest", () => {
         });
       },
     });
+  });
+
+  it("rejects unattributable proxy ingress before bootstrap device-token fallback", async () => {
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+
+    try {
+      await withPairedOperatorDeviceToken({
+        fn: async (operatorToken) => {
+          await withControlUiRoot({
+            fn: async (tmp) => {
+              const sendBootstrap = async (token: string) =>
+                await runBootstrapConfigRequest({
+                  rootPath: tmp,
+                  auth: { mode: "token", token: "shared", allowTailscale: false },
+                  headers: {
+                    authorization: `Bearer ${token}`,
+                    forwarded: "for=203.0.113.10",
+                  },
+                  rateLimiter,
+                });
+
+              expect((await sendBootstrap(operatorToken)).res.statusCode).toBe(403);
+              expect((await sendBootstrap("wrong-one")).res.statusCode).toBe(403);
+            },
+          });
+        },
+      });
+    } finally {
+      rateLimiter.dispose();
+    }
   });
 
   it("selects higher-scope frame tabs using paired device-token scopes", async () => {

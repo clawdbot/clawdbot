@@ -20,6 +20,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { runGitHubCopilotDeviceFlow } from "./login.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn<typeof fetchWithSsrFGuard>(async (params) => ({
@@ -55,12 +56,11 @@ vi.mock("./register.runtime.js", () => ({
 import plugin from "./index.js";
 
 const tempDirs: string[] = [];
-type RegisteredMemoryEmbeddingProvider = Parameters<
-  OpenClawPluginApi["registerMemoryEmbeddingProvider"]
->[0];
+type RegisteredEmbeddingProvider = Parameters<OpenClawPluginApi["registerEmbeddingProvider"]>[0];
 type RegisteredProvider = Parameters<OpenClawPluginApi["registerProvider"]>[0];
 type GithubCopilotTestProvider = RegisteredProvider & {
   auth: Array<{
+    id: string;
     run: (ctx: unknown) => Promise<ProviderAuthResult | null>;
     runNonInteractive: (ctx: unknown) => Promise<OpenClawConfig | null>;
   }>;
@@ -368,8 +368,7 @@ describe("github-copilot plugin", () => {
   });
 
   it("registers embedding provider", () => {
-    const registerMemoryEmbeddingProviderMock =
-      vi.fn<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>();
+    const registerEmbeddingProviderMock = vi.fn<OpenClawPluginApi["registerEmbeddingProvider"]>();
 
     plugin.register(
       createTestPluginApi({
@@ -380,14 +379,14 @@ describe("github-copilot plugin", () => {
         pluginConfig: {},
         runtime: {} as never,
         registerProvider: vi.fn(),
-        registerMemoryEmbeddingProvider: registerMemoryEmbeddingProviderMock,
+        registerEmbeddingProvider: registerEmbeddingProviderMock,
       }),
     );
 
-    expect(registerMemoryEmbeddingProviderMock).toHaveBeenCalledTimes(1);
-    const adapter = requireFirstMockArg<RegisteredMemoryEmbeddingProvider>(
-      registerMemoryEmbeddingProviderMock,
-      "memory embedding provider registration",
+    expect(registerEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+    const adapter = requireFirstMockArg<RegisteredEmbeddingProvider>(
+      registerEmbeddingProviderMock,
+      "embedding provider registration",
     );
     expect(adapter.id).toBe("github-copilot");
   });
@@ -1444,23 +1443,46 @@ describe("github-copilot plugin", () => {
   it("stores GitHub Copilot token from non-interactive onboarding", async () => {
     const provider = registerProviderWithPluginConfig({});
     const method = requireAuthMethod(provider.auth, 0);
+    const choice = expectDefined(
+      manifest.providerAuthChoices.find((entry) => entry.choiceId === "github-copilot"),
+      "GitHub Copilot manifest auth choice",
+    );
+    const optionKey = expectDefined(choice.optionKey, "GitHub Copilot option key");
+    const setupProvider = expectDefined(
+      manifest.setup.providers.find((entry) => entry.id === choice.provider),
+      "GitHub Copilot setup provider",
+    );
+    const envVar = expectDefined(setupProvider.envVars[0], "GitHub Copilot setup env var");
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
+    const resolveApiKey = vi.fn(async () => ({
+      key: "ghu_test123",
+      source: "flag" as const,
+    }));
 
     const result = await method.runNonInteractive({
-      authChoice: "github-copilot",
+      authChoice: choice.choiceId,
       config: {},
       baseConfig: {},
-      opts: { githubCopilotToken: "ghu_test\r\n123" },
+      opts: { [optionKey]: "ghu_test\r\n123" },
       runtime,
       agentDir,
-      resolveApiKey: vi.fn(async () => ({
-        key: "ghu_test123",
-        source: "flag" as const,
-      })),
+      resolveApiKey,
       toApiKeyCredential: vi.fn(),
     });
 
+    expect(provider.id).toBe(choice.provider);
+    expect(method.id).toBe(choice.method);
+    expect(provider.envVars).toEqual(setupProvider.envVars);
+    expect(resolveApiKey).toHaveBeenCalledWith({
+      provider: choice.provider,
+      flagValue: "ghu_test123",
+      flagName: choice.cliFlag,
+      envVar,
+      envVarName: envVar,
+      allowProfile: false,
+      required: false,
+    });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(result?.auth?.profiles?.["github-copilot:github"]).toEqual({
       provider: "github-copilot",

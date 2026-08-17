@@ -1,7 +1,7 @@
 /**
  * Test harness mocks for embedded-run overflow compaction coverage.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
@@ -20,8 +20,10 @@ import type {
 } from "../../plugins/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { extractObservedOverflowTokenCount } from "../embedded-agent-helpers/context-overflow-observation.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
+import type { AgentHarnessAttemptParams } from "../harness/types.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -256,8 +258,8 @@ const mockedPrepareProviderRuntimeAuth = vi.fn<
   (params?: { context?: { apiKey?: string } }) => Promise<{ apiKey: string } | undefined>
 >(async () => undefined);
 export const mockedRunEmbeddedAttempt =
-  vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-const mockedBuildEmbeddedRunPayloads = vi.fn<
+  vi.fn<(params: AgentHarnessAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
+export const mockedBuildEmbeddedRunPayloads = vi.fn<
   (
     ...args: Parameters<typeof buildEmbeddedRunPayloads>
   ) => ReturnType<typeof buildEmbeddedRunPayloads>
@@ -335,10 +337,7 @@ export const mockedClassifyAssistantFailoverReason = vi.fn(
   (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
     mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
 );
-const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
-  const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
-  return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
-});
+const mockedExtractObservedOverflowTokenCount = vi.fn(extractObservedOverflowTokenCount);
 export const mockedFormatAssistantErrorText = vi.fn(() => "");
 const mockedIsAuthAssistantError = vi.fn(() => false);
 const mockedIsBillingAssistantError = vi.fn(() => false);
@@ -348,15 +347,15 @@ const mockedIsFailoverErrorMessage = vi.fn(() => false);
 const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
   /^\s*an unknown error occurred\.?\s*$/i.test(raw),
 );
-export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
-  const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
+function matchesCanonicalOverflowFixture(msg?: string): boolean {
+  const raw = msg ?? "";
   return (
-    lower.includes("request_too_large") ||
-    lower.includes("context window exceeded") ||
-    (lower.includes("context window") && lower.includes("ran out of room")) ||
-    lower.includes("prompt is too long")
+    matchesContextOverflowMessage(raw, "failover-explicit") ||
+    matchesContextOverflowMessage(raw, "provider-fallback") ||
+    matchesContextOverflowMessage(raw, "failover-hint")
   );
-});
+}
+export const mockedIsLikelyContextOverflowError = vi.fn(matchesCanonicalOverflowFixture);
 const mockedParseImageSizeError = vi.fn(() => null);
 const mockedParseImageDimensionError = vi.fn(() => null);
 export const mockedIsRateLimitAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
@@ -574,10 +573,7 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsBillingAssistantError.mockReset();
   mockedIsBillingAssistantError.mockReturnValue(false);
   mockedExtractObservedOverflowTokenCount.mockReset();
-  mockedExtractObservedOverflowTokenCount.mockImplementation((msg?: string) => {
-    const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
-    return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
-  });
+  mockedExtractObservedOverflowTokenCount.mockImplementation(extractObservedOverflowTokenCount);
   mockedIsCompactionFailureError.mockReset();
   mockedIsCompactionFailureError.mockReturnValue(false);
   mockedIsFailoverAssistantError.mockReset();
@@ -589,15 +585,7 @@ function resetRunOverflowCompactionHarnessMocks(): void {
     /^\s*an unknown error occurred\.?\s*$/i.test(raw),
   );
   mockedIsLikelyContextOverflowError.mockReset();
-  mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
-    const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
-    return (
-      lower.includes("request_too_large") ||
-      lower.includes("context window exceeded") ||
-      (lower.includes("context window") && lower.includes("ran out of room")) ||
-      lower.includes("prompt is too long")
-    );
-  });
+  mockedIsLikelyContextOverflowError.mockImplementation(matchesCanonicalOverflowFixture);
   mockedParseImageSizeError.mockReset();
   mockedParseImageSizeError.mockReturnValue(null);
   mockedParseImageDimensionError.mockReset();
@@ -721,15 +709,7 @@ export function resetSharedRunIntegrationHarnessMocks(): void {
   mockedIsFailoverAssistantError.mockReset();
   mockedIsFailoverAssistantError.mockReturnValue(false);
   mockedIsLikelyContextOverflowError.mockReset();
-  mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
-    const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
-    return (
-      lower.includes("request_too_large") ||
-      lower.includes("context window exceeded") ||
-      (lower.includes("context window") && lower.includes("ran out of room")) ||
-      lower.includes("prompt is too long")
-    );
-  });
+  mockedIsLikelyContextOverflowError.mockImplementation(matchesCanonicalOverflowFixture);
   mockedIsRateLimitAssistantError.mockReset();
   mockedIsRateLimitAssistantError.mockReturnValue(false);
   mockedResolveAuthProfileOrder.mockReset();
@@ -749,6 +729,7 @@ export function resetSharedRunIntegrationHarnessMocks(): void {
 
 /** Install module mocks, import the runner, and return the mocked entrypoint. */
 export async function loadRunOverflowCompactionHarness(): Promise<{
+  registerPreparedAgentHarness: typeof import("../harness/registry.js").registerAgentHarness;
   runEmbeddedAgent: TestRunEmbeddedAgent;
 }> {
   resetRunOverflowCompactionHarnessMocks();
@@ -822,6 +803,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
+    resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
@@ -970,7 +952,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
   }));
 
-  vi.doMock("../embedded-agent-helpers.js", () => ({
+  vi.doMock("../embedded-agent-helpers.js", async () => ({
+    ...(await vi.importActual<typeof import("../embedded-agent-helpers.js")>(
+      "../embedded-agent-helpers.js",
+    )),
     formatBillingErrorMessage: mockedFormatBillingErrorMessage,
     classifyFailoverReason: mockedClassifyFailoverReason,
     classifyAssistantFailoverReason: mockedClassifyAssistantFailoverReason,
@@ -1019,7 +1004,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     ensureAuthProfileStore: mockedEnsureAuthProfileStore,
     ensureAuthProfileStoreWithoutExternalProfiles:
       mockedEnsureAuthProfileStoreWithoutExternalProfiles,
-    getApiKeyForModel: mockedGetApiKeyForModel,
+    getApiKeyForModelCore: mockedGetApiKeyForModel,
     hasUsableCustomProviderApiKey: mockedHasUsableCustomProviderApiKey,
     resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
     resolveAuthProfileOrderWithMetadata: mockedResolveAuthProfileOrderWithMetadata,
@@ -1078,10 +1063,12 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     DEFAULT_PROVIDER: "anthropic",
   }));
 
-  vi.doMock("../failover-error.js", () => ({
+  vi.doMock("../failover-error.js", async () => ({
+    ...(await vi.importActual<typeof import("../failover-error.js")>("../failover-error.js")),
     FailoverError: MockedFailoverError,
     coerceToFailoverError: mockedCoerceToFailoverError,
     describeFailoverError: mockedDescribeFailoverError,
+    isFailoverError: (error: unknown) => error instanceof MockedFailoverError,
     resolveFailoverStatus: mockedResolveFailoverStatus,
   }));
 
@@ -1119,6 +1106,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
     await import("../admitted-run-context.js");
   const { runEmbeddedAgent } = await import("./run.js");
+  const preparedRegistry = await import("../harness/registry.js");
   return {
     runEmbeddedAgent: async (params) => {
       const agentId = params.agentId ?? "main";
@@ -1145,6 +1133,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
         preparedRunAdmission.close();
       }
     },
+    registerPreparedAgentHarness: preparedRegistry.registerAgentHarness,
   };
 }
 

@@ -1,19 +1,18 @@
 import { Type } from "typebox";
+import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
+import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  isValidAgentId,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
@@ -26,7 +25,7 @@ import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-de
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
-import { normalizeToolModelOverride, readStringParam, ToolInputError } from "./common.js";
+import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import {
   callInProcessGatewayTool,
   callInProcessGatewayToolWithCreation,
@@ -99,8 +98,8 @@ export async function maybeSpawnVisibleSession(params: {
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
   const worktree = params.raw.worktree === true;
-  const worktreeName = readStringParam(params.raw, "worktreeName");
-  const worktreeBaseRef = readStringParam(params.raw, "worktreeBaseRef");
+  const worktreeName = readToolStringParam(params.raw, "worktreeName");
+  const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
       ["worktree", worktree],
@@ -117,8 +116,8 @@ export async function maybeSpawnVisibleSession(params: {
     }
     return undefined;
   }
-  const modelOverride = normalizeToolModelOverride(readStringParam(params.raw, "model"));
-  const requestedCwd = readStringParam(params.raw, "cwd");
+  const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
+  const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
   const unsupported = [
     [
@@ -128,7 +127,7 @@ export async function maybeSpawnVisibleSession(params: {
     ],
     [
       "thinking",
-      readStringParam(params.raw, "thinking"),
+      readToolStringParam(params.raw, "thinking"),
       "thinking overrides are not wired to the sessions.create path",
     ],
     [
@@ -169,7 +168,10 @@ export async function maybeSpawnVisibleSession(params: {
     completionOwnerKey: params.options?.completionOwnerKey,
   });
   const requesterKey = ownership.controllerSessionKey;
-  const callerDepth = getSubagentDepthFromSessionStore(requesterKey, { cfg });
+  const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
+    cfg,
+    agentId: params.options?.requesterAgentIdOverride,
+  });
   const maxDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxDepth) {
@@ -186,9 +188,11 @@ export async function maybeSpawnVisibleSession(params: {
       error: `Invalid agentId "${params.requestedAgentId}". Use agents_list.`,
     };
   }
-  const requesterAgentId = normalizeAgentId(
-    params.options?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterKey)?.agentId,
-  );
+  const requesterAgentId = resolveSessionAgentId({
+    config: cfg,
+    sessionKey: requesterKey,
+    agentId: params.options?.requesterAgentIdOverride,
+  });
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -291,26 +295,45 @@ export async function maybeSpawnVisibleSession(params: {
             deny: [...(params.options?.inheritedToolDenylist ?? [])],
           },
         }));
-    const response = await createGatewayCall<{
+    let response: {
       key?: string;
       runStarted?: boolean;
       runId?: string;
       runError?: unknown;
-    }>("sessions.create", {
-      agentId: targetAgentId,
-      ...(params.label ? { label: params.label } : {}),
-      model: resolvedModel,
-      task: params.task,
-      parentSessionKey: requesterKey,
-      // Declared spawn lineage: without it the child persists as a depth-0 root
-      // and could spawn past maxSpawnDepth.
-      spawnDepth: callerDepth + 1,
-      ...(params.raw.context === "fork" ? { fork: true } : {}),
-      ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
-      ...(worktree ? { worktree: true } : {}),
-      ...(worktreeName ? { worktreeName } : {}),
-      ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
-    });
+    };
+    try {
+      response = await createGatewayCall("sessions.create", {
+        agentId: targetAgentId,
+        ...(params.label ? { label: params.label } : {}),
+        model: resolvedModel,
+        task: params.task,
+        parentSessionKey: requesterKey,
+        // Declared spawn lineage: without it the child persists as a depth-0 root
+        // and could spawn past maxSpawnDepth.
+        spawnDepth: callerDepth + 1,
+        ...(params.raw.context === "fork" ? { fork: true } : {}),
+        ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
+        ...(worktree ? { worktree: true } : {}),
+        ...(worktreeName ? { worktreeName } : {}),
+        ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
+      });
+    } catch (error) {
+      const missingScope = readMissingScopeErrorDetails(
+        error && typeof error === "object" && "details" in error ? error.details : undefined,
+      );
+      if (
+        spawnedCwd &&
+        missingScope?.missingScope === ADMIN_SCOPE &&
+        missingScope.requiredScopes.includes(ADMIN_SCOPE) &&
+        !(await resolveWorkspacePathContainment(spawnedCwd, cfg))
+      ) {
+        return {
+          status: "forbidden",
+          error: `Visible session cwd "${spawnedCwd}" is outside configured agent workspaces and requires operator.admin. Omit cwd to use the target agent workspace, or ask the operator to start the session from a registered project. Do not substitute the synchronous \`openclaw agent\` CLI for a persistent visible session.`,
+        };
+      }
+      throw error;
+    }
     const childSessionKey = response.key?.trim();
     const runId = response.runId?.trim();
     const runError = response.runError

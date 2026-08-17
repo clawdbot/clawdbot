@@ -1,6 +1,12 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
+import "../../styles/sessions.css";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -10,15 +16,14 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
-import "../../styles/sessions.css";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import {
   renderSettingsPage,
   renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
@@ -30,7 +35,7 @@ import {
   formatDurationCompact,
   formatMs,
   formatRelativeTimestamp,
-  formatTokens,
+  formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -53,11 +58,6 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../lib/string-coerce.ts";
-import { parseFilterInteger } from "./page-state.ts";
 
 export type TranscriptSearchState =
   | { status: "idle" }
@@ -131,6 +131,7 @@ export type SessionsProps = {
     key: string,
     patch: {
       label?: string | null;
+      icon?: string | null;
       category?: string | null;
       archived?: boolean;
       pinned?: boolean;
@@ -198,10 +199,6 @@ function resolveThinkLevelOptions(
       label: formatThinkingOverrideLabel(option.id, option.label),
     })),
   ];
-}
-
-function withCurrentOption(options: readonly string[], current: string): string[] {
-  return !current || options.includes(current) ? [...options] : [...options, current];
 }
 
 function withCurrentLabeledOption(
@@ -301,7 +298,7 @@ function renderTokensCell(row: GatewaySessionRow) {
   // as "~" orientation but must not drive warn/danger tones; mirrors the chat
   // composer's context-usage convention.
   const fresh = row.totalTokensFresh !== false;
-  const totalLabel = `${fresh ? "" : "~"}${formatTokens(total)}`;
+  const totalLabel = `${fresh ? "" : "~"}${formatCompactTokenCount(total)}`;
   const context =
     typeof row.contextTokens === "number" && row.contextTokens > 0 ? row.contextTokens : null;
   if (!context) {
@@ -323,7 +320,9 @@ function renderTokensCell(row: GatewaySessionRow) {
   return html`
     <openclaw-tooltip .content=${title}>
       <div class="session-tokens">
-        <span class="session-tokens__value">${totalLabel} / ${formatTokens(context)}</span>
+        <span class="session-tokens__value"
+          >${totalLabel} / ${formatCompactTokenCount(context)}</span
+        >
         <span
           class="session-context-meter session-context-meter--${tone}"
           role="img"
@@ -354,7 +353,7 @@ function renderSessionsOverview(
   const tokensValue =
     rowsWithTokens.length === 0
       ? t("common.na")
-      : `${tokensApproximate ? "~" : ""}${formatTokens(totalTokens)}`;
+      : `${tokensApproximate ? "~" : ""}${formatCompactTokenCount(totalTokens)}`;
   const tiles: Array<
     readonly [string, (typeof icons)[keyof typeof icons], string, string, boolean]
   > = [
@@ -638,7 +637,7 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 function hasActiveFilters(props: SessionsProps): boolean {
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-    parseFilterInteger(props.activeMinutes) !== undefined ||
+    parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
     !props.includeGlobal
   );
 }
@@ -683,7 +682,7 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs) || runtimeMs < 0) {
     return null;
   }
-  return formatDurationCompact(runtimeMs, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(runtimeMs) ?? "0ms";
 }
 
 // Goal state is a dot + summary; the tooltip carries the objective detail.
@@ -1286,7 +1285,7 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             ${sortHeader("updated", t("sessionsView.updated"))}
             ${sortHeader("tokens", t("sessionsView.tokens"))}
             <th class="session-actions-col">
-              <span class="sessions-sr-only">${t("sessionsView.actions")}</span>
+              <span class="sr-only">${t("sessionsView.actions")}</span>
             </th>
           </tr>
         </thead>
@@ -1457,7 +1456,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         props.onToggleDetails(row.key);
       }}
       @keydown=${(e: KeyboardEvent) => {
-        if (openMenuFromEvent(e)) {
+        openMenuFromEvent(e);
+        if (e.defaultPrevented) {
           return;
         }
         if (isRowControlTarget(e.target)) {
@@ -1639,7 +1639,10 @@ function renderSessionDetailsRow(params: {
     verbose,
   );
   const reasoning = row.reasoningLevel ?? "";
-  const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
+  const reasoningLevels = withCurrentLabeledOption(
+    buildSessionLevelOptions(REASONING_LEVELS),
+    reasoning,
+  );
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
   const checkpointLabel = formatCheckpointCount(visibleCheckpointCount);
@@ -1715,10 +1718,7 @@ function renderSessionDetailsRow(params: {
               label: t("sessionsView.reasoning"),
               disabled: props.loading || Boolean(props.patchAdminDisabledReason),
               disabledReason: props.patchAdminDisabledReason,
-              options: reasoningLevels.map((level) => ({
-                value: level,
-                label: level || t("sessionsView.inherit"),
-              })),
+              options: reasoningLevels,
               current: reasoning,
               onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
             })}

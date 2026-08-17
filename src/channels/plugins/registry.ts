@@ -29,9 +29,15 @@ export function getLoadedChannelPluginOrigin(id: ChannelId): string | undefined 
 /**
  * Resolves the active channel implementation together with host-owned provenance.
  */
-export function resolveChannelPluginRegistration(
-  id: ChannelId,
-): { plugin: ChannelPlugin; origin?: string } | undefined {
+export function resolveChannelPluginRegistration(id: ChannelId):
+  | {
+      plugin: ChannelPlugin;
+      origin?: string;
+      resolveChannelRuntime?: NonNullable<
+        ReturnType<typeof getLoadedChannelPluginEntryById>
+      >["resolveChannelRuntime"];
+    }
+  | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
@@ -43,6 +49,9 @@ export function resolveChannelPluginRegistration(
     const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
     return {
       plugin: loadedEntry.plugin as ChannelPlugin,
+      ...(loadedEntry.resolveChannelRuntime
+        ? { resolveChannelRuntime: loadedEntry.resolveChannelRuntime }
+        : {}),
       ...(origin ? { origin } : {}),
     };
   }

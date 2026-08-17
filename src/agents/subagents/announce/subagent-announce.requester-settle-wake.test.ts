@@ -3,6 +3,7 @@
 // nested/cron/single-delivered paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 const deliverSpy = vi.fn(
   async (
@@ -22,15 +23,19 @@ let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; las
 
 const { registryRuntimeMock } = vi.hoisted(() => ({
   registryRuntimeMock: {
+    countPendingDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
+    isSubagentSessionRunActive: vi.fn((_childSessionKey: string) => true),
+    shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey: string) => false),
     hasDescendantRunAwaitingSettle: vi.fn(
       (_rootSessionKey: string, _excludeRunId?: string) => false,
     ),
     listSubagentRunsForRequester: vi.fn((_requesterSessionKey: string): unknown[] => []),
     getLatestSubagentRunByChildSessionKey: vi.fn((_childSessionKey: string) => undefined),
+    resolveRequesterForChildSession: vi.fn((_childSessionKey: string) => null),
   },
 }));
 
-vi.mock("../registry/subagent-registry-runtime.js", () => registryRuntimeMock);
+vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: vi.fn(async () => ({})),
@@ -39,10 +44,10 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   getRuntimeConfig: () => ({ session: { mainKey: "main", scope: "per-sender" } }),
   loadSessionStore: vi.fn(() => ({})),
   readSessionMessagesAsync: vi.fn(async () => []),
-  readSessionEntry: vi.fn(() => undefined),
+  readSubagentSessionEntry: vi.fn(() => undefined),
   resolveAgentIdFromSessionKey: vi.fn(() => "main"),
   resolveMainSessionKey: vi.fn(() => "agent:main:main"),
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
   waitForEmbeddedAgentRunEnd: vi.fn(async () => true),
 }));
 
@@ -70,6 +75,8 @@ import {
 } from "./subagent-announce.requester-settle-wake.js";
 
 const REQUESTER = "agent:main:main";
+const requesterSettleKey = (suffix: string) =>
+  `announce:requester-settle:main:${REQUESTER}:${suffix}`;
 
 type SettledChildOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
   startedAt?: number;
@@ -117,8 +124,14 @@ function transitionBatch(runIds: readonly string[], state: RequesterSettleWakeBa
   }
 }
 
-function completeBatch(runIds: readonly string[], rearmGeneration?: number): void {
-  if (rearmGeneration === undefined) {
+function completeBatch(
+  runIds: readonly string[],
+  rearmGeneration?: number,
+  outcome?: SubagentAnnounceDeliveryResult,
+): void {
+  if (outcome) {
+    completeBatchSpy(runIds, rearmGeneration, outcome);
+  } else if (rearmGeneration === undefined) {
     completeBatchSpy(runIds);
   } else {
     completeBatchSpy(runIds, rearmGeneration);
@@ -189,7 +202,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(call.expectsCompletionMessage).toBe(false);
     expect(call.requireDirectDelivery).toBe(true);
     expect(call.requireVisibleReply).toBeUndefined();
-    expect(call.directIdempotencyKey).toBe(`announce:requester-settle:${REQUESTER}:run-a,run-b`);
+    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b"));
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");
     expect(message).toContain("social findings");
@@ -198,6 +211,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(registryRuntimeMock.hasDescendantRunAwaitingSettle).toHaveBeenCalledWith(
       REQUESTER,
       "run-b",
+      "main",
     );
   });
 
@@ -220,14 +234,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       wakeParams({ settledEntry: children[1] }),
     );
     await vi.waitFor(() => expect(deliverSpy).toHaveBeenCalledOnce());
+    await wakeB;
     releaseDeliveries();
     await expect(Promise.all([wakeA, wakeB])).resolves.toEqual(
       expect.arrayContaining([true, false]),
     );
 
-    expect(deliveredCallArg().directIdempotencyKey).toBe(
-      `announce:requester-settle:${REQUESTER}:run-a,run-b`,
-    );
+    expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b"));
     deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
   });
 
@@ -285,9 +298,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(true);
     const call = deliveredCallArg();
-    expect(call.directIdempotencyKey).toBe(
-      `announce:requester-settle:${REQUESTER}:run-a,run-b,run-c`,
-    );
+    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
     const message = String(call.triggerMessage);
     expect(message).toContain("alpha findings");
     expect(message).toContain("bravo findings");
@@ -313,7 +324,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: queued })),
     ).toBe(true);
     expect(deliveredCallArg().directIdempotencyKey).toBe(
-      `announce:requester-settle:${REQUESTER}:run-first,run-queued`,
+      requesterSettleKey("run-first,run-queued"),
     );
   });
 
@@ -431,10 +442,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).not.toContain("NO_REPLY");
     expect(message).toContain("original user request still requires your visible final answer");
-    expect(deliveredCallArg().directIdempotencyKey).toBe(
-      `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
-    );
-    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
+    expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
+      delivered: true,
+      path: "direct",
+    });
   });
 
   it.each([
@@ -491,7 +503,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(completeBatchSpy).toHaveBeenCalledWith(["run-a"], 1);
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-a"], 1, {
+      delivered: true,
+      path: "direct",
+    });
   });
 
   it("wakes after a requester yields with one already-delivered completion", async () => {
@@ -519,10 +534,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).not.toContain("NO_REPLY");
     expect(message).toContain("original user request still requires your visible final answer");
-    expect(deliveredCallArg().directIdempotencyKey).toBe(
-      `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
-    );
-    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
+    expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
+      delivered: true,
+      path: "direct",
+    });
   });
 
   it("wakes for a single required completion whose announce never delivered", async () => {
@@ -603,8 +619,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(woke).toBe(true);
       expect(deliverSpy).toHaveBeenCalledTimes(2);
       const keys = deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey);
-      expect(keys[0]).toBe(`announce:requester-settle:${REQUESTER}:run-a,run-b`);
-      expect(keys[1]).toBe(`announce:requester-settle:${REQUESTER}:run-a,run-b:retry-1`);
+      expect(keys[0]).toBe(requesterSettleKey("run-a,run-b"));
+      expect(keys[1]).toBe(requesterSettleKey("run-a,run-b:retry-1"));
     } finally {
       vi.useRealTimers();
     }
@@ -650,10 +666,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
       ).resolves.toBe(true);
       expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
-        `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
-        `announce:requester-settle:${REQUESTER}:run-b:yield-1:retry-1`,
+        requesterSettleKey("run-b:yield-1"),
+        requesterSettleKey("run-b:yield-1:retry-1"),
       ]);
-      expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
+        delivered: true,
+        path: "direct",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -686,8 +705,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ).toBe(true);
       expect(deliverSpy).toHaveBeenCalledTimes(2);
       expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
-        `announce:requester-settle:${REQUESTER}:run-a,run-b`,
-        `announce:requester-settle:${REQUESTER}:run-a,run-b`,
+        requesterSettleKey("run-a,run-b"),
+        requesterSettleKey("run-a,run-b"),
       ]);
     } finally {
       vi.useRealTimers();
@@ -742,6 +761,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
       expect(woke).toBe(false);
       expect(deliverSpy).toHaveBeenCalledTimes(3);
+      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"], undefined, {
+        delivered: false,
+        path: "direct",
+        error: "undelivered",
+      });
     } finally {
       vi.useRealTimers();
       deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
@@ -763,6 +787,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(false);
     expect(deliverSpy).toHaveBeenCalledTimes(1);
+    expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"], undefined, {
+      delivered: false,
+      path: "direct",
+      disposition: "ambiguous",
+    });
   });
 
   it("does not consume retry budget when aborted before dispatch", async () => {
@@ -812,7 +841,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ).toBe(true);
       expect(String(deliveredCallArg().triggerMessage)).toContain("alpha findings");
       expect(String(deliveredCallArg().triggerMessage)).toContain("beta findings");
-      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"]);
+      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"], undefined, {
+        delivered: true,
+        path: "direct",
+      });
     });
 
     it("persists the frozen batch before dispatch", async () => {
@@ -848,9 +880,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ).toBe(true);
 
       expect(transitionBatchSpy).not.toHaveBeenCalled();
-      expect(deliveredCallArg().directIdempotencyKey).toBe(
-        `announce:requester-settle:${REQUESTER}:run-a,run-b`,
-      );
+      expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b"));
     });
 
     it("defers a frozen batch replay until a newer descendant settles", async () => {
@@ -967,7 +997,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           ),
         ).toBe(true);
         expect(deliveredCallArg().directIdempotencyKey).toBe(
-          `announce:requester-settle:${REQUESTER}:run-a,run-b:retry-1`,
+          requesterSettleKey("run-a,run-b:retry-1"),
         );
       } finally {
         vi.useRealTimers();
@@ -983,7 +1013,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: mixed[1] })),
       ).toBe(true);
-      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-delete", "run-keep"]);
+      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-delete", "run-keep"], undefined, {
+        delivered: true,
+        path: "direct",
+      });
 
       deliverSpy.mockClear();
       completeBatchSpy.mockClear();

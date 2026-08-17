@@ -550,6 +550,7 @@ export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
+  agentId?: string;
 }): void {
   const providers = params.config.models?.providers as Record<string, ProviderLike> | undefined;
   if (providers) {

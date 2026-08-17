@@ -6,6 +6,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
+import {
+  readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -24,6 +30,7 @@ import {
 } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plugin-index.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -250,6 +257,7 @@ afterEach(() => {
   resetAutoMigrateLegacyStateDirForTest();
   resetAutoMigrateLegacyTaskStateSidecarsForTest();
   closeOpenClawStateDatabaseForTest();
+  closeOpenClawAgentDatabasesForTest();
   setMaxPluginStateEntriesPerPluginForTests();
   resetPluginStateStoreForTests();
   mockedChannelMigrationPlans.plans = [];
@@ -796,6 +804,33 @@ async function runAutoMigrateLegacyStateWithLog(params: {
   return { result, log };
 }
 
+function getProfileWorkspaceMigrationPaths(root: string, profile = "work") {
+  return {
+    legacyDir: path.join(root, ".openclaw", `workspace-${profile}`),
+    targetDir: path.join(root, `.openclaw-${profile}`, "workspace"),
+    stateDir: path.join(root, `.openclaw-${profile}`),
+  };
+}
+
+async function runProfileWorkspaceDoctorMigration(root: string, profile = "work") {
+  const paths = getProfileWorkspaceMigrationPaths(root, profile);
+  fs.mkdirSync(paths.stateDir, { recursive: true });
+  const log = { info: vi.fn(), warn: vi.fn() };
+  const result = await autoMigrateLegacyState({
+    cfg: {},
+    env: {
+      HOME: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_PROFILE: profile,
+      OPENCLAW_STATE_DIR: paths.stateDir,
+    } as NodeJS.ProcessEnv,
+    homedir: () => root,
+    log,
+    doctorOnlyStateMigrations: true,
+  });
+  return { log, paths, result };
+}
+
 function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targetDir: string) {
   expect(result.migrated).toBe(false);
   expect(result.warnings).toEqual([
@@ -886,6 +921,66 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("c");
     expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("d");
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
+  });
+
+  it("routes shared auth relocation through the doctor-only migration plan", async () => {
+    const stateDir = makeDoctorStateDir();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const mainAgentDir = resolveSharedMainAuthAgentDir(env);
+    const store = {
+      version: 1,
+      profiles: {
+        "openai:default": { type: "api_key" as const, provider: "openai", key: "secret" },
+      },
+    };
+    writePersistedAuthProfileStoreRaw(store, mainAgentDir);
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(detected.sharedAuthStore.hasLegacy).toBe(true);
+    expect(detected.preview).toContain(
+      "- Shared auth store: legacy main-agent rows → shared SQLite state",
+    );
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toContain("Relocated shared auth profiles into shared SQLite state.");
+    expect(result.notices).toContain(
+      "The main agent no longer owns shared credentials and can now be deleted.",
+    );
+    expect(readPersistedSharedAuthProfileStoreRaw(env)).toEqual(store);
+    expect(readPersistedAuthProfileStoreRaw(mainAgentDir)).toBeNull();
+  });
+
+  it("records fresh shared auth ownership without reporting a relocation", async () => {
+    const stateDir = makeDoctorStateDir();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.changes).not.toContain(
+      "Relocated shared auth profiles into shared SQLite state.",
+    );
+    expect(result.notices ?? []).not.toContain(
+      "The main agent no longer owns shared credentials and can now be deleted.",
+    );
+    const database = openOpenClawStateDatabase({ env }).db;
+    expect(
+      database
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'")
+        .get(),
+    ).toEqual({ value_json: JSON.stringify({ location: "state-db" }) });
   });
 
   it("removes stale transcript paths left by a shipped legacy migration", async () => {
@@ -4154,6 +4249,51 @@ describe("doctor legacy state migrations", () => {
     expect(log.info).toHaveBeenCalled();
     expect(store["main"]).toBeUndefined();
     expect(store["agent:main:main"]?.sessionId).toBe("legacy");
+  });
+
+  it("moves the active profile's legacy workspace into its state root", async () => {
+    const root = makeDoctorStateDir();
+    const paths = getProfileWorkspaceMigrationPaths(root);
+    fs.mkdirSync(paths.legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(paths.legacyDir, "AGENTS.md"), "profile workspace", "utf8");
+
+    const { log, result } = await runProfileWorkspaceDoctorMigration(root);
+
+    expect(fs.existsSync(paths.legacyDir)).toBe(false);
+    expect(fs.readFileSync(path.join(paths.targetDir, "AGENTS.md"), "utf8")).toBe(
+      "profile workspace",
+    );
+    expect(result.changes).toContain(`Profile workspace: ${paths.legacyDir} → ${paths.targetDir}`);
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining(paths.targetDir));
+  });
+
+  it("keeps both profile workspaces when the canonical target already exists", async () => {
+    const root = makeDoctorStateDir();
+    const paths = getProfileWorkspaceMigrationPaths(root);
+    fs.mkdirSync(paths.legacyDir, { recursive: true });
+    fs.mkdirSync(paths.targetDir, { recursive: true });
+    fs.writeFileSync(path.join(paths.legacyDir, "legacy.txt"), "legacy", "utf8");
+    fs.writeFileSync(path.join(paths.targetDir, "current.txt"), "current", "utf8");
+
+    const { log, result } = await runProfileWorkspaceDoctorMigration(root);
+
+    const warning = `Profile workspace migration skipped: target already exists (${paths.targetDir}). Kept legacy workspace at ${paths.legacyDir}; merge manually.`;
+    expect(result.warnings).toContain(warning);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(warning));
+    expect(fs.readFileSync(path.join(paths.legacyDir, "legacy.txt"), "utf8")).toBe("legacy");
+    expect(fs.readFileSync(path.join(paths.targetDir, "current.txt"), "utf8")).toBe("current");
+  });
+
+  it("does nothing when the active profile has no legacy workspace", async () => {
+    const root = makeDoctorStateDir();
+
+    const { log, paths, result } = await runProfileWorkspaceDoctorMigration(root);
+
+    expect(fs.existsSync(paths.legacyDir)).toBe(false);
+    expect(fs.existsSync(paths.targetDir)).toBe(false);
+    expect(result.changes.some((entry) => entry.startsWith("Profile workspace:"))).toBe(false);
+    expect(result.warnings.some((entry) => entry.includes("Profile workspace"))).toBe(false);
+    expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("Profile workspace"));
   });
 
   it("does nothing when no legacy state dir exists", async () => {

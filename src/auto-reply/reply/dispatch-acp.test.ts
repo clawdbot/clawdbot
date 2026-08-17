@@ -8,11 +8,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
+import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
+import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
+import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
+import {
+  configureChannelAdmissionEvidenceCollection,
+  registerChannelAdmissionEvidenceOwner,
+} from "../../channels/message-access/admission-evidence.js";
+import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import {
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
@@ -23,6 +32,7 @@ import {
   appendRecentHistoryImageContext,
   resolveRecentInboundHistoryImages,
 } from "./history-media.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -249,11 +259,6 @@ vi.mock("./dispatch-acp-media.runtime.js", async () => {
 
 vi.mock("../../logging/diagnostic.js", () => ({
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
-  isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
-    config?.diagnostics?.enabled !== false,
-  requestStuckDiagnosticSessionRecovery: vi.fn(),
-  resolveStuckSessionWarnMs: () => 120_000,
-  resolveStuckSessionAbortMs: () => 360_000,
 }));
 
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
@@ -368,16 +373,19 @@ async function runDispatch(params: {
     opts?: { reason?: string; error?: string },
   ) => void;
   markIdle?: (reason: string) => void;
+  ctx?: FinalizedRuntimeMsgContext;
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReplyCore({
-    ctx: buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: targetSessionKey,
-      BodyForAgent: params.bodyForAgent,
-      ...params.ctxOverrides,
-    }),
+    ctx:
+      params.ctx ??
+      buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: targetSessionKey,
+        BodyForAgent: params.bodyForAgent,
+        ...params.ctxOverrides,
+      }),
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     ...(params.runId ? { runId: params.runId } : {}),
@@ -539,6 +547,72 @@ describe("tryDispatchAcpReplyCore", () => {
     globalThis.fetch = originalFetch;
   });
 
+  it("admits ACP message turns with the original channel participant", async () => {
+    const captured: unknown[] = [];
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const clearSink = configureExecutionIdentityAdmissionSink((work) => {
+      captured.push(work);
+      return true;
+    });
+    const owner = { channelId: "discord", record: {}, epoch: {}, isLive: () => true };
+    const clearOwner = registerChannelAdmissionEvidenceOwner(owner);
+    try {
+      setReadyAcpResolution();
+      const channelIngress = await resolveStableChannelMessageIngress({
+        channelId: "discord",
+        accountId: "default",
+        subject: { stableId: "person-42" },
+        conversation: { kind: "group", id: "room-1" },
+        contextBinding: {
+          agentId: "main",
+          sessionKey,
+          messageId: "msg-acp",
+          inboundEventKind: "user_request",
+        },
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const buildContext = createHostChannelInboundEventContextBuilder(
+        buildChannelInboundEventContext,
+        owner,
+      );
+      const ctx = finalizeInboundContext(
+        await buildContext({
+          channel: "discord",
+          accountId: "default",
+          messageId: "msg-acp",
+          from: "discord:channel:room-1",
+          sender: { id: "person-42" },
+          conversation: { kind: "group", id: "room-1" },
+          route: { agentId: "main", routeSessionKey: sessionKey },
+          reply: { to: "discord:channel:room-1" },
+          message: { rawBody: "run acp", bodyForAgent: "run acp" },
+          channelIngress,
+        }),
+      );
+
+      await runDispatch({
+        bodyForAgent: "run acp",
+        cfg: createAcpTestConfig({ logging: { audit: { executionIdentity: true } } }),
+        ctx,
+      });
+
+      expect(captured).toMatchObject([
+        {
+          kind: "capture",
+          envelope: {
+            ingress: { kind: "acp", state: "present" },
+            invoker: { state: "present", kind: "person" },
+          },
+        },
+      ]);
+    } finally {
+      clearOwner();
+      clearSink();
+      clearCollection();
+    }
+  });
+
   it("projects normal ACP dispatch lifecycle and tool events into audit diagnostics", async () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("tool-audit");
@@ -625,6 +699,40 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(routePayload().text).toBe("hello");
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("records channel transform suppression without an ACP delivery claim", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("private reply");
+    const transport = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver: transport,
+      transformReplyPayload: () => null,
+    });
+    const recordProcessed = vi.fn();
+
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      recordProcessed,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(transport).not.toHaveBeenCalled();
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(recordProcessed).toHaveBeenCalledWith("completed", {
+      reason: "channel_transform",
+    });
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.finalText).toBe("");
   });
 
   it("persists ACP transcript when routed delivery fails", async () => {
@@ -1137,7 +1245,7 @@ describe("tryDispatchAcpReplyCore", () => {
     }
   });
 
-  it("passes the ACP agent directory to media understanding", async () => {
+  it("passes the ACP agent directory without declaring host-path access", async () => {
     setReadyAcpResolution();
     mockVisibleTextTurn("image turn");
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
@@ -1167,12 +1275,55 @@ describe("tryDispatchAcpReplyCore", () => {
         },
       });
 
-      expect(
-        requireRecord(
-          mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
-          "media understanding",
-        ).agentDir,
-      ).toBe(agentDir);
+      const mediaUnderstandingParams = requireRecord(
+        mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
+        "media understanding",
+      );
+      expect(mediaUnderstandingParams.agentDir).toBe(agentDir);
+      expect(mediaUnderstandingParams.selfServeLocalPaths).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes exactly the resolved attachment indexes as delivered images", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("image turn");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "delivered.png");
+    try {
+      // Real PNG bytes: the turn-attachment resolver byte-sniffs image MIME
+      // through the harness buffer map keyed by local path.
+      await fs.writeFile(imagePath, ACP_PNG_IMAGE_BYTES);
+      acpAttachmentBuffers.set(imagePath, ACP_PNG_IMAGE_BYTES);
+
+      await runDispatch({
+        bodyForAgent: "describe both images",
+        cfg: createAcpTestConfig({
+          channels: {
+            imessage: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
+        ctxOverrides: {
+          Provider: "imessage",
+          Surface: "imessage",
+          media: [
+            { path: imagePath, contentType: "image/png", kind: "image" },
+            { url: "https://cdn.example.test/photos/remote.png", contentType: "image/png" },
+          ],
+        },
+      });
+
+      // The delivered set must mirror the resolver: local image in, remote-url
+      // image out — an empty or over-broad set reintroduces false skip claims.
+      const delivered = requireRecord(
+        mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
+        "media understanding",
+      ).deliveredImageIndexes as ReadonlySet<number>;
+      expect(delivered.has(0)).toBe(true);
+      expect(delivered.has(1)).toBe(false);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -3007,6 +3158,61 @@ describe("tryDispatchAcpReplyCore", () => {
     });
 
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("Visible.  Done.");
+  });
+
+  it.each([
+    {
+      expectedText: "Private ACP speech.",
+      ttsReply: { text: "Private ACP speech." },
+      finalReply: {},
+      streamedText: "[[tts:text]]Private ACP speech.[[/tts:text]]",
+    },
+    {
+      expectedText: undefined,
+      ttsReply: {
+        text: "Private ACP speech.",
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+      },
+      finalReply: {
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+      },
+      streamedText: "[[tts:text]]Private ACP speech.[[/tts:text]]",
+    },
+    {
+      expectedText: "Visible ACP answer. ",
+      ttsReply: { text: "Visible ACP answer." },
+      finalReply: undefined,
+      streamedText: "Visible ACP answer. [[tts:text]]Private speech.[[/tts:text]]",
+    },
+  ])("keeps tagged ACP TTS delivery single for $streamedText", async (testCase) => {
+    setReadyAcpResolution();
+    queueTtsReplies(testCase.ttsReply as MockTtsReply);
+    mockVisibleTextTurn(testCase.streamedText);
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "tagged" },
+      }),
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    const blockReply = vi.mocked(dispatcher.sendBlockReply).mock.calls[0]?.[0];
+    const deliveredPayload = testCase.finalReply
+      ? dispatcherCall(dispatcher.sendFinalReply)
+      : blockReply;
+    expect(deliveredPayload?.text).toBe(testCase.expectedText);
+    if (testCase.finalReply) {
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+      expect(deliveredPayload).toMatchObject(testCase.finalReply);
+    } else {
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    }
   });
 
   it("falls back to Telegram ACP text when a routed captioned voice is suppressed", async () => {

@@ -7,6 +7,10 @@ import UIKit
 @testable import OpenClaw
 @testable import OpenClawKit
 
+private func percentEncodedPath(of url: URL?) -> String? {
+    url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
+}
+
 @discardableResult
 private func saveActiveManualGateway(
     host: String,
@@ -922,6 +926,46 @@ private func waitUntil(
         #expect(appModel.activeGatewayConnectConfig?.password == nil)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == false)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == setupAuth.targetStableID)
+    }
+
+    @Test @MainActor func `setup context path survives registry reconnect`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let instanceID = "ios-context-path-\(UUID().uuidString)"
+        let temporaryState = try TemporaryOpenClawState(instanceID: instanceID)
+        defer { temporaryState.restore() }
+        let link = GatewayConnectDeepLink(
+            host: "192.168.1.41",
+            port: 18789,
+            tls: false,
+            contextPath: "/openclaw%2Fgateway",
+            bootstrapToken: nil,
+            token: nil,
+            password: nil)
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.connectManual(
+            host: link.host,
+            port: link.port,
+            useTLS: link.tls,
+            contextPath: link.contextPath,
+            authOverride: setupAuth.manualAuthOverride)
+        await waitUntil { appModel.activeGatewayConnectConfig != nil }
+
+        #expect(percentEncodedPath(of: appModel.activeGatewayConnectConfig?.url) == "/openclaw%2Fgateway")
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == setupAuth.targetStableID)
+        let stored = try #require(GatewaySettingsStore.activeGatewayEntry())
+        #expect(stored.contextPath == "/openclaw%2Fgateway")
+
+        appModel.disconnectGateway()
+        await controller.connectActiveGateway()
+        await waitUntil { appModel.activeGatewayConnectConfig != nil }
+
+        #expect(percentEncodedPath(of: appModel.activeGatewayConnectConfig?.url) == "/openclaw%2Fgateway")
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stored.stableID)
     }
 
     @Test @MainActor func `legacy auth preserves proven relay credentials and otherwise requires full re-pair`() throws {
@@ -1913,6 +1957,66 @@ private func waitUntil(
         }
     }
 
+    @Test @MainActor func `share relay keeps credentials out of app group defaults`() throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let token = "relay-token-\(UUID().uuidString)"
+        let password = "relay-password-\(UUID().uuidString)"
+
+        #expect(ShareGatewayRelaySettings.saveConfig(ShareGatewayRelayConfig(
+            gatewayURLString: "wss://secure-relay.example.com",
+            gatewayStableID: "manual|secure-relay.example.com|443",
+            token: token,
+            password: password,
+            sessionKey: "main")))
+
+        let defaults = try #require(UserDefaults(suiteName: OpenClawAppGroup.identifier))
+        let persisted = try #require(defaults.data(forKey: "share.gatewayRelay.config.v1"))
+        #expect(persisted.range(of: Data(token.utf8)) == nil)
+        #expect(persisted.range(of: Data(password.utf8)) == nil)
+        let loaded = try #require(ShareGatewayRelaySettings.loadConfig())
+        #expect(loaded.token == token)
+        #expect(loaded.password == password)
+
+        let otherRelay = ShareGatewayRelayConfig(
+            gatewayURLString: "wss://other-relay.example.com",
+            gatewayStableID: "manual|other-relay.example.com|443",
+            token: nil,
+            password: nil,
+            sessionKey: "main")
+        defaults.set(try JSONEncoder().encode(otherRelay), forKey: "share.gatewayRelay.config.v1")
+        let mismatched = try #require(ShareGatewayRelaySettings.loadConfig())
+        #expect(mismatched.token == nil)
+        #expect(mismatched.password == nil)
+    }
+
+    @Test @MainActor func `share relay migrates legacy defaults credentials into keychain`() throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let token = "legacy-token-\(UUID().uuidString)"
+        let password = "legacy-password-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: OpenClawAppGroup.identifier))
+        let legacy = try JSONSerialization.data(withJSONObject: [
+            "gatewayURLString": "wss://legacy-relay.example.com",
+            "gatewayStableID": "manual|legacy-relay.example.com|443",
+            "token": token,
+            "password": password,
+            "sessionKey": "main",
+        ])
+        defaults.set(legacy, forKey: "share.gatewayRelay.config.v1")
+
+        let loaded = try #require(ShareGatewayRelaySettings.loadConfig())
+
+        #expect(loaded.token == token)
+        #expect(loaded.password == password)
+        let migrated = try #require(defaults.data(forKey: "share.gatewayRelay.config.v1"))
+        #expect(migrated.range(of: Data(token.utf8)) == nil)
+        #expect(migrated.range(of: Data(password.utf8)) == nil)
+        let reloaded = try #require(ShareGatewayRelaySettings.loadConfig())
+        #expect(reloaded.token == token)
+        #expect(reloaded.password == password)
+    }
+
     @Test @MainActor func `forget gateway clears matching share relay only`() async {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
@@ -2116,6 +2220,35 @@ private func waitUntil(
         #expect(controller.pendingTrustPrompt == nil)
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == nil)
         #expect(!GatewaySettingsStore.loadGatewayRegistry().entries.contains { $0.stableID == stableID })
+    }
+
+    @Test @MainActor func `manual trust handoff persists its context path`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let host = "context-path-trust.example.com"
+        let contextPath = "/openclaw-gateway"
+        let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: host,
+            port: 443,
+            contextPath: contextPath)
+        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
+        GatewayTLSStore.clearFingerprint(stableID: stableID)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = makeTLSProbeController(appModel: appModel, fingerprint: "context-path-fingerprint")
+
+        await controller.connectManual(
+            host: host,
+            port: 443,
+            useTLS: true,
+            contextPath: contextPath)
+        #expect(controller.pendingTrustPrompt?.stableID == stableID)
+        await controller.acceptPendingTrustPrompt()
+        await waitUntil { appModel.activeGatewayConnectConfig != nil }
+
+        #expect(percentEncodedPath(of: appModel.activeGatewayConnectConfig?.url) == contextPath)
+        let stored = try #require(GatewaySettingsStore.activeGatewayEntry())
+        #expect(stored.contextPath == contextPath)
     }
 
     @Test @MainActor func `forget gateway preserves another gateway pending trust handoff`() async {

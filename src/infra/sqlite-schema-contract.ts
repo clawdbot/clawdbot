@@ -113,6 +113,7 @@ export function collectSqliteSchemaIssues(
 ): SqliteSchemaIssue[] {
   const expected = getSqliteSchemaContract(schemaSql);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
+  const allowedMissingIndexes = new Set(compatibility.allowedMissingIndexes ?? []);
 
   const issues: SqliteSchemaIssue[] = [];
   const add = (code: SqliteSchemaIssueCode, objectName: string, message?: string) => {
@@ -140,6 +141,16 @@ export function collectSqliteSchemaIssues(
     for (const expectedIndex of expectedTable.indexes) {
       if (!actualTable.indexes.some((actualIndex) => isEqual(actualIndex, expectedIndex))) {
         const objectName = expectedIndex.name ?? tableName;
+        const namedIndexPresent = expectedIndex.name
+          ? actualTable.indexes.some((actualIndex) => actualIndex.name === expectedIndex.name)
+          : false;
+        if (
+          expectedIndex.name &&
+          allowedMissingIndexes.has(expectedIndex.name) &&
+          !namedIndexPresent
+        ) {
+          continue;
+        }
         add(
           "missing-or-drifted-index",
           objectName,

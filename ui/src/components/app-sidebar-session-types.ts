@@ -1,7 +1,10 @@
+import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
+  SessionObserverDigest,
+  SessionCreatedActor,
+} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
@@ -54,17 +57,26 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
+  sessionId?: string;
   displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
   archivedBy?: SessionCreatedActor;
   label: string;
+  /**
+   * Stored user label, undecorated. `label` above is the resolved display name
+   * and can carry a derived account or channel; rename edits this one so a
+   * derived string never lands back in persisted state.
+   */
+  userLabel?: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
   href: string;
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  /** Raw Gateway liveness used for operations even when display status is terminal. */
+  gatewayHasActiveRun?: boolean;
   activeRunIds?: readonly string[];
   modelSelectionLocked: boolean;
   kind?: string;
@@ -73,6 +85,7 @@ export type SidebarRecentSession = {
   visibility?: SessionVisibility;
   draftOwnedBySelf?: boolean;
   category?: string;
+  icon?: string;
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
@@ -81,11 +94,12 @@ export type SidebarRecentSession = {
   acpSession?: boolean;
   worktreeId?: string;
   placementState?: SessionPlacementState;
+  diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
   cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
-  outboxCount?: number;
+  outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
   lastMessagePreview?: string;
@@ -114,9 +128,9 @@ export type SidebarRecentSession = {
 };
 
 export const enum RowVisibilityReason {
-  Any,
-  ActiveRun,
-  Attention,
+  Any = 0,
+  ActiveRun = 1,
+  Attention = 2,
 }
 
 export function rowDemandsVisibility(
@@ -177,6 +191,11 @@ export type SidebarSessionMutationScope = {
   sessions: SessionCapability;
   client: GatewayBrowserClient;
   selectedAgentId: string;
+  // Owner-scoped abort signal for this epoch's destructive confirmations. A
+  // retired epoch aborts it so any open dialog dismisses itself instead of
+  // surviving a reconnect; scopes built outside SessionDataController may
+  // leave this unset and keep their own stale-guard behavior.
+  signal?: AbortSignal;
 };
 
 export type SidebarSessionMutationResult = "completed" | "failed" | "stale";
@@ -186,6 +205,7 @@ export type SidebarSessionPatch = {
   pinned?: boolean;
   unread?: boolean;
   label?: string | null;
+  icon?: string | null;
   category?: string | null;
 };
 
@@ -204,7 +224,9 @@ export function sidebarSessionStateId(key: string): string {
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:catalog-grouping";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
+const SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY = "openclaw:sidebar:sessions:show-system";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
+const SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY = "openclaw:sidebar:sessions:sort-mode";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 const SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY = "openclaw:sidebar:sessions:hidden-catalogs";
@@ -244,9 +266,20 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY) === "true";
 }
 
+export function loadStoredSidebarSessionsShowSystem(): boolean {
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY) === "true";
+}
+
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY);
   return stored === "archived" || stored === "all" ? stored : "active";
+}
+
+export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
+  const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY);
+  // "people" stays readable here even when the gateway later hides the
+  // capability; effectiveSessionSortMode() downgrades it at render time.
+  return stored === "updated" || stored === "people" ? stored : "created";
 }
 
 export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
@@ -295,8 +328,36 @@ export function storeSidebarSessionsShowCron(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
 }
 
+export function storeSidebarSessionsShowSystem(show: boolean) {
+  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
+}
+
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
+}
+
+/** People collapses to Created only where the gateway has authoritatively
+ *  denied the capability; an undefined capability (reconnect) keeps the mode. */
+export function resolveSidebarSessionSortMode(
+  mode: SidebarSessionSortMode,
+  keepPeople: boolean,
+): SidebarSessionSortMode {
+  return mode === "people" && !keepPeople ? "created" : mode;
+}
+
+/** Persists the resolved mode, never the rejected request, so a reload cannot
+ *  restore a People sort the gateway already refused. Returns what was stored. */
+export function storeSidebarSessionSortMode(
+  mode: SidebarSessionSortMode,
+  peopleCapability: boolean | undefined,
+): SidebarSessionSortMode {
+  const resolved = resolveSidebarSessionSortMode(mode, peopleCapability !== false);
+  try {
+    getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY, resolved);
+  } catch {
+    // Keep the in-memory preference when storage is unavailable.
+  }
+  return resolved;
 }
 
 export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {

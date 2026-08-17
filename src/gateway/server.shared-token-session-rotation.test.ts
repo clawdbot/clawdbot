@@ -2,6 +2,7 @@
  * Shared gateway-token session rotation tests.
  */
 import fs from "node:fs/promises";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   loadGatewayConfig,
@@ -9,7 +10,7 @@ import {
   waitForGatewayWsClose,
 } from "./shared-auth.test-helpers.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   startTestGatewayServer,
@@ -34,7 +35,7 @@ beforeAll(async () => {
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
-  port = await getFreePort();
+  port = await getGatewayTestPort();
   testState.gatewayAuth = undefined;
   await fs.writeFile(
     configPath,
@@ -80,17 +81,11 @@ afterAll(async () => {
   await server.close();
 });
 
-function toRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 function buildConfigSetWithRotatedToken(config: Record<string, unknown>): Record<string, unknown> {
   const next = structuredClone(config);
-  const gateway = { ...toRecord(next.gateway) };
-  const auth = { ...toRecord(gateway.auth), mode: "token", token: NEW_TOKEN };
-  const reload = { ...toRecord(gateway.reload), mode: "off" };
+  const gateway = { ...asOptionalRecord(next.gateway) };
+  const auth = { ...asOptionalRecord(gateway.auth), mode: "token", token: NEW_TOKEN };
+  const reload = { ...asOptionalRecord(gateway.reload), mode: "off" };
   gateway.auth = auth;
   gateway.reload = reload;
   next.gateway = gateway;

@@ -6,13 +6,18 @@ import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/clien
 import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
   isGatewayNativeApprovalMethod,
   type GatewayNativeApprovalMethod,
 } from "./approval-gateway-runtime-methods.js";
+import {
+  normalizeApprovalRequest,
+  type ApprovalRequestInput,
+  type NormalizedApprovalRequest,
+} from "./approval-types.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
   ExecApprovalChannelRuntime,
@@ -20,14 +25,14 @@ import type {
   ExecApprovalChannelRuntimeEventKind,
 } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import type { PluginApprovalResolved } from "./plugin-approvals.js";
 export type {
   ExecApprovalChannelRuntime,
   ExecApprovalChannelRuntimeAdapter,
   ExecApprovalChannelRuntimeEventKind,
 } from "./exec-approval-channel-runtime.types.js";
 
-type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequestEvent = ApprovalRequestInput;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
 type ApprovalReplayMethod = Extract<
   GatewayNativeApprovalMethod,
@@ -64,7 +69,7 @@ export function isExecApprovalChannelRuntimeTerminalStartError(
 }
 
 type PendingApprovalValue<TPending, TRequest extends ApprovalRequestEvent> = {
-  request: TRequest;
+  request: NormalizedApprovalRequest<TRequest>;
   entries: TPending[];
 };
 
@@ -141,12 +146,13 @@ export function createExecApprovalChannelRuntime<
   };
 
   const handleRequested = async (
-    request: TRequest,
+    requestInput: TRequest,
     opts?: { ignoreIfInactive?: boolean; alreadyAccepted?: boolean },
   ): Promise<void> => {
     if (opts?.ignoreIfInactive && !shouldKeepRunning()) {
       return;
     }
+    const request = normalizeApprovalRequest(requestInput);
     if (pending.has(request.id)) {
       log.debug(`ignored duplicate request ${request.id}`);
       return;
@@ -296,8 +302,10 @@ export function createExecApprovalChannelRuntime<
           // Subscribe before replay so a request created during the list calls is not lost.
           unsubscribeGatewayRuntime = gatewayRuntime.subscribe({
             eventKinds,
+            // SAFETY: Gateway-owned subscribers publish the canonical normalized request union.
             shouldHandle: (request) =>
-              shouldKeepRunning() && adapter.shouldHandle(request as TRequest),
+              shouldKeepRunning() &&
+              adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
             onRequested: (request) => {
               spawn(
                 "error handling approval request",
@@ -322,7 +330,7 @@ export function createExecApprovalChannelRuntime<
           return;
         }
 
-        const ready = createDeferred();
+        const ready = createDeferredCore();
         let lastConnectError: unknown = null;
 
         const client = await createOperatorApprovalsGatewayClient({

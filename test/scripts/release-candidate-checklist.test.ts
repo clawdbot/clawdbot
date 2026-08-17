@@ -1149,6 +1149,8 @@ describe("release candidate checklist", () => {
         "111",
         "--npm-preflight-run",
         "222",
+        "--plugin-sdk-api-acknowledgement",
+        "a1b2c3d4",
         "--skip-dispatch",
       ]),
       workflowRef: "main",
@@ -1159,6 +1161,7 @@ describe("release candidate checklist", () => {
     expect(command).toContain("'full_release_validation_run_id=111'");
     expect(command).toContain("'full_release_validation_run_attempt=2'");
     expect(command).toContain("'preflight_run_id=222'");
+    expect(command).toContain("'plugin_sdk_api_acknowledgement=a1b2c3d4'");
     expect(command).toContain("'tag=v2026.5.14-beta.3'");
     expect(command).toContain("'plugin_publish_scope=all-publishable'");
     expect(command).toContain("'--ref' 'main'");
@@ -1175,6 +1178,12 @@ describe("release candidate checklist", () => {
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }
+  });
+
+  it("validates Plugin SDK acknowledgement digests", () => {
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--plugin-sdk-api-acknowledgement", "ABC"]),
+    ).toThrow("8-character lowercase digest");
   });
 
   it("requires and carries an exact Windows Node tag for stable release candidates", () => {

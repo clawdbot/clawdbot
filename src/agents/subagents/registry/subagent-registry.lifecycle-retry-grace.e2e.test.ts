@@ -4,11 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
-import {
-  maybeWakeRequesterAfterAllChildrenSettled,
-  testing as settleWakeTesting,
-} from "../announce/subagent-announce.requester-settle-wake.js";
-import * as announceRead from "./subagent-registry-announce-read.js";
+import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
@@ -103,7 +99,7 @@ const loadConfigMock = vi.fn(() => ({
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveStorePath: () => "/tmp/test-store",
+  resolveSessionStorePathCore: () => "/tmp/test-store",
   resolveMainSessionKey: () => "agent:main:main",
   updateSessionStore: vi.fn(),
 }));
@@ -129,16 +125,7 @@ vi.mock("../spawn/subagent-depth.js", () => ({
 
 const loadSubagentRegistryRuntimeForTest = async () =>
   ({
-    countActiveDescendantRuns: mod.countActiveDescendantRuns,
-    countPendingDescendantRuns: mod.countPendingDescendantRuns,
-    countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
-    hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
-    getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
-    isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
-    listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
-    replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
-    resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
-    shouldIgnorePostCompletionAnnounceForSession: mod.shouldIgnorePostCompletionAnnounceForSession,
+    replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteerCore,
   }) as unknown as typeof import("./subagent-registry-runtime.js");
 
 describe("subagent registry lifecycle error grace", () => {
@@ -197,9 +184,6 @@ describe("subagent registry lifecycle error grace", () => {
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
     });
-    settleWakeTesting.setDepsForTest({
-      loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
-    });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
@@ -217,9 +201,9 @@ describe("subagent registry lifecycle error grace", () => {
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
-      readSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
+      readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
       resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
-      resolveStorePath: () => "/tmp/test-store",
+      resolveSessionStorePathCore: () => "/tmp/test-store",
     });
   });
 
@@ -228,7 +212,6 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceDeliveryTesting.setDepsForTest();
     subagentAnnounceOutputTesting.setDepsForTest();
     subagentAnnounceTesting.setDepsForTest();
-    settleWakeTesting.setDepsForTest();
     mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
@@ -404,7 +387,7 @@ describe("subagent registry lifecycle error grace", () => {
       });
   }
 
-  it("lets requester settlement own a yielded batch while child delivery is in progress", async () => {
+  it("lets requester settlement own a yielded batch after sibling deliveries race", async () => {
     const requesterTurnRunId = "run-requester-yield-race";
     const alphaSessionKey = "agent:main:subagent:yield-alpha";
     const betaSessionKey = "agent:main:subagent:yield-beta";
@@ -412,21 +395,6 @@ describe("subagent registry lifecycle error grace", () => {
     registerCompletionRun("run-yield-beta", "yield-beta", "yield beta", requesterTurnRunId);
     setAssistantOutput(alphaSessionKey, "alpha complete");
     setAssistantOutput(betaSessionKey, "beta complete");
-
-    let releaseAlphaWakeRuntime: (() => void) | undefined;
-    const alphaWakeRuntimeGate = new Promise<void>((resolve) => {
-      releaseAlphaWakeRuntime = resolve;
-    });
-    let settleWakeRuntimeLoads = 0;
-    settleWakeTesting.setDepsForTest({
-      loadSubagentRegistryRuntime: async () => {
-        settleWakeRuntimeLoads += 1;
-        if (settleWakeRuntimeLoads === 1) {
-          await alphaWakeRuntimeGate;
-        }
-        return await loadSubagentRegistryRuntimeForTest();
-      },
-    });
 
     let releaseBetaDelivery: (() => void) | undefined;
     agentCallGates.set(
@@ -438,7 +406,6 @@ describe("subagent registry lifecycle error grace", () => {
 
     emitLifecycleEvent("run-yield-alpha", { phase: "end", endedAt: Date.now() });
     await waitForAgentCallCount(1);
-    await vi.waitFor(() => expect(settleWakeRuntimeLoads).toBe(1));
 
     emitLifecycleEvent("run-yield-beta", { phase: "end", endedAt: Date.now() + 1 });
     await waitForAgentCallCount(2);
@@ -468,7 +435,6 @@ describe("subagent registry lifecycle error grace", () => {
       }),
     ).toBe(true);
 
-    releaseAlphaWakeRuntime?.();
     await vi.advanceTimersByTimeAsync(0);
     await flushAsync();
 
@@ -491,8 +457,8 @@ describe("subagent registry lifecycle error grace", () => {
       },
       {
         runId: "run-yield-beta",
-        delivery: "in_progress",
-        disposition: "intentional_non_delivery",
+        delivery: "delivered",
+        disposition: "delivered",
         nextAttemptAt: undefined,
         rearmGeneration: undefined,
       },

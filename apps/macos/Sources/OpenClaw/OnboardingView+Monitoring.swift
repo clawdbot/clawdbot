@@ -200,20 +200,23 @@ extension OnboardingView {
     func refreshLocalGatewayProbe() async {
         let port = GatewayEnvironment.gatewayPort()
         let desc = await PortGuardian.shared.describe(port: port)
+        let managedServicePID: Int32? = if AppProfile.current.isActive, desc != nil {
+            await GatewayLaunchAgentManager.runningGatewayPID()
+        } else {
+            nil
+        }
         await MainActor.run {
             guard let desc else {
                 self.localGatewayProbe = nil
                 return
             }
             let command = desc.command.trimmingCharacters(in: .whitespacesAndNewlines)
-            let expectedTokens = ["node", "openclaw", "tsx", "pnpm", "bun"]
-            let lower = command.lowercased()
-            let expected = expectedTokens.contains { lower.contains($0) }
             self.localGatewayProbe = LocalGatewayProbe(
                 port: port,
                 pid: desc.pid,
                 command: command,
-                expected: expected)
+                profile: .current,
+                managedServicePID: managedServicePID)
         }
     }
 }

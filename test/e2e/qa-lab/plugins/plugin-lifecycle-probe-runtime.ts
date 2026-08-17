@@ -88,6 +88,10 @@ function requiredConfig(env: ProbeEnv = process.env) {
   return readRequiredJson(configPath(env));
 }
 
+function writeConfig(config: Record<string, unknown>, env: ProbeEnv = process.env) {
+  fs.writeFileSync(configPath(env), `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
 function assertProbe(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
@@ -213,6 +217,38 @@ export function assertUninstalled(pluginId: string, env: ProbeEnv = process.env)
   assertProbe(
     !loadPaths.some((entry) => String(entry).includes(pluginId)),
     `load path still references ${pluginId}: ${loadPaths.join(", ")}`,
+  );
+}
+
+function assertRemovedChildPolicy(pluginId: string, env: ProbeEnv = process.env) {
+  const cfg = requiredConfig(env) as {
+    plugins?: {
+      allow?: string[];
+      deny?: string[];
+      entries?: Record<string, unknown>;
+      load?: { paths?: unknown[] };
+      slots?: { memory?: string; contextEngine?: string };
+    };
+  };
+  assertProbe(!cfg.plugins?.entries?.[pluginId], `plugin entry survived for ${pluginId}`);
+  assertProbe(
+    !(cfg.plugins?.allow ?? []).includes(pluginId),
+    `allow policy survived for ${pluginId}`,
+  );
+  assertProbe(
+    !(cfg.plugins?.deny ?? []).includes(pluginId),
+    `deny policy survived for ${pluginId}`,
+  );
+  assertProbe(
+    !(cfg.plugins?.load?.paths ?? []).some((entry) =>
+      String(entry).endsWith(`/${pluginId.split("/").at(-1)}.js`),
+    ),
+    `load path survived for ${pluginId}`,
+  );
+  assertProbe(cfg.plugins?.slots?.memory !== pluginId, `memory slot survived for ${pluginId}`);
+  assertProbe(
+    cfg.plugins?.slots?.contextEngine !== pluginId,
+    `context engine slot survived for ${pluginId}`,
   );
 }
 
@@ -439,6 +475,26 @@ async function packFixturePlugin(
   await runCommand("tar", ["-czf", outputTgz, "-C", packDir, "package"]);
 }
 
+async function packFixturePluginPack(
+  packDir: string,
+  outputTgz: string,
+  pluginId: string,
+  version: string,
+  entries: readonly string[],
+) {
+  const packageDir = path.join(packDir, "package");
+  fs.mkdirSync(packageDir, { recursive: true });
+  await runCommand("node", [
+    "scripts/e2e/lib/fixture.mjs",
+    "plugin-pack",
+    packageDir,
+    pluginId,
+    version,
+    entries.join(","),
+  ]);
+  await runCommand("tar", ["-czf", outputTgz, "-C", packDir, "package"]);
+}
+
 async function startNpmFixtureRegistry(
   registryRoot: string,
   packages: readonly [packageName: string, version: string, tarball: string][],
@@ -446,6 +502,7 @@ async function startNpmFixtureRegistry(
 ): Promise<RegistryServer> {
   const serverLog = path.join(registryRoot, "npm-registry.log");
   const serverPortFile = path.join(registryRoot, "npm-registry-port");
+  fs.rmSync(serverPortFile, { force: true });
   const logFd = fs.openSync(serverLog, "a");
   const child = spawn(
     "node",
@@ -535,16 +592,28 @@ async function runRuntimeInspect(params: {
 async function runPluginLifecycleMatrix() {
   const pluginId = "lifecycle-claw";
   const packageName = "@openclaw/lifecycle-claw";
+  const packOwner = "lifecycle-pack";
+  const packPackageName = "@openclaw/lifecycle-pack";
+  const packOne = `${packOwner}/one`;
+  const packTwo = `${packOwner}/two`;
+  const packOld = `${packOwner}/old`;
+  const packRenamed = `${packOwner}/renamed`;
   const resourceDir = tempDirs.make("openclaw-plugin-lifecycle-matrix-");
   const npmPrefix = "/tmp/npm-prefix";
   const env = createMatrixStateEnv(resourceDir);
   const tarballV1 = path.join(resourceDir, "lifecycle-claw-1.0.0.tgz");
   const tarballV2 = path.join(resourceDir, "lifecycle-claw-2.0.0.tgz");
+  const packTarballV1 = path.join(resourceDir, "lifecycle-pack-1.0.0.tgz");
+  const packTarballV2 = path.join(resourceDir, "lifecycle-pack-2.0.0.tgz");
   const inspectV1 = path.join(resourceDir, "plugin-lifecycle-inspect-v1.json");
   const inspectDisabled = path.join(resourceDir, "plugin-lifecycle-inspect-disabled.json");
   const inspectReenabled = path.join(resourceDir, "plugin-lifecycle-inspect-reenabled.json");
   const inspectV2 = path.join(resourceDir, "plugin-lifecycle-inspect-v2.json");
   const inspectDowngradeV1 = path.join(resourceDir, "plugin-lifecycle-inspect-downgrade-v1.json");
+  const inspectPackOneV1 = path.join(resourceDir, "plugin-pack-one-v1.json");
+  const inspectPackTwoDisabled = path.join(resourceDir, "plugin-pack-two-disabled.json");
+  const inspectPackOneV2 = path.join(resourceDir, "plugin-pack-one-v2.json");
+  const inspectPackRenamedV2 = path.join(resourceDir, "plugin-pack-renamed-v2.json");
   const summaryTsv = path.join(resourceDir, "resource-summary.tsv");
   let registry: RegistryServer | undefined;
 
@@ -575,6 +644,15 @@ async function runPluginLifecycleMatrix() {
       "lifecycle.v1",
       "Lifecycle Claw",
     );
+    await packFixturePluginPack(path.join(packRoot, "pack-v1"), packTarballV1, packOwner, "1.0.0", [
+      "one",
+      "two",
+      "old",
+    ]);
+    await packFixturePluginPack(path.join(packRoot, "pack-v2"), packTarballV2, packOwner, "2.0.0", [
+      "one",
+      "renamed",
+    ]);
     await packFixturePlugin(
       path.join(packRoot, "v2"),
       tarballV2,
@@ -588,10 +666,11 @@ async function runPluginLifecycleMatrix() {
       [
         [packageName, "1.0.0", tarballV1],
         [packageName, "2.0.0", tarballV2],
+        [packPackageName, "1.0.0", packTarballV1],
       ],
       matrixEnv,
     );
-    const runEnv = registry.env as MatrixEnv;
+    let runEnv = registry.env as MatrixEnv;
 
     await runMeasured(
       summaryTsv,
@@ -688,14 +767,144 @@ async function runPluginLifecycleMatrix() {
       `failed to remove plugin code before missing-code uninstall: ${installedPath}`,
     );
 
+    let missingCodeUninstallFailed = false;
+    try {
+      await runMeasured(
+        summaryTsv,
+        "missing-code-uninstall",
+        "node",
+        [entry, "plugins", "uninstall", pluginId, "--force"],
+        runEnv,
+      );
+    } catch {
+      missingCodeUninstallFailed = true;
+    }
+    assertProbe(
+      missingCodeUninstallFailed,
+      "missing-code uninstall must fail closed without authoritative child metadata",
+    );
+    assertProbe(recordFor(pluginId, runEnv), "missing-code uninstall removed the install record");
+    assertEnabled(pluginId, true, runEnv);
+
     await runMeasured(
       summaryTsv,
-      "missing-code-uninstall",
+      "pack-install-v1",
       "node",
-      [entry, "plugins", "uninstall", pluginId, "--force"],
+      [entry, "plugins", "install", `npm:${packPackageName}@latest`, "--force"],
       runEnv,
     );
-    assertUninstalled(pluginId, runEnv);
+    assertVersion(packOwner, "1.0.0", runEnv);
+    assertEnabled(packOne, true, runEnv);
+    assertEnabled(packTwo, true, runEnv);
+    assertEnabled(packOld, true, runEnv);
+    await runRuntimeInspect({
+      summaryTsv,
+      phase: "pack-inspect-one-v1",
+      entry,
+      pluginId: packOne,
+      inspectPath: inspectPackOneV1,
+      env: runEnv,
+    });
+    assertInspectLoaded(packOne, inspectPackOneV1);
+
+    await runMeasured(
+      summaryTsv,
+      "pack-disable-two",
+      "node",
+      [entry, "plugins", "disable", packTwo],
+      runEnv,
+    );
+    assertEnabled(packTwo, false, runEnv);
+    await runRuntimeInspect({
+      summaryTsv,
+      phase: "pack-inspect-two-disabled",
+      entry,
+      pluginId: packTwo,
+      inspectPath: inspectPackTwoDisabled,
+      env: runEnv,
+    });
+    assertInspectDisabled(packTwo, inspectPackTwoDisabled);
+
+    const policyConfig = requiredConfig(runEnv) as {
+      plugins?: Record<string, unknown> & {
+        allow?: string[];
+        deny?: string[];
+        entries?: Record<string, unknown>;
+        load?: { paths?: string[] };
+        slots?: Record<string, string>;
+      };
+    };
+    policyConfig.plugins = {
+      ...policyConfig.plugins,
+      allow: [packOne, packTwo, packOld],
+      deny: [packOld],
+      entries: {
+        ...policyConfig.plugins?.entries,
+        [packOld]: { enabled: true },
+      },
+    };
+    writeConfig(policyConfig, runEnv);
+
+    registry.stop();
+    registry = await startNpmFixtureRegistry(
+      registryRoot,
+      [
+        [packageName, "1.0.0", tarballV1],
+        [packageName, "2.0.0", tarballV2],
+        [packPackageName, "1.0.0", packTarballV1],
+        [packPackageName, "2.0.0", packTarballV2],
+      ],
+      matrixEnv,
+    );
+    runEnv = registry.env as MatrixEnv;
+
+    await runMeasured(
+      summaryTsv,
+      "pack-child-update-v2",
+      "node",
+      [entry, "plugins", "update", packTwo],
+      runEnv,
+    );
+    assertVersion(packOwner, "2.0.0", runEnv);
+    assertEnabled(packOne, true, runEnv);
+    assertRemovedChildPolicy(packTwo, runEnv);
+    assertRemovedChildPolicy(packOld, runEnv);
+    await runRuntimeInspect({
+      summaryTsv,
+      phase: "pack-inspect-one-v2",
+      entry,
+      pluginId: packOne,
+      inspectPath: inspectPackOneV2,
+      env: runEnv,
+    });
+    assertInspectLoaded(packOne, inspectPackOneV2);
+    await runRuntimeInspect({
+      summaryTsv,
+      phase: "pack-inspect-renamed-v2",
+      entry,
+      pluginId: packRenamed,
+      inspectPath: inspectPackRenamedV2,
+      env: runEnv,
+    });
+    assertInspectDisabled(packRenamed, inspectPackRenamedV2);
+
+    const packInstallPath = installPath(packOwner, runEnv);
+    await runMeasured(
+      summaryTsv,
+      "pack-child-uninstall",
+      "node",
+      [entry, "plugins", "uninstall", packOne, "--force"],
+      runEnv,
+    );
+    assertUninstalled(packOwner, runEnv);
+    assertUninstalled(packOne, runEnv);
+    assertUninstalled(packTwo, runEnv);
+    assertUninstalled(packOld, runEnv);
+    assertUninstalled(packRenamed, runEnv);
+    assertProbe(
+      !fs.existsSync(packInstallPath),
+      `pack install directory still exists after child-addressed uninstall: ${packInstallPath}`,
+    );
 
     process.stdout.write(
       `Plugin lifecycle resource summary:\n${fs.readFileSync(summaryTsv, "utf8")}`,

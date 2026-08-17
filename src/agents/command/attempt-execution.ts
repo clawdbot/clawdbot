@@ -21,9 +21,10 @@ import {
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
-import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
+import {
+  persistSessionTranscriptTurn,
+  type SessionTranscriptRuntimeTarget,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -44,7 +45,7 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -136,10 +137,6 @@ function rebaseExecApprovalContinuationPromptRange(params: {
   };
 }
 
-function normalizeTranscriptMirrorText(value: string): string {
-  return value.trim().replace(/\s+/gu, " ");
-}
-
 const ACP_TRANSCRIPT_USAGE = {
   input: 0,
   output: 0,
@@ -211,7 +208,6 @@ type PersistTextTurnTranscriptParams = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-  embeddedAssistantGapFill?: boolean;
   skipAssistantTurn?: boolean;
   assistant: {
     api: string;
@@ -372,19 +368,6 @@ async function persistTextTurnTranscript(
         stopReason: "stop",
         timestamp: Date.now(),
       },
-      shouldAppend: async (
-        context: import("../../config/sessions/session-accessor.js").SessionTranscriptTurnWriteContext,
-      ) => {
-        if (!params.embeddedAssistantGapFill) {
-          return true;
-        }
-        const latest = await readTailAssistantTextFromSessionTranscript(context, {
-          excludeTranscriptOnlyOpenClawAssistant: true,
-        });
-        const normalizedReply = normalizeTranscriptMirrorText(replyText);
-        const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
-        return !normalizedLatest || normalizedLatest !== normalizedReply;
-      },
     });
   }
 
@@ -474,7 +457,6 @@ export async function persistCliTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-  embeddedAssistantGapFill?: boolean;
   skipUserTurn?: boolean;
   skipAssistantTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
@@ -482,8 +464,7 @@ export async function persistCliTurnTranscript(params: {
   const replyText = resolveCliTranscriptReplyText(result);
   const provider = result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = result.meta.agentMeta?.model?.trim() ?? "default";
-  const gapFill = params.embeddedAssistantGapFill ?? false;
-  const skipUserTurn = gapFill || requestedSkipUserTurn === true;
+  const skipUserTurn = requestedSkipUserTurn === true;
 
   return await persistTextTurnTranscript({
     ...transcript,
@@ -491,7 +472,6 @@ export async function persistCliTurnTranscript(params: {
     transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
     userMessage: skipUserTurn ? undefined : transcript.userMessage,
     finalText: replyText,
-    embeddedAssistantGapFill: gapFill,
     assistant: {
       api: "cli",
       provider,
@@ -507,6 +487,7 @@ export function runAgentAttempt(params: {
   preparedRunAdmission: PreparedAgentRunAdmission;
   providerOverride: string;
   modelOverride: string;
+  modelHasVision?: boolean;
   configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
@@ -535,7 +516,7 @@ export function runAgentAttempt(params: {
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
-  skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
+  skillsSnapshot: SkillSnapshot | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
   onAgentEvent: (evt: {
@@ -942,6 +923,7 @@ export function runAgentAttempt(params: {
             prompt: cliPrompt,
             transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
+            modelHasVision: params.modelHasVision,
             provider: cliExecutionProvider,
             model: params.modelOverride,
             thinkLevel: params.resolvedThinkLevel,
@@ -953,6 +935,7 @@ export function runAgentAttempt(params: {
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
+            cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,
             sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
             requireExplicitMessageTarget:
               params.opts.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
@@ -1176,6 +1159,7 @@ export function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
+    modelHasVision: params.modelHasVision,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
@@ -1206,6 +1190,7 @@ export function runAgentAttempt(params: {
       ? params.opts.trustedInternalHandoff
       : undefined,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
+    cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,

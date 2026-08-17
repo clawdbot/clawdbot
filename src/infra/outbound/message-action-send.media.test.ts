@@ -4,57 +4,18 @@ import path from "node:path";
 // Covers message-action media hydration, sandbox path normalization,
 // attachments, and channel/plugin media source aliases.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
-import { loadWebMedia } from "../../media/web-media.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { runMessageAction } from "./message-action-runner.js";
-
-const channelResolutionMocks = vi.hoisted(() => ({
-  resolveOutboundChannelPlugin: vi.fn(),
-  executeSendAction: vi.fn(),
-  executePollAction: vi.fn(),
-}));
-
-vi.mock("./channel-resolution.js", () => ({
-  normalizeDeliverableOutboundChannel: (value?: string | null) =>
-    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
-  resolveOutboundChannelPlugin: channelResolutionMocks.resolveOutboundChannelPlugin,
-  resetOutboundChannelResolutionStateForTest: vi.fn(),
-}));
-
-vi.mock("./outbound-send-service.js", () => ({
-  executeSendAction: channelResolutionMocks.executeSendAction,
-  executePollAction: channelResolutionMocks.executePollAction,
-}));
-
-vi.mock("./outbound-session.js", () => ({
-  ensureOutboundSessionEntry: vi.fn(async () => undefined),
-  resolveOutboundSessionRoute: vi.fn(async () => null),
-}));
-
-vi.mock("./message-action-threading.js", async () => {
-  const { createOutboundThreadingMock } =
-    await import("./message-action-threading.test-helpers.js");
-  return createOutboundThreadingMock();
-});
-
-vi.mock("../../media/web-media.js", async () => {
-  const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
-    "../../media/web-media.js",
-  );
-  return {
-    ...actual,
-    loadWebMedia: vi.fn(actual.loadWebMedia),
-  };
-});
+import {
+  messageActionRunnerMocks as channelResolutionMocks,
+  resetMessageActionMediaMocks,
+  runMessageAction,
+  setMessageActionTestPlugin as setTestPlugin,
+} from "./message-action-runner.test-helpers.js";
 
 const workspaceConfig = {
   channels: {
@@ -64,10 +25,6 @@ const workspaceConfig = {
     },
   },
 } as OpenClawConfig;
-
-function setTestPlugin(plugin: ChannelPlugin, pluginId: string) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId, source: "test", plugin }]));
-}
 
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -112,8 +69,6 @@ const runDrySend = (params: {
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
-let actualLoadWebMedia: typeof loadWebMedia;
-
 const workspacePlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
     id: "workspace",
@@ -147,54 +102,7 @@ const workspacePlugin: ChannelPlugin = {
 
 describe("runMessageAction media behavior", () => {
   beforeEach(async () => {
-    actualLoadWebMedia ??= (
-      await vi.importActual<typeof import("../../media/web-media.js")>("../../media/web-media.js")
-    ).loadWebMedia;
-    vi.restoreAllMocks();
-    vi.clearAllMocks();
-    channelResolutionMocks.resolveOutboundChannelPlugin.mockReset();
-    channelResolutionMocks.resolveOutboundChannelPlugin.mockImplementation(
-      ({ channel }: { channel: string }) =>
-        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
-    );
-    channelResolutionMocks.executeSendAction.mockReset();
-    channelResolutionMocks.executeSendAction.mockImplementation(
-      async ({
-        ctx,
-        to,
-        message,
-        mediaUrl,
-        mediaUrls,
-      }: {
-        ctx: { channel: string; dryRun: boolean };
-        to: string;
-        message: string;
-        mediaUrl?: string;
-        mediaUrls?: string[];
-      }) => ({
-        handledBy: "core" as const,
-        payload: {
-          channel: ctx.channel,
-          to,
-          message,
-          mediaUrl,
-          mediaUrls,
-          dryRun: ctx.dryRun,
-        },
-        sendResult: {
-          channel: ctx.channel,
-          messageId: "msg-test",
-          ...(mediaUrl ? { mediaUrl } : {}),
-          ...(mediaUrls ? { mediaUrls } : {}),
-        },
-      }),
-    );
-    channelResolutionMocks.executePollAction.mockReset();
-    channelResolutionMocks.executePollAction.mockImplementation(async () => {
-      throw new Error("executePollAction should not run in media tests");
-    });
-    vi.mocked(loadWebMedia).mockReset();
-    vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
+    await resetMessageActionMediaMocks();
   });
   it("forwards asVoice from send actions into core delivery", async () => {
     setTestPlugin(workspacePlugin, "workspace");

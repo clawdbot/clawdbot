@@ -281,9 +281,8 @@ suite.define(() => {
         })
         .toBe(true);
       await expect.poll(() => splitEntry.count()).toBe(0);
-      // The pane header hosts the session workspace toggle (the old collapsed
-      // rail strip is gone).
-      await expect.poll(() => headers.first().locator(".chat-workspace-toggle").count()).toBe(1);
+      // The pane header owns one side-panel toggle; individual tools live in its tab strip.
+      await expect.poll(() => headers.first().locator(".chat-side-panel-toggle").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
       // Keyboard focus on a header action marks the pane active.
@@ -300,7 +299,8 @@ suite.define(() => {
           targetHeader.evaluate((header) => {
             const owner = header.closest("openclaw-chat-pane");
             return (
-              owner === header.parentElement && owner?.classList.contains("chat-split-view__pane")
+              header.parentElement?.classList.contains("chat-main__conversation-column") === true &&
+              owner?.classList.contains("chat-split-view__pane") === true
             );
           }),
         )

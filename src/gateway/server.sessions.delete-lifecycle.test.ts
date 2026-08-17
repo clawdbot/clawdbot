@@ -16,7 +16,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -320,7 +320,7 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
     }),
   );
   for (const sessionId of [canonicalSessionId, aliasSessionId]) {
-    await replaceSqliteTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
+    await replaceTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
       { type: "session", id: sessionId, content: sessionId },
     ]);
   }
@@ -572,14 +572,33 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
   });
   await runtimeCleanupStarted;
   let patchSettled = false;
-  const patch = directSessionReq("sessions.patch", {
-    key: sessionKey,
-    label: "updated during cleanup",
-  }).then((result) => {
+  let markPatchPreflight = () => {};
+  const patchPreflight = new Promise<void>((resolve) => {
+    markPatchPreflight = resolve;
+  });
+  const patch = directSessionReq(
+    "sessions.patch",
+    {
+      key: sessionKey,
+      label: "updated during cleanup",
+    },
+    {
+      context: {
+        workerSessionPlacementService: {
+          getMany(sessionIds: readonly string[]) {
+            if (sessionIds.includes(sessionId)) {
+              markPatchPreflight();
+            }
+            return new Map();
+          },
+        },
+      },
+    },
+  ).then((result) => {
     patchSettled = true;
     return result;
   });
-  await Promise.resolve();
+  await patchPreflight;
   expect(patchSettled).toBe(false);
   releaseRuntimeCleanup();
 

@@ -81,6 +81,44 @@ class ChatControllerSubagentActivityTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalRetentionUsesFirstLocalObservation() =
+    runTest {
+      val controller = newController()
+      controller.handleGatewayEvent(
+        "task",
+        taskPayload(id = "task-1", status = "completed", endedAt = 1),
+      )
+
+      advanceTimeBy(30_000)
+      runCurrent()
+      assertTrue("task-1" in controller.subagentActivities.value)
+
+      controller.handleGatewayEvent(
+        "task",
+        taskPayload(
+          id = "task-1",
+          status = "completed",
+          terminalSummary = "Updated terminal detail",
+          endedAt = 1,
+        ),
+      )
+      assertEquals(
+        "Updated terminal detail",
+        controller.subagentActivities.value
+          .getValue("task-1")
+          .terminalSummary,
+      )
+      advanceTimeBy(29_999)
+      runCurrent()
+      assertTrue("task-1" in controller.subagentActivities.value)
+
+      advanceTimeBy(1)
+      runCurrent()
+      assertTrue(controller.subagentActivities.value.isEmpty())
+    }
+
+  @Test
   fun sessionSwitchClearsActivityButParentRunCleanupDoesNot() =
     runTest {
       val controller = newController()
@@ -139,6 +177,7 @@ class ChatControllerSubagentActivityTest {
     terminalSummary: String? = null,
     error: String? = null,
     diffStat: Triple<Int, Int, Int>? = null,
+    endedAt: Long? = null,
   ): String =
     buildString {
       append("{\"action\":\"upserted\",\"task\":{")
@@ -148,6 +187,7 @@ class ChatControllerSubagentActivityTest {
       append("\"childSessionKey\":\"agent:worker:subagent:").append(id).append("\",")
       append("\"status\":\"").append(status).append("\",")
       append("\"startedAt\":1000")
+      endedAt?.let { append(",\"endedAt\":").append(it) }
       lastActivity?.let { append(",\"lastActivity\":\"").append(it).append("\"") }
       progressSummary?.let { append(",\"progressSummary\":\"").append(it).append("\"") }
       lastToolName?.let { append(",\"lastToolName\":\"").append(it).append("\"") }

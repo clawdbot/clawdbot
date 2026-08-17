@@ -21,6 +21,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
+import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
@@ -69,7 +70,7 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   outcome: "success" | "failure";
   failure?: Omit<
     ToolErrorSummary,
-    "toolName" | "meta" | "mutatingAction" | "actionFingerprint" | "fileTarget"
+    "toolName" | "meta" | "mutatingAction" | "ownerKey" | "actionFingerprint" | "fileTarget"
   >;
   /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
   nativeMutation?: {
@@ -77,6 +78,10 @@ type EmbeddedRunAttemptToolTerminalObservation = {
     replaySafe: boolean;
     actionFingerprint?: string;
     fileTarget?: ToolErrorSummary["fileTarget"];
+  };
+  /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
+  ownerMutation?: {
+    ownerKey: string;
   };
 };
 
@@ -99,6 +104,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Explicit session owner captured before fallback agent resolution. */
+  contextEngineAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
   sandbox?: SandboxContext | null;
   /** Host-created authority available only after harness selection. */
@@ -107,6 +114,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   operation?: EmbeddedRunAttemptOperation;
   /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */
   pluginHarnessToolPolicyRestricted?: boolean;
+  /** Audited exact denies that the plugin harness must enforce against native equivalents. */
+  pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
@@ -115,6 +124,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** Per-model contextTokens cap authored by the operator; absent when none was authored. */
+  authoredContextTokenCap?: number;
   /** Source metadata for the resolved model context budget. */
   contextWindowInfo?: EmbeddedRunContextWindowInfo;
   /** Resolved API key for this run when runtime auth did not replace it. */
@@ -269,6 +280,7 @@ export type EmbeddedRunAttemptResult = {
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
   lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;
@@ -280,6 +292,8 @@ export type EmbeddedRunAttemptResult = {
     asyncTaskId?: string;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  /** This attempt accepted work whose future output has a runtime-owned delivery path. */
+  runtimeContinuationStarted?: boolean;
   lastAssistant: AssistantMessage | undefined;
   /**
    * Omission preserves the legacy `lastAssistant` fallback; explicit `undefined`

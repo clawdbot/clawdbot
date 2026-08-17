@@ -5,18 +5,23 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
-import {
-  GatewayClient,
-  GatewayClientRequestError,
-  type GatewayReconnectPausedInfo,
-} from "../gateway/client.js";
+import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import {
+  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_BUNDLE_RETENTION_VERSION,
+  NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
+import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
@@ -30,6 +35,11 @@ type NodeHostRunOptions = {
   gatewayPort: number;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
+  gatewayCandidates?: NodeHostGatewayConfig[];
+  gatewayBootstrapToken?: string;
+  preferGatewayBootstrapToken?: boolean;
+  /** Stop cleanly after the first authenticated hello (used before service install). */
+  stopAfterFirstConnect?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -73,6 +83,7 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
@@ -122,9 +133,16 @@ function isExactUnknownMethodError(error: unknown, method: string): boolean {
   );
 }
 
-function isExactLegacyNodeAuthorizationError(error: unknown, gatewayProtocol: number): boolean {
+function isExactLegacyNodeAuthorizationError(
+  error: unknown,
+  method: string,
+  gatewayProtocol: number,
+): boolean {
+  const legacyUnknownMethodShape =
+    gatewayProtocol === 3 ||
+    (gatewayProtocol === 4 && method === NODE_RUNNER_INVENTORY_UPDATE_METHOD);
   return (
-    gatewayProtocol === 3 &&
+    legacyUnknownMethodShape &&
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
     error.message === "unauthorized role: node"
@@ -138,7 +156,7 @@ function classifyNodeMethodFailure(
 ): "legacy-unsupported" | "rejected" | "transient" {
   if (
     isExactUnknownMethodError(error, method) ||
-    isExactLegacyNodeAuthorizationError(error, gatewayProtocol)
+    isExactLegacyNodeAuthorizationError(error, method, gatewayProtocol)
   ) {
     return "legacy-unsupported";
   }
@@ -149,6 +167,7 @@ function classifyNodeMethodFailure(
 }
 
 type NodeOptionalPublicationMethod =
+  | typeof NODE_RUNNER_INVENTORY_UPDATE_METHOD
   | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
   | typeof NODE_SKILLS_UPDATE_METHOD;
 
@@ -220,34 +239,30 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const nodeId = config.nodeId;
   const displayName = config.displayName ?? fallbackDisplayName;
   const gateway = config.gateway ?? plannedGateway;
+  const gatewayCandidates = opts.gatewayCandidates?.length ? opts.gatewayCandidates : [gateway];
 
   const cfg = getRuntimeConfig();
   const preparedRuntime = await prepareNodeHostRuntime({
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    enableWorkerRuns: true,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  const { token, password } = await resolveNodeHostGatewayCredentials({
-    config: cfg,
-    env: process.env,
-  });
+  const { token, password } = opts.preferGatewayBootstrapToken
+    ? {}
+    : await resolveNodeHostGatewayCredentials({
+        config: cfg,
+        env: process.env,
+      });
 
-  const host = gateway.host ?? "127.0.0.1";
-  const urlHost =
-    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
-  const port = gateway.port ?? 18789;
-  const scheme = gateway.tls ? "wss" : "ws";
-  const contextPath = gateway.contextPath
-    ? gateway.contextPath.startsWith("/")
-      ? gateway.contextPath
-      : `/${gateway.contextPath}`
-    : "";
-  const url = `${scheme}://${urlHost}:${port}${contextPath}`;
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
+  let workerRunsAvailable = false;
   let gatewayHelloReceived = false;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
+  let gatewaySupportsBundleRetention = false;
+  let gatewaySupportsBundleStatus = false;
   let optionalPublicationStates = new Map<
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
@@ -264,6 +279,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     gatewayConnectionGeneration += 1;
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
+    gatewaySupportsBundleRetention = false;
+    gatewaySupportsBundleStatus = false;
     retireOptionalPublications();
   };
 
@@ -451,27 +468,66 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     );
   };
 
-  const client = new GatewayClient({
-    url,
-    token: token || undefined,
-    password: password || undefined,
-    instanceId: nodeId,
-    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-    clientDisplayName: displayName,
-    clientVersion: VERSION,
-    platform: resolveNodeHostGatewayPlatform(process.platform),
-    deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
-    mode: GATEWAY_CLIENT_MODES.NODE,
-    role: "node",
-    scopes: [],
-    // Pair the built-in MCP command family up front. Server inventory is
-    // restart-scoped availability, not a capability upgrade requiring re-pairing.
-    caps: preparedRuntime.manifest.caps,
-    commands: preparedRuntime.manifest.commands,
-    pathEnv: preparedRuntime.manifest.pathEnv,
-    permissions: undefined,
-    deviceIdentity: loadOrCreateDeviceIdentity(),
-    tlsFingerprint: gateway.tlsFingerprint,
+  const publishRunnerInventory = () => {
+    queueOptionalPublication(
+      NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: preparedRuntime.workerHostingEnabled
+          ? {
+              enabled: true,
+              capacity: workerRunsAvailable ? "available" : "full",
+              bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
+              ...(gatewaySupportsBundleRetention
+                ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
+                : {}),
+              ...(gatewaySupportsBundleRetention && gatewaySupportsBundleStatus
+                ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
+                : {}),
+            }
+          : { enabled: false },
+      },
+      "runner inventory",
+    );
+  };
+
+  const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
+    void configureNodeHost({
+      nodeId,
+      displayName,
+      fallbackDisplayName,
+      gateway: winningGateway,
+      installedAppsSharing: config.installedAppsSharing,
+    }).catch((error: unknown) => {
+      writeStderrLine(`node host gateway endpoint persistence failed: ${String(error)}`);
+    });
+  };
+
+  const client = createNodeHostGatewayCandidateConnection({
+    candidates: gatewayCandidates,
+    clientOptions: {
+      token: token || undefined,
+      bootstrapToken: opts.gatewayBootstrapToken,
+      preferBootstrapToken: opts.preferGatewayBootstrapToken,
+      password: password || undefined,
+      instanceId: nodeId,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientDisplayName: displayName,
+      clientVersion: VERSION,
+      platform: resolveNodeHostGatewayPlatform(process.platform),
+      deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      role: "node",
+      scopes: [],
+      // Pair the built-in MCP command family up front. Server inventory is
+      // restart-scoped availability, not a capability upgrade requiring re-pairing.
+      caps: preparedRuntime.manifest.caps,
+      commands: preparedRuntime.manifest.commands,
+      computerUse: preparedRuntime.manifest.computerUse,
+      pathEnv: preparedRuntime.manifest.pathEnv,
+      permissions: undefined,
+      deviceIdentity: loadOrCreateDeviceIdentity(),
+    },
     onEvent: (evt) => {
       if (evt.event === "node.invoke.cancel") {
         const payload = coerceNodeInvokeCancelPayload(evt.payload);
@@ -491,23 +547,34 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         return;
       }
       const payload = coerceNodeInvokePayload(evt.payload);
-      if (!payload) {
-        return;
+      if (payload) {
+        void activeRuntime.invoke(payload);
       }
-      void activeRuntime.invoke(payload);
     },
-    onHelloOk: (hello) => {
+    onHelloOk: (hello, url, tlsFingerprint) => {
       writeStderrLine(`node host gateway connected: ${url}`);
+      activeRuntime.updateGatewayConnection({ url, ...(tlsFingerprint ? { tlsFingerprint } : {}) });
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
       connectedGatewayProtocol = hello.protocol;
+      gatewaySupportsBundleRetention =
+        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) ===
+        true;
+      gatewaySupportsBundleStatus =
+        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS) ===
+        true;
       retireOptionalPublications();
       optionalPublicationStates = new Map();
+      if (opts.stopAfterFirstConnect) {
+        void finish(0);
+        return;
+      }
+      publishRunnerInventory();
       publishInventory();
     },
-    onConnectError: (err) => {
+    onConnectError: (error) => {
       // keep retrying (handled by GatewayClient)
-      writeStderrLine(`node host gateway connect failed: ${err.message}`);
+      writeStderrLine(`node host gateway connect failed: ${error.message}`);
     },
     onReconnectPaused: (info) => {
       handleNodeHostReconnectPaused(info, {
@@ -521,15 +588,21 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onClose: (code, reason) => {
       retireGatewayConnection();
+      activeRuntime.updateGatewayConnection();
       activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
+    onWinningCandidate: persistWinningGateway,
   });
   const activeRuntime = preparedRuntime.start({
     client,
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;
       publishInventory();
+    },
+    onRunnerAvailabilityChanged: (available) => {
+      workerRunsAvailable = available;
+      publishRunnerInventory();
     },
     onManifestChanged: (manifest) => {
       // Manifest changes force a reconnect. Retire the current publication queue

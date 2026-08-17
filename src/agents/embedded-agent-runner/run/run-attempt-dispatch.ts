@@ -8,6 +8,7 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { resolveSandboxContext } from "../../sandbox/context.js";
+import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -15,14 +16,15 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-submit.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
+import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
@@ -32,6 +34,7 @@ type InternalRunParams = RunEmbeddedAgentParams & {
 };
 
 type AttemptRuntime = {
+  contextEngineAgentId?: string;
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
@@ -42,6 +45,7 @@ type AttemptRuntime = {
   preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
   contextEngine?: EmbeddedRunAttemptParams["contextEngine"];
   contextTokenBudget?: number;
+  authoredContextTokenCap?: number;
   contextWindowInfo?: EmbeddedRunAttemptParams["contextWindowInfo"];
   prompt: string;
   provider: string;
@@ -190,11 +194,27 @@ export async function dispatchEmbeddedRunAttempt(input: {
     modelMaxTokens: runtime.model.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  const promptMedia = await preparePluginHarnessPromptImages({
-    runParams: params,
-    runtime,
-    pluginHarnessOwnsTransport: control.pluginHarnessOwnsTransport,
-  });
+  const promptMedia = control.pluginHarnessOwnsTransport
+    ? await (async () => {
+        const workspace = await resolveAttemptWorkspaceSandbox({
+          ...params,
+          cwd: undefined,
+          sessionId: runtime.sessionId,
+          sessionKey: runtime.sessionKey,
+          workspaceDir: runtime.workspaceDir,
+        });
+        return await prepareEmbeddedAttemptPromptExecution({
+          attempt: { ...params, model: runtime.model },
+          mediaOwnerAgentId: workspace.sessionAgentId,
+          effectiveFsWorkspaceOnly: workspace.effectiveFsWorkspaceOnly,
+          effectiveWorkspace: workspace.effectiveWorkspace,
+          prompt: "",
+          sandbox: workspace.sandbox,
+          skipPromptSubmission: false,
+          pluginHarness: true,
+        });
+      })()
+    : { images: params.images, imageOrder: params.imageOrder, media: params.media };
   // Plugin harnesses own their tool materialization, so the host cannot attest
   // a message tool. Finalize conservatively instead of leaking phantom guidance.
   const pluginHarnessPrompt =
@@ -206,17 +226,25 @@ export async function dispatchEmbeddedRunAttempt(input: {
         })
       : undefined;
   const pluginSandbox = control.pluginHarnessOwnsTransport
-    ? await resolveSandboxContext({
+    ? ((await resolveSessionPlacementSandbox({
+        agentId: runtime.agentId,
+        config: params.config,
+        sessionId: runtime.sessionId,
+        sessionKey: runtime.sessionKey,
+        workspaceDir: runtime.workspaceDir,
+      })) ??
+      (await resolveSandboxContext({
         config: params.config,
         sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
         workspaceDir: runtime.workspaceDir,
-      })
+      })))
     : undefined;
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
   }
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
+    contextEngineAgentId: runtime.contextEngineAgentId,
     ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId: runtime.sessionId,
@@ -272,10 +300,15 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(runtime.contextEngine
       ? {
           contextEngine: runtime.contextEngine,
-          contextTokenBudget: runtime.contextTokenBudget,
           contextWindowInfo: runtime.contextWindowInfo,
         }
       : {}),
+    ...(runtime.contextTokenBudget === undefined
+      ? {}
+      : { contextTokenBudget: runtime.contextTokenBudget }),
+    ...(runtime.authoredContextTokenCap === undefined
+      ? {}
+      : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
     skillsSnapshot: params.skillsSnapshot,
     prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
     transcriptPrompt:
@@ -291,6 +324,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
+    explicitSkillSelections: params.explicitSkillSelections,
     images: promptMedia.images,
     imageOrder: promptMedia.imageOrder,
     media: promptMedia.media,
@@ -407,6 +441,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
+    cronCreatorAuthorityCapability: params.cronCreatorAuthorityCapability,
     cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
@@ -420,6 +455,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     bootstrapContextMode: params.bootstrapContextMode,
     bootstrapContextRunKind: params.bootstrapContextRunKind,
     jobId: params.jobId,
+    scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
+    scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
@@ -452,6 +489,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentId: runtime.agentId,
     sessionKey: runtime.sessionKey,
     turnSourceChannel: params.messageChannel ?? params.messageProvider,
+    turnSourceLocal:
+      !params.messageChannel &&
+      !params.messageProvider &&
+      params.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
+        ? true
+        : undefined,
     turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
     turnSourceAccountId: params.agentAccountId,
     turnSourceThreadId: params.currentThreadTs,

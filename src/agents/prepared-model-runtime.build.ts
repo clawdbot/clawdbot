@@ -1,15 +1,25 @@
 import { performance } from "node:perf_hooks";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
-import { withTimeout } from "../node-host/with-timeout.js";
+import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { setPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
 import {
-  PreparedModelRuntimePublicationSupersededError,
-  toPreparedModelRuntimeError,
-} from "./prepared-model-runtime.errors.js";
+  createPreparedModelCatalogWorker,
+  createPreparedModelCatalogWorkerInput,
+} from "./prepared-model-catalog-worker.js";
+import {
+  setPreparedModelRuntimeAuthMaterializations,
+  setPreparedModelRuntimeAuthLoader,
+  setPreparedModelRuntimeAuthStore,
+  type PreparedModelRuntimeAuth,
+  type PreparedModelRuntimeAuthScope,
+} from "./prepared-model-runtime-auth.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
   prepareAgentCatalogSource,
@@ -24,6 +34,7 @@ import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { projectPreparedPluginGeneration } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -39,7 +50,9 @@ const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 
 type PreparedModelRuntimeCatalogAccess = Readonly<{
-  loadFullModelCatalog: () => Promise<ModelCatalogSnapshot>;
+  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
+  loadFullModelCatalog: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
+  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
 }>;
 type PreparedModelRuntimeBuildGuards =
   | ReadonlyMap<PreparedModelRuntimeInput, () => boolean>
@@ -61,6 +74,9 @@ function runSerializedPreparedModelRuntimeTask<T>(params: {
     if (previous) {
       await previous;
     }
+    // Workspace generations serialize to bound heap growth. Yield before the first and between
+    // later builds so queued Gateway accepts and health probes always get an admission turn.
+    await yieldToEventLoop();
     if (!params.isCurrent()) {
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime catalog generation was superseded for ${params.agentDir}`,
@@ -107,10 +123,17 @@ function createFullModelCatalogAccess(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   agentBuildCompletions: Map<string, Promise<void>>;
   isCurrent: () => boolean;
-  eagerCatalog?: ModelCatalogSnapshot;
 }): PreparedModelRuntimeCatalogAccess {
-  let fullCatalog = params.eagerCatalog;
+  // The completed catalog is generation-owned. Explicit refresh replaces it only after a
+  // successful build, so failed refreshes cannot discard the last verified inventory.
+  let fullCatalog: ModelCatalogSnapshot | undefined;
   let pending: Promise<ModelCatalogSnapshot> | undefined;
+  let pendingAuth:
+    | {
+        key: string;
+        promise: Promise<PreparedModelRuntimeAuth>;
+      }
+    | undefined;
   const assertCurrent = () => {
     if (!params.isCurrent()) {
       throw new PreparedModelRuntimePublicationSupersededError(
@@ -118,13 +141,62 @@ function createFullModelCatalogAccess(params: {
       );
     }
   };
+  // Construction is lazy: automatic prepared reads do not start a thread. The first explicit
+  // request initializes one registry and reuses that exact plugin generation until retirement.
+  const worker = createPreparedModelCatalogWorker({
+    input: createPreparedModelCatalogWorkerInput({
+      agentFacts: params.agentFacts,
+      pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+    }),
+    isCurrent: params.isCurrent,
+  });
   return {
-    loadFullModelCatalog: () => {
-      if (fullCatalog) {
+    loadAuth: ({ providerIds, profileIds }) => {
+      const key = [...new Set(providerIds)]
+        .toSorted((left, right) => left.localeCompare(right))
+        .join("\0");
+      const profileKey = [...new Set(profileIds ?? [])]
+        .toSorted((left, right) => left.localeCompare(right))
+        .join("\0");
+      const cacheKey = `${key}\0\0${profileKey}`;
+      if (pendingAuth?.key === cacheKey) {
+        return pendingAuth.promise;
+      }
+      const promise = worker
+        .loadAuth({ providerIds, ...(profileIds?.length ? { profileIds } : {}) })
+        .then((refreshed) => {
+          const authModes = {
+            ...resolveUsableAgentCredentialModes(params.agentFacts.credentials),
+          };
+          for (const providerId of providerIds) {
+            delete authModes[normalizeProviderId(providerId)];
+          }
+          Object.assign(authModes, refreshed.authModes);
+          return { authStore: refreshed.authStore, authModes: Object.freeze(authModes) };
+        })
+        .finally(() => {
+          if (pendingAuth?.promise === promise) {
+            pendingAuth = undefined;
+          }
+        });
+      pendingAuth = { key: cacheKey, promise };
+      return promise;
+    },
+    readFullModelCatalog: () => {
+      assertCurrent();
+      return fullCatalog;
+    },
+    loadFullModelCatalog: (options) => {
+      try {
+        assertCurrent();
+      } catch (error) {
+        return Promise.reject(toStringifiedError(error));
+      }
+      if (!options?.refresh && fullCatalog) {
         return Promise.resolve(fullCatalog);
       }
       if (!pending) {
-        pending = runSerializedPreparedModelRuntimeTask({
+        const build = runSerializedPreparedModelRuntimeTask({
           agentDir: params.agentFacts.input.agentDir,
           agentBuildCompletions: params.agentBuildCompletions,
           isCurrent: params.isCurrent,
@@ -133,29 +205,19 @@ function createFullModelCatalogAccess(params: {
               // Full inventory belongs to explicit control-plane reads. The generation queue
               // prevents a stale plan from overlapping or following a replacement build.
               assertCurrent();
-              // Agent facts remain bound to the published turn generation. Auth mutations advance
-              // that owner generation, while plugin facts remain bound to this exact generation.
-              const fullCatalogMode: PreparedModelRuntimeCatalogMode = "live";
-              const catalogSource = await prepareAgentCatalogSource(
-                params.agentFacts,
-                params.pluginGeneration,
-                fullCatalogMode,
-                false,
-              );
+              const catalog = await worker.loadCatalog();
               assertCurrent();
-              const facts = await prepareFullCatalogFacts(
-                params.agentFacts,
-                params.pluginGeneration,
-                fullCatalogMode,
-                catalogSource,
-              );
-              assertCurrent();
-              fullCatalog = facts.modelCatalog;
-              return fullCatalog;
+              return catalog;
             }),
-        }).finally(() => {
-          pending = undefined;
         });
+        pending = build
+          .then((catalog) => {
+            fullCatalog = catalog;
+            return catalog;
+          })
+          .finally(() => {
+            pending = undefined;
+          });
       }
       return pending;
     },
@@ -193,11 +255,14 @@ function createSnapshot(
     ...(messageToolCatalog ? { messageToolCatalog } : {}),
     ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
     modelCatalog,
+    readFullModelCatalog: catalogAccess.readFullModelCatalog,
     loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
     configuredRuntimeModels,
     inlineProviderModels,
     createStores,
   });
+  setPreparedModelRuntimeAuthStore(snapshot, agentFacts.authStore);
+  setPreparedModelRuntimeAuthLoader(snapshot, catalogAccess.loadAuth);
   setPreparedModelRuntimeAuthMaterializations(
     snapshot,
     Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),
@@ -291,7 +356,13 @@ async function buildSnapshotBatch(
     configuredProjectionMs += prepared.buildStats.configuredProjectionMs;
     for (const agentFacts of prepared.agentFacts) {
       preparedInputs.set(agentFacts.input, agentFacts);
-      pluginGenerations.set(agentFacts.input, prepared.pluginGeneration);
+      pluginGenerations.set(
+        agentFacts.input,
+        projectPreparedPluginGeneration({
+          input: agentFacts.input,
+          pluginGeneration: prepared.pluginGeneration,
+        }),
+      );
     }
   }
   const workspaceFactsMs = performance.now() - workspaceFactsStartedAt;
@@ -344,7 +415,7 @@ async function buildSnapshotBatch(
     if (sourceBuild.hasError) {
       // A superseded owner is lifecycle control flow. Preserve any genuine in-flight sibling
       // failure so auth refresh diagnostics do not disappear behind that expected cancellation.
-      throw toPreparedModelRuntimeError(
+      throw toStringifiedError(
         sourceErrors.find(
           (error) => !(error instanceof PreparedModelRuntimePublicationSupersededError),
         ) ?? sourceBuild.firstError,
@@ -461,7 +532,6 @@ async function buildSnapshotBatch(
           pluginGeneration,
           agentBuildCompletions,
           isCurrent: generationGuards.get(input) ?? (() => false),
-          ...(catalogMode === "live" ? { eagerCatalog: catalogFacts.modelCatalog } : {}),
         }),
       ),
       pluginGeneration,
@@ -528,7 +598,7 @@ export function startSerializedSnapshotBuildBatch(
     });
   }
   return {
-    pending: withTimeout(
+    pending: runAbortableTimeout(
       async () => {
         const { actualBuild } = await startBuild;
         return await actualBuild;
@@ -547,6 +617,7 @@ export function startSerializedSnapshotBuild(
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   generationGuard: () => boolean = () => true,
   prepareInboundPluginRegistry = false,
+  reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult>;
   completion: Promise<void>;
@@ -560,6 +631,7 @@ export function startSerializedSnapshotBuild(
     new Map([[input, generationGuard]]),
     undefined,
     prepareInboundPluginRegistry ? new Set([input]) : undefined,
+    reusablePluginGeneration ? new Map([[input, reusablePluginGeneration]]) : undefined,
   );
   return {
     pending: build.pending.then((results) => results[0]!),

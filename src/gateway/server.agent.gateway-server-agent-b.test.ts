@@ -3,12 +3,15 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
@@ -18,7 +21,7 @@ import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
-  agentCommand,
+  agentCommandMock,
   connectOk,
   connectWebchatClient,
   installGatewayTestHooks,
@@ -152,14 +155,18 @@ async function writeMainSessionEntry(params: {
 
 function sendAgentWsRequest(
   socket: WebSocket,
-  params: { reqId: string; message: string; idempotencyKey: string },
+  params: { reqId: string; message: string; idempotencyKey: string; sessionKey?: string },
 ) {
   socket.send(
     JSON.stringify({
       type: "req",
       id: params.reqId,
       method: "agent",
-      params: { message: params.message, idempotencyKey: params.idempotencyKey },
+      params: {
+        message: params.message,
+        idempotencyKey: params.idempotencyKey,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      },
     }),
   );
 }
@@ -190,7 +197,7 @@ afterAll(() => {
 
 describe("gateway server agent", () => {
   beforeEach(() => {
-    vi.mocked(agentCommand).mockClear();
+    vi.mocked(agentCommandMock).mockClear();
     testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
   });
@@ -432,7 +439,7 @@ describe("gateway server agent", () => {
       expect(directReset.ok).toBe(false);
       expect(directReset.error?.message).toContain("missing scope: operator.admin");
 
-      vi.mocked(agentCommand).mockClear();
+      vi.mocked(agentCommandMock).mockClear();
       const viaAgent = await rpcReq(writeWs, "agent", {
         message: "/reset",
         sessionKey: "main",
@@ -451,7 +458,7 @@ describe("gateway server agent", () => {
 
       const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
       expect(stored?.sessionId).toBe("sess-main-before-write-reset");
-      expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
+      expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
 
       writeWs.close();
     });
@@ -485,9 +492,150 @@ describe("gateway server agent", () => {
     expect(finalPayload.status).toBe("ok");
   });
 
+  test("agent durably admits the user turn before acknowledging a hanging dispatch", async () => {
+    await writeMainSessionEntry({ sessionId: "sess-durable-agent-ack" });
+    const dispatch = createDeferred<unknown>();
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => await dispatch.promise);
+    const runId = "idem-agent-durable-ack";
+    const ackP = onceMessage(
+      ws,
+      (message) =>
+        message.type === "res" && message.id === runId && message.payload?.status === "accepted",
+    );
+    const finalP = onceMessage(
+      ws,
+      (message) =>
+        message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
+    );
+
+    sendAgentWsRequest(ws, {
+      reqId: runId,
+      message: "persist this agent turn before ACK",
+      sessionKey: "main",
+      idempotencyKey: runId,
+    });
+    await ackP;
+
+    const storePath = testState.sessionStorePath;
+    if (!storePath) {
+      throw new Error("expected session store path");
+    }
+    expect(
+      loadTranscriptEventsSync({
+        agentId: "main",
+        sessionId: "sess-durable-agent-ack",
+        sessionKey: "agent:main:main",
+        storePath,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "user",
+            content: "persist this agent turn before ACK",
+            idempotencyKey: `${runId}:user`,
+          }),
+        }),
+      ]),
+    );
+
+    dispatch.resolve({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+    await finalP;
+  });
+
+  test("an aborted hanging agent dispatch leaves its acknowledged turn queryable", async () => {
+    await writeMainSessionEntry({ sessionId: "sess-durable-agent-abort" });
+    const runId = "idem-agent-durable-abort";
+    vi.mocked(agentCommandMock).mockImplementationOnce(
+      async (...args: unknown[]) =>
+        await new Promise<void>((_resolve, reject) => {
+          const options = args[0] as { abortSignal?: AbortSignal };
+          const finish = () => {
+            const reason = options.abortSignal?.reason;
+            reject(reason instanceof Error ? reason : new Error("agent run aborted"));
+          };
+          options.abortSignal?.addEventListener("abort", finish, { once: true });
+        }),
+    );
+    const ackP = onceMessage(
+      ws,
+      (message) =>
+        message.type === "res" && message.id === runId && message.payload?.status === "accepted",
+    );
+    const finalP = onceMessage(
+      ws,
+      (message) =>
+        message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
+    );
+
+    sendAgentWsRequest(ws, {
+      reqId: runId,
+      message: "keep this aborted agent turn queryable",
+      sessionKey: "main",
+      idempotencyKey: runId,
+    });
+    await ackP;
+    await rpcReq(ws, "chat.abort", { runId, sessionKey: "main" });
+    const final = await finalP;
+    expect(final.payload).toMatchObject({ runId, status: "timeout", stopReason: "rpc" });
+
+    const storePath = testState.sessionStorePath;
+    if (!storePath) {
+      throw new Error("expected session store path");
+    }
+    expect(
+      loadTranscriptEventsSync({
+        agentId: "main",
+        sessionId: "sess-durable-agent-abort",
+        sessionKey: "agent:main:main",
+        storePath,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "user",
+            content: "keep this aborted agent turn queryable",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("agent returns a wire error when durable user-turn admission fails", async () => {
+    await writeMainSessionEntry({ sessionId: "sess-durable-agent-failure" });
+    const storePath = testState.sessionStorePath;
+    if (!storePath) {
+      throw new Error("expected session store path");
+    }
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path }).db;
+    database.exec(`
+      CREATE TEMP TRIGGER fail_agent_turn_admission
+      BEFORE INSERT ON transcript_events
+      BEGIN
+        SELECT RAISE(ABORT, 'injected agent transcript admission failure');
+      END;
+    `);
+    try {
+      const response = await rpcReq(ws, "agent", {
+        message: "this turn must not be acknowledged",
+        sessionKey: "main",
+        idempotencyKey: "idem-agent-durable-failure",
+      });
+
+      expect(response.ok).toBe(false);
+      expect(response.error).toMatchObject({ code: "UNAVAILABLE" });
+      expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS fail_agent_turn_admission");
+    }
+  });
+
   test("agent final response surfaces redacted ACP runtime cause details", async () => {
     const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
-    vi.mocked(agentCommand).mockRejectedValueOnce(
+    vi.mocked(agentCommandMock).mockRejectedValueOnce(
       new AcpRuntimeError("ACP_TURN_FAILED", "Internal error", {
         cause: new Error(`upstream rejected token=${token}`),
       }),
@@ -506,6 +654,7 @@ describe("gateway server agent", () => {
     expect(errorMessage).toMatch(/ACP_TURN_FAILED/);
     expect(errorMessage).toMatch(/Internal error/);
     expect(errorMessage).toMatch(/upstream rejected/);
+    expect(errorMessage).not.toContain("AcpRuntimeError");
     expect(JSON.stringify(final)).not.toContain(token);
   });
 

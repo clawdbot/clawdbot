@@ -181,7 +181,28 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith("🧠 _hidden_");
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "🧠 _hidden_",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("suppresses internal reflection when reasoning streams", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    mockTurn(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<internal>private reflection</internal>", isReasoning: true },
+        { kind: "final" },
+      );
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -238,7 +259,10 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Before <think>literal tag text after");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Before <think>literal tag text after",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 

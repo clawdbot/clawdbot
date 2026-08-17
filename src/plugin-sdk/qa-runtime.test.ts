@@ -118,6 +118,18 @@ describe("plugin-sdk qa-runtime", () => {
     expect(module.isQaRuntimeAvailable()).toBe(false);
   });
 
+  it("rethrows non-absence loader failures that mention the qa-lab runtime path", async () => {
+    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
+      throw new Error("Failed to evaluate qa-lab/runtime-api.js: invalid runtime export");
+    });
+
+    const module = await import("./qa-runtime.js");
+
+    expect(() => module.isQaRuntimeAvailable()).toThrow(
+      "Failed to evaluate qa-lab/runtime-api.js: invalid runtime export",
+    );
+  });
+
   it("runs a plugin-owned transport through the private QA suite host", async () => {
     const runLiveTransportQaSuiteCommand = vi.fn(async () => {});
     loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
@@ -168,6 +180,10 @@ describe("plugin-sdk qa-runtime", () => {
         run,
       })
       .register(qa);
+
+    await qa.parseAsync(["node", "openclaw", "telegram"]);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
+    run.mockClear();
 
     await qa.parseAsync([
       "node",

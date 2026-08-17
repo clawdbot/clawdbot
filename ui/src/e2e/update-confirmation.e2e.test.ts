@@ -140,10 +140,10 @@ suite.define(() => {
         await dialog.waitFor();
 
         // The keypress that opened the dialog lands on Cancel, never on the confirm action.
-        const cancelFocused = await page.evaluate(
-          () => document.activeElement?.textContent?.trim() ?? "",
-        );
-        expect(cancelFocused).toBe("Cancel");
+        const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+        await expect
+          .poll(() => cancel.evaluate((element) => document.activeElement === element))
+          .toBe(true);
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await page.screenshot({
           animations: "disabled",
@@ -174,7 +174,9 @@ suite.define(() => {
 
         await page.getByRole("button", { name: "Update and restart", exact: true }).click();
         await gateway.waitForRequest("update.run");
-        await page.getByRole("dialog").waitFor({ state: "detached" });
+        // The dialog that started the update reports it; it stays open through
+        // the install instead of closing onto a page with nothing to say.
+        await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
         await page.screenshot({
           animations: "disabled",
           path: path.join(PROOF_DIR, "07-update-running.png"),

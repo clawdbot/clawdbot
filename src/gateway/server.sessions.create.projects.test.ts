@@ -5,17 +5,18 @@ import { promisify } from "node:util";
 import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { testState } from "./test-helpers.js";
 import {
   directSessionReq,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -55,10 +56,13 @@ test("sessions.create starts directly in an outside registered project at write 
   const workspace = await initializeRepository(root, "workspace");
   const projectRoot = await initializeRepository(root, "project");
   testState.agentConfig = { workspace };
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
 
-  const created = await directSessionReq<{ entry?: { spawnedCwd?: string } }>(
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { projectId?: string; spawnedCwd?: string };
+  }>(
     "sessions.create",
     { agentId: "main", projectId: project.id },
     { client: { connect: { scopes: ["operator.write"] } } as never },
@@ -66,6 +70,14 @@ test("sessions.create starts directly in an outside registered project at write 
 
   expect(created.ok).toBe(true);
   expect(created.payload?.entry?.spawnedCwd).toBe(projectRoot);
+  expect(created.payload?.entry?.projectId).toBe(project.id);
+  expect(
+    loadSessionEntry({
+      agentId: "main",
+      sessionKey: created.payload?.key ?? "",
+      storePath,
+    })?.projectId,
+  ).toBe(project.id);
 });
 
 test("sessions.create provisions a managed worktree from a registered project at write scope", async () => {

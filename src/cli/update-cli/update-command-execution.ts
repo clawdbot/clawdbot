@@ -12,7 +12,7 @@ import {
   createBeforeGitMutation,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
-  runGitUpdate,
+  updateGitInstall,
 } from "./update-command-git.js";
 import {
   captureOwnedManagedUpdateContext,
@@ -212,7 +212,7 @@ export async function executeMutableUpdate(params: {
               installEnv: params.packageInstallEnv,
               installTarget: params.packageInstallTarget,
             })
-          : await runGitUpdate({
+          : await updateGitInstall({
               root: params.root,
               switchToGit: params.switchToGit,
               installKind: params.installKind,

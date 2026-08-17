@@ -16,3 +16,8 @@ export { previewRemHarness } from "./src/rem-harness.js";
 export type { PreviewRemHarnessOptions, PreviewRemHarnessResult } from "./src/rem-harness.js";
 export { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 export { filterMemorySearchHitsBySessionVisibility } from "./src/session-search-visibility.js";
+export {
+  MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+  pluginStateIsolatedDoctorCheckIds,
+  registerMemoryCoreDoctorChecks,
+} from "./src/doctor-health.js";

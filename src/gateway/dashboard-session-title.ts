@@ -1,33 +1,44 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Dashboard session titles use the shared utility-model completion path.
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { generateConversationLabelWithFallback } from "../auto-reply/reply/conversation-label-generator.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { isValidAttachmentBase64, type ChatAttachment } from "./chat-attachments.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
-  "authProfileOverride" | "model" | "modelOverride" | "modelProvider" | "providerOverride"
+  | "agentHarnessId"
+  | "agentRuntimeOverride"
+  | "authProfileOverride"
+  | "model"
+  | "modelOverride"
+  | "modelProvider"
+  | "modelSelectionLocked"
+  | "providerOverride"
 >;
 
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
+const WORKTREE_SESSION_TITLE_TIMEOUT_MS = 8_000;
+const WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS = 4_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
-  "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message. No emoji. Return only the title.";
+  "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
 
-// One title request per first turn. Concurrent sends cannot race duplicate model
+// One title request per session generation. Concurrent triggers cannot race duplicate model
 // calls or metadata writes; late callers receive the in-flight promise so they
 // may await the persisted title before proceeding. Stored promises always
-// settle: the label generator aborts internally (TIMEOUT_MS), so a hung model
-// call cannot pin an entry here and block future attempts.
+// settle: isolated completion enforces a timeout, so a hung model call cannot
+// pin an entry here and block future attempts.
 const sessionTitleRequests = new Map<string, Promise<boolean>>();
 
 function decodeTextAttachmentPrefix(attachment: ChatAttachment, maxChars: number): string | null {
@@ -60,7 +71,7 @@ export function buildDashboardSessionTitleSource(params: {
   message: string;
   attachments?: readonly ChatAttachment[];
 }): string {
-  const visibleMessage = stripInlineDirectiveTagsForDisplay(params.message).text.trim();
+  const visibleMessage = params.message.trim();
   const slashCommand = visibleMessage.startsWith("/");
   let source = slashCommand ? "" : visibleMessage;
   for (const attachment of params.attachments ?? []) {
@@ -145,13 +156,13 @@ function normalizeDashboardSessionTitle(raw: string): string | null {
   return normalized ? truncateUtf16Safe(normalized, DASHBOARD_SESSION_TITLE_MAX_CHARS) : null;
 }
 
-/** Generates the same short title used by dashboard session rows without persisting it. */
-export async function generateDashboardSessionTitle(params: {
+async function generateDashboardSessionTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
   entry?: DashboardSessionTitleModelEntry;
   userMessage: string;
   attachments?: readonly ChatAttachment[];
+  timeoutMs?: number;
 }): Promise<string | null> {
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
@@ -161,6 +172,11 @@ export async function generateDashboardSessionTitle(params: {
     return null;
   }
   const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+    provider: regularModel.provider,
+    entry: params.entry,
+    cfg: params.cfg,
+  });
   const preferredProfile = resolveDashboardTitleAuthProfile({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -181,13 +197,74 @@ export async function generateDashboardSessionTitle(params: {
     prompt: DASHBOARD_SESSION_TITLE_PROMPT,
     cfg: params.cfg,
     agentId: params.agentId,
+    ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
     ...(utilityModelRef ? { utilityModelRef } : {}),
     regularModelRef,
     ...(preferredProfile ? { preferredProfile } : {}),
     normalizeLabel: normalizeDashboardSessionTitle,
     maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
+    ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
   });
   return generated ? normalizeDashboardSessionTitle(generated) : null;
+}
+
+export function prepareWorktreeSessionTitle(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry?: DashboardSessionTitleModelEntry | null;
+  userMessage: string;
+  attachments?: readonly ChatAttachment[];
+  onError: (error: unknown) => void;
+}) {
+  if (params.entry === null) {
+    return undefined;
+  }
+  const source = buildDashboardSessionTitleSource({
+    message: params.userMessage,
+    attachments: params.attachments,
+  });
+  if (!source) {
+    return undefined;
+  }
+  const generated = withTimeout(
+    generateDashboardSessionTitle({
+      ...params,
+      entry: params.entry ?? undefined,
+      timeoutMs: WORKTREE_SESSION_TITLE_ATTEMPT_TIMEOUT_MS,
+    }),
+    WORKTREE_SESSION_TITLE_TIMEOUT_MS,
+    "worktree title generation",
+  ).catch((error: unknown) => {
+    params.onError(error);
+    return null;
+  });
+  return {
+    source,
+    generated,
+    persist: async (
+      agentId: string,
+      entry: SessionEntry,
+      sessionKey: string,
+      storePath: string,
+    ) => {
+      try {
+        const attempt = await maybeGenerateSessionTitle({
+          cfg: params.cfg,
+          agentId,
+          entry,
+          sessionId: entry.sessionId,
+          sessionKey,
+          storePath,
+          userMessage: source,
+          titleGeneration: generated,
+        });
+        return attempt.kind === "persisted";
+      } catch (error) {
+        params.onError(error);
+        return false;
+      }
+    },
+  };
 }
 
 export async function maybeGenerateDashboardSessionTitle(params: {
@@ -197,6 +274,7 @@ export async function maybeGenerateDashboardSessionTitle(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
+  currentUserMessage?: string;
   userMessage: string;
 }): Promise<boolean> {
   const sourceText = params.userMessage.trim();
@@ -221,14 +299,11 @@ export async function maybeGenerateSessionTitle(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
+  currentUserMessage?: string;
   userMessage: string;
+  titleGeneration?: Promise<string | null>;
 }): Promise<SessionTitleAttempt> {
-  const sourceText = params.userMessage.trim();
-  if (
-    hasExplicitSessionName(params.entry) ||
-    params.entry?.systemSent === true ||
-    params.entry?.sessionId !== params.sessionId
-  ) {
+  if (hasExplicitSessionName(params.entry) || params.entry?.sessionId !== params.sessionId) {
     return { kind: "skipped" };
   }
 
@@ -237,16 +312,39 @@ export async function maybeGenerateSessionTitle(params: {
   if (existing) {
     return { kind: "in-flight", settled: existing };
   }
+
+  // A retry may be triggered by a later send or by discussion open. Always
+  // title the session from its original user message when the transcript owns it.
+  const transcriptSource = readSessionTitleFieldsFromTranscript({
+    agentId: params.agentId,
+    sessionEntry: params.entry,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  }).firstUserMessage;
+  const transcriptText = transcriptSource ? stripInboundMetadata(transcriptSource).trim() : "";
+  const currentText = params.currentUserMessage?.trim() ?? "";
+  // A first-turn transcript may win the persistence race before title work starts.
+  // When it is the current turn, retain the supplied attachment-enriched source.
+  const sourceText =
+    !transcriptText || (currentText && currentText === transcriptText)
+      ? params.userMessage.trim()
+      : transcriptText;
+  if (!sourceText) {
+    return { kind: "skipped" };
+  }
+
   const request = getOrCreatePromise(
     sessionTitleRequests,
     requestKey,
     async () => {
-      const displayName = await generateDashboardSessionTitle({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        entry: params.entry,
-        userMessage: sourceText,
-      });
+      const displayName = await (params.titleGeneration ??
+        generateDashboardSessionTitle({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          entry: params.entry,
+          userMessage: sourceText,
+        }));
       if (!displayName) {
         return false;
       }

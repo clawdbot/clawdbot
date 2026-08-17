@@ -169,9 +169,7 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     );
     emitSessionsChanged(context, {
       sessionKey: canonicalKey,
-      ...(canonicalKey === "global" && requestedAgent.agentId
-        ? { agentId: requestedAgent.agentId }
-        : {}),
+      agentId: requestedAgent.agentId,
       reason: "checkpoint-branch",
     });
     emitSessionsChanged(context, {
@@ -450,9 +448,7 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
         );
         emitSessionsChanged(context, {
           sessionKey: current.canonicalKey,
-          ...(current.canonicalKey === "global" && requestedAgent.agentId
-            ? { agentId: requestedAgent.agentId }
-            : {}),
+          agentId: requestedAgent.agentId,
           reason: "checkpoint-restore",
         });
       },

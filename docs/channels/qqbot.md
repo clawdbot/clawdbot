@@ -19,7 +19,7 @@ Status: official downloadable plugin.
 ## Install
 
 ```bash
-openclaw plugins install @openclaw/qqbot
+openclaw plugins install @tencent-connect/openclaw-qqbot
 ```
 
 ## Setup
@@ -93,28 +93,15 @@ File-backed AppSecret:
 }
 ```
 
-Env SecretRef AppSecret:
-
-```json5
-{
-  channels: {
-    qqbot: {
-      enabled: true,
-      appId: "YOUR_APP_ID",
-      clientSecret: { source: "env", provider: "default", id: "QQBOT_CLIENT_SECRET" },
-    },
-  },
-}
-```
-
 Notes:
 
 - `openclaw channels add --channel qqbot --token-file ...` sets the AppSecret
   only; `appId` must already be set in config or `QQBOT_APP_ID`.
-- `clientSecret` accepts a plaintext string, a file path (`clientSecretFile`),
-  or a structured SecretRef object.
-- Legacy `secretref:...` / `secretref-env:...` marker strings are rejected for
-  `clientSecret`; use a structured SecretRef object instead.
+- `clientSecret` accepts a plaintext string or a file path (`clientSecretFile`).
+- Known limitation: the external `@tencent-connect/openclaw-qqbot` package does
+  not support structured SecretRef objects for `clientSecret`. If your config
+  uses one, move the secret to the `QQBOT_CLIENT_SECRET` environment variable
+  (or `clientSecretFile`) before upgrading.
 
 ### Streaming
 
@@ -223,16 +210,16 @@ group, then mention it or configure the group to run without a mention.
 `groups["*"]` sets defaults for every group; a concrete `groups.GROUP_OPENID`
 entry overrides those defaults for one group. Group settings:
 
-| Field                 | Default          | Description                                                                                        |
-| --------------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
-| `requireMention`      | `true`           | Require an `@`-mention before the bot replies.                                                     |
-| `commandLevel`        | `all`            | Which built-in slash commands can run in the group (see below).                                    |
-| `ignoreOtherMentions` | `false`          | Drop messages that mention someone else but not the bot.                                           |
-| `historyLimit`        | `50`             | Recent non-mention messages kept as context for the next mentioned turn. `0` disables history.     |
-| `tools`               | —                | Allow/deny tools for the whole group.                                                              |
-| `toolsBySender`       | —                | Per-sender tool overrides; see [Groups](/channels/groups#groupchannel-tool-restrictions-optional). |
-| `name`                | openid prefix    | Friendly label used in logs and group context.                                                     |
-| `prompt`              | built-in default | Per-group behavior prompt appended to the agent context.                                           |
+| Field                 | Default          | Description                                                                                           |
+| --------------------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `requireMention`      | `true`           | Require an `@`-mention before the bot replies.                                                        |
+| `commandLevel`        | `all`            | Which built-in slash commands can run in the group (see below).                                       |
+| `ignoreOtherMentions` | `false`          | Drop messages that mention someone else but not the bot.                                              |
+| `historyLimit`        | `50`             | Recent non-mention messages kept as context for the next mentioned turn. `0` disables history.        |
+| `tools`               | —                | Allow/deny tools for the whole group.                                                                 |
+| `toolsBySender`       | —                | Per-sender tool overrides; see [Groups](/channels/groups#group%2Fchannel-tool-restrictions-optional). |
+| `name`                | openid prefix    | Friendly label used in logs and group context.                                                        |
+| `prompt`              | built-in default | Per-group behavior prompt appended to the agent context.                                              |
 
 `commandLevel` accepts:
 

@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
+import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
+import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
@@ -28,13 +30,15 @@ type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<
     GatewayServerLiveState,
-    "cronState" | "configReloader" | "controlUiSessionPullRequests" | "sessionViewerPresence"
+    "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
+  getPortalService?: () => GatewayRequestContext["portalService"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
@@ -64,22 +68,19 @@ type GatewayRequestContextParams = {
   nodeUnsubscribeAll: GatewayRequestContext["nodeUnsubscribeAll"];
   hasConnectedTalkNode: GatewayRequestContext["hasConnectedTalkNode"];
   clients: Set<GatewayRequestContextClient>;
+  isConnectionActive: NonNullable<GatewayRequestContext["isConnectionActive"]>;
   invalidateDeviceTransports?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },
   ) => void;
   disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
-  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
-  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: {
-    deviceId: string;
-    publicKey: string;
-    scopes: string[];
-  }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
+  nodeDesktopService?: import("./desktop/node-source.js").NodeDesktopService;
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
+  hostDesktopService?: GatewayRequestContext["hostDesktopService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
+  workerPlacementDiskSpaceReader?: GatewayRequestContext["workerPlacementDiskSpaceReader"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
   validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
@@ -110,6 +111,8 @@ type GatewayRequestContextParams = {
   channelWizardRunner: GatewayRequestContext["channelWizardRunner"];
   broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
   broadcastVoiceWakeRoutingChanged: GatewayRequestContext["broadcastVoiceWakeRoutingChanged"];
+  notifyPluginMetadataChanged: GatewayRequestContext["notifyPluginMetadataChanged"];
+  getConfigReloaderHotReloadStatus: GatewayRequestContext["getConfigReloaderHotReloadStatus"];
   unavailableGatewayMethods: ReadonlySet<string>;
 };
 
@@ -160,6 +163,7 @@ export type GatewayRequestContextWithClientLookup = GatewayRequestContext & {
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContextWithClientLookup {
+  const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
   const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
@@ -171,17 +175,21 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
-    notifyPluginMetadataChanged: () =>
-      params.runtimeState.configReloader.notifyPluginMetadataChanged(),
+    notifyPluginMetadataChanged: params.notifyPluginMetadataChanged,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,
+    get portalService() {
+      return params.getPortalService?.();
+    },
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    scopeUpgradeCoordinator,
     cancelRunBoundApprovals: params.cancelRunBoundApprovals
       ? (runId) => params.cancelRunBoundApprovals!(runId, context)
       : undefined,
@@ -213,8 +221,7 @@ export function createGatewayRequestContext(
     nodeUnsubscribe: params.nodeUnsubscribe,
     nodeUnsubscribeAll: params.nodeUnsubscribeAll,
     hasConnectedTalkNode: params.hasConnectedTalkNode,
-    isConnectionActive: (connId) =>
-      [...params.clients].some((client) => client.connId === connId && !client.invalidated),
+    isConnectionActive: params.isConnectionActive,
     hasExecApprovalClients: (excludeConnId?: string) => {
       for (const gatewayClient of params.clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
@@ -357,15 +364,19 @@ export function createGatewayRequestContext(
     },
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
-    claimControlUiDeviceAuthMigration: params.claimControlUiDeviceAuthMigration,
-    releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
-    completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
+    ...(params.nodeDesktopService
+      ? { [NODE_DESKTOP_SERVICE_CONTEXT]: params.nodeDesktopService }
+      : {}),
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }
       : {}),
+    ...(params.hostDesktopService ? { hostDesktopService: params.hostDesktopService } : {}),
     ...(params.workerSessionPlacementService
       ? { workerSessionPlacementService: params.workerSessionPlacementService }
+      : {}),
+    ...(params.workerPlacementDiskSpaceReader
+      ? { workerPlacementDiskSpaceReader: params.workerPlacementDiskSpaceReader }
       : {}),
     validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
     ...(params.workerPlacementDispatchService
@@ -397,7 +408,7 @@ export function createGatewayRequestContext(
     purgeWizardSession: params.purgeWizardSession,
     getRuntimeSnapshot: params.getRuntimeSnapshot,
     getEventLoopHealth: params.getEventLoopHealth,
-    getConfigReloaderHotReloadStatus: () => params.runtimeState.configReloader.hotReloadStatus?.(),
+    getConfigReloaderHotReloadStatus: params.getConfigReloaderHotReloadStatus,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
     markChannelLoggedOut: params.markChannelLoggedOut,

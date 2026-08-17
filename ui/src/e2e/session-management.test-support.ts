@@ -1,17 +1,19 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
+  waitForConfirmModal,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export { controlUiSessionPath, controlUiSessionUrl, installMockGateway };
+export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForConfirmModal };
 
 export const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -36,6 +38,7 @@ export function sessionRow(
   updatedAt: number,
   options: {
     archived?: boolean;
+    sessionId?: string;
     category?: string;
     pinned?: boolean;
     pinnedAt?: number;
@@ -56,6 +59,7 @@ export function sessionRow(
     displayName: label,
     hasActiveRun: false,
     key,
+    sessionId: `session:${key}`,
     kind: "direct",
     label,
     model: "gpt-5.5",
@@ -94,12 +98,7 @@ export function sessionsListResponse(
   };
 }
 
-export function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+export const requireRecord = createRequireRecord("record", "expected-object-value");
 
 export async function waitForPatch(
   gateway: MockGatewayControls,
@@ -120,8 +119,33 @@ export async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
-export async function activateMenuItem(item: Locator): Promise<void> {
-  await item.evaluate((element) => (element as HTMLElement).click());
+/** Dispatches before a successful action can remove its own control from the DOM. */
+export async function activateSelfRemovingControl(control: Locator): Promise<void> {
+  await control.evaluate((element) => {
+    const target = element as HTMLElement & { disabled?: boolean };
+    const style = getComputedStyle(target);
+    const bounds = target.getBoundingClientRect();
+    const root = target.getRootNode();
+    const hitTestRoot = root instanceof ShadowRoot ? root : document;
+    const hitTarget = hitTestRoot.elementFromPoint(
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2,
+    );
+    if (
+      !target.isConnected ||
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      bounds.width <= 0 ||
+      bounds.height <= 0 ||
+      target.disabled === true ||
+      target.getAttribute("aria-disabled") === "true" ||
+      !hitTarget ||
+      (hitTarget !== target && !target.contains(hitTarget))
+    ) {
+      throw new Error("Self-removing control must be visible and enabled before activation");
+    }
+    target.click();
+  });
 }
 
 export function trimmedTextContents(locator: Locator): Promise<string[]> {

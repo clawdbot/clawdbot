@@ -30,6 +30,7 @@ import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
+import { findModelInCatalog, modelSupportsInput } from "../model-catalog-lookup.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
@@ -51,12 +52,13 @@ import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { EmbeddedModelSelection } from "./model-selection.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
-import { persistSessionEntry, resolveInternalSessionEffectsSource } from "./session-helpers.js";
+import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -313,7 +315,7 @@ export async function runEmbeddedAgentAttempt(params: {
             }
             const nextSessionEntry = { ...sessionEntry };
             clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
-            sessionEntry = await persistSessionEntry({
+            sessionEntry = await persistAgentSession({
               sessionStore,
               sessionKey,
               storePath,
@@ -398,16 +400,16 @@ export async function runEmbeddedAgentAttempt(params: {
             })
           ) {
             attemptedThinkingCatalogHydration = true;
-            const { loadPreparedModelCatalogSnapshot } =
+            const { loadProviderScopedThinkingCatalog } =
               await import("../model-catalog.runtime.js");
             const runtimeCatalog = normalizeThinkingCatalogProviders(
-              (
-                await loadPreparedModelCatalogSnapshot({
-                  config: cfg,
-                  agentId: sessionAgentId,
-                  workspaceDir,
-                })
-              ).entries,
+              await loadProviderScopedThinkingCatalog({
+                config: cfg,
+                provider: providerOverride,
+                model: modelOverride,
+                agentId: sessionAgentId,
+                workspaceDir,
+              }),
             );
             const allowedRuntimeCatalog = createModelVisibilityPolicy({
               cfg,
@@ -449,6 +451,10 @@ export async function runEmbeddedAgentAttempt(params: {
             preparedRunAdmission: params.preparedRunAdmission,
             providerOverride,
             modelOverride,
+            modelHasVision: modelSupportsInput(
+              findModelInCatalog(thinkingCatalog ?? [], providerOverride, modelOverride),
+              "image",
+            ),
             configuredAuthProfileId,
             modelFallbacksOverride: effectiveFallbacksOverride,
             originalProvider: provider,

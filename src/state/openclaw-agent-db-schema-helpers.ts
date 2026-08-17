@@ -25,12 +25,14 @@ import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engin
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
+import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
   AGENT_V14_CORE_SCHEMA_SQL,
   AGENT_V14_SESSION_SHARING_SCHEMA_SQL,
 } from "./openclaw-agent-session-sharing-schema.js";
+import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "./openclaw-agent-session-transcript-archive-schema.js";
 import {
   STANDING_INTENTS_FTS_SHADOW_TABLES,
   STANDING_INTENTS_FTS_TABLE,
@@ -49,6 +51,8 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
     MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
     CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
+    MESSAGE_TOOL_RUN_OUTCOMES_TABLE,
+    SESSION_TRANSCRIPT_ARCHIVES_TABLE,
     STANDING_INTENTS_TABLE,
     STANDING_INTENTS_FTS_TABLE,
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
@@ -64,6 +68,12 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     },
   ],
 } satisfies SqliteSchemaCompatibility;
+
+function hasRetiredAgentStateLeaseSchema(database: DatabaseSync): boolean {
+  return Boolean(
+    database.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = 'state_leases'").get(),
+  );
+}
 
 export function assertOpenClawAgentSchemaContains(
   database: DatabaseSync,
@@ -88,6 +98,11 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
   if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw new Error(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
+    );
+  }
+  if (hasRetiredAgentStateLeaseSchema(database)) {
+    throw new Error(
+      `OpenClaw agent database ${options.pathname} retains retired state_leases storage; run openclaw doctor --fix before using it.`,
     );
   }
   assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);

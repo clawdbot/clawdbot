@@ -2,10 +2,9 @@ import { createHash } from "node:crypto";
 import type { Api, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { resolveModelPayloadDebugMode } from "./model-transport-debug.js";
 import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts.js";
-import { log, type MutableAssistantOutput } from "./openai-transport-shared.js";
+import { log } from "./openai-transport-shared.js";
 import { redactIdentifier, redactSensitiveText } from "./transport-utils.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
@@ -16,33 +15,6 @@ function stringifyUnknown(value: unknown, fallback = ""): string {
     return String(value);
   }
   return fallback;
-}
-
-function getServiceTierCostMultiplier(serviceTier: ResponseCreateParamsStreaming["service_tier"]) {
-  switch (serviceTier) {
-    case "flex":
-      return 0.5;
-    case "priority":
-      return 2;
-    default:
-      return 1;
-  }
-}
-
-export function applyServiceTierPricing(
-  usage: MutableAssistantOutput["usage"],
-  serviceTier?: ResponseCreateParamsStreaming["service_tier"],
-): void {
-  const multiplier = getServiceTierCostMultiplier(serviceTier);
-  if (multiplier === 1) {
-    return;
-  }
-  usage.cost.input *= multiplier;
-  usage.cost.output *= multiplier;
-  usage.cost.cacheRead *= multiplier;
-  usage.cost.cacheWrite *= multiplier;
-  usage.cost.total =
-    usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
 
 export function safeDebugValue(value: unknown): string {

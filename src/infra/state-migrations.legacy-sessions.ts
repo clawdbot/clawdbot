@@ -4,7 +4,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import {
   ensureMigrationDir,
-  fileExists,
+  migrationFileExists,
   readSessionStoreJson5,
   safeReadDir,
   type SessionEntryLike,
@@ -16,7 +16,7 @@ import {
   emptyDirOrMissing,
   isAmbiguousSharedStoreKey,
   isLegacyDefaultMainAliasKey,
-  mergeSessionEntry,
+  selectNewerSessionEntry,
   normalizeSessionEntry,
   pickLatestLegacyDirectEntry,
   removeDirIfEmpty,
@@ -71,10 +71,10 @@ export async function migrateLegacySessions(
 
   ensureMigrationDir(detected.sessions.targetDir);
 
-  const legacyParsed = fileExists(detected.sessions.legacyStorePath)
+  const legacyParsed = migrationFileExists(detected.sessions.legacyStorePath)
     ? readSessionStoreJson5(detected.sessions.legacyStorePath)
     : { store: {}, ok: true };
-  const targetParsed = fileExists(detected.sessions.targetStorePath)
+  const targetParsed = migrationFileExists(detected.sessions.targetStorePath)
     ? readSessionStoreJson5(detected.sessions.targetStorePath)
     : { store: {}, ok: true };
   const legacyStore = legacyParsed.store;
@@ -166,7 +166,7 @@ export async function migrateLegacySessions(
     merged[key] = entry;
   }
   for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
-    merged[key] = mergeSessionEntry({
+    merged[key] = selectNewerSessionEntry({
       existing: merged[key],
       incoming: entry,
       preferIncomingOnTie: false,
@@ -192,7 +192,7 @@ export async function migrateLegacySessions(
     );
   }
 
-  const targetExists = fileExists(detected.sessions.targetStorePath);
+  const targetExists = migrationFileExists(detected.sessions.targetStorePath);
   let targetReadable = !targetExists || targetParsed.ok;
   if (!targetReadable) {
     if (options.recoverCorruptTargetStore) {
@@ -257,7 +257,7 @@ export async function migrateLegacySessions(
     }
     const from = path.join(detected.sessions.legacyDir, entry.name);
     let to = path.join(detected.sessions.targetDir, entry.name);
-    if (fileExists(to)) {
+    if (migrationFileExists(to)) {
       const parsed = path.parse(entry.name);
       to = path.join(detected.sessions.targetDir, `${parsed.name}.legacy-${now()}${parsed.ext}`);
     }
@@ -271,7 +271,7 @@ export async function migrateLegacySessions(
 
   if (legacyParsed.ok && targetReadable) {
     try {
-      if (fileExists(detected.sessions.legacyStorePath)) {
+      if (migrationFileExists(detected.sessions.legacyStorePath)) {
         fs.rmSync(detected.sessions.legacyStorePath, { force: true });
       }
     } catch {

@@ -8,7 +8,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -120,7 +120,7 @@ describe("forkSessionEntryFromParent", () => {
         updatedAt: 10,
       },
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: "parent-session",
@@ -290,7 +290,7 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: parentEntry.sessionId,
@@ -334,7 +334,7 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: parentEntry.sessionId,
@@ -387,7 +387,7 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: parentEntry.sessionId,
@@ -469,7 +469,7 @@ describe("forkSessionEntryFromParent", () => {
       totalTokensFresh: false,
       updatedAt: 1,
     };
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: parentEntry.sessionId,

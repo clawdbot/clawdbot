@@ -3,6 +3,11 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  isPluginCandidateInstallOwnerAmbiguous,
+  resolvePluginCandidateInstallOwner,
+  resolvePluginInstallOwnerLookup,
+} from "./candidate-install-owner.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -142,17 +147,17 @@ function matchesExplicitInstallRule(params: {
 
 function resolveCandidateDuplicateRank(params: {
   candidate: PluginCandidate;
-  manifestBySource: Map<string, PluginManifestRecord>;
   provenance: PluginProvenanceIndex;
   env: NodeJS.ProcessEnv;
 }): number {
-  const manifestRecord = params.manifestBySource.get(params.candidate.source);
-  const pluginId = manifestRecord?.id;
+  const installOwner = isPluginCandidateInstallOwnerAmbiguous(params.candidate)
+    ? undefined
+    : resolvePluginCandidateInstallOwner(params.candidate);
   const isExplicitInstall =
     params.candidate.origin === "global" &&
-    pluginId !== undefined &&
+    installOwner !== undefined &&
     matchesExplicitInstallRule({
-      pluginId,
+      pluginId: installOwner,
       source: params.candidate.source,
       index: params.provenance,
       env: params.env,
@@ -199,13 +204,11 @@ export function compareDuplicateCandidateOrder(params: {
   return (
     resolveCandidateDuplicateRank({
       candidate: params.left,
-      manifestBySource: params.manifestBySource,
       provenance: params.provenance,
       env: params.env,
     }) -
     resolveCandidateDuplicateRank({
       candidate: params.right,
-      manifestBySource: params.manifestBySource,
       provenance: params.provenance,
       env: params.env,
     })
@@ -301,9 +304,11 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     if (allowSet.has(plugin.id)) {
       continue;
     }
+    const installOwner = resolvePluginInstallOwnerLookup(params)?.get(plugin.id);
     if (
+      installOwner &&
       isTrackedByProvenance({
-        pluginId: plugin.id,
+        pluginId: installOwner,
         source: plugin.source,
         index: params.provenance,
         env: params.env,

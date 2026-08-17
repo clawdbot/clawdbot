@@ -2,7 +2,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import "./accounts.test-mocks.js";
 import { listZalouserDirectoryGroupMembers } from "./directory.js";
-import "./zalo-js.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import { listZaloGroupMembersMock } from "./zalo-js.test-mocks.js";
 
 describe("zalouser directory group members", () => {

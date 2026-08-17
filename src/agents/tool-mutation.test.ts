@@ -20,6 +20,15 @@ describe("tool mutation helpers", () => {
     ).toBe(true);
   });
 
+  it("classifies portal list as replay-safe and portal mutations as mutating", () => {
+    expect(isMutatingToolCall("portal", { action: "list" })).toBe(false);
+    expect(isReplaySafeToolCall("portal", { action: "list" })).toBe(true);
+    for (const action of ["open", "close"]) {
+      expect(isMutatingToolCall("portal", { action }), action).toBe(true);
+      expect(isReplaySafeToolCall("portal", { action }), action).toBe(false);
+    }
+  });
+
   it("builds stable fingerprints for mutating calls and omits read-only calls", () => {
     const writeFingerprint = buildToolMutationState(
       "write",
@@ -39,6 +48,40 @@ describe("tool mutation helpers", () => {
       path: "/tmp/demo.txt",
     }).actionFingerprint;
     expect(readFingerprint).toBeUndefined();
+  });
+
+  it("binds reordered exact arguments to one owner but separates changed facts and owners", () => {
+    const ownerKey = '["memory-lancedb","memory_store"]';
+    const metric = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers metric units." },
+      undefined,
+      { ownerKey },
+    );
+    const reordered = buildToolMutationState(
+      "memory_store",
+      { text: "The user prefers metric units.", category: "preference" },
+      undefined,
+      { ownerKey },
+    );
+    const imperial = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers imperial units." },
+      undefined,
+      { ownerKey },
+    );
+    const otherOwner = buildToolMutationState(
+      "memory_store",
+      { category: "preference", text: "The user prefers metric units." },
+      undefined,
+      { ownerKey: '["other-plugin","memory_store"]' },
+    );
+
+    expect(metric).toMatchObject({ mutatingAction: true, replaySafe: false });
+    expect(metric.actionFingerprint).toBe(reordered.actionFingerprint);
+    expect(metric.actionFingerprint).not.toBe(imperial.actionFingerprint);
+    expect(metric.actionFingerprint).not.toBe(otherOwner.actionFingerprint);
+    expect(metric.actionFingerprint).not.toContain("metric units");
   });
 
   it.each([

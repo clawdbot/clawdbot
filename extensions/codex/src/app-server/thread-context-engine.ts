@@ -2,6 +2,7 @@ import {
   isActiveHarnessContextEngine,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -88,14 +89,10 @@ function areContextEngineProjectionBindingsCompatible(
 }
 
 function resolveContextEngineCitationsMode(config: unknown): JsonValue | undefined {
-  const rootConfig = isUnknownRecord(config) ? config : undefined;
-  const memoryConfig = isUnknownRecord(rootConfig?.memory) ? rootConfig.memory : undefined;
+  const rootConfig = isRecord(config) ? config : undefined;
+  const memoryConfig = isRecord(rootConfig?.memory) ? rootConfig.memory : undefined;
   const citations = memoryConfig?.citations;
   return isJsonConfigValue(citations) ? citations : undefined;
-}
-
-function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isJsonConfigValue(value: unknown): value is JsonValue {
@@ -108,5 +105,5 @@ function isJsonConfigValue(value: unknown): value is JsonValue {
   if (Array.isArray(value)) {
     return value.every(isJsonConfigValue);
   }
-  return isUnknownRecord(value) && Object.values(value).every(isJsonConfigValue);
+  return isRecord(value) && Object.values(value).every(isJsonConfigValue);
 }

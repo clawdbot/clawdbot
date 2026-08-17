@@ -546,6 +546,43 @@ describe("exportTrajectoryBundle", () => {
     expect(bundle.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
   });
 
+  it("keeps runtime timestamp validation on the Date.parse string contract", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvents: TrajectoryEvent[] = [
+      { ts: "2026", type: "date-compatible" },
+      { ts: "999999", type: "numeric-milliseconds-only" },
+    ].map(({ ts, type }, index) => ({
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type,
+      ts,
+      seq: index + 1,
+      sourceSeq: index + 1,
+      sessionId: "session-1",
+    }));
+    fs.writeFileSync(
+      runtimeFile,
+      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir: path.join(tmpDir, "bundle"),
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    expect(eventTypes(bundle.events)).toContain("date-compatible");
+    expect(eventTypes(bundle.events)).not.toContain("numeric-milliseconds-only");
+  });
+
   it("rejects an incomplete target that conflicts with a legacy marker", async () => {
     const tmpDir = makeTempDir();
 

@@ -14,7 +14,7 @@ import {
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { AgentSelectionRequiredError, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
@@ -64,6 +64,7 @@ import {
   flushTalkRealtimeRelayVoiceWrites,
 } from "../talk-realtime-relay.js";
 import { formatForLog } from "../ws-log.js";
+import { hasOwnedActiveTalkClientRun } from "./talk-client-run-ownership.js";
 import {
   buildRealtimeInstructions,
   buildRealtimeVoiceLaunchOptions,
@@ -90,13 +91,6 @@ function pruneLegacyVoiceBindings(now = Date.now()): void {
       legacyVoiceSessionByClient.delete(key);
     }
   }
-}
-
-function resolveTalkClientAgentId(
-  config: Parameters<typeof resolveTalkSessionAgentId>[0],
-  key: string,
-) {
-  return resolveTalkSessionAgentId(config, key);
 }
 
 /**
@@ -215,6 +209,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         provider: resolution.provider,
         providerConfig: resolution.providerConfig,
         cfg: runtimeConfig,
+        agentId: requestedAgentId,
         model: launchOptions.model,
         surface: "browser-session",
       });
@@ -313,8 +308,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         const gatewayControlOwner = wantsGatewayControl
           ? createTalkClientGatewayControlOwner({
               voiceSessionId: activeVoiceSessionId!,
+              providerId: resolution.provider.id,
               sessionKey,
               connId: ownerConnId!,
+              context,
               runAgentConsult: consultRunner.runArgs,
               appendTranscript: ({ entryId, role, text }) =>
                 appendClientVoiceTranscript({
@@ -339,7 +336,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
                   config: runtimeConfig,
                 });
               },
-              warn: (message) => context.logGateway.warn(message),
             })
           : undefined;
         const browserSessionRequest: InternalRealtimeVoiceBrowserSessionCreateRequest = {
@@ -479,7 +475,16 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         ),
       );
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(
+          err instanceof AgentSelectionRequiredError
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          formatForLog(err),
+        ),
+      );
     }
   },
   "talk.client.toolCall": async (request) => {
@@ -499,7 +504,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     }
 
     const config = request.context.getRuntimeConfig();
-    const agentId = resolveTalkClientAgentId(config, params.sessionKey);
+    const agentId = resolveTalkSessionAgentId(config, params.sessionKey);
     const relaySessionId = normalizeOptionalString(params.relaySessionId);
     const connId = normalizeOptionalString(request.client?.connId);
     pruneLegacyVoiceBindings();
@@ -625,7 +630,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     try {
       const config = context.getRuntimeConfig();
       await appendClientVoiceTranscript({
-        agentId: resolveTalkClientAgentId(config, params.sessionKey),
+        agentId: resolveTalkSessionAgentId(config, params.sessionKey),
         sessionKey: params.sessionKey,
         voiceSessionId: params.voiceSessionId,
         entryId: params.entryId,
@@ -655,7 +660,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         return;
       }
       const config = context.getRuntimeConfig();
-      const agentId = resolveTalkClientAgentId(config, params.sessionKey);
+      const agentId = resolveTalkSessionAgentId(config, params.sessionKey);
       const origin = resolveClientVoiceSessionOrigin({
         agentId,
         sessionKey: params.sessionKey,
@@ -711,27 +716,16 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       });
       respond(true, result, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(
+          err instanceof AgentSelectionRequiredError
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          formatForLog(err),
+        ),
+      );
     }
   },
 };
-
-function hasOwnedActiveTalkClientRun(params: {
-  context: Parameters<GatewayRequestHandlers[string]>[0]["context"];
-  clientConnId?: string;
-  sessionKey: string;
-}): boolean {
-  // Browser steering is only allowed for the connection that owns the live
-  // browser session; agent-owned consult runs use the relay steering path.
-  const connId = normalizeOptionalString(params.clientConnId);
-  const sessionKey = params.sessionKey.trim();
-  if (!connId || !sessionKey) {
-    return false;
-  }
-  for (const entry of params.context.chatAbortControllers.values()) {
-    if (entry.sessionKey === sessionKey && entry.ownerConnId === connId && entry.kind !== "agent") {
-      return true;
-    }
-  }
-  return false;
-}

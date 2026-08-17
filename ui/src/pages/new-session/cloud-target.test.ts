@@ -9,6 +9,7 @@ import {
   startCloudInitialTurn,
 } from "../../lib/sessions/cloud-startup.ts";
 import { renderCloudProfileMenuItems } from "./cloud-target.ts";
+import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
 const params = {
   key: "agent:cloud:test",
@@ -37,6 +38,23 @@ describe("cloud session startup", () => {
       key: params.key,
       agentId: params.agentId,
       profileId: params.profileId,
+    });
+  });
+
+  it("passes a non-default machine class to dispatch", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ placement: { state: "active", environmentId: "worker-fast" } })
+      .mockResolvedValueOnce({ runId: "run-fast" });
+
+    await expect(
+      startCloudInitialTurn(clientWith(request), { ...params, machineClass: "fast" }, () => true),
+    ).resolves.toMatchObject({ status: "started" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.dispatch", {
+      key: params.key,
+      agentId: params.agentId,
+      profileId: params.profileId,
+      machineClass: "fast",
     });
   });
 
@@ -648,6 +666,38 @@ describe("cloud session startup", () => {
 });
 
 describe("cloud target menu", () => {
+  it.each([
+    {
+      name: "keeps an advertised supported runtime enabled",
+      runtime: { id: "codex", cloudPlacementSupported: true, source: "model" as const },
+      expected: undefined,
+    },
+    {
+      name: "leaves an unadvertised runtime to the Gateway dispatch gate",
+      runtime: { id: "codex", source: "model" as const },
+      expected: undefined,
+    },
+    {
+      name: "explains an advertised unsupported runtime",
+      runtime: { id: "acpx", cloudPlacementSupported: false, source: "model" as const },
+      expected: "The acpx runtime does not support cloud workers.",
+    },
+  ])("$name", ({ runtime, expected }) => {
+    const flow = new DraftSubmissionFlow(
+      {} as never,
+      {
+        modelControl: { resolveAgentRuntime: () => runtime },
+        repository: { kind: "git", repoRoot: "/repo", branches: [] },
+        selectedAgent: () => undefined,
+        worktreeAvailable: () => true,
+      } as never,
+      () => ({ context: undefined, data: undefined, isConnected: true }),
+      { requestUpdate: vi.fn(), closeTransientUi: vi.fn() },
+    );
+
+    expect(flow.cloudDisabledReason()).toBe(expected);
+  });
+
   it("disables cloud profiles with the runtime preflight reason", () => {
     const container = document.createElement("div");
     render(
@@ -656,7 +706,7 @@ describe("cloud target menu", () => {
         selectedId: "",
         submitting: false,
         disabled: true,
-        disabledReason: "Cloud workers require the OpenClaw runtime; codex is selected.",
+        disabledReason: "The acpx runtime does not support cloud workers.",
         onSelect: vi.fn(),
       }),
       container,
@@ -664,6 +714,6 @@ describe("cloud target menu", () => {
 
     const button = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
     expect(button?.disabled).toBe(true);
-    expect(button?.title).toBe("Cloud workers require the OpenClaw runtime; codex is selected.");
+    expect(button?.title).toBe("The acpx runtime does not support cloud workers.");
   });
 });

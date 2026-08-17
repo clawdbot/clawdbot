@@ -13,7 +13,11 @@ import {
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  normalizeTrimmedStringList,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
@@ -67,7 +71,6 @@ export async function handleCodexAppServerApprovalRequest(params: {
     "allowedEvents" | "generation" | "relayId"
   >;
   autoApprove?: boolean;
-  autoApproveOpenClawToolPolicy?: boolean;
   signal?: AbortSignal;
   onNativeToolFailureDisposition?: (
     itemId: string,
@@ -83,23 +86,66 @@ export async function handleCodexAppServerApprovalRequest(params: {
     requestParams,
     paramsForRun: params.paramsForRun,
   });
-  const resolvePolicyApproval = (
+  let revalidateMutableFileApproval:
+    | (() => Promise<{ ok: true } | { ok: false; message: string }>)
+    | undefined;
+  let mutableFileApprovalRequiresOneShot = false;
+  const resolvePolicyApproval = async (
     outcome: Extract<AppServerApprovalOutcome, "denied" | "approved-once" | "approved-session">,
     message = approvalResolutionMessage(outcome),
-  ): JsonValue => {
+    approvalId?: string,
+  ): Promise<JsonValue> => {
+    let resolvedOutcome = outcome;
+    let resolvedMessage = message;
+    // This is the last enforceable client boundary before Codex owns spawn.
+    // Releasing without this check would approve bytes changed during the wait.
+    if (outcome !== "denied" && revalidateMutableFileApproval) {
+      const binding = await revalidateMutableFileApproval();
+      if (!binding.ok) {
+        resolvedOutcome = "denied";
+        resolvedMessage = binding.message;
+      }
+    }
+    if (resolvedOutcome === "approved-session" && mutableFileApprovalRequiresOneShot) {
+      resolvedOutcome = "approved-once";
+      resolvedMessage = "Codex app-server approval granted for this byte-bound command only.";
+    }
     emitApprovalEvent(params.paramsForRun, {
       phase: "resolved",
       kind: context.kind,
-      status: outcome === "denied" ? "denied" : "approved",
+      status: resolvedOutcome === "denied" ? "denied" : "approved",
       title: context.title,
+      ...(approvalId ? { approvalId, approvalSlug: approvalId } : {}),
       ...context.eventDetails,
-      ...approvalEventScope(params.method, outcome),
-      message,
+      ...approvalEventScope(params.method, resolvedOutcome),
+      message: resolvedMessage,
     });
-    return buildApprovalResponse(params.method, context.requestParams, outcome);
+    return buildApprovalResponse(params.method, context.requestParams, resolvedOutcome);
   };
-
   try {
+    if (params.method === "item/commandExecution/requestApproval") {
+      const command = readPolicyCommand(requestParams);
+      const cwd = readString(requestParams, "cwd") ?? params.paramsForRun.workspaceDir;
+      // Snapshot the executable file operands before policy or operator waits;
+      // an unbound or unreadable script could otherwise change under the prompt.
+      const prepareMutableFileApproval =
+        params.paramsForRun.hostCapabilities.prepareMutableFileApproval;
+      if (!prepareMutableFileApproval) {
+        return await resolvePolicyApproval(
+          "denied",
+          "SYSTEM_RUN_DENIED: mutable file approval binding is unavailable",
+        );
+      }
+      const prepared = await prepareMutableFileApproval({
+        command: command ?? "",
+        cwd,
+      });
+      if (!prepared.ok) {
+        return await resolvePolicyApproval("denied", prepared.message);
+      }
+      mutableFileApprovalRequiresOneShot = prepared.requiresOneShot;
+      revalidateMutableFileApproval = prepared.revalidate;
+    }
     const policyOutcome = await runOpenClawToolPolicyForApprovalRequest({
       method: params.method,
       requestParams,
@@ -111,27 +157,17 @@ export async function handleCodexAppServerApprovalRequest(params: {
     });
     if (policyOutcome?.outcome === "denied") {
       recordNativeToolFailureDisposition(params, context, policyOutcome.failureDisposition);
-      return resolvePolicyApproval("denied", policyOutcome.reason);
+      return await resolvePolicyApproval("denied", policyOutcome.reason);
     }
     if (
       policyOutcome?.outcome === "approved-once" ||
       policyOutcome?.outcome === "approved-session"
     ) {
-      return resolvePolicyApproval(policyOutcome.outcome);
+      return await resolvePolicyApproval(policyOutcome.outcome);
     }
     const canAutoApproveConcreteToolCall = CONCRETE_TOOL_AUTO_APPROVAL_METHODS.has(params.method);
-    if (
-      canAutoApproveConcreteToolCall &&
-      params.autoApproveOpenClawToolPolicy === true &&
-      policyOutcome?.outcome === "allowed"
-    ) {
-      return resolvePolicyApproval(
-        "approved-once",
-        "Codex app-server approval accepted by OpenClaw tool policy.",
-      );
-    }
     if (canAutoApproveConcreteToolCall && params.autoApprove === true) {
-      return resolvePolicyApproval(
+      return await resolvePolicyApproval(
         "approved-session",
         "Codex app-server approval auto-approved by runtime policy.",
       );
@@ -193,6 +229,10 @@ export async function handleCodexAppServerApprovalRequest(params: {
       recordNativeToolFailureDisposition(params, context, approvalExpired ? "timed_out" : "failed");
     }
 
+    if (outcome === "approved-once" || outcome === "approved-session") {
+      return await resolvePolicyApproval(outcome, approvalResolutionMessage(outcome), approvalId);
+    }
+
     emitApprovalEvent(params.paramsForRun, {
       phase: "resolved",
       kind: context.kind,
@@ -229,7 +269,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
       message: cancelled
         ? "Codex app-server approval cancelled because the run stopped."
         : `Codex app-server approval route failed: ${formatCodexDisplayText(
-            formatErrorMessage(error),
+            coerceErrorMessage(error),
           )}`,
     });
     return buildApprovalResponse(
@@ -351,13 +391,7 @@ function buildApprovalContext(params: {
   const description =
     permissionLines.length > 0
       ? joinDescriptionLinesWithinLimit(permissionLines, PERMISSION_DESCRIPTION_MAX_LENGTH)
-      : [
-          subject,
-          ...commandDetailLines,
-          params.paramsForRun.sessionKey && `Session: ${params.paramsForRun.sessionKey}`,
-        ]
-          .filter(Boolean)
-          .join("\n");
+      : [subject, ...commandDetailLines].join("\n");
   return {
     kind,
     title,
@@ -582,7 +616,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
       handled: true,
       blocked: true,
       reason: `OpenClaw native hook relay unavailable for Codex app-server approval: ${formatCodexDisplayText(
-        formatErrorMessage(error),
+        coerceErrorMessage(error),
       )}`,
       failureDisposition: "failed",
     };
@@ -1190,7 +1224,7 @@ function approvalKindForMethod(method: string): AgentApprovalEventData["kind"] {
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {
   void params.onAgentEvent?.({
     stream: "approval",
-    data: data as unknown as Record<string, unknown>,
+    data: { ...data },
   });
 }
 
@@ -1271,11 +1305,6 @@ function readStringPreview(
   return value === undefined ? undefined : previewSource(value);
 }
 
-function readString(record: JsonObject | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
-}
-
 function previewSource(value: string): ApprovalPreviewSource {
   return {
     value: sliceUtf16Safe(value, 0, APPROVAL_PREVIEW_SCAN_MAX_LENGTH),
@@ -1335,7 +1364,4 @@ function joinDescriptionLinesWithinLimit(lines: string[], maxLength: number): st
   return description;
 }
 
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

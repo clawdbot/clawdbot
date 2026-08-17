@@ -17,7 +17,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const mocks = vi.hoisted(() => ({
   entries: {} as Record<string, SessionEntry>,
   loadSessionEntry: vi.fn(),
-  patchSessionEntry: vi.fn(),
+  patchSessionEntryCore: vi.fn(),
   readSessionMessages: vi.fn(async () => [] as unknown[]),
 }));
 
@@ -26,15 +26,15 @@ vi.mock("../../../config/config.js", () => ({
 }));
 vi.mock("../../../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "main",
-  resolveStorePath: () => "/tmp/subagent-recovery.sqlite",
+  resolveSessionStorePathCore: () => "/tmp/subagent-recovery.sqlite",
 }));
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
-  patchSessionEntry: mocks.patchSessionEntry,
+  patchSessionEntryCore: mocks.patchSessionEntryCore,
 }));
 vi.mock("../../../gateway/session-transcript-readers.js", () => ({
   extractMessageRole: (message: { role?: string }) => message?.role,
-  extractMessageText: (message: { content?: string }) => message?.content ?? null,
+  extractSessionTranscriptText: (message: { content?: string }) => message?.content ?? null,
   readSessionMessagesAsync: mocks.readSessionMessages,
 }));
 
@@ -160,7 +160,7 @@ describe("subagent registry restart recovery", () => {
     mocks.loadSessionEntry.mockImplementation(
       ({ sessionKey }: { sessionKey: string }) => mocks.entries[sessionKey],
     );
-    mocks.patchSessionEntry.mockImplementation(
+    mocks.patchSessionEntryCore.mockImplementation(
       async (
         { sessionKey }: { sessionKey: string },
         update: (entry: SessionEntry) => SessionEntry,
@@ -363,7 +363,7 @@ describe("subagent registry restart recovery", () => {
       status: "retry",
       error: "runtime not ready",
     });
-    expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
     expect(mocks.entries[childSessionKey]!.abortedLastRun).toBe(true);
   });
 
@@ -374,7 +374,7 @@ describe("subagent registry restart recovery", () => {
       status: "retry",
       error: "undefined",
     });
-    expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
     expect(mocks.entries[childSessionKey]!.abortedLastRun).toBe(true);
   });
 
@@ -570,7 +570,7 @@ describe("subagent registry restart recovery", () => {
     });
     expect(markLaunchAccepted).not.toHaveBeenCalled();
     expect(replaceRun).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 
   it("does not create a successor when Gateway consumes admission but rejects launch", async () => {
@@ -599,7 +599,7 @@ describe("subagent registry restart recovery", () => {
     });
     expect(markLaunchAccepted).not.toHaveBeenCalled();
     expect(replaceRun).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 
   it("keeps accepted source ownership when durable remap fails before settlement", async () => {
@@ -608,7 +608,7 @@ describe("subagent registry restart recovery", () => {
 
     await expect(recover(entry)).resolves.toEqual({ status: "deferred" });
     expect(dispatchAgent).toHaveBeenCalledOnce();
-    expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
     expect(mocks.entries[childSessionKey]!.abortedLastRun).toBe(true);
     expect(entry.execution.restartRecovery).toMatchObject({
       idempotencyKey: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
@@ -627,7 +627,7 @@ describe("subagent registry restart recovery", () => {
       entry.execution.restartRecovery = params.restartRecovery;
       return true;
     });
-    mocks.patchSessionEntry.mockRejectedValueOnce(new Error("store unavailable"));
+    mocks.patchSessionEntryCore.mockRejectedValueOnce(new Error("store unavailable"));
 
     await expect(recover(entry)).resolves.toEqual({
       status: "deferred",
@@ -694,7 +694,7 @@ describe("subagent registry restart recovery", () => {
     expect(markLaunchConsumed).toHaveBeenCalledOnce();
     expect(markLaunchAccepted).not.toHaveBeenCalled();
     expect(replaceRun).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 
   it("resets an unconsumed attempt after its Gateway lifecycle retires", async () => {
@@ -713,7 +713,7 @@ describe("subagent registry restart recovery", () => {
     expect(markLaunchConsumed).not.toHaveBeenCalled();
     expect(markLaunchAccepted).not.toHaveBeenCalled();
     expect(replaceRun).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 
   it("preserves a newer restart marker when the lifecycle retires during settlement", async () => {
@@ -730,7 +730,7 @@ describe("subagent registry restart recovery", () => {
       params.expected.execution.restartRecovery = accepted;
       return accepted;
     });
-    mocks.patchSessionEntry.mockImplementationOnce(
+    mocks.patchSessionEntryCore.mockImplementationOnce(
       async (
         { sessionKey }: { sessionKey: string },
         update: (entry: SessionEntry) => SessionEntry,
@@ -786,7 +786,7 @@ describe("subagent registry restart recovery", () => {
       }),
     );
     expect(dispatchAgent).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntry).toHaveBeenCalledOnce();
+    expect(mocks.patchSessionEntryCore).toHaveBeenCalledOnce();
     expect(mocks.entries[childSessionKey]!.abortedLastRun).toBe(false);
   });
 
@@ -809,25 +809,27 @@ describe("subagent registry restart recovery", () => {
         runs.set(entry.runId, entry);
         return true;
       });
-      mocks.patchSessionEntry.mockImplementationOnce(async ({ sessionKey }, update, options) => {
-        const next = update({ ...mocks.entries[sessionKey]! });
-        const advanceOwner = () => {
-          const newer = run({
-            runId: "newer-accepted-run",
-            generation: (entry.generation ?? 0) + 1,
-          });
-          runs.set(newer.runId, newer);
-        };
-        if (beforeCommit) {
-          advanceOwner();
-        }
-        options?.assertCommitAllowed?.();
-        mocks.entries[sessionKey] = next;
-        if (!beforeCommit) {
-          advanceOwner();
-        }
-        return next;
-      });
+      mocks.patchSessionEntryCore.mockImplementationOnce(
+        async ({ sessionKey }, update, options) => {
+          const next = update({ ...mocks.entries[sessionKey]! });
+          const advanceOwner = () => {
+            const newer = run({
+              runId: "newer-accepted-run",
+              generation: (entry.generation ?? 0) + 1,
+            });
+            runs.set(newer.runId, newer);
+          };
+          if (beforeCommit) {
+            advanceOwner();
+          }
+          options?.assertCommitAllowed?.();
+          mocks.entries[sessionKey] = next;
+          if (!beforeCommit) {
+            advanceOwner();
+          }
+          return next;
+        },
+      );
 
       await expect(
         recover(entry, {
@@ -866,7 +868,7 @@ describe("subagent registry restart recovery", () => {
 
     expect(dispatchAgent).not.toHaveBeenCalled();
     expect(replaceRun).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
     expect(clearAcceptedRecovery).not.toHaveBeenCalled();
     expect(resumeAcceptedRecovery).not.toHaveBeenCalled();
     expect(mocks.entries[childSessionKey]).toMatchObject({
@@ -911,7 +913,7 @@ describe("subagent registry restart recovery", () => {
 
     expect(replaceRun).toHaveBeenCalledOnce();
     expect(dispatchAgent).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
     expect(clearAcceptedRecovery).not.toHaveBeenCalled();
     expect(successor.execution.restartRecovery).toMatchObject({ phase: "accepted" });
   });

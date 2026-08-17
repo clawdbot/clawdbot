@@ -3,9 +3,13 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSettings } from "../../../app/settings.ts";
-import type { SessionMenuActionKind } from "../../../components/session-menu.ts";
+import { icons } from "../../../components/icons.ts";
 import "./chat-header-session-menu.ts";
-import type { HeaderMenuAction } from "./chat-header-session-menu.ts";
+import type {
+  HeaderMenuAction,
+  HeaderMenuActionKind,
+  HeaderMenuQuickAction,
+} from "./chat-header-session-menu.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
@@ -41,9 +45,13 @@ async function mountMenu(
     archived?: boolean;
     onboarding?: boolean;
     preferencesBrowserOnly?: boolean;
+    compact?: boolean;
     settings?: UiSettings;
-    actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
+    panelActions?: HeaderMenuQuickAction[];
+    layoutActions?: HeaderMenuQuickAction[];
+    actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
+    forkFromLastCompleted?: boolean;
     archiveAllowed?: boolean;
     deleteAllowed?: boolean;
     onOpen?: () => void;
@@ -61,9 +69,13 @@ async function mountMenu(
       .archived=${options.archived ?? false}
       .onboarding=${options.onboarding ?? false}
       .preferencesBrowserOnly=${options.preferencesBrowserOnly ?? false}
+      .compact=${options.compact ?? false}
       .settings=${options.settings ?? settings()}
+      .panelActions=${options.panelActions ?? []}
+      .layoutActions=${options.layoutActions ?? []}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${options.forkDisabled ?? false}
+      .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${options.deleteAllowed ?? true}
       .onOpen=${options.onOpen ?? (() => {})}
@@ -112,7 +124,14 @@ describe("chat header session menu", () => {
       menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
     ).map(itemLabel);
 
-    expect(labels).toEqual(["Rename…", "View", "Fork", "Archive session", "Delete…"]);
+    expect(labels).toEqual([
+      "Rename…",
+      "View",
+      "Fork",
+      "Continue in terminal…",
+      "Archive session",
+      "Delete…",
+    ]);
     expect(
       menu.querySelector(".chat-header-session-menu__trigger")?.getAttribute("aria-label"),
     ).toBe("Actions for Test session");
@@ -165,6 +184,82 @@ describe("chat header session menu", () => {
     ]);
   });
 
+  it("keeps panel and layout actions available from the session menu", async () => {
+    const showTasks = vi.fn();
+    const showChanges = vi.fn();
+    const splitRight = vi.fn();
+    const menu = await mountMenu({
+      panelActions: [
+        {
+          id: "background-tasks",
+          label: "Show background tasks",
+          icon: icons.listChecks,
+          active: false,
+          badge: 2,
+          onActivate: showTasks,
+        },
+        {
+          id: "changes",
+          label: "Show session changes",
+          icon: icons.diff,
+          onActivate: showChanges,
+        },
+      ],
+      layoutActions: [
+        {
+          id: "split-right",
+          label: "Split right",
+          icon: icons.panelRightOpen,
+          onActivate: splitRight,
+        },
+      ],
+    });
+
+    const panels = item(menu, "Panels");
+    const panelItems = Array.from(
+      panels.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
+    );
+    expect(panelItems.map(itemLabel)).toEqual(["Show background tasks", "Show session changes"]);
+    expect(panelItems[0]?.checked).toBe(false);
+    expect(panelItems[0]?.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
+    expect(
+      Array.from(
+        item(menu, "Layout").querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
+      ).map(itemLabel),
+    ).toEqual(["Split right"]);
+
+    select(menu, "quick:panels:background-tasks");
+    select(menu, "quick:panels:changes");
+    select(menu, "quick:layout:split-right");
+    expect(showTasks).toHaveBeenCalledOnce();
+    expect(showChanges).toHaveBeenCalledOnce();
+    expect(splitRight).toHaveBeenCalledOnce();
+  });
+
+  it("renders quick actions directly in the compact menu", async () => {
+    const showTasks = vi.fn();
+    const menu = await mountMenu({
+      compact: true,
+      panelActions: [
+        {
+          id: "background-tasks",
+          label: "Show background tasks",
+          icon: icons.listChecks,
+          badge: 2,
+          onActivate: showTasks,
+        },
+      ],
+    });
+
+    expect(menu.querySelector(".session-menu__section-label")?.textContent?.trim()).toBe("Panels");
+    const action = item(menu, "Show background tasks");
+    expect(action.getAttribute("slot")).toBeNull();
+    expect(action.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
+
+    select(menu, "quick:panels:background-tasks");
+    expect(showTasks).toHaveBeenCalledOnce();
+  });
+
   it("pins and disables onboarding view preferences", async () => {
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const menu = await mountMenu({ onboarding: true, onSettingsChange });
@@ -202,6 +297,35 @@ describe("chat header session menu", () => {
     dropdown?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true }),
     );
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("names the stable fork boundary for an active session", async () => {
+    const menu = await mountMenu({ forkFromLastCompleted: true });
+
+    expect(item(menu, "Fork from last completed message")).toBeDefined();
+  });
+
+  it("emits terminal continuation only while the current Gateway is connected", async () => {
+    const onAction = vi.fn<(action: HeaderMenuAction) => void>();
+    const connected = await mountMenu({ onAction });
+
+    expect(item(connected, "Continue in terminal…").disabled).toBe(false);
+    const dropdown = connected.querySelector("wa-dropdown") as HTMLElement & { open: boolean };
+    dropdown.open = true;
+    select(connected, "continue-in-terminal");
+    expect(dropdown.open).toBe(false);
+    expect(onAction).toHaveBeenCalledWith({ kind: "continue-in-terminal" });
+
+    const disconnected = await mountMenu({
+      actionDisabledReasons: { "continue-in-terminal": "Gateway disconnected." },
+      onAction,
+    });
+    const disabledAction = item(disconnected, "Continue in terminal…");
+    expect(disabledAction.disabled).toBe(true);
+    expect(disabledAction.getAttribute("title")).toBe("Gateway disconnected.");
+    onAction.mockClear();
+    select(disconnected, "continue-in-terminal");
     expect(onAction).not.toHaveBeenCalled();
   });
 });

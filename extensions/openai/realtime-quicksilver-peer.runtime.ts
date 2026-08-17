@@ -1,5 +1,6 @@
 // Lazy GPT-Live media runtime: werift peer plus WASM Opus framing and PCM conversion.
 import { randomInt } from "node:crypto";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
 import {
   OpenAIQuicksilverPendingAudio,
@@ -48,10 +49,6 @@ export type OpenAIQuicksilverAudioPeerContract = {
   sendAudio(audio: Buffer): void;
   close(): void;
 };
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
 
 function pcmBufferToInt16(pcm: Buffer): Int16Array {
   const samples = new Int16Array(Math.floor(pcm.length / 2));
@@ -305,7 +302,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.flushInboundReorderWindow(state);
       this.scheduleInboundFlush(state);
     } catch (error) {
-      this.state.callbacks.onError(toError(error));
+      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
     }
   }
 
@@ -376,7 +373,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       try {
         this.flushInboundReorderWindow(state, true);
       } catch (error) {
-        this.state.callbacks.onError(toError(error));
+        this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
       }
     }, INBOUND_REORDER_DEPTH * OPUS_FRAME_DURATION_MS);
     state.flushTimer.unref?.();
@@ -438,10 +435,10 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       // werift queues encrypted UDP synchronously before sendRtp yields
       // (rtpSender.js:538; transport/dtls.js:455), preserving per-tick order.
       void this.state.transceiver.sender.sendRtp(rtp).catch((error: unknown) => {
-        this.state.callbacks.onError(toError(error));
+        this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
       });
     } catch (error) {
-      this.state.callbacks.onError(toError(error));
+      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
     }
   }
 

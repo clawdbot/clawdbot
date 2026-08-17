@@ -461,7 +461,7 @@ After every successful `config set` / `config patch` / `config unset`, the CLI p
 | `Change will apply without restarting the gateway.` | Hot reload picks it up automatically.  |
 | `No gateway restart needed.`                        | Nothing runtime-relevant changed.      |
 
-Writes to `plugins.entries` (or any subpath) always require a restart, since the CLI cannot prove every plugin's reload metadata is loaded.
+Effective changes to `plugins.entries` (or any subpath) require a restart, since the CLI cannot prove every plugin's reload metadata is loaded. Idempotent writes with no effective diff report `No gateway restart needed.`
 
 ## Write safety
 

@@ -1,6 +1,38 @@
 // NPM CLI fixture writers used by installer shell-script tests.
 import { chmodSync, writeFileSync } from "node:fs";
 
+export function writeNpmInstallRetryFixture(path: string) {
+  writeFileSync(
+    path,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'if [[ "${1:-}" == "config" ]]; then printf "null\\n"; exit 0; fi',
+      'if [[ "${1:-}" == "view" ]]; then printf "2026.8.1\\n"; exit 0; fi',
+      'if [[ "${1:-}" == "root" ]]; then printf "%s\\n" "${NPM_FAKE_ROOT:-}"; exit 0; fi',
+      "is_install=0",
+      'for arg in "$@"; do [[ "$arg" == "install" ]] && is_install=1; done',
+      'if [[ "$is_install" -eq 0 ]]; then exit 0; fi',
+      'spec="${!#}"',
+      'printf "%s\\n" "$spec" >> "$NPM_FAKE_CALLS"',
+      'attempt="$(wc -l < "$NPM_FAKE_CALLS")"',
+      'if [[ "$NPM_FAKE_OUTCOME" == "success" || "$NPM_FAKE_OUTCOME" == "transient" && "$attempt" -eq 2 ]]; then',
+      '  if [[ -n "${NPM_FAKE_PACKAGE_DIR:-}" ]]; then',
+      '    mkdir -p "$NPM_FAKE_PACKAGE_DIR/dist"',
+      '    printf "#!/bin/sh\\nprintf \'2026.8.1\\\\n\'\\n" > "$NPM_FAKE_PACKAGE_DIR/openclaw.mjs"',
+      '    printf "#!/usr/bin/env node\\n" > "$NPM_FAKE_PACKAGE_DIR/dist/entry.js"',
+      '    chmod +x "$NPM_FAKE_PACKAGE_DIR/openclaw.mjs" "$NPM_FAKE_PACKAGE_DIR/dist/entry.js"',
+      "  fi",
+      "  exit 0",
+      "fi",
+      'printf "%s (attempt %s)\\n" "$NPM_FAKE_ERROR" "$attempt" >&2',
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(path, 0o755);
+}
+
 export function writeNpmFreshnessConflictFixture(path: string, argsLog: string) {
   writeFileSync(
     path,

@@ -322,6 +322,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     const session = {
       key: "agent:main:discord:channel:target-room",
       kind: "group",
+      classification: "channel",
       channel: "discord",
       deliveryContext: {
         channel: "discord",

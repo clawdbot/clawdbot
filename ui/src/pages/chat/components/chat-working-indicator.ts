@@ -163,9 +163,7 @@ export function renderChatWorkingIndicator(
                 ${renderLiveOutputTokens(options.outputTokens)}
               `
             : html`
-                <span class=${continuation ? "" : "agent-chat__sr-only"}
-                  >${t("common.working")}</span
-                >
+                <span class=${continuation ? "" : "sr-only"}>${t("common.working")}</span>
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}

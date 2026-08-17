@@ -20,6 +20,7 @@ import {
   embeddedAgentLog,
   getChannelAgentToolMeta,
   getPluginToolMeta,
+  getPluginToolSideEffectOwnerKey,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -43,9 +44,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import {
+  asNonArrayRecord,
   asOptionalRecord,
   isRecord,
   normalizeOptionalString,
@@ -103,13 +109,64 @@ type ProjectedCodexDynamicTool = {
   tool: AnyAgentTool;
   name: string;
   description: string;
-  inputSchema: JsonValue;
+  inputSchema: JsonSchemaObject & JsonValue;
 };
 
 type CodexDynamicToolSchemaQuarantine = {
   tool: string;
   violations: readonly string[];
 };
+
+const INTERNAL_TOOL_EXECUTION_VALIDATION = Symbol.for("openclaw.internalToolExecutionValidation");
+const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
+const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
+const CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX = " [detail truncated]";
+
+function shouldValidateCodexDynamicToolInput(tool: AnyAgentTool): boolean {
+  return getPluginToolMeta(tool)?.mcp?.operation !== "tool";
+}
+
+function assertCodexDynamicToolInputMatchesSchema(params: {
+  toolName: string;
+  schema: JsonSchemaObject;
+  value: unknown;
+}): void {
+  const validation = validateJsonSchemaValue({
+    schema: params.schema,
+    cacheKey: `codex-dynamic-tool-input:${params.toolName}:${JSON.stringify(params.schema)}`,
+    value: params.value,
+  });
+  if (validation.ok) {
+    return;
+  }
+  const visibleErrors = validation.errors.slice(0, MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS);
+  const details = visibleErrors
+    .map((error) => {
+      if (error.text.length <= MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS) {
+        return error.text;
+      }
+      return `${error.text.slice(
+        0,
+        MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS -
+          CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX.length,
+      )}${CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX}`;
+    })
+    .join("; ");
+  const omitted = validation.errors.length - visibleErrors.length;
+  const omittedSuffix = omitted > 0 ? `; ${omitted} more violation(s) omitted` : "";
+  throw new Error(`Invalid arguments for tool "${params.toolName}": ${details}${omittedSuffix}.`);
+}
+
+function createCodexDynamicToolValidationControl(params: {
+  toolCallId: string;
+  validate: (value: unknown) => void;
+}): Record<PropertyKey, unknown> {
+  return {
+    [INTERNAL_TOOL_EXECUTION_VALIDATION]: true,
+    toolCallId: params.toolCallId,
+    validate: params.validate,
+  };
+}
 
 function applyCurrentMessageProvider(
   toolName: string,
@@ -353,6 +410,7 @@ export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
+  sideEffectOwnerKeyForTool: (toolName: string) => string | undefined;
   handleToolCall: (
     params: CodexDynamicToolCallParams,
     options?: {
@@ -542,6 +600,10 @@ export function createCodexDynamicToolBridge(params: {
       directToolNames,
     }),
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
+    sideEffectOwnerKeyForTool: (toolName) => {
+      const tool = toolMap.get(toolName)?.tool;
+      return tool ? getPluginToolSideEffectOwnerKey(tool) : undefined;
+    },
     telemetry,
     setRemoteWorkspaceFileReader: (reader) => {
       readRemoteWorkspaceFile = reader;
@@ -557,7 +619,7 @@ export function createCodexDynamicToolBridge(params: {
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
-        const executedArguments = jsonObjectToRecord(call.arguments);
+        const executedArguments = asNonArrayRecord(call.arguments);
         const message = registeredToolNames.has(call.tool)
           ? `OpenClaw tool is not available for this turn: ${call.tool}`
           : `Unknown OpenClaw tool: ${call.tool}`;
@@ -582,7 +644,8 @@ export function createCodexDynamicToolBridge(params: {
         });
       }
       const { tool, name: toolName } = toolEntry;
-      const args = jsonObjectToRecord(call.arguments);
+      const rawArguments = call.arguments;
+      const args = asNonArrayRecord(rawArguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
       let didStartExecution = false;
@@ -616,7 +679,9 @@ export function createCodexDynamicToolBridge(params: {
         }
       };
       try {
-        const toolArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        // Compatibility preparation owns raw arguments; record coercion must not run first.
+        const prepare = tool.prepareArguments;
+        const toolArgs = prepare ? Reflect.apply(prepare, tool, [rawArguments]) : args;
         const preparedArgs =
           toolName === "message" && isRecord(toolArgs)
             ? await prepareCodexRemoteWorkspaceMessageMedia({
@@ -641,7 +706,21 @@ export function createCodexDynamicToolBridge(params: {
             : undefined,
         };
         didDispatchExecution = true;
-        const rawResult = await tool.execute(call.callId, preparedArgs, signal);
+        const executionArgs: unknown[] = [call.callId, preparedArgs, signal];
+        if (shouldValidateCodexDynamicToolInput(tool)) {
+          executionArgs.push(
+            createCodexDynamicToolValidationControl({
+              toolCallId: call.callId,
+              validate: (value) =>
+                assertCodexDynamicToolInputMatchesSchema({
+                  toolName,
+                  schema: toolEntry.inputSchema,
+                  value,
+                }),
+            }),
+          );
+        }
+        const rawResult = await Reflect.apply(tool.execute, tool, executionArgs);
         captureExecutionBoundary();
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isToolResultError(rawResult);
@@ -1112,11 +1191,18 @@ function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
       quarantinedTools.push({ tool: descriptor.name, violations: projection.violations });
       continue;
     }
+    if (!isRecord(projection.schema)) {
+      quarantinedTools.push({
+        tool: descriptor.name,
+        violations: [`${descriptor.name}.inputSchema must be a JSON object schema`],
+      });
+      continue;
+    }
     projectedTools.push({
       tool,
       name: descriptor.name,
       description: descriptor.description,
-      inputSchema: projection.schema as JsonValue,
+      inputSchema: projection.schema,
     });
   }
   return { tools: projectedTools, quarantinedTools };
@@ -1529,12 +1615,6 @@ function convertToolContent(
       imageUrl,
     },
   ];
-}
-function jsonObjectToRecord(value: JsonValue | undefined): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as Record<string, unknown>;
 }
 function readFirstString(record: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {

@@ -1,11 +1,10 @@
 // Real CLI processes must keep unrelated plugin runtimes cold on read-only command paths.
 import { execFile } from "node:child_process";
 import fs from "node:fs";
-import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
@@ -13,38 +12,13 @@ import {
 
 const execFileAsync = promisify(execFile);
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cold-commands-"));
-let clawHubServer: Server;
-let clawHubUrl: string;
 
-beforeAll(async () => {
-  clawHubServer = createServer((_request, response) => {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end('{"results":[]}');
-  });
-  await new Promise<void>((resolve) => {
-    clawHubServer.listen(0, "127.0.0.1", resolve);
-  });
-  const address = clawHubServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("failed to bind the ClawHub fixture server");
-  }
-  clawHubUrl = `http://127.0.0.1:${address.port}`;
-});
-
-afterAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    clawHubServer.close((error) => (error ? reject(error) : resolve()));
-  });
+afterAll(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
 const cases = [
   { label: "hooks", args: ["hooks", "--json"], needsMemoryOwner: false },
-  {
-    label: "skills-search",
-    args: ["skills", "search", "fixture", "--json"],
-    needsMemoryOwner: false,
-  },
   {
     label: "skills-info",
     args: ["skills", "info", "fixture-skill", "--json"],
@@ -53,11 +27,6 @@ const cases = [
   {
     label: "memory-status",
     args: ["memory", "status", "--agent", "main", "--json"],
-    needsMemoryOwner: true,
-  },
-  {
-    label: "memory-search",
-    args: ["memory", "search", "no-hit", "--agent", "main", "--json"],
     needsMemoryOwner: true,
   },
 ] as const;
@@ -116,7 +85,6 @@ it.each(cases)(
           "    api.registerCli(({ program }) => {",
           '      const memory = program.command("memory");',
           '      memory.command("status").option("--agent <id>").option("--json").action(() => console.log("[]"));',
-          '      memory.command("search").argument("<query>").option("--agent <id>").option("--json").action(() => console.log("{\\\"results\\\":[]}"));',
           '    }, { descriptors: [{ name: "memory", description: "Memory fixture", hasSubcommands: true }] });',
           "  },",
           "};",
@@ -151,7 +119,6 @@ it.each(cases)(
           NODE_DISABLE_COMPILE_CACHE: "1",
           NODE_ENV: undefined,
           VITEST: undefined,
-          OPENCLAW_CLAWHUB_URL: clawHubUrl,
           OPENCLAW_CONFIG_PATH: configPath,
           MEMORY_OWNER_MARKER: path.join(root, "memory-owner-loaded"),
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",

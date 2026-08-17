@@ -6,6 +6,7 @@ import {
 import {
   createNativeApprovalChannelRouteGates,
   doesApprovalRequestSelectChannelAccount,
+  resolveApprovalKind,
   resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
@@ -60,15 +61,6 @@ type SlackForwardTarget = Parameters<
 const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
 const SLACK_DM_CHANNEL_ID_RE = /^D[A-Z0-9]{8,}$/i;
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{8,}$/i;
-
-function resolveSlackApprovalKind(request: SlackNativeApprovalRequest): SlackApprovalKind {
-  const isExec = "command" in request.request;
-  const isPlugin = "title" in request.request && "description" in request.request;
-  if (isExec === isPlugin) {
-    throw new Error("Slack approval request payload does not identify exactly one owner");
-  }
-  return isExec ? "exec" : "plugin";
-}
 
 function isSlackApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
@@ -446,12 +438,16 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
   ) {
     return false;
   }
-  const approvalKind = params.approvalKind ?? resolveSlackApprovalKind(params.request);
+  const approvalKind = resolveApprovalKind(params.request, params.approvalKind);
   if (approvalKind === "plugin") {
     return (
       shouldHandleSlackPluginViaNativeClientConfig(params) ||
       shouldHandleSlackPluginViaForwarding(params)
     );
+  }
+  const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
+  if (turnSourceChannel && turnSourceChannel !== "slack") {
+    return false;
   }
   if (
     !doesApprovalRequestSelectChannelAccount({

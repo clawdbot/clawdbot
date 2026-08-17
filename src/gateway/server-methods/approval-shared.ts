@@ -1,5 +1,6 @@
 // Approval shared helpers normalize pending exec/plugin approval lookups,
 // decision payloads, turn-source routing, and gateway error responses.
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type {
@@ -7,8 +8,10 @@ import type {
   ValidationError,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
-import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
+import type {
+  ExecApprovalDecision,
+  ExecApprovalRequestPayload,
+} from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
@@ -47,7 +50,11 @@ type ApprovalTurnSourceFields = {
   turnSourceAccountId?: string | null;
 };
 
-type RequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields> = {
+type RequestedApprovalEvent<
+  TPayload extends ApprovalTurnSourceFields,
+  TKind extends "exec" | "plugin" = "exec" | "plugin",
+> = {
+  approvalKind?: TKind;
   id: string;
   request: TPayload;
   createdAtMs: number;
@@ -75,10 +82,6 @@ type ApprovalResolveParamsValidator<TParams extends ApprovalResolveParams> = ((
 ) => params is TParams) & {
   errors?: ValidationError[] | null;
 };
-
-function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
-  return typeof value === "object" && value !== null && "then" in value;
-}
 
 function isApprovalDecision(value: string): value is ExecApprovalDecision {
   return value === "allow-once" || value === "allow-always" || value === "deny";
@@ -138,10 +141,15 @@ export function registerPendingApprovalRecord<TPayload>(params: {
 }
 
 /** Builds the gateway event payload broadcast when an approval starts waiting. */
-export function buildRequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields>(
+export function buildRequestedApprovalEvent<
+  TPayload extends ApprovalTurnSourceFields,
+  TKind extends "exec" | "plugin",
+>(
   record: ExecApprovalRecord<TPayload>,
-): RequestedApprovalEvent<TPayload> {
+  approvalKind?: TKind,
+): RequestedApprovalEvent<TPayload, TKind> {
   return {
+    ...(approvalKind ? { approvalKind } : {}),
     id: record.id,
     request: record.request,
     createdAtMs: record.createdAtMs,

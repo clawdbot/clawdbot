@@ -13,13 +13,13 @@ import { killControlledSubagentRun } from "../../agents/subagents/registry/subag
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
-} from "../../agents/subagents/registry/subagent-registry.js";
+} from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
-import { resolveStorePath } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   markSessionAbortTarget,
@@ -159,7 +159,7 @@ function resolveStoredSessionId(params: {
     sessionKey: params.sessionKey,
     config: params.cfg,
   });
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
   try {
     return loadSessionEntry({
       agentId,
@@ -337,7 +337,7 @@ export async function tryFastAbortFromMessage(params: {
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
 
   if (targetKey) {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const abortCutoffForTarget = (target: SessionAbortTargetContext): AbortCutoff | undefined =>
       shouldPersistAbortCutoff({
         commandSessionKey,

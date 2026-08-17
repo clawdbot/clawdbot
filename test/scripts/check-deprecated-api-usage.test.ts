@@ -65,7 +65,7 @@ describe("scripts/check-deprecated-api-usage", () => {
     }
   });
 
-  it("bans internal imports of every deprecated reply facade", () => {
+  it("bans internal imports of every deprecated facade", () => {
     const modulePaths = new Set(
       BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES.map((ban) => ban.modulePath),
     );

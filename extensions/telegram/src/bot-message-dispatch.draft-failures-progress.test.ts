@@ -1,18 +1,24 @@
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyWithBufferedBlockDispatcherRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it, vi } from "vitest";
 import {
+  expectWindowRetiredAfterFinal,
+  expectWindowRetiredWithoutSummary,
+} from "./bot-message-dispatch.progress-window.test-helpers.js";
+import {
   describeTelegramDispatch,
   createContext,
   createDirectSessionPayload,
   createReasoningStreamContext,
+  createStatusReactionController,
   createTelegramDraftStream,
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
+  emitTelegramMessageSentHooks,
   expectDeliveredReply,
   expectDeliverRepliesParams,
-  expectWindowCollapsedTo,
+  expectRecordFields,
   mockCallArg,
   requireInvocationOrder,
   setupDraftStreams,
@@ -120,6 +126,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
   ])(
     "finalizes the default streamed draft in place after an unexpected reply failure in a $label",
     async ({ createMessageContext }) => {
+      const statusReactionController = createStatusReactionController();
       const answerDraftStream = createTestDraftStream({
         onWaitForInFlight: () => answerDraftStream.setMessageId(2001),
       });
@@ -133,14 +140,17 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
         return await dispatchReplyWithBufferedBlockDispatcherRuntime({
           ...params,
           replyResolver: async (_ctx, opts) => {
+            opts?.onAgentRunStart?.("failed-run");
             partialAccepted = await opts?.onPartialReply?.({ text: "partial answer" });
             throw new Error("unexpected model failure");
           },
         });
       });
+      const messageContext = createMessageContext();
+      messageContext.statusReactionController = statusReactionController as never;
 
       await dispatchWithContext({
-        context: createMessageContext(),
+        context: messageContext,
         streamMode: "partial",
         telegramCfg: { streaming: { mode: "partial" } },
       });
@@ -153,9 +163,43 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
         expect.stringMatching(
           /^partial answer\n\n.*Something went wrong while processing your request\. Please try again, or use \/new to start a fresh session\.$/,
         ),
+        expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
       );
       expect(answerDraftStream.clear).not.toHaveBeenCalled();
       expect(deliverReplies).not.toHaveBeenCalled();
+      expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);
+      expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), { success: true });
+      await vi.waitFor(() => {
+        expect(statusReactionController.restoreInitial).toHaveBeenCalledTimes(1);
+      });
+      expect(statusReactionController.setError).toHaveBeenCalledTimes(1);
+      expect(statusReactionController.setDone).not.toHaveBeenCalled();
+      expect(
+        requireInvocationOrder(
+          statusReactionController.setThinking,
+          0,
+          "initial thinking status reaction",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(
+          statusReactionController.setError,
+          0,
+          "terminal error status reaction",
+        ),
+      );
+      expect(
+        requireInvocationOrder(
+          statusReactionController.setError,
+          0,
+          "terminal error status reaction",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(
+          statusReactionController.restoreInitial,
+          0,
+          "initial status reaction restoration",
+        ),
+      );
     },
   );
 
@@ -267,7 +311,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update.mock.calls).toEqual([["Site A shows X."], ["Final answer"]]);
+    expect(answerDraftStream.update.mock.calls).toEqual([
+      ["Site A shows X."],
+      ["Final answer", expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) })],
+    ]);
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
@@ -320,7 +367,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     // The tool-progress window repositions (deferred delete) rather than an
     // immediate clear when the following text block takes over the lane.
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
@@ -356,7 +407,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
 
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Partial before compaction");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Final after compaction");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      2,
+      "Final after compaction",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -375,7 +430,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Branch is up to date");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      "Branch is up to date",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     // Reposition, not delete-then-repost: the tool-progress window is rewound
     // for a new message and its delete deferred until after the replacement
     // lands. clear() (immediate delete) must NOT run — that scroll-jumps.
@@ -422,7 +481,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Branch is up to date");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      "Branch is up to date",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     // Across an assistant boundary the tool-progress window still repositions
     // (new message first, deferred delete) rather than deleting immediately.
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
@@ -463,7 +526,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "🛠️ Exec: pnpm test");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Tests passed");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      2,
+      "Tests passed",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     // Verbose tool result window repositions before the final: new message
     // first, superseded delete deferred (no immediate clear/delete).
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
@@ -515,30 +582,23 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
     });
 
+    // #121600: default command progress is status-only — raw command text stays
+    // out of chat previews (`/verbose full` / commandText: "raw" retain it).
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview(
-        "Cracking\n\n🛠️ Exec\n🛠️ git rev-parse --abbrev-ref HEAD",
-        "<b>Cracking</b>\n<b>🛠️ Exec</b>\n<b>🛠️ Exec</b> <code>git rev-parse --abbrev-ref HEAD</code>",
-      ),
+      telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    // The window collapses IN PLACE into the one-line activity summary (edit,
-    // not delete + repost — Discord parity), so clear() is never called on it.
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    // A tool-only window retires by repositioning in place (not delete + repost
+    // — Discord parity), so clear() is never called on it.
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
     expectDeliverRepliesParams({ replyToMode: "off" });
-    // The final answer is SENT before the window collapses into the bar: sending
-    // first keeps the final at the bottom of the anchored viewport, so shrinking
-    // the tall window above it never drops the final off screen.
-    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
-      requireInvocationOrder(
-        answerDraftStream.finalizeToPreview,
-        0,
-        "first answer draft finalization",
-      ),
-    );
+    // The final answer is SENT before the window retires: sending first keeps
+    // the final at the bottom of the anchored viewport, so retiring the tall
+    // window above it never drops the final off screen.
+    expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
@@ -586,14 +646,8 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       expect.objectContaining({ text: expect.stringContaining("Exec") }),
     );
     expectDeliveredReply(0, { text: "Terminal block after tool" });
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
-    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
-      requireInvocationOrder(
-        answerDraftStream.finalizeToPreview,
-        0,
-        "first answer draft finalization",
-      ),
-    );
+    expectWindowRetiredWithoutSummary(answerDraftStream);
+    expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
 
   function allDeliveredReplyTexts(): string[] {
@@ -604,7 +658,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     );
   }
 
-  it("sends the final answer before collapsing the window into the bar", async () => {
+  it("sends the final answer before retiring the progress window", async () => {
     // Edit-shrink anchor loss: shrinking the tall window to a one-line bar BEFORE
     // the final is sent breaks the client's at-bottom follow and drops the final
     // off screen. The final must be sent FIRST, then the window edited down.
@@ -623,21 +677,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    // Final delivered, then the window edited into the bar — final send precedes
-    // the collapse edit.
+    // Final delivered first, then the window retires behind it.
     expectDeliveredReply(0, { text: "All done" });
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
-    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
-      requireInvocationOrder(
-        answerDraftStream.finalizeToPreview,
-        0,
-        "first answer draft finalization",
-      ),
-    );
-    // The bar counters are snapshotted before the final send, so the count is
-    // stable (one tool call — the final's own delivery does not perturb it).
-    expect(answerDraftStream.finalizeToPreview).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expectWindowRetiredWithoutSummary(answerDraftStream);
+    expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
 
   it("still collapses the window when the final answer send is skipped", async () => {
@@ -660,7 +703,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     });
 
     // The bar still edits the window in place even though the final send failed.
-    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
   });
 
   it("tallies reasoning bursts and tool calls into the collapse summary", async () => {
@@ -687,7 +730,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    expectWindowCollapsedTo(answerDraftStream, "🧠 3 thoughts · 🛠️ 2 tool calls · ⏱️ 1s");
+    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Done" });
   });
 

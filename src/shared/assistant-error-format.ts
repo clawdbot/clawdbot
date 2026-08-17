@@ -1,5 +1,6 @@
 // Assistant error formatting helpers normalize assistant-visible error payloads.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const HTTP_STATUS_DELIMITER_RE = /(?:\s*:\s*|\s+)/;
@@ -16,6 +17,9 @@ const HTTP_STATUS_CODE_PREFIX_RE = new RegExp(
 // like model ids or image dimensions never become fake HTTP statuses.
 const PROVIDER_WRAPPED_HTTP_STATUS_RE =
   /^(?:[a-z][\w-]*(?:\s+[a-z][\w-]*){0,3}\s+)?api\s*error\s*\((\d{3})\)(?:\s*:\s*([\s\S]*))?$/i;
+const LABELED_HTTP_STATUS_RE =
+  /^(?:status code|unexpected status|http status)\s*[:=]?\s*(\d{3})\b(?:\s*[:,]?\s*(?:message\s*:\s*)?([\s\S]*))?$/i;
+const ERROR_STATUS_ENVELOPE_RE = /^error\s*[:,]\s*/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
@@ -122,6 +126,27 @@ export function extractProviderWrappedHttpStatus(
   return extractHttpStatusMatch(raw.match(PROVIDER_WRAPPED_HTTP_STATUS_RE));
 }
 
+/** Extract an explicitly labeled provider HTTP status without matching embedded numeric text. */
+export function extractErrorHttpStatus(raw: string): { code: number; rest: string } | null {
+  const trimmed = raw.trim();
+  const direct =
+    extractLeadingHttpStatus(trimmed) ??
+    extractProviderWrappedHttpStatus(trimmed) ??
+    extractHttpStatusMatch(trimmed.match(LABELED_HTTP_STATUS_RE));
+  if (direct) {
+    return direct;
+  }
+  const unwrapped = trimmed.replace(ERROR_STATUS_ENVELOPE_RE, "");
+  if (unwrapped === trimmed) {
+    return null;
+  }
+  return (
+    extractLeadingHttpStatus(unwrapped) ??
+    extractProviderWrappedHttpStatus(unwrapped) ??
+    extractHttpStatusMatch(unwrapped.match(LABELED_HTTP_STATUS_RE))
+  );
+}
+
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -136,7 +161,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
     return true;
   }
 
-  const status = extractLeadingHttpStatus(trimmed);
+  const status = extractHttpResponseBody(extractLeadingHttpStatus(trimmed));
   if (!status || status.code < 500) {
     return false;
   }
@@ -146,7 +171,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   }
 
   return (
-    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.rest) && HTML_CLOSE_RE.test(status.rest)
+    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.body) && HTML_CLOSE_RE.test(status.body)
   );
 }
 

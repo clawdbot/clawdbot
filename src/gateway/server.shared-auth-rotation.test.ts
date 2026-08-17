@@ -13,7 +13,7 @@ import {
 } from "./shared-auth.test-helpers.js";
 import {
   connectOk,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   startTestGatewayServer,
@@ -53,8 +53,10 @@ async function openDeviceTokenWsWithDetails(
   const identityPath = path.join(os.tmpdir(), `openclaw-shared-auth-${process.pid}-${port}.sqlite`);
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
-  const { approveDevicePairing, ensureDeviceToken, requestDevicePairing, rotateDeviceToken } =
-    await import("../infra/device-pairing.js");
+  const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+  const { ensureDeviceToken, rotateDeviceToken } =
+    await import("../infra/device-pairing-tokens.js");
+  const { requestDevicePairing } = await import("../infra/device-pairing.js");
   const client = params.browserClient
     ? {
         id: "openclaw-control-ui",
@@ -209,7 +211,8 @@ async function expectIssuerTaggedDeviceToken(params: {
   token: string;
   issuerGeneration: string;
 }) {
-  const { getPairedDevice, verifyDeviceToken } = await import("../infra/device-pairing.js");
+  const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
+  const { getPairedDevice } = await import("../infra/device-pairing.js");
   const paired = await getPairedDevice(params.deviceId);
   expect(paired?.tokens?.operator?.issuer).toEqual({
     kind: "shared-gateway-auth",
@@ -257,7 +260,7 @@ describe("gateway shared auth rotation", () => {
   };
 
   beforeAll(async () => {
-    port = await getFreePort();
+    port = await getGatewayTestPort();
     testState.gatewayAuth = { mode: "token", token: OLD_TOKEN };
     server = await startTestGatewayServer(port, { controlUiEnabled: true });
 
@@ -338,7 +341,7 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
     }
-    secretRefPort = await getFreePort();
+    secretRefPort = await getGatewayTestPort();
     testState.gatewayAuth = undefined;
     setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
     await fs.mkdir(path.dirname(configPath), { recursive: true });

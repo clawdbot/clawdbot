@@ -1,142 +1,64 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { registerAgentHarness } from "../../agents/harness/registry.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { WorkerPlacementDispatchRequest } from "../worker-environments/service-contract.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import {
+  dispatchTestSessionId as sessionId,
+  dispatchTestSessionKey as sessionKey,
+  getDispatchTestMocks,
+  invokeSessionDispatch as invoke,
+  invokeSessionMove,
+  makeDispatchTestContext as makeContext,
+  makeFailedPlacement as failedPlacementRecord,
+  makeReclaimedPlacement as reclaimedPlacementRecord,
+  makeSessionTarget as targetWithEntry,
+} from "./sessions-dispatch.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  findLiveByOwner: vi.fn(),
-  resolveTarget: vi.fn(),
-}));
+const mocks = getDispatchTestMocks();
+const originalPluginRegistry = getActivePluginRegistry();
 
-vi.mock("../../agents/worktrees/service.js", () => ({
-  managedWorktrees: {
-    findLiveByOwner: mocks.findLiveByOwner,
-  },
-}));
-
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
   return {
-    ...actual,
-    resolveGatewaySessionStoreTargetWithStore: mocks.resolveTarget,
-  };
-});
-
-import { sessionDispatchHandlers } from "./sessions-dispatch.js";
-
-const sessionKey = "agent:main:cloud-test";
-const sessionId = "session-cloud-test";
-
-function reclaimedPlacementRecord(): WorkerSessionPlacementRecord {
-  return {
-    sessionId,
-    agentId: "main",
-    sessionKey,
-    state: "reclaimed",
-    environmentId: "environment-previous",
-    generation: 4,
-    activeOwnerEpoch: 1,
-    workspaceBaseManifestRef: "manifest-previous",
-    remoteWorkspaceDir: "/worker/session-cloud-test",
-    workerBundleHash: "c".repeat(64),
-    lastTranscriptAckCursor: 3,
-    lastLiveEventAckCursor: 2,
+    ...reclaimedPlacementRecord(),
+    state: "active",
     recoveryError: null,
     terminalReason: null,
     terminalAtMs: null,
-    turnClaim: null,
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    stateChangedAtMs: 2,
   };
-}
-
-function failedPlacementRecord(): WorkerSessionPlacementRecord {
-  return {
-    ...reclaimedPlacementRecord(),
-    state: "failed",
-    recoveryError: "gateway restarted during worker dispatch",
-    turnClaim: null,
-  };
-}
-
-function targetWithEntry(entry?: {
-  sessionId: string;
-  worktree?: { id: string; branch: string; repoRoot: string };
-  agentHarnessId?: string;
-  agentRuntimeOverride?: string;
-  archivedAt?: number;
-  modelSelectionLocked?: boolean;
-  providerOverride?: string;
-  modelOverride?: string;
-}) {
-  // Pin an anthropic model by default: the effective-runtime fallback consults
-  // the process-global harness registry, so the default openai model resolves
-  // to "codex" whenever a sibling test in the shard registered that harness.
-  const pinnedEntry = entry
-    ? { providerOverride: "anthropic", modelOverride: "claude-test", ...entry }
-    : undefined;
-  return {
-    agentId: "main",
-    storePath: "/tmp/openclaw-agent.sqlite",
-    canonicalKey: sessionKey,
-    storeKeys: [sessionKey],
-    store: pinnedEntry ? { [sessionKey]: pinnedEntry } : {},
-  };
-}
-
-function makeContext(overrides: Partial<GatewayRequestContext> = {}): GatewayRequestContext {
-  return {
-    getRuntimeConfig: () => ({
-      cloudWorkers: {
-        profiles: {
-          test: { provider: "fake", region: "test", size: "small" },
-        },
-      },
-    }),
-    ...overrides,
-  } as unknown as GatewayRequestContext;
-}
-
-async function invoke(context: GatewayRequestContext) {
-  const respond = vi.fn() as unknown as RespondFn;
-  await expectDefined(
-    sessionDispatchHandlers["sessions.dispatch"],
-    'sessionDispatchHandlers["sessions.dispatch"] test invariant',
-  )({
-    req: { id: "dispatch-request" } as never,
-    params: { key: sessionKey, profileId: "test" },
-    respond,
-    context,
-    client: null,
-    isWebchatConnect: () => false,
-  });
-  return respond;
-}
-
-async function invokeReclaim(context: GatewayRequestContext) {
-  const respond = vi.fn() as unknown as RespondFn;
-  await expectDefined(
-    sessionDispatchHandlers["sessions.reclaim"],
-    'sessionDispatchHandlers["sessions.reclaim"] test invariant',
-  )({
-    req: { id: "reclaim-request" } as never,
-    params: { key: sessionKey },
-    respond,
-    context,
-    client: null,
-    isWebchatConnect: () => false,
-  });
-  return respond;
 }
 
 describe("sessions.dispatch", () => {
   beforeEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry(), "sessions-dispatch-test", "default");
+    const codexHarness: AgentHarness & { cloudPlacement: { mode: "remote-exec" } } = {
+      id: "codex",
+      label: "Codex",
+      cloudPlacement: { mode: "remote-exec" },
+      supports: () => ({ supported: true, priority: 10 }),
+      async runAttempt() {
+        throw new Error("not used");
+      },
+    };
+    registerAgentHarness(codexHarness);
     vi.clearAllMocks();
     mocks.resolveTarget.mockReturnValue(targetWithEntry());
+  });
+
+  afterEach(() => {
+    if (originalPluginRegistry) {
+      setActivePluginRegistry(originalPluginRegistry, "sessions-dispatch-test-restore", "default");
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("stays unavailable without a configured placement dispatcher", async () => {
@@ -163,6 +85,49 @@ describe("sessions.dispatch", () => {
       false,
       undefined,
       expect.objectContaining({ code: ErrorCodes.INVALID_REQUEST }),
+    );
+  });
+
+  it("rejects an unconfigured cloud worker profile before dispatch", async () => {
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: "missing" },
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "cloud worker profile is not configured: missing",
+      }),
+    );
+  });
+
+  it("treats a whitespace-only profile as an omitted dispatch target", async () => {
+    mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: " " },
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "worker dispatch target is missing",
+      }),
     );
   });
 
@@ -220,7 +185,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("rejects sessions owned by an unsupported runtime", async () => {
+  it("dispatches codex sessions in remote-exec mode", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
@@ -228,7 +193,12 @@ describe("sessions.dispatch", () => {
         worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
       }),
     );
-    const dispatch = vi.fn();
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockRejectedValue(new Error("remote dispatch reached"));
     const respond = await invoke(
       makeContext({
         workerPlacementDispatchService: { dispatch },
@@ -236,14 +206,44 @@ describe("sessions.dispatch", () => {
       }),
     );
 
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ executionMode: "remote-exec" }),
+      expect.any(Function),
+    );
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("OpenClaw runtime"),
+        code: ErrorCodes.UNAVAILABLE,
+        message: "remote dispatch reached",
       }),
+    );
+  });
+
+  it("passes a per-dispatch machine class to placement", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockRejectedValue(new Error("machine dispatch reached"));
+    await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: "test", machineClass: "large" },
+    );
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "test", machineClass: "large" }),
+      expect.any(Function),
     );
   });
 
@@ -274,6 +274,116 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("moves an active session back to the Gateway with exact-source CAS", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const move = vi.fn().mockResolvedValue({ state: "local", generation: 7 });
+    const source = { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 };
+
+    const respond = await invokeSessionMove(
+      makeContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), move } as never,
+        workerSessionPlacementService: {
+          getMany: () => new Map([[sessionId, activePlacementRecord()]]),
+        },
+      }),
+      { expected: source, target: { kind: "gateway" } },
+    );
+
+    expect(move).toHaveBeenCalledWith(
+      {
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        source,
+        target: { kind: "gateway" },
+      },
+      expect.any(Function),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        key: sessionKey,
+        sessionId,
+        placement: { state: "local", generation: 7 },
+      },
+      undefined,
+    );
+  });
+
+  it("resolves a worker move through the canonical destination owner", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const move = vi.fn().mockResolvedValue({ state: "active", generation: 12 });
+
+    await invokeSessionMove(
+      makeContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), move } as never,
+        workerSessionPlacementService: {
+          getMany: () => new Map([[sessionId, activePlacementRecord()]]),
+        },
+      }),
+      {
+        expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
+        target: { kind: "profile", profileId: "test" },
+      },
+    );
+
+    expect(move).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "profile", profileId: "test" },
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it("rejects a move when the session is no longer worker-owned", async () => {
+    mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
+    const move = vi.fn();
+
+    const respond = await invokeSessionMove(
+      makeContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), move } as never,
+        workerSessionPlacementService: {
+          getMany: () => new Map([[sessionId, { state: "local" } as never]]),
+        },
+      }),
+      {
+        expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+    );
+
+    expect(move).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "session cannot move from placement local",
+      }),
+    );
+  });
+
   it("allows an explicitly reclaimed session to dispatch again", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
@@ -290,6 +400,7 @@ describe("sessions.dispatch", () => {
       sessionId,
       agentId: "main",
       sessionKey,
+      executionMode: "worker-turn",
       state: "active",
       environmentId: "environment-2",
       generation: 5,
@@ -546,6 +657,7 @@ describe("sessions.dispatch", () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
+        agentRuntimeOverride: "openclaw",
         worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
       }),
     );
@@ -558,6 +670,7 @@ describe("sessions.dispatch", () => {
       sessionId,
       agentId: "main",
       sessionKey,
+      executionMode: "worker-turn",
       state: "active",
       environmentId: "environment-1",
       generation: 5,
@@ -605,6 +718,7 @@ describe("sessions.dispatch", () => {
         sessionId,
         sessionKey,
         agentId: "main",
+        executionMode: "worker-turn",
         profileId: "test",
       }),
       expect.any(Function),
@@ -623,97 +737,6 @@ describe("sessions.dispatch", () => {
         }),
       }),
       undefined,
-    );
-  });
-});
-
-describe("sessions.reclaim", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
-  });
-
-  it("reconciles and reclaims an active placement", async () => {
-    const reclaim = vi.fn().mockResolvedValue(reclaimedPlacementRecord());
-    const respond = await invokeReclaim(
-      makeContext({
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-        workerSessionPlacementService: {
-          getMany: () =>
-            new Map([
-              [
-                sessionId,
-                {
-                  ...reclaimedPlacementRecord(),
-                  state: "active",
-                  generation: 3,
-                  recoveryError: null,
-                } as WorkerSessionPlacementRecord,
-              ],
-            ]),
-        },
-      }),
-    );
-
-    expect(reclaim).toHaveBeenCalledWith({ sessionId, sessionKey, agentId: "main" });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        placement: expect.objectContaining({ state: "reclaimed" }),
-      }),
-      undefined,
-    );
-  });
-
-  it("returns an already reclaimed placement as idempotent success", async () => {
-    const reclaim = vi.fn();
-    const respond = await invokeReclaim(
-      makeContext({
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-        workerSessionPlacementService: {
-          getMany: () => new Map([[sessionId, reclaimedPlacementRecord()]]),
-        },
-      }),
-    );
-
-    expect(reclaim).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        placement: expect.objectContaining({ state: "reclaimed" }),
-      }),
-      undefined,
-    );
-  });
-
-  it("rejects a missing placement", async () => {
-    const reclaim = vi.fn();
-    const respond = await invokeReclaim(
-      makeContext({
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-        workerSessionPlacementService: {
-          getMany: () => new Map(),
-        },
-      }),
-    );
-
-    expect(reclaim).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: ErrorCodes.INVALID_REQUEST }),
     );
   });
 });

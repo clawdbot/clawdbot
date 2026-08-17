@@ -3,7 +3,8 @@
  *
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
-import type { Usage } from "@openclaw/llm-core";
+import type { AssistantMessage, Usage } from "@openclaw/llm-core";
+import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -20,14 +21,10 @@ type TransportUsage = {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };
 
-export type WritableTransportStream = {
-  push(event: unknown): void;
-  end(): void;
-};
-
-type TransportOutputShape = Partial<Omit<ProviderErrorProjection, "stopReason">> & {
-  stopReason: string;
-};
+export type WritableTransportStream = Pick<
+  ReturnType<typeof createAssistantMessageEventStream>,
+  "push" | "end"
+>;
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 export function sanitizeTransportPayloadText(text: string): string {
@@ -46,15 +43,13 @@ export function sanitizeNonEmptyTransportPayloadText(
 }
 
 export function coerceTransportToolCallArguments(argumentsValue: unknown): Record<string, unknown> {
-  if (argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
-    return argumentsValue as Record<string, unknown>;
+  const argumentsRecord = asOptionalRecord(argumentsValue);
+  if (argumentsRecord) {
+    return argumentsRecord;
   }
   if (typeof argumentsValue === "string") {
     try {
-      const parsed = JSON.parse(argumentsValue);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
+      return asNonArrayRecord(JSON.parse(argumentsValue));
     } catch {
       // Preserve malformed strings in stored history, but send object-shaped payloads to
       // providers that require structured tool-call arguments.
@@ -82,10 +77,7 @@ export function mergeTransportMetadata<T extends Record<string, unknown>>(
   if (!metadata || Object.keys(metadata).length === 0) {
     return payload;
   }
-  const existingMetadata =
-    payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
-      ? (payload.metadata as Record<string, string>)
-      : undefined;
+  const existingMetadata = asOptionalRecord(payload.metadata) as Record<string, string> | undefined;
   return {
     ...payload,
     metadata: {
@@ -110,7 +102,7 @@ export function createWritableTransportEventStream() {
   const eventStream = createAssistantMessageEventStream();
   return {
     eventStream,
-    stream: eventStream as unknown as WritableTransportStream,
+    stream: eventStream,
   };
 }
 
@@ -132,12 +124,12 @@ export function transportAbortError(signal?: AbortSignal): Error {
 }
 
 /** Run a provider-response hook before start/body consumption inside the first-event deadline. */
-export function withProviderResponseHook<T>(params: {
-  stream: AsyncIterable<T>;
+export function withProviderResponseHook<T = never>(params: {
+  stream?: AsyncIterable<T>;
   signal: AbortSignal;
   abort: (reason: Error) => void;
   hook?: () => void | Promise<void>;
-  onReady: () => void;
+  onReady?: () => void;
 }): AsyncIterable<T> {
   return {
     async *[Symbol.asyncIterator]() {
@@ -166,15 +158,17 @@ export function withProviderResponseHook<T>(params: {
       if (params.signal.aborted) {
         throw transportAbortError(params.signal);
       }
-      params.onReady();
-      yield* params.stream;
+      params.onReady?.();
+      if (params.stream) {
+        yield* params.stream;
+      }
     },
   };
 }
 
 export function finalizeTransportStream(params: {
   stream: WritableTransportStream;
-  output: TransportOutputShape;
+  output: AssistantMessage;
   signal?: AbortSignal;
 }): void {
   const { stream, output, signal } = params;
@@ -184,29 +178,31 @@ export function finalizeTransportStream(params: {
   if (output.stopReason === "aborted" || output.stopReason === "error") {
     throw new Error(output.errorMessage ?? "An unknown error occurred");
   }
-  stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
+  stream.push({ type: "done", reason: output.stopReason, message: output });
   stream.end();
 }
 
 /** @deprecated Use projectProviderError. v2026.7.2-beta.5 compatibility; remove after 2026.10. */
 export function assignTransportErrorDetails(
-  output: TransportOutputShape,
+  output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
-): void {
-  Object.assign(output, projectProviderError(error, signal));
+): ProviderErrorProjection {
+  const projection = projectProviderError(error, signal);
+  Object.assign(output, projection);
+  return projection;
 }
 
 export function failTransportStream(params: {
   stream: WritableTransportStream;
-  output: TransportOutputShape;
+  output: AssistantMessage;
   signal?: AbortSignal;
   error: unknown;
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
   cleanup?.();
-  assignTransportErrorDetails(output, error, signal);
-  stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
+  const projection = assignTransportErrorDetails(output, error, signal);
+  stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();
 }

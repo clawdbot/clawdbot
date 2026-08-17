@@ -3,9 +3,9 @@
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
+import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
-import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-subscribe.tools.js";
-import { createMessageTool } from "./message-tool.js";
+import { createMessageTool } from "./message-tool-execution.js";
 
 describe("WebChat message tool internal source reply", () => {
   it("projects a real targetless send and preserves the automatic final reply", async () => {

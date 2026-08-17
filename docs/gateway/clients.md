@@ -196,6 +196,9 @@ Rows returned by `chat.history` can carry an `__openclaw` metadata envelope:
   `kind: "compaction"` and may include `tokensBefore` and `tokensAfter` when a
   matching checkpoint recorded those metrics.
 
+  A session reset boundary uses `kind: "reset"`. It has no checkpoint token
+  metrics.
+
 Page backward with the response's `hasMore` and `nextOffset` values. Numeric
 offsets describe the current transcript projection, so do not persist them as
 long-lived bookmarks across reset or compaction. Persist `__openclaw.id` instead.

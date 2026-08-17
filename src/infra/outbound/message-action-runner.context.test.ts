@@ -20,7 +20,7 @@ import {
   runDrySend,
   workspaceConfig,
   workspaceTestPlugin,
-} from "./message-action-runner.test-helpers.js";
+} from "./message-action-runner.test-support.js";
 
 const handleWorkspaceAction = vi.fn(async (_ctx: ChannelMessageActionContext) =>
   jsonResult({ ok: true }),
@@ -132,7 +132,7 @@ describe("runMessageAction context isolation", () => {
     {
       name: "a channel id passed as channel",
       actionParams: { channel: "C_TARGET" },
-      expectedError: "Unknown channel: c_target",
+      expectedError: 'Unknown channel "c_target"',
     },
     {
       name: "targets passed instead of target",

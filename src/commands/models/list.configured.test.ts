@@ -31,7 +31,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
-  shouldSuppressBuiltInModel: vi.fn(() => false),
+  shouldSuppressBuiltInModelCore: vi.fn(() => false),
   shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 

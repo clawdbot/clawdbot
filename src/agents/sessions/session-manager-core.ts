@@ -1,8 +1,8 @@
 import {
   loadTranscriptEventsSync,
   replaceTranscriptEventsSync,
+  type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -12,7 +12,7 @@ import {
   parseParentLinkedOpaqueEntry,
   partitionSessionFileEntries,
 } from "./session-manager-codec.js";
-import { createSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -91,7 +91,7 @@ export class SessionManagerCore {
     this.persistenceTarget = target ? { ...target } : undefined;
     this.fileEntries = partitioned.fileEntries;
     this.opaqueFileEntries = partitioned.opaqueEntries;
-    this.sessionId = header?.id ?? target?.sessionId ?? createSessionId();
+    this.sessionId = header?.id ?? target?.sessionId ?? createManagedSessionId();
     this.migrated = migrateToCurrentVersion(
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
@@ -115,7 +115,7 @@ export class SessionManagerCore {
   }
 
   private initializeSession(options?: NewSessionOptions): string | undefined {
-    this.sessionId = options?.id ?? this.persistenceTarget?.sessionId ?? createSessionId();
+    this.sessionId = options?.id ?? this.persistenceTarget?.sessionId ?? createManagedSessionId();
     this.migrated = false;
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {

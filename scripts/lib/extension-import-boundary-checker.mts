@@ -1,5 +1,6 @@
 // Creates reusable import-boundary guards for bundled extension source trees.
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import pMap from "p-map";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./bundled-plugin-paths.mjs";
 import {
@@ -45,6 +46,7 @@ type CollectEntriesContext = {
 
 type BoundaryCheckerParams<Entry> = {
   roots: string[];
+  repoRoot?: string;
   sourceOptions?: Record<string, unknown>;
   maxSourceBytes?: unknown;
   boundaryLabel?: string;
@@ -62,7 +64,7 @@ type BoundaryCheckerIo = {
   stderr: { write(chunk: string): unknown };
 };
 
-const repoRoot = resolveRepoRoot(import.meta.url);
+const DEFAULT_REPO_ROOT = resolveRepoRoot(import.meta.url);
 const DEFAULT_BOUNDARY_SOURCE_MAX_BYTES = 2 * 1024 * 1024;
 // Escaped plugin paths must reach the scanner without lexing every unrelated escaped source.
 const ESCAPED_BUNDLED_PLUGIN_PATH_PREFIX_RE = new RegExp(
@@ -106,6 +108,7 @@ function classifyResolvedExtensionReason(kind: string, boundaryLabel: string | u
 }
 
 function scanImportBoundaryViolations(
+  repoRoot: string,
   references: ModuleReference[],
   filePath: string,
   boundaryLabel: string | undefined,
@@ -141,7 +144,12 @@ function normalizeMaxSourceBytes(value: unknown): number {
     : DEFAULT_BOUNDARY_SOURCE_MAX_BYTES;
 }
 
-function assertSourceFileWithinLimit(filePath: string, bytes: number, maxBytes: number): void {
+function assertSourceFileWithinLimit(
+  repoRoot: string,
+  filePath: string,
+  bytes: number,
+  maxBytes: number,
+): void {
   if (bytes <= maxBytes) {
     return;
   }
@@ -153,11 +161,15 @@ function assertSourceFileWithinLimit(filePath: string, bytes: number, maxBytes: 
   );
 }
 
-async function readBoundedSourceFile(filePath: string, maxBytes: number): Promise<string> {
+async function readBoundedSourceFile(
+  repoRoot: string,
+  filePath: string,
+  maxBytes: number,
+): Promise<string> {
   const stat = await fs.stat(filePath);
-  assertSourceFileWithinLimit(filePath, stat.size, maxBytes);
+  assertSourceFileWithinLimit(repoRoot, filePath, stat.size, maxBytes);
   const source = await fs.readFile(filePath, "utf8");
-  assertSourceFileWithinLimit(filePath, Buffer.byteLength(source, "utf8"), maxBytes);
+  assertSourceFileWithinLimit(repoRoot, filePath, Buffer.byteLength(source, "utf8"), maxBytes);
   return source;
 }
 
@@ -165,6 +177,7 @@ async function readBoundedSourceFile(filePath: string, maxBytes: number): Promis
 export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
   params: BoundaryCheckerParams<Entry>,
 ) {
+  const repoRoot = path.resolve(params.repoRoot ?? DEFAULT_REPO_ROOT);
   const scanRoots = resolveSourceRoots(repoRoot, params.roots);
   const maxSourceBytes = normalizeMaxSourceBytes(params.maxSourceBytes);
 
@@ -177,7 +190,7 @@ export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
     const entriesByFile = await pMap(
       files,
       async (filePath) => {
-        const source = await readBoundedSourceFile(filePath, maxSourceBytes);
+        const source = await readBoundedSourceFile(repoRoot, filePath, maxSourceBytes);
         const relativeFile = normalizeRepoPath(repoRoot, filePath);
         if (
           params.skipSourcesWithoutBundledPluginPrefix &&
@@ -198,6 +211,7 @@ export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
         return params.collectEntries
           ? params.collectEntries({ source, filePath, relativeFile, references })
           : scanImportBoundaryViolations(
+              repoRoot,
               references,
               filePath,
               params.boundaryLabel,

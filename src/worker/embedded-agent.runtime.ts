@@ -27,7 +27,7 @@ import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
+import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
@@ -38,11 +38,14 @@ import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
 import {
   WORKER_LOCAL_TOOL_NAMES,
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
-  type WorkerLocalToolName,
+  WORKER_SESSION_TOOL_NAMES,
+  WORKER_TOOL_NAMES,
+  type WorkerToolName,
 } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
+import { createWorkerSessionTools } from "./worker-session-tools.js";
 
-function toError(value: unknown, fallback: string): Error {
+function toWorkerAgentError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
 }
 
@@ -64,7 +67,8 @@ type WorkerEmbeddedTranscriptClient = {
 };
 
 type WorkerEmbeddedLiveClient = {
-  emit: (event: WorkerLiveEvent) => Promise<void>;
+  enqueuePreview: (event: WorkerLiveEvent) => boolean;
+  emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };
 
 type RunWorkerEmbeddedTurnParams = {
@@ -81,12 +85,14 @@ type RunWorkerEmbeddedTurnParams = {
   inference: WorkerEmbeddedInferenceClient;
   transcript: WorkerEmbeddedTranscriptClient;
   live: WorkerEmbeddedLiveClient;
+  sessions?: Parameters<typeof createWorkerSessionTools>[0];
   initialMessages?: WorkerTranscriptMessage[];
   suppressPromptTranscript?: boolean;
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
-  allowedToolNames: readonly WorkerLocalToolName[];
+  allowedToolNames: readonly WorkerToolName[];
   browser?: WorkerBrowserLaunchDescriptor;
+  browserRuntime?: WorkerBrowserRuntime;
   signal?: AbortSignal;
 };
 
@@ -140,7 +146,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   });
 
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-  const activeToolNames = WORKER_LOCAL_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
+  const activeToolNames = WORKER_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
   const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const coreTools = createCoreCodingTools({
     codingRoot: params.cwd,
@@ -177,6 +183,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         sessionKey: params.sessionKey,
         stateDir: params.stateDir,
         workspaceDir: params.cwd,
+        ...(params.browserRuntime ? { runtime: params.browserRuntime } : {}),
       })
     : undefined;
   const { session } = await (async () => {
@@ -215,6 +222,17 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           throw new Error(`Worker coding tool unavailable: ${toolName}`);
         }
       }
+      const activeSessionToolNames = WORKER_SESSION_TOOL_NAMES.filter((name) =>
+        allowedToolNameSet.has(name),
+      );
+      if (activeSessionToolNames.length > 0 && !params.sessions) {
+        throw new Error("Worker session tool client unavailable");
+      }
+      const sessionTools = params.sessions
+        ? createWorkerSessionTools(params.sessions).filter((tool) =>
+            allowedToolNameSet.has(tool.name),
+          )
+        : [];
 
       return await createAgentSession({
         cwd: params.cwd,
@@ -224,9 +242,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         model,
         thinkingLevel: "medium",
         tools: [...activeToolNames],
-        customTools: toToolDefinitions(
-          localTools.filter((tool) => allowedToolNameSet.has(tool.name)),
-        ),
+        customTools: toToolDefinitions([
+          ...localTools.filter((tool) => allowedToolNameSet.has(tool.name)),
+          ...sessionTools,
+        ]),
         noTools: "all",
         sessionManager,
         settingsManager,
@@ -264,7 +283,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   let runFailure: Error | undefined;
   try {
     if (params.signal?.aborted) {
-      throw toError(params.signal.reason, "Worker agent turn aborted.");
+      throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");
     }
     await session.agent.prompt({
       role: "user",
@@ -273,7 +292,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     });
     await session.agent.waitForIdle();
     if (params.signal?.aborted) {
-      throw toError(params.signal.reason, "Worker agent turn aborted.");
+      throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");
     }
     const terminalAssistant = session.agent.state.messages
       .toReversed()
@@ -286,8 +305,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     }
   } catch (error) {
     runFailure = params.signal?.aborted
-      ? toError(params.signal.reason, "Worker agent turn aborted.")
-      : toError(error, "Worker agent turn failed.");
+      ? toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.")
+      : toWorkerAgentError(error, "Worker agent turn failed.");
     liveRuntime.enqueueRunFailure({
       aborted: params.signal?.aborted === true,
       error: runFailure,
@@ -299,9 +318,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     try {
       await transcriptRuntime.withSessionWriteSettlement(() => undefined);
     } catch (error) {
-      finalTranscriptFailure = toError(error, "Worker transcript flush failed.");
+      finalTranscriptFailure = toWorkerAgentError(error, "Worker transcript flush failed.");
     }
-    await liveRuntime.flush();
     if (finalTranscriptFailure === undefined) {
       await liveRuntime.emitTerminal();
     }

@@ -13,13 +13,12 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import {
+  sessionDeliveryChannel,
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -37,12 +36,10 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import {
-  buildPendingFinalDeliveryText,
-  sanitizePendingFinalDeliveryText,
-} from "./pending-final-delivery.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
@@ -75,18 +72,6 @@ export function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): Rep
   return payloads.map((payload) =>
     setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
   );
-}
-
-export function resolvePendingFinalDeliveryRetryText(params: {
-  isHeartbeat: boolean;
-  payload: ReplyPayload;
-}): string {
-  const pendingText = buildPendingFinalDeliveryText([params.payload]);
-  if (!params.isHeartbeat) {
-    return pendingText;
-  }
-  const stripped = stripHeartbeatToken(pendingText, { mode: "message" });
-  return stripped.shouldSkip ? "" : stripped.text || pendingText;
 }
 
 export function buildSilentFallbackFailurePayload(params: {
@@ -209,7 +194,7 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
   );
 }
 
-export function resolveConfiguredFallbackModel(params: {
+export function resolveFallbackOriginModel(params: {
   run: FollowupRun["run"];
   fallbackStateEntry?: SessionEntry;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {
@@ -328,6 +313,9 @@ export async function handleReplyAgentRunError(
     sessionCtx,
   } = context;
 
+  if (isReplyOperationSuperseded(replyOperation)) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
@@ -476,7 +464,6 @@ export type RunReplyAgentParams = {
   runtimePolicySessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
   toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;

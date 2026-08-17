@@ -2,14 +2,13 @@ import path from "node:path";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { MediaFact } from "../../media/media-facts.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { SavedMedia } from "../../media/store.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
@@ -31,32 +30,34 @@ type ChatSendUserTurnInputController = {
   setInputPromise: (input: Promise<UserTurnInput>) => void;
 };
 
+type PersistedChatSendMedia = Awaited<
+  ReturnType<typeof persistInboundImagesForTranscript>
+>["entries"];
+
 async function persistChatSendImages(params: {
   images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
   offloadedRefs: OffloadedRef[];
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
-}): Promise<SavedMedia[]> {
+}): Promise<Awaited<ReturnType<typeof persistInboundImagesForTranscript>>> {
   if (
     (params.images.length === 0 && params.offloadedRefs.length === 0) ||
     isAcpBridgeClient(params.client)
   ) {
-    return [];
+    return { entries: [], omission: "none" };
   }
   return await persistInboundImagesForTranscript({
     images: params.images,
-    imageOrder: params.imageOrder,
     offloadedRefs: params.offloadedRefs,
     log: params.logGateway,
     logContext: "chat.send",
   });
 }
 
-function resolveChatSendManagedMedia(savedImages: SavedMedia[]): MediaFact[] {
-  return savedImages.map((entry) => ({
+function resolveChatSendManagedMedia(entries: PersistedChatSendMedia): MediaFact[] {
+  return entries.map((entry) => ({
     path: entry.path,
-    contentType: entry.contentType ?? "application/octet-stream",
+    contentType: entry.fact.contentType ?? "application/octet-stream",
   }));
 }
 
@@ -64,39 +65,6 @@ export function applyChatSendManagedMedia(ctx: MsgContext, media: MediaFact[]): 
   if ((!ctx.media || ctx.media.length === 0) && media.length > 0) {
     ctx.media = media;
   }
-}
-
-function buildChatSendUserTurnMedia(
-  savedMedia: SavedMedia[],
-  offloadedRefs: OffloadedRef[],
-): MediaFact[] {
-  const offloadedRefsById = new Map(offloadedRefs.map((ref) => [ref.id, ref] as const));
-  return savedMedia.map((entry) => {
-    const offloadedRef = offloadedRefsById.get(entry.id);
-    return {
-      path: entry.path,
-      ...(offloadedRef
-        ? {
-            // Every offload keeps its claim-check alias so persisted marker
-            // ownership survives; only non-images skip native image hydration.
-            url: offloadedRef.mediaRef,
-            kind: offloadedRef.kind,
-            fileName: offloadedRef.label,
-            sizeBytes: offloadedRef.sizeBytes,
-            ...(offloadedRef.durationMs !== undefined
-              ? { durationMs: offloadedRef.durationMs }
-              : {}),
-            ...(offloadedRef.width !== undefined ? { width: offloadedRef.width } : {}),
-            ...(offloadedRef.height !== undefined ? { height: offloadedRef.height } : {}),
-            ...(offloadedRef.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
-          }
-        : {}),
-      contentType: entry.contentType,
-      ...(offloadedRef?.durationMs ? { durationMs: offloadedRef.durationMs } : {}),
-      ...(offloadedRef?.width ? { width: offloadedRef.width } : {}),
-      ...(offloadedRef?.height ? { height: offloadedRef.height } : {}),
-    };
-  });
 }
 
 function buildChatSendPromptMedia(
@@ -231,35 +199,35 @@ export function prepareChatSendUserTurn(params: {
   const { request, session, admission, attachments, client, logGateway, userTurn } = params;
   const persistedMediaForTranscriptPromise = persistChatSendImages({
     images: attachments.parsedImages,
-    imageOrder: attachments.imageOrder,
     offloadedRefs: attachments.offloadedRefs,
     client,
     logGateway,
   });
-  const preparedUserTurnMediaPromise: Promise<MediaFact[]> =
-    request.normalizedAttachments.length > 0
-      ? persistedMediaForTranscriptPromise.then((media) =>
-          buildChatSendUserTurnMedia(media, attachments.offloadedRefs),
-        )
-      : Promise.resolve([]);
   userTurn.setInputPromise(
-    preparedUserTurnMediaPromise.then((media) => ({
-      ...userTurn.baseInput,
-      ...(media.length > 0 ? { media } : {}),
-      ...(media.length > 0 && attachments.imageOrder.length > 0
-        ? {
-            mediaImageLayout: {
-              // persistInboundImagesForTranscript emits image facts in this exact order,
-              // then appends non-images, so image slot ordinals are fact ordinals.
-              slots: attachments.imageOrder.map((kind, factIndex) => ({ kind, factIndex })),
-            },
-          }
-        : {}),
-    })),
+    persistedMediaForTranscriptPromise.then((result) => {
+      const media = result.entries.map((entry) => entry.fact);
+      const slots = result.entries.flatMap((entry, factIndex) =>
+        entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
+      );
+      return {
+        ...userTurn.baseInput,
+        ...(result.omission === "inline-image-save-failed"
+          ? {
+              text: [userTurn.baseInput.text, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
+                .filter(Boolean)
+                .join("\n"),
+            }
+          : {}),
+        ...(media.length > 0 ? { media } : {}),
+        ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
+      };
+    }),
   );
   const pluginBoundMediaPromise =
     attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0
-      ? persistedMediaForTranscriptPromise.then(resolveChatSendManagedMedia)
+      ? persistedMediaForTranscriptPromise.then((result) =>
+          resolveChatSendManagedMedia(result.entries),
+        )
       : Promise.resolve([]);
   void pluginBoundMediaPromise.catch(() => undefined);
   const messageContext = buildChatSendMessageContext({

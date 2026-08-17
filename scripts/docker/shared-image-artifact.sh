@@ -53,11 +53,16 @@ configure_image_artifact_inputs() {
 
 is_transient_gh_api_get_error() {
   local error_text="$1"
-  if [[ "$error_text" =~ (^|[^0-9])(401|403|404|422)([^0-9]|$) ||
+  local not_found_policy="$2"
+  if [[ "$error_text" =~ (^|[^0-9])(401|403|422)([^0-9]|$) ||
     "$error_text" =~ [Bb]ad[[:space:]]+[Cc]redentials ||
     "$error_text" =~ [Cc]redential ||
     "$error_text" =~ [Aa]uthentication ]]; then
     return 1
+  fi
+  if [[ "$error_text" =~ (^|[^0-9])404([^0-9]|$) ]]; then
+    [[ "$not_found_policy" == "retry-fresh-artifact" ]]
+    return
   fi
 
   [[ "$error_text" == *"i/o timeout"* ||
@@ -76,7 +81,21 @@ is_transient_gh_api_get_error() {
 gh_api_get_with_retry() {
   local label="$1"
   local endpoint="$2"
+  local not_found_policy="$3"
   local attempt error_file response_file retry_delay retry_dir
+  case "$not_found_policy" in
+    fail-fast) ;;
+    retry-fresh-artifact)
+      # Artifact metadata can briefly lag upload completion. Keep 404 retries confined
+      # to that fresh-object read so producer tuple and authentication failures stay immediate.
+      if [[ ! "$endpoint" =~ ^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/artifacts/[1-9][0-9]*$ ]]; then
+        fail "$label cannot retry 404 responses for this GitHub API endpoint."
+      fi
+      ;;
+    *)
+      fail "$label has an invalid GitHub API 404 retry policy."
+      ;;
+  esac
   retry_dir="$(mktemp -d)"
   response_file="${retry_dir}/response"
   error_file="${retry_dir}/error"
@@ -90,7 +109,8 @@ gh_api_get_with_retry() {
       return 0
     fi
 
-    if [[ "$attempt" -lt 3 ]] && is_transient_gh_api_get_error "$(cat "$error_file")"; then
+    if [[ "$attempt" -lt 3 ]] &&
+      is_transient_gh_api_get_error "$(cat "$error_file")" "$not_found_policy"; then
       retry_delay=$((attempt * 2))
       printf \
         'warning: %s GitHub API GET failed transiently on attempt %d/3; retrying in %ss.\n' \
@@ -142,7 +162,8 @@ verify_uploaded_artifact() {
   artifact_json="$(
     gh_api_get_with_retry \
       "$artifact_label artifact metadata" \
-      "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+      "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" \
+      "retry-fresh-artifact"
   )"
   jq -e \
     --arg digest "sha256:${artifact_digest}" \
@@ -161,7 +182,8 @@ verify_uploaded_artifact() {
   attempt_json="$(
     gh_api_get_with_retry \
       "$artifact_label producer run attempt metadata" \
-      "repos/${GITHUB_REPOSITORY}/actions/runs/${artifact_run_id}/attempts/${artifact_run_attempt}"
+      "repos/${GITHUB_REPOSITORY}/actions/runs/${artifact_run_id}/attempts/${artifact_run_attempt}" \
+      "fail-fast"
   )"
   jq -e \
     --arg attempt "$artifact_run_attempt" \

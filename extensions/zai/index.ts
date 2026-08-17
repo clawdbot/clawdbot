@@ -36,7 +36,7 @@ import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { isGlm52ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
+import { resolveThinkingProfile, resolveZaiReasoningEffort } from "./provider-policy-api.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
@@ -111,29 +111,10 @@ function isDisabledThinkingLevel(thinkingLevel: ProviderWrapStreamFnContext["thi
   return thinkingLevel === "off";
 }
 
-function mapThinkingLevelToZaiReasoningEffort(
-  thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
-): "high" | "max" | undefined {
-  switch (thinkingLevel) {
-    case "low":
-    case "medium":
-    case "high":
-    case "adaptive":
-      return "high";
-    case "xhigh":
-    case "max":
-      return "max";
-    default:
-      return undefined;
-  }
-}
-
 function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
   let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
   const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
-  const reasoningEffort = isGlm52ModelId(ctx.modelId)
-    ? mapThinkingLevelToZaiReasoningEffort(ctx.thinkingLevel)
-    : undefined;
+  const reasoningEffort = resolveZaiReasoningEffort(ctx.modelId, ctx.thinkingLevel);
 
   if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking && !reasoningEffort) {
     return streamFn;

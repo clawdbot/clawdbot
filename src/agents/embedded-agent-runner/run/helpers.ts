@@ -113,7 +113,7 @@ export function resolveEmbeddedAttemptBasePrompt(params: {
   return scrubAnthropicRefusalMagic(params.prompt);
 }
 
-export function createCompactionDiagId(): string {
+export function createRunRecoveryDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 

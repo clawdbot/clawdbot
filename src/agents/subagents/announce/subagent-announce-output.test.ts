@@ -12,12 +12,12 @@ import {
 
 type CallGateway = typeof import("../../../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
-type ReadSessionEntry = typeof import("./subagent-announce.runtime.js").readSessionEntry;
+type ReadSessionEntry = typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry;
 type ReadSessionMessagesAsync =
   typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
 type ResolveAgentIdFromSessionKey =
   typeof import("./subagent-announce.runtime.js").resolveAgentIdFromSessionKey;
-type ResolveStorePath = typeof import("./subagent-announce.runtime.js").resolveStorePath;
+type ResolveStorePath = typeof import("./subagent-announce.runtime.js").resolveSessionStorePathCore;
 
 function installOutputDeps(params: {
   messages: Array<unknown>;
@@ -89,7 +89,7 @@ describe("buildCompactAnnounceStatsLine", () => {
   it("rolls one-decimal thousand token stats over to the million unit", async () => {
     testing.setDepsForTest({
       getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
-      readSessionEntry: (() => ({
+      readSubagentSessionEntry: (() => ({
         sessionId: "child-session",
         updatedAt: 0,
         inputTokens: 999_999,
@@ -97,7 +97,7 @@ describe("buildCompactAnnounceStatsLine", () => {
         totalTokens: 999_999,
       })) as ReadSessionEntry,
       resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
-      resolveStorePath: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
+      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
     });
 
     await expect(

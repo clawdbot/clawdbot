@@ -2,12 +2,22 @@
 import fs from "node:fs/promises";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import {
+  claimCronRunReceiptInDatabase,
+  CronRunReceiptConflictError,
+  finishCronRunReceipt,
+  prepareCronRunReceiptClaim,
+} from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
+import { cronRunReceiptOwnerMutationHooks } from "./run-receipts.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
@@ -553,21 +563,71 @@ describe("cron service store seam coverage", () => {
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
   });
 
-  it("loads normalized jobId-only jobs from SQLite so scheduler lookups resolve by stable id", async () => {
+  it("does not let quarantine recovery bypass an active receipt fence", async () => {
     const { storePath } = await makeStorePath();
+    const job = createReloadCronJob({ id: "quarantined-receipt-conflict", agentId: "alpha" });
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    const prepared = prepareCronRunReceiptClaim({
+      storePath,
+      job,
+      agentId: "alpha",
+      startedAtMs: STORE_TEST_NOW,
+    });
+    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+      claimCronRunReceiptInDatabase({
+        database: db,
+        prepared,
+        resolveAgentId: (current) => current.agentId!,
+      }),
+    );
+    const snapshot = snapshotStoreForRollback(state);
+    findJobOrThrow(state, job.id).agentId = "beta";
+    state.pendingQuarantineConfigJobs = [
+      { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
+    ];
 
-    await writeSingleJobStore(storePath, {
+    try {
+      await expect(
+        persistOrRestore(state, snapshot, {
+          transactionHooks: cronRunReceiptOwnerMutationHooks({ state, jobId: job.id }),
+        }),
+      ).rejects.toBeInstanceOf(CronRunReceiptConflictError);
+      expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBe("alpha");
+      expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
+    } finally {
+      finishCronRunReceipt({
+        handle: receipt,
+        status: "superseded",
+        finishedAtMs: STORE_TEST_NOW + 1,
+      });
+    }
+  });
+
+  it("uses the normalized stable id for job rows and companion authority", async () => {
+    const { storePath } = await makeStorePath();
+    const rawJob = {
       jobId: "repro-stable-id",
       name: "handed",
       enabled: true,
       createdAtMs: STORE_TEST_NOW - 60_000,
       updatedAtMs: STORE_TEST_NOW - 60_000,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "isolated",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
+      payload: { kind: "agentTurn", message: "tick", toolsAllow: [" read "] },
+      runtimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { apps: [{ id: "calendar" }] },
+      },
       state: {},
-    });
+    };
+
+    await writeSingleJobStore(storePath, rawJob);
+    await writeSingleJobStore(storePath, rawJob);
 
     const state = createStoreTestState(storePath);
 
@@ -576,6 +636,13 @@ describe("cron service store seam coverage", () => {
     const job = findJobOrThrow(state, "repro-stable-id");
     expect(job.id).toBe("repro-stable-id");
     expect((job as { jobId?: unknown }).jobId).toBeUndefined();
+    expect(job.payload).toMatchObject({ kind: "agentTurn", toolsAllow: ["read"] });
+    expect(job.runtimeAuthority).toEqual({
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    });
     await expectPathMissing(`${storePath}.migrated`);
   });
 

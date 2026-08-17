@@ -3,10 +3,10 @@
  *
  * Resolves persisted runtime overrides without leaking provider-specific CLI runtime bindings across model routes.
  */
-import type { SessionEntry } from "../config/sessions.js";
+import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
+import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
-import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 
 /** Persisted runtime fields used to recover session runtime compatibility. */
@@ -18,6 +18,21 @@ type SessionRuntimeOverrideEntry = Pick<
   SessionEntry,
   "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
 >;
+type ManualCompactionRuntimeEntry = Pick<
+  SessionEntry,
+  | "agentHarnessId"
+  | "agentRuntimeOverride"
+  | "cliSessionBindings"
+  | "claudeCliSessionId"
+  | "cliSessionIds"
+  | "modelSelectionLocked"
+>;
+
+type ManualCompactionCliTarget = {
+  agentHarnessId?: string;
+  cliSessionBinding?: CliSessionBinding;
+  cliSessionId?: string;
+};
 
 /** Resolves the persisted runtime id, preserving locked transcript ownership. */
 export function resolvePersistedSessionRuntimeId(
@@ -81,4 +96,75 @@ export function resolveSessionRuntimeOverrideForProvider(params: {
     runtime: params.entry?.agentRuntimeOverride,
     cfg: params.cfg,
   });
+}
+
+/** Resolves the native CLI transcript that owns manual compaction for a session. */
+export function resolveManualCompactionCliTarget(params: {
+  provider?: string | null;
+  entry?: ManualCompactionRuntimeEntry;
+  cfg?: OpenClawConfig;
+}): ManualCompactionCliTarget {
+  const runtimeOverride = normalizeOptionalAgentRuntimeId(params.entry?.agentRuntimeOverride);
+  const runtimeConfig =
+    runtimeOverride && getCliSessionBinding(params.entry, runtimeOverride) ? params.cfg : undefined;
+  const historicalRuntime = normalizeOptionalAgentRuntimeId(params.entry?.agentHarnessId);
+  const historicalRuntimeConfig =
+    historicalRuntime && getCliSessionBinding(params.entry, historicalRuntime)
+      ? params.cfg
+      : undefined;
+  const selectedRuntime = resolveSessionRuntimeOverrideForProvider({
+    provider: params.provider,
+    entry: params.entry,
+    // Setup discovery is only relevant when this runtime owns a native transcript.
+    // Model-picker overrides without a binding must stay on the generic compaction path.
+    cfg: runtimeConfig,
+  });
+  const persistedRuntime =
+    params.entry?.modelSelectionLocked === true
+      ? resolvePersistedSessionRuntimeId(params.entry)
+      : (selectedRuntime ??
+        (params.entry?.agentRuntimeOverride
+          ? undefined
+          : resolveCompatibleAgentRuntimeForProvider({
+              provider: params.provider,
+              runtime: historicalRuntime,
+              cfg: historicalRuntimeConfig,
+            })));
+  if (persistedRuntime) {
+    const cliSessionBinding = getCliSessionBinding(params.entry, persistedRuntime);
+    return {
+      agentHarnessId: persistedRuntime,
+      cliSessionBinding,
+      cliSessionId: cliSessionBinding?.sessionId,
+    };
+  }
+
+  // Implicit CLI selections have no runtime override. Recover ownership from
+  // the native bindings themselves, but only when exactly one runtime can
+  // serve the selected provider; ambiguity must not compact the wrong history.
+  const boundRuntimeIds = new Set([
+    ...Object.keys(params.entry?.cliSessionBindings ?? {}),
+    ...Object.keys(params.entry?.cliSessionIds ?? {}),
+    ...(params.entry?.claudeCliSessionId ? ["claude-cli"] : []),
+  ]);
+  const compatibleBindings = [...boundRuntimeIds].flatMap((runtime) => {
+    const compatibleRuntime = resolveCompatibleAgentRuntimeForProvider({
+      provider: params.provider,
+      runtime,
+      cfg: params.cfg,
+    });
+    const binding = compatibleRuntime
+      ? getCliSessionBinding(params.entry, compatibleRuntime)
+      : undefined;
+    return compatibleRuntime && binding ? [{ runtime: compatibleRuntime, binding }] : [];
+  });
+  const compatibleBinding = compatibleBindings.length === 1 ? compatibleBindings[0] : undefined;
+  if (!compatibleBinding) {
+    return {};
+  }
+  return {
+    agentHarnessId: compatibleBinding.runtime,
+    cliSessionBinding: compatibleBinding.binding,
+    cliSessionId: compatibleBinding.binding.sessionId,
+  };
 }

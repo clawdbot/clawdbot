@@ -62,6 +62,7 @@ function resolveSandboxScopeKey(
   scope: "session" | "agent" | "shared",
   sessionKey: string,
   workspaceDir: string,
+  agentId?: string,
 ) {
   const trimmed = sessionKey.trim() || "main";
   if (scope === "shared") {
@@ -73,8 +74,10 @@ function resolveSandboxScopeKey(
   if (scope === "session") {
     return `${trimmed}${workspaceSuffix}`;
   }
-  const agentId = resolveAgentIdFromSessionKey(trimmed);
-  return `agent:${agentId}${workspaceSuffix}`;
+  const resolvedAgentId = agentId
+    ? normalizeAgentId(agentId)
+    : resolveAgentIdFromSessionKey(trimmed);
+  return `agent:${resolvedAgentId}${workspaceSuffix}`;
 }
 
 /** Extracts the agent id represented by a sandbox scope key, when one exists. */
@@ -94,6 +97,7 @@ export function resolveSandboxAgentId(scopeKey: string): string | undefined {
 export function resolveSandboxWorkspaceLayoutPaths(params: {
   cfg: Pick<SandboxConfig, "scope" | "workspaceAccess" | "workspaceRoot">;
   rawSessionKey: string;
+  agentId?: string;
   workspaceDir?: string;
 }) {
   const agentWorkspaceDir = resolveUserPath(
@@ -104,6 +108,7 @@ export function resolveSandboxWorkspaceLayoutPaths(params: {
     params.cfg.scope,
     params.rawSessionKey,
     agentWorkspaceDir,
+    params.agentId,
   );
   const sandboxWorkspaceDir =
     params.cfg.scope === "shared"

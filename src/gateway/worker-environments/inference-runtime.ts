@@ -12,7 +12,6 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -397,7 +396,6 @@ async function resolveApprovedModel(params: {
     config,
     agentId: target.agentId,
     agentDir: resolveAgentDir(config, target.agentId),
-    inheritedAuthDir: resolveDefaultAgentDir(config),
   });
   const runtimeSnapshot = runtimeLease.snapshot;
   try {

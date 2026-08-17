@@ -27,6 +27,9 @@ import {
 } from "./pending-final-delivery.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
@@ -40,7 +43,6 @@ type SessionResetOptions = {
 
 type ExecutePreparedReplyAgentRunInput = Pick<
   RunReplyAgentParams,
-  | "agentCfgContextTokens"
   | "blockReplyChunking"
   | "blockStreamingEnabled"
   | "commandBody"
@@ -103,7 +105,6 @@ export async function executePreparedReplyAgentRun(
   const {
     activeSessionStore,
     admitUserTurn: admitUserTurnWithRecovery,
-    agentCfgContextTokens,
     applyReplyToMode,
     beginBeforeAgentReply: beginBeforeAgentReplyWithRecovery,
     blockReplyChunking,
@@ -194,7 +195,6 @@ export async function executePreparedReplyAgentRun(
       sessionCtx,
       opts,
       defaultModel,
-      agentCfgContextTokens,
       resolvedVerboseLevel,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -225,7 +225,6 @@ export async function executePreparedReplyAgentRun(
         followupRun,
         promptForEstimate: followupRun.prompt,
         defaultModel,
-        agentCfgContextTokens,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey,
@@ -277,7 +276,6 @@ export async function executePreparedReplyAgentRun(
     sessionKey,
     storePath,
     defaultModel,
-    agentCfgContextTokens,
     toolProgressDetail,
   });
   setRunFollowupTurn(runFollowupTurn);
@@ -299,14 +297,14 @@ export async function executePreparedReplyAgentRun(
       },
       afterDispatch: async (hookResult) => {
         if (!hookResult?.handled) {
-          await checkpointBeforeAgentReply({ state: "continue" });
+          await checkpointBeforeAgentReply({ state: undefined });
           return hookResult;
         }
         const hookReply = hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
         const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
         const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
         let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
-          state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
+          state: normalizedHookReplies.length === 0 ? "handled-silent" : "pending",
         };
         if (sessionKey && storePath && normalizedHookReplies.length > 0) {
           const sourceReplyPolicy = resolveSourceReplyPolicy({
@@ -319,15 +317,25 @@ export async function executePreparedReplyAgentRun(
           });
           if (!sourceReplyPolicy.suppressDelivery) {
             const pendingFinalDeliveryIntentId = crypto.randomUUID();
+            const pendingFinalDeliveryDeliveryId = crypto.randomUUID();
             setReplyPayloadMetadata(hookReply, {
-              pendingFinalDeliveryIntentId,
-              pendingFinalDeliveryRetryText: hookFinalDeliveryText,
+              pendingFinalDeliveryCompletion: {
+                deliveryId: pendingFinalDeliveryDeliveryId,
+                intentId: pendingFinalDeliveryIntentId,
+                ...(activeSessionEntry?.restartRecoveryDeliveryRunId
+                  ? { recoveryRunId: activeSessionEntry.restartRecoveryDeliveryRunId }
+                  : {}),
+                sessionId: replyOperation.sessionId,
+                sessionKey,
+                storePath,
+              },
             });
             hookCheckpoint = {
-              state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
+              state: "handled-reply",
               pendingFinalDelivery: {
                 text: hookFinalDeliveryText ?? "",
                 intentId: pendingFinalDeliveryIntentId,
+                deliveries: [{ id: pendingFinalDeliveryDeliveryId, state: "prepared" }],
                 context: resolveReplyRunDeliveryContext({
                   cfg,
                   sessionCtx,
@@ -381,9 +389,22 @@ export async function executePreparedReplyAgentRun(
         }),
       ),
   );
+  const operationSuperseded = isReplyOperationSuperseded(replyOperation);
+  recordReplyOperationAgentTurn(
+    resolveReplyOperationRunState(opts),
+    operationSuperseded
+      ? "superseded"
+      : runOutcome.outcome.kind === "settled"
+        ? runOutcome.outcome.status
+        : "failed",
+    replyOperation,
+  );
   activeSessionEntry = getActiveSessionEntry();
   activeIsNewSession = getActiveIsNewSession();
 
+  if (operationSuperseded) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
   if (runOutcome.outcome.kind !== "settled") {
     if (runOutcome.outcome.kind === "rejected" && !replyOperation.result) {
       replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
@@ -399,7 +420,6 @@ export async function executePreparedReplyAgentRun(
     activeIsNewSession,
     activeSessionEntry,
     activeSessionStore,
-    agentCfgContextTokens,
     blockReplyPipeline,
     blockStreamingEnabled,
     cfg,
@@ -484,7 +504,6 @@ export function createReplyAgentRestartRecoveryController(
         ? (activeSessionStore?.[sessionKey] ?? getActiveSessionEntry())
         : getActiveSessionEntry(),
     getSessionId: () => replyOperation.sessionId,
-    beforeAgentReplyState: "admitted",
     isRestartAbort: () =>
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",

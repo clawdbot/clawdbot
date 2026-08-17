@@ -11,7 +11,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import {
-  extractAssistantVisibleText,
+  extractAssistantPhaseText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
 import {
@@ -25,7 +25,7 @@ import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "./legacy-sqlite-marker.js";
-import { resolveDefaultSessionStorePath, resolveStorePath } from "./paths.js";
+import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -147,7 +147,6 @@ class SessionTranscriptAgentScopeMismatchError extends Error {
 }
 
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
-type TailAssistantTranscriptText = AssistantTranscriptText;
 
 export { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 
@@ -171,7 +170,7 @@ function parseAssistantTranscriptText(
   ) {
     return undefined;
   }
-  const text = extractAssistantVisibleText(message)?.trim();
+  const text = extractAssistantPhaseText(message)?.trim();
   if (!text) {
     return undefined;
   }
@@ -232,7 +231,7 @@ function parseRecentConversationText(
   }
   const text =
     message.role === "assistant"
-      ? extractAssistantVisibleText(message)
+      ? extractAssistantPhaseText(message)
       : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
   if (!text) {
     return undefined;
@@ -380,112 +379,6 @@ export async function readLatestAssistantTextFromSessionTranscript(
   return undefined;
 }
 
-export async function readTailAssistantTextFromSessionTranscript(
-  sessionFile:
-    | string
-    | undefined
-    | { agentId?: string; sessionId?: string; sessionKey?: string; storePath?: string },
-  options?: { excludeTranscriptOnlyOpenClawAssistant?: boolean },
-): Promise<TailAssistantTranscriptText | undefined> {
-  if (typeof sessionFile === "object") {
-    if (!sessionFile.sessionId || (!sessionFile.agentId && !sessionFile.sessionKey)) {
-      return undefined;
-    }
-    const events = await loadTranscriptEvents({
-      ...(sessionFile.agentId ? { agentId: sessionFile.agentId } : {}),
-      sessionId: sessionFile.sessionId,
-      ...(sessionFile.sessionKey ? { sessionKey: sessionFile.sessionKey } : {}),
-      ...(sessionFile.storePath ? { storePath: sessionFile.storePath } : {}),
-    });
-    for (const event of events.toReversed()) {
-      const parsed = event as { message?: { model?: unknown; provider?: unknown; role?: unknown } };
-      if (!parsed.message || typeof parsed.message !== "object") {
-        continue;
-      }
-      if (parsed.message.role !== "assistant") {
-        return undefined;
-      }
-      const assistantText = parseAssistantTranscriptText(JSON.stringify(event), {
-        excludeTranscriptOnlyOpenClawAssistant:
-          options?.excludeTranscriptOnlyOpenClawAssistant === true,
-      });
-      if (assistantText) {
-        return assistantText;
-      }
-      if (
-        options?.excludeTranscriptOnlyOpenClawAssistant !== true ||
-        !isTranscriptOnlyOpenClawAssistantMessage(parsed.message)
-      ) {
-        return undefined;
-      }
-    }
-    return undefined;
-  }
-  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-  if (sqliteMarker) {
-    const events = await loadTranscriptEvents({
-      agentId: sqliteMarker.agentId,
-      sessionId: sqliteMarker.sessionId,
-      storePath: sqliteMarker.storePath,
-    });
-    for (const event of events.toReversed()) {
-      const parsed = event as { message?: { model?: unknown; provider?: unknown; role?: unknown } };
-      if (!parsed.message || typeof parsed.message !== "object") {
-        continue;
-      }
-      if (parsed.message.role !== "assistant") {
-        return undefined;
-      }
-      const assistantText = parseAssistantTranscriptText(JSON.stringify(event), {
-        excludeTranscriptOnlyOpenClawAssistant:
-          options?.excludeTranscriptOnlyOpenClawAssistant === true,
-      });
-      if (assistantText) {
-        return assistantText;
-      }
-      if (
-        options?.excludeTranscriptOnlyOpenClawAssistant !== true ||
-        !isTranscriptOnlyOpenClawAssistantMessage(parsed.message)
-      ) {
-        return undefined;
-      }
-    }
-    return undefined;
-  }
-  if (!sessionFile?.trim()) {
-    return undefined;
-  }
-
-  for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
-    try {
-      const parsed = JSON.parse(line) as { message?: unknown };
-      // Skip non-message entries (e.g. `openclaw.cache-ttl` custom events) so
-      // a metadata line emitted after the canonical assistant turn doesn't
-      // make the tail reader fall through to "no assistant tail" and cause
-      // persistTextTurnTranscript to append a duplicate. Stop at any real
-      // message entry — a user turn means a new turn has started and a
-      // matching reply is a legitimate repeat, not a gap-fill duplicate.
-      if (!parsed.message || typeof parsed.message !== "object") {
-        continue;
-      }
-      const assistantText = parseAssistantTranscriptText(line, options);
-      if (assistantText) {
-        return assistantText;
-      }
-      if (
-        options?.excludeTranscriptOnlyOpenClawAssistant === true &&
-        isTranscriptOnlyOpenClawAssistantMessage(parsed.message)
-      ) {
-        continue;
-      }
-      return undefined;
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
-
 export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
@@ -592,7 +485,8 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const storeAgentId =
     transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
   const storePath =
-    params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
+    params.storePath ??
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: storeAgentId });
   const resolved = resolveSessionEntrySelection({
     ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
     sessionKey,
@@ -846,8 +740,8 @@ function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage):
   );
 }
 
-function extractAssistantMessageText(message: SessionTranscriptAssistantMessage): string | null {
-  if (!Array.isArray(message.content)) {
+function extractAssistantMessageText(message: AgentMessage): string | null {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
     return null;
   }
 
@@ -870,9 +764,7 @@ async function findLatestEquivalentAssistantMessageId(
   message: SessionTranscriptAssistantMessage,
   config?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(
-    redactTranscriptMessage(message, config) as unknown as SessionTranscriptAssistantMessage,
-  );
+  const expectedText = extractAssistantMessageText(redactTranscriptMessage(message, config));
   if (!expectedText) {
     return undefined;
   }
@@ -889,12 +781,7 @@ async function findLatestEquivalentAssistantMessageId(
       return undefined;
     }
     const candidateText = latest
-      ? extractAssistantMessageText(
-          redactTranscriptMessage(
-            latest.message as AgentMessage,
-            config,
-          ) as unknown as SessionTranscriptAssistantMessage,
-        )
+      ? extractAssistantMessageText(redactTranscriptMessage(latest.message as AgentMessage, config))
       : undefined;
     return candidateText === expectedText ? latest?.id : undefined;
   }

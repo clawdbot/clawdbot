@@ -45,6 +45,11 @@
       "import": "./dist/readiness.mjs",
       "default": "./dist/readiness.mjs"
     },
+    "./scope-upgrade": {
+      "types": "./dist/scope-upgrade.d.mts",
+      "import": "./dist/scope-upgrade.mjs",
+      "default": "./dist/scope-upgrade.mjs"
+    },
     "./timeouts": {
       "types": "./dist/timeouts.d.mts",
       "import": "./dist/timeouts.mjs",
@@ -57,12 +62,15 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/timeouts.ts src/websocket-data.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/scope-upgrade.ts src/timeouts.ts src/websocket-data.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
     "ipaddr.js": "2.4.0",
     "ws": "8.21.1"
+  },
+  "devDependencies": {
+    "@openclaw/normalization-core": "workspace:*"
   },
   "engines": {
     "node": ">=22.19.0"

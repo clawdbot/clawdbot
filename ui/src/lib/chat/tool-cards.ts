@@ -1,4 +1,8 @@
-import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNullableObjectRecord as readRecord,
+  asNullableRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI chat domain owns pure tool-card extraction rules.
 import {
@@ -22,10 +26,7 @@ function resolveTranscriptMessageId(message: Record<string, unknown>): string | 
     return message.messageId;
   }
   const openClawMeta = message["__openclaw"];
-  const transcriptMeta =
-    openClawMeta && typeof openClawMeta === "object" && !Array.isArray(openClawMeta)
-      ? (openClawMeta as Record<string, unknown>)
-      : null;
+  const transcriptMeta = asNullableRecord(openClawMeta);
   return typeof transcriptMeta?.id === "string" && transcriptMeta.id.trim()
     ? transcriptMeta.id
     : undefined;
@@ -116,10 +117,10 @@ function isToolErrorOutput(outputText: string | undefined): boolean {
   } catch {
     return false;
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (!isRecord(parsed)) {
     return false;
   }
-  const obj = parsed as Record<string, unknown>;
+  const obj = parsed;
   const explicitErrorFlag = readToolErrorFlag(obj);
   if (explicitErrorFlag !== undefined) {
     return explicitErrorFlag;
@@ -274,10 +275,10 @@ const TOOL_ARGUMENT_PREVIEW_KEYS = [
 
 /** First meaningful user-authored line for compact generic tool rows. */
 export function resolveCollapsedToolArgumentPreview(args: unknown): string | undefined {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
+  if (!isRecord(args)) {
     return undefined;
   }
-  const record = args as Record<string, unknown>;
+  const record = args;
   for (const key of TOOL_ARGUMENT_PREVIEW_KEYS) {
     const value = record[key];
     if (typeof value !== "string") {
@@ -358,7 +359,13 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
-        existing.completed = true;
+        // Live tool-stream messages emit a toolresult block for partial
+        // `update` output too; completion there is owned by the stream's
+        // resultReceived marker (set at card creation), not block presence —
+        // otherwise a running tool flips to "succeeded" mid-execution.
+        if (!isLiveToolStream) {
+          existing.completed = true;
+        }
         existing.outputText = text;
         existing.preview = preview;
         if (details !== undefined) {

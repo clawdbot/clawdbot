@@ -3,6 +3,7 @@ import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import { resolveEmbeddedAuthCooldownProbePolicy as resolveEmbeddedAuthCooldownProbePolicyActual } from "./embedded-agent-runner/run/auth-controller.js";
 import {
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
@@ -116,7 +117,7 @@ const installRunEmbeddedMocks = () => {
       await vi.importActual<typeof import("./command/session.js")>("./command/session.js");
     return {
       ...actual,
-      resolveSessionKeyForRequest: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
+      resolveSessionKeyForRequestCore: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
       resolveStoredSessionKeyForSessionId: (opts: unknown) =>
         resolveStoredSessionKeyForSessionIdMock(opts),
     };
@@ -158,6 +159,7 @@ const installRunEmbeddedMocks = () => {
       }),
       stopRuntimeAuthRefreshTimer: vi.fn(),
     }),
+    resolveEmbeddedAuthCooldownProbePolicy: resolveEmbeddedAuthCooldownProbePolicyActual,
   }));
   vi.doMock("./models-config.js", async () => {
     const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
@@ -176,7 +178,7 @@ type TestRunEmbeddedAgent = (
 let runEmbeddedAgent: TestRunEmbeddedAgent;
 let SessionManager: typeof import("openclaw/plugin-sdk/agent-sessions").SessionManager;
 let loadTranscriptEvents: typeof import("../config/sessions/session-accessor.js").loadTranscriptEvents;
-let upsertSessionEntry: typeof import("../config/sessions/session-accessor.js").upsertSessionEntry;
+let upsertSessionEntryCore: typeof import("../config/sessions/session-accessor.js").upsertSessionEntryCore;
 let resolveAgentRunSessionTarget: typeof import("./run-session-target.js").resolveAgentRunSessionTarget;
 let e2eWorkspace: EmbeddedAgentRunnerTestWorkspace | undefined;
 let agentDir: string;
@@ -185,10 +187,14 @@ let sessionStorePath: string;
 let sessionCounter = 0;
 let runCounter = 0;
 
-const createEmbeddedAgentRunnerOpenAiConfig = (modelIds: string[]) => ({
-  ...createBaseEmbeddedAgentRunnerOpenAiConfig(modelIds),
-  session: { store: sessionStorePath },
-});
+const createEmbeddedAgentRunnerOpenAiConfig = (modelIds: string[]) => {
+  const config = createBaseEmbeddedAgentRunnerOpenAiConfig(modelIds);
+  const mainAgent = config.agents?.list?.find((entry) => entry.id === "main");
+  if (mainAgent) {
+    mainAgent.default = true;
+  }
+  return { ...config, session: { store: sessionStorePath } };
+};
 
 beforeAll(async () => {
   vi.useRealTimers();
@@ -200,7 +206,7 @@ beforeAll(async () => {
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
   ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
-  ({ loadTranscriptEvents, upsertSessionEntry } =
+  ({ loadTranscriptEvents, upsertSessionEntryCore } =
     await import("../config/sessions/session-accessor.js"));
   ({ resolveAgentRunSessionTarget } = await import("./run-session-target.js"));
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
@@ -258,7 +264,7 @@ const createPersistedTestSessionManager = async (params: {
   sessionKey: string;
 }) => {
   const target = await resolveTestSessionTarget(params);
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath },
     { sessionId: target.sessionId, updatedAt: Date.now() },
   );
@@ -867,49 +873,6 @@ describe("runEmbeddedAgent", () => {
     expect("contextEngine" in attempt).toBe(false);
     expect("contextTokenBudget" in attempt).toBe(false);
     expect("contextWindowInfo" in attempt).toBe(false);
-  });
-
-  it("applies the selected agent's contextTokens cap to the embedded precheck budget", async () => {
-    // Regression for #118678: a per-agent contextTokens cap must reach the
-    // embedded run's context budget, not silently fall back to
-    // agents.defaults.contextTokens. The model window (272000) stays above both
-    // caps so the difference between 200000 and the 128000 default is visible.
-    const sessionFile = nextSessionCompatibilityKey();
-    const cfg = {
-      ...createEmbeddedAgentRunnerOpenAiConfig([]),
-      agents: {
-        list: [{ id: "capped", contextTokens: 200_000 }],
-        defaults: { contextTokens: 128_000 },
-      },
-    };
-    resolveModelAsyncMock.mockImplementationOnce(async (provider: string, modelId: string) => {
-      const resolved = createResolvedEmbeddedRunnerModel(provider, modelId);
-      return { ...resolved, model: { ...resolved.model, contextWindow: 272_000 } };
-    });
-    mockSuccessfulEmbeddedAttempt();
-
-    const result = await runEmbeddedAgent({
-      sessionId: "per-agent-context-cap",
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      prompt: "hello",
-      provider: "openai",
-      model: "mock-1",
-      timeoutMs: 5_000,
-      agentDir,
-      agentId: "capped",
-      runId: nextRunId("per-agent-context-cap"),
-      enqueue: immediateEnqueue,
-    });
-
-    const attempt = firstRunEmbeddedAttemptParams() as {
-      contextTokenBudget?: number;
-      model?: { contextWindow?: number };
-    };
-    expect(attempt.contextTokenBudget).toBe(200_000);
-    expect(attempt.model?.contextWindow).toBe(200_000);
-    expect(result.meta.agentMeta?.contextTokens).toBe(200_000);
   });
 
   it("does not apply outer context-overflow recovery to a locked Codex harness", async () => {

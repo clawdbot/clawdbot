@@ -114,6 +114,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const bundleMcpRuntime = bundleMcpSessionRuntime
     ? await materializeBundleMcpToolsForRun({
         runtime: bundleMcpSessionRuntime,
+        agentId: params.sessionAgentId,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),

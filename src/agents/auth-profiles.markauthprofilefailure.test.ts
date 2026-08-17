@@ -19,11 +19,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "./auth-profiles/store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   calculateAuthProfileCooldownMs,
   markAuthProfileFailure,

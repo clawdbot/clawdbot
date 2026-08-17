@@ -806,10 +806,30 @@ struct OnboardingView: View {
     }
 
     struct LocalGatewayProbe: Equatable {
-        let port: Int
-        let pid: Int32
-        let command: String
-        let expected: Bool
+        let subtitle: String
+
+        init(
+            port: Int,
+            pid: Int32,
+            command: String,
+            profile: AppProfile,
+            managedServicePID: Int32?)
+        {
+            let expectedTokens = ["node", "openclaw", "tsx", "pnpm", "bun"]
+            let looksLikeGateway = expectedTokens.contains { command.lowercased().contains($0) }
+            let process = command.isEmpty ? "" : " (\(command) pid \(pid))"
+            guard GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+                profile: profile,
+                listenerPID: pid,
+                managedServicePID: managedServicePID)
+            else {
+                let profile = profile.name.map { " for profile \($0)" } ?? ""
+                self.subtitle = "Port \(port) already in use\(process). Choose a different Gateway port\(profile)."
+                return
+            }
+            let base = looksLikeGateway ? "Existing gateway detected" : "Port \(port) already in use"
+            self.subtitle = "\(base)\(process). Will attach."
+        }
     }
 
     init(

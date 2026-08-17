@@ -46,6 +46,7 @@ import type {
   GatewayServiceState,
 } from "./service-types.js";
 import {
+  findInstalledSystemdGatewayScope,
   installSystemdService,
   isSystemdServiceEnabled,
   readSystemdServiceExecStart,
@@ -84,6 +85,7 @@ export type GatewayService = {
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (
     env: GatewayServiceEnv,
@@ -354,6 +356,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopSystemdService,
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
+    hasInstalledDefinition: async ({ env }) =>
+      (await findInstalledSystemdGatewayScope(env ?? process.env)) !== null,
     readCommand: readSystemdServiceExecStart,
     readRuntime: readSystemdServiceRuntime,
   },

@@ -9,7 +9,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -26,7 +28,12 @@ import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
+import {
+  getHealthVersion,
+  getPresenceVersion,
+  incrementPresenceVersion,
+} from "./server/health-state.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -112,9 +119,10 @@ export async function startGatewayCoreRuntime(input: {
     agentRunSeq,
     nodeSendToSession,
     runtimeState,
+    kernel,
     startupTrace,
-    activeTaskCount,
     channelManager,
+    readinessEventLoopHealth,
     workerDispatchAuthority,
     clients,
     startChannel,
@@ -131,18 +139,41 @@ export async function startGatewayCoreRuntime(input: {
     workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
     workerDesktopObserveAvailable,
+    desktopObserveAvailable,
+    desktopSessionRegistry,
     listStartupChannelGatewayMethods,
     coreGatewayMethodNames,
     pluginHostServices,
     baseMethods,
-    defaultWorkspaceDir,
+    pluginWorkspaceDir,
     ambientEnvTriggers,
     workerEnvironmentStartup,
     broadcastPluginEvent,
     activateRuntimeSecrets,
+    residentRegistry,
+    shutdownRuntime,
   } = runtime;
-  const earlyRuntime = await startupTrace.measure("runtime.early", () =>
-    loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
+  if (desktopSessionRegistry) {
+    kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
+  }
+  const secretEgressProxy =
+    cfgAtStart.secrets?.egressProxy?.enabled === true
+      ? await import("../secrets/egress-proxy/runtime.js").then((egressRuntime) =>
+          egressRuntime.startGatewaySecretEgressProxy(
+            cfgAtStart.secrets?.egressProxy?.bypassHosts
+              ? { bypassHosts: cfgAtStart.secrets.egressProxy.bypassHosts }
+              : {},
+          ),
+        )
+      : undefined;
+  if (secretEgressProxy) {
+    kernel.addGatewayLifetimeSidecar(secretEgressProxy);
+  }
+  let earlyRuntimePromise: ReturnType<
+    Awaited<ReturnType<typeof loadGatewayStartupEarlyModule>>["startGatewayEarlyRuntime"]
+  > | null = null;
+  const startEarlyRuntime = () => {
+    earlyRuntimePromise ??= loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
       startGatewayEarlyRuntime({
         minimalTestGateway,
         cfgAtStart,
@@ -159,6 +190,14 @@ export async function startGatewayCoreRuntime(input: {
         getPresenceVersion,
         getHealthVersion,
         refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
+        restartRunningChannels: async () =>
+          await restartRunningChannelAccounts(channelManager, {
+            shouldContinue: () => !isGatewayWorkAdmissionClosed(),
+            onError: (message) => logHealth.error(message),
+          }),
+        refreshPresence: () =>
+          broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion }),
+        resetEventLoopHealth: readinessEventLoopHealth.reset,
         logHealth,
         dedupe,
         chatAbortControllers,
@@ -179,11 +218,30 @@ export async function startGatewayCoreRuntime(input: {
         getRuntimeConfig,
         startupTrace,
       }),
-    ),
+    );
+    return earlyRuntimePromise;
+  };
+  const discoveryResident = residentRegistry.register({
+    name: "bonjour-discovery",
+    start: startEarlyRuntime,
+    stop: async () => {
+      const earlyRuntime = await startEarlyRuntime();
+      await earlyRuntime.bonjourStop?.();
+    },
+  });
+  const taskAndSkillsResident = residentRegistry.register({
+    name: "task-and-skills-runtime",
+    start: async () => await discoveryResident.start(),
+    stop: async () => {
+      const earlyRuntime = await startEarlyRuntime();
+      earlyRuntime.skillsChangeUnsub();
+      shutdownRuntime.stopTaskRegistryMaintenance();
+    },
+  });
+  const earlyRuntime = await startupTrace.measure("runtime.early", () =>
+    taskAndSkillsResident.start(),
   );
-  runtimeState.bonjourStop = earlyRuntime.bonjourStop;
-  activeTaskCount.get = earlyRuntime.getActiveTaskCount;
-  runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
+  kernel.setEarlyRuntimeHandles(earlyRuntime);
 
   const [{ startGatewayEventSubscriptions }, { startGatewayRuntimeServices }] =
     await startupTrace.measure("runtime.post-early-imports", () =>
@@ -192,8 +250,9 @@ export async function startGatewayCoreRuntime(input: {
         import("./server-runtime-startup-services.js"),
       ]),
     );
-  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } =
-    await startupTrace.measure("runtime.subscriptions", () =>
+  const eventSubscriptionsResident = residentRegistry.register({
+    name: "event-subscriptions",
+    start: () =>
       startGatewayEventSubscriptions({
         log,
         broadcast,
@@ -208,7 +267,16 @@ export async function startGatewayCoreRuntime(input: {
         restartRecoveryCandidates,
         terminalSessions,
       }),
-    );
+    stop: async () => {
+      await runtimeState.agentUnsub?.();
+      runtimeState.heartbeatUnsub?.();
+      runtimeState.transcriptUnsub?.();
+      runtimeState.lifecycleUnsub?.();
+      runtimeState.taskUnsub?.();
+    },
+  });
+  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } =
+    await startupTrace.measure("runtime.subscriptions", () => eventSubscriptionsResident.start());
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
   const runtimeServices = await startupTrace.measure("runtime.services", () =>
@@ -284,11 +352,14 @@ export async function startGatewayCoreRuntime(input: {
             delegatedAuthority: authority,
           }),
         onApprovalLifecycle: approvalSessionEvents.publish,
+        onAgentRunAuthorityClosed: (authority) => {
+          secretEgressProxy?.revokeRun(authority.operationalRunInstance);
+        },
       }),
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
   });
-  runtimeState.gatewayLifetimeSidecars.push({
+  kernel.addGatewayLifetimeSidecar({
     stop: async () => {
       unregisterApprovalAuthorityObserver();
     },
@@ -301,14 +372,16 @@ export async function startGatewayCoreRuntime(input: {
     for (const sessionKey of keys) {
       revokeAttachGrantsForSession(sessionKey);
     }
-    for (const record of execApprovalManager.listPendingRecords()) {
-      if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-        execApprovalManager.expire(record.id, "worker-dispatch");
-      }
-    }
-    for (const record of pluginApprovalManager.listPendingRecords()) {
-      if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
-        pluginApprovalManager.expire(record.id, "worker-dispatch");
+    // Dispatch fencing closes approval authority deliberately: record it as a
+    // run-aborted cancellation, not a timeout, so ask-fallback replay cannot
+    // re-admit through the fenced record (consumeAskFallback admits only
+    // expired/no-route terminals).
+    const fenceResolver = { kind: "system", id: "worker-dispatch" } as const;
+    for (const manager of [execApprovalManager, pluginApprovalManager]) {
+      for (const record of manager.listPendingRecords()) {
+        if (approvalRequestTargetsSession(record.request, keys, sessionId)) {
+          manager.forceDenyDetailed(record.id, "run-aborted", fenceResolver, "cancelled");
+        }
       }
     }
   };
@@ -337,9 +410,12 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy")) &&
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim") &&
+        (workerPlacementControlAvailable ||
+          (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
+        (desktopObserveAvailable || descriptor.name !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
-          (descriptor.name !== "worker.desktop.observe" &&
+          (descriptor.name !== "desktop.launch" &&
+            descriptor.name !== "worker.desktop.observe" &&
             descriptor.name !== "worker.desktop.launch")),
     );
     return createGatewayMethodRegistry(
@@ -361,11 +437,7 @@ export async function startGatewayCoreRuntime(input: {
     methods.push(...listStartupChannelGatewayMethods());
     return uniqueStrings(methods);
   };
-  runtimeState.gatewayMethods.splice(
-    0,
-    runtimeState.gatewayMethods.length,
-    ...listAttachedGatewayMethods(),
-  );
+  kernel.publishMethodSurface(listAttachedGatewayMethods());
   const replaceAttachedPluginRuntime = (loaded: {
     pluginRegistry: typeof pluginRuntime.registry;
     gatewayMethods: string[];
@@ -378,11 +450,7 @@ export async function startGatewayCoreRuntime(input: {
     Object.assign(attachedGatewayExtraHandlers, pluginRuntime.registry.gatewayHandlers);
     attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRuntime.registry.gatewayHandlers));
     attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
-    runtimeState.gatewayMethods.splice(
-      0,
-      runtimeState.gatewayMethods.length,
-      ...listAttachedGatewayMethods(),
-    );
+    kernel.publishMethodSurface(listAttachedGatewayMethods());
     nodeRegistry.refreshNodePluginTools();
   };
   const refreshAttachedGatewayDiscovery = async (
@@ -392,8 +460,7 @@ export async function startGatewayCoreRuntime(input: {
       return;
     }
     try {
-      const stopPreviousDiscovery = runtimeState.bonjourStop;
-      runtimeState.bonjourStop = null;
+      const stopPreviousDiscovery = kernel.swapBonjourStop(null);
       if (stopPreviousDiscovery) {
         try {
           await stopPreviousDiscovery();
@@ -402,16 +469,18 @@ export async function startGatewayCoreRuntime(input: {
         }
       }
       const { startGatewayPluginDiscovery } = await loadGatewayStartupEarlyModule();
-      runtimeState.bonjourStop = await startGatewayPluginDiscovery({
-        minimalTestGateway,
-        cfgAtStart,
-        port,
-        gatewayTls,
-        gatewayDirectReachable: !isLoopbackHost(bindHost),
-        tailscaleMode,
-        logDiscovery,
-        pluginRegistry: nextPluginRegistry,
-      });
+      kernel.swapBonjourStop(
+        await startGatewayPluginDiscovery({
+          minimalTestGateway,
+          cfgAtStart,
+          port,
+          gatewayTls,
+          gatewayDirectReachable: !isLoopbackHost(bindHost),
+          tailscaleMode,
+          logDiscovery,
+          pluginRegistry: nextPluginRegistry,
+        }),
+      );
     } catch (err) {
       logDiscovery.warn(`gateway discovery refresh failed after plugin load: ${String(err)}`);
     }
@@ -461,7 +530,7 @@ export async function startGatewayCoreRuntime(input: {
     });
     const nextPluginLookUpTable = loadPluginLookUpTable({
       config: nextPluginActivationConfig,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
       env: params.env,
       activationSourceConfig: params.nextConfig,
       // Workers can be created after startup; reload planning needs the live durable set.
@@ -524,7 +593,7 @@ export async function startGatewayCoreRuntime(input: {
     );
     const loaded = prepareGatewayPluginLoad({
       cfg: params.nextConfig,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
       log,
       coreGatewayMethodNames,
       hostServices: pluginHostServices,
@@ -536,25 +605,27 @@ export async function startGatewayCoreRuntime(input: {
       snapshot: nextPluginLookUpTable,
       config: params.nextConfig,
       env: params.env,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
     });
     setCurrentPluginMetadataSnapshot(nextPluginMetadataSnapshot, {
       config: params.nextConfig,
       env: params.env,
-      workspaceDir: defaultWorkspaceDir,
+      workspaceDir: pluginWorkspaceDir,
     });
     replaceAttachedPluginRuntime(loaded);
-    runtimeState.pluginServices = null;
+    kernel.setPluginServices(null);
     if (previousPluginServices) {
       await previousPluginServices.stop();
     }
     await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
-    runtimeState.pluginServices = await startPluginServices({
-      registry: loaded.pluginRegistry,
-      config: params.nextConfig,
-      workspaceDir: defaultWorkspaceDir,
-      broadcastPluginEvent,
-    });
+    kernel.setPluginServices(
+      await startPluginServices({
+        registry: loaded.pluginRegistry,
+        config: params.nextConfig,
+        workspaceDir: pluginWorkspaceDir,
+        broadcastPluginEvent,
+      }),
+    );
     const afterChannelTargets = listAttachedChannelConfigTargets();
     const afterChannelIds = new Set(afterChannelTargets.keys());
     const restartChannels = new Set<ChannelId>();
@@ -579,6 +650,10 @@ export async function startGatewayCoreRuntime(input: {
 
   return {
     ...runtime,
+    kernel: {
+      ...kernel,
+      reloadPlugins: reloadAttachedGatewayPlugins,
+    },
     earlyRuntime,
     sessionCompanion,
     sessionObserver,
@@ -595,7 +670,6 @@ export async function startGatewayCoreRuntime(input: {
     getAttachedGatewayMethodRegistry: () => attachedGatewayMethodRegistry,
     replaceAttachedPluginRuntime,
     refreshAttachedGatewayDiscovery,
-    reloadAttachedGatewayPlugins,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,

@@ -13,7 +13,7 @@ import {
 } from "./heartbeat-events-filter.js";
 import {
   heartbeatLog,
-  resolveHeartbeatPrompt,
+  resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatResponseToolPrompt,
   type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
@@ -202,7 +202,7 @@ export async function resolveHeartbeatPreflight(params: {
 }
 
 type HeartbeatPromptResolution = {
-  prompt: string | null;
+  prompt: string;
   hasExecCompletion: boolean;
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
@@ -283,7 +283,7 @@ ${completionInstruction}`;
         })
       : baseUsesHeartbeatResponseTool
         ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
-        : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
+        : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat);
   const basePromptWithDirectives = appendHeartbeatScratch(
     basePrompt,
     params.heartbeatScratchContent,

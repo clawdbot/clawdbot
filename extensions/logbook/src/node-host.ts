@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 type LogbookSnapshotParams = {
@@ -22,11 +23,11 @@ function readParams(value: unknown): LogbookSnapshotParams {
     return {};
   }
   const record = value as Record<string, unknown>;
-  const num = (key: string) => {
-    const candidate = record[key];
-    return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : undefined;
+  return {
+    screenIndex: asFiniteNumber(record.screenIndex),
+    maxWidth: asFiniteNumber(record.maxWidth),
+    quality: asFiniteNumber(record.quality),
   };
-  return { screenIndex: num("screenIndex"), maxWidth: num("maxWidth"), quality: num("quality") };
 }
 
 export async function handleLogbookSnapshot(rawParams: unknown): Promise<LogbookSnapshotPayload> {

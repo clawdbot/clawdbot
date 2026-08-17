@@ -1275,6 +1275,31 @@ describe("handleToolExecutionEnd MCP App channel view tracking", () => {
   });
 });
 
+describe("handleToolExecutionEnd MCP connect action tracking", () => {
+  it("retains only a successful HTTP(S) connect action", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "mcp_connect",
+      toolCallId: "mcp-connect",
+      isError: false,
+      result: {
+        details: {
+          mcpConnect: {
+            serverName: "calendar",
+            authorizationUrl: "https://auth.example/authorize?state=opaque",
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.latestMcpConnectAction).toEqual({
+      serverName: "calendar",
+      authorizationUrl: "https://auth.example/authorize?state=opaque",
+    });
+  });
+});
+
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
   it("records accepted sessions_spawn identifiers", async () => {
     const { ctx } = createTestContext();
@@ -1990,6 +2015,27 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.replayState).toEqual({
       replayInvalid: false,
       hadPotentialSideEffects: false,
+    });
+  });
+
+  it("binds failed side effects to the canonical plugin tool owner", async () => {
+    const { ctx } = createTestContext();
+    const ownerKey = '["memory-lancedb","memory_store"]';
+    ctx.params.sideEffectToolOwners = new Map([["memory_store", ownerKey]]);
+
+    await executeTool(ctx, {
+      toolName: "memory_store",
+      toolCallId: "tool-memory-store-failed",
+      args: { text: "The user prefers metric units." },
+      isError: true,
+      result: { details: { status: "error", error: "429 insufficient_quota" } },
+    });
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "memory_store",
+      ownerKey,
+      mutatingAction: true,
+      actionFingerprint: expect.stringContaining(`owner=${ownerKey}|args=`),
     });
   });
 

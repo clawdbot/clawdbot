@@ -15,6 +15,7 @@ import { captureEnv, setTestEnvValue, withEnv } from "../../../test-utils/env.js
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   canonicalSubagentRunFixtures,
@@ -32,7 +33,6 @@ import {
   testing,
   addSubagentRunForTests,
   clearSubagentRunSteerRestart,
-  getLatestSubagentRunByChildSessionKey,
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   listSubagentRunsForRequester,
@@ -42,7 +42,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
-  announceSpy: vi.fn(async () => true),
+  announceSpy: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
 }));
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
@@ -198,7 +198,7 @@ describe("subagent registry persistence", () => {
 
   beforeEach(() => {
     announceSpy.mockReset();
-    announceSpy.mockResolvedValue(true);
+    announceSpy.mockResolvedValue("delivered");
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       persistSubagentRunsToDisk: fastPersistSubagentRunsToDisk,
@@ -610,7 +610,7 @@ describe("subagent registry persistence", () => {
     });
     const registryPath = await writePersistedRegistry(persisted);
 
-    announceSpy.mockResolvedValueOnce(false);
+    announceSpy.mockResolvedValueOnce("retryable");
     restartRegistry();
     await waitForRegistryWork(async () => {
       const afterFirst = await readPersistedRun<{
@@ -632,7 +632,7 @@ describe("subagent registry persistence", () => {
     expect(afterFirst?.cleanupHandled).toBe(false);
     expect(afterFirst?.cleanupCompletedAt).toBeUndefined();
 
-    announceSpy.mockResolvedValueOnce(true);
+    announceSpy.mockResolvedValueOnce("delivered");
     const beforeRetry = Date.now();
     restartRegistry();
     await waitForRegistryWork(async () => {
@@ -684,7 +684,7 @@ describe("subagent registry persistence", () => {
         .cleanupCompletedAt,
     ).toBeUndefined();
 
-    announceSpy.mockResolvedValueOnce(true);
+    announceSpy.mockResolvedValueOnce("delivered");
     const beforeRetry = Date.now();
     restartRegistry();
     await waitForRegistryWork(async () => {
@@ -711,7 +711,7 @@ describe("subagent registry persistence", () => {
     });
     const registryPath = await writePersistedRegistry(persisted);
 
-    announceSpy.mockResolvedValueOnce(false);
+    announceSpy.mockResolvedValueOnce("retryable");
     restartRegistry();
     await waitForRegistryWork(async () => {
       const afterFirst = await readPersistedRun<{ cleanupHandled?: boolean }>(
@@ -725,7 +725,7 @@ describe("subagent registry persistence", () => {
     const afterFirst = await readPersistedRun<{ cleanupHandled?: boolean }>(registryPath, "run-4");
     expect(afterFirst?.cleanupHandled).toBe(false);
 
-    announceSpy.mockResolvedValueOnce(true);
+    announceSpy.mockResolvedValueOnce("delivered");
     restartRegistry();
     await waitForRegistryWork(async () => {
       const afterSecond = readPersistedRegistry();

@@ -15,6 +15,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { mergeUserPreferences } from "./user-preferences.js";
 import { USER_PROFILES_SCHEMA_SQL } from "./user-profiles-schema.js";
 import {
   fetchTailscaleAvatar,
@@ -561,6 +562,19 @@ export function linkEmail(
         kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
       );
       if (remainingAliases.length === 0) {
+        const mergeSourceIds = [
+          existingAlias.profile_id,
+          ...executeSqliteQuerySync(
+            db,
+            kysely
+              .selectFrom("user_profiles")
+              .select("id")
+              .where("merged_into", "=", existingAlias.profile_id),
+          ).rows.map((row) => row.id),
+        ];
+        for (const sourceProfileId of mergeSourceIds) {
+          mergeUserPreferences(db, sourceProfileId, target.id);
+        }
         executeSqliteQuerySync(
           db,
           kysely
@@ -707,4 +721,11 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}): UserPr
     },
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },
   );
+}
+
+/** True when session-sharing policy can distinguish at least two durable people. */
+export function hasMultipleSessionSharingIdentities(
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  return listProfiles(options).filter((profile) => !profile.mergedInto).length >= 2;
 }

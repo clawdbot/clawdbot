@@ -1,5 +1,5 @@
 import os from "node:os";
-import { asRecord } from "../record-shared.js";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const BROWSER_NATIVE_REQUEST_MAX_BYTES = 4 * 1024;
 const BROWSER_NATIVE_RESPONSE_MAX_BYTES = 1024 * 1024;
@@ -38,7 +38,7 @@ function rootJsonKeys(raw: string): string[] | null {
       index += 1;
     }
   };
-  const readString = (): string | null => {
+  const readJsonString = (): string | null => {
     if (raw[index] !== '"') {
       return null;
     }
@@ -103,7 +103,7 @@ function rootJsonKeys(raw: string): string[] | null {
     if (raw[index] === "}") {
       return keys;
     }
-    const key = readString();
+    const key = readJsonString();
     if (key === null) {
       return null;
     }
@@ -149,7 +149,7 @@ function parseBrowserNativeRequest(raw: string): BrowserNativeBootstrapRequest |
   } catch {
     return null;
   }
-  const record = asRecord(parsed);
+  const record = asNullableRecord(parsed);
   return record?.v === 1 && record.op === "bootstrap" && isCanonicalNonce(record.nonce)
     ? { v: 1, op: "bootstrap", nonce: record.nonce }
     : null;

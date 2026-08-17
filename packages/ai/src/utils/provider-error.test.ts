@@ -56,6 +56,23 @@ describe("projectProviderError", () => {
     );
   });
 
+  it("normalizes string and finite-number provider error fields", () => {
+    expect(
+      projectProviderError({
+        message: "  provider failure  ",
+        code: 12.5,
+        type: "  upstream  ",
+      }),
+    ).toMatchObject({
+      errorMessage: "provider failure",
+      errorCode: "12.5",
+      errorType: "upstream",
+    });
+    expect(
+      projectProviderError({ message: "failed", code: Number.POSITIVE_INFINITY }),
+    ).not.toHaveProperty("errorCode");
+  });
+
   it("bounds repeated aliases without expanding the shared graph", () => {
     const shared = { detail: "safe" };
 

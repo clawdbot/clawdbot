@@ -9,12 +9,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Codex tests cover run attempt.context engine plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
@@ -208,10 +210,6 @@ type MockCallReader = { mock: { calls: unknown[][] } };
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
-function optionalString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 function requireFirstCallArg(mock: unknown, label: string): unknown {
   const call = (mock as MockCallReader).mock.calls[0];
   if (!call) {
@@ -256,7 +254,7 @@ function getRequestInputTextAt(
   return input
     .map((entry) => {
       const item = requireRecord(entry, "turn/start input entry");
-      return item.type === "text" ? optionalString(item.text) : "";
+      return item.type === "text" ? (readStringValue(item.text) ?? "") : "";
     })
     .join("\n");
 }
@@ -343,7 +341,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(assembleParams.availableTools).toEqual(new Set());
 
     const threadStartParams = requireRequestParams(harness, "thread/start");
-    expect(optionalString(threadStartParams.developerInstructions)).toContain(
+    expect(readStringValue(threadStartParams.developerInstructions) ?? "").toContain(
       "context-engine system",
     );
     expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
@@ -1964,17 +1962,4 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { asRecord } from "../record-shared.js";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type BrowserNativeBootstrapResponse,
   decodeBrowserNativeFrame,
@@ -103,10 +103,11 @@ async function validateNativeManifest(params: {
     throw new Error("launcher is outside the managed root");
   }
   const parsed: unknown = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-  if (!asRecord(parsed)) {
+  const manifestRecord = asNullableRecord(parsed);
+  if (!manifestRecord) {
     throw new Error("invalid manifest");
   }
-  const manifest = parsed as NativeHostManifest;
+  const manifest = manifestRecord as NativeHostManifest;
   const expectedOrigins = validateExpectedOrigins(params.expectedOrigins);
   const keys = ["name", "description", "path", "type", "allowed_origins"];
   if (

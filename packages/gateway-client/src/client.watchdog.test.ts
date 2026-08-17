@@ -35,8 +35,8 @@ function createOpenGatewayClient(requestTimeoutMs: number): {
   return { client, send };
 }
 
-function getPendingCount(client: GatewayClient): number {
-  return protocolHarness(client).pending.size;
+function hasPendingRequests(client: GatewayClient): boolean {
+  return protocolHarness(client).hasPendingRequests;
 }
 
 test("decodes every ws raw-data shape", () => {
@@ -50,8 +50,8 @@ type ProtocolHarness = {
   socket: GatewayProtocolSocket | null;
   stopped: boolean;
   generation: number;
+  hasPendingRequests: boolean;
   reconnectSupervisor: { reset(initialMs?: number): void };
-  pending: Map<string, unknown>;
   handleMessage: (socket: GatewayProtocolSocket, generation: number, raw: string) => void;
 };
 
@@ -630,12 +630,22 @@ describe("GatewayClient", () => {
     client.updateNodeManifest({
       caps: ["canvas", "system"],
       commands: ["canvas.present", "system.run"],
+      workerRuns: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.12",
+        protocolFeatures: ["worker-heartbeat-v1"],
+      },
     });
 
     expect(close).toHaveBeenCalledWith(1012, "node manifest changed");
     expect((client as unknown as { opts: Record<string, unknown> }).opts).toMatchObject({
       caps: ["canvas", "system"],
       commands: ["canvas.present", "system.run"],
+      workerRuns: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.12",
+        protocolFeatures: ["worker-heartbeat-v1"],
+      },
     });
   });
 
@@ -915,7 +925,7 @@ describe("GatewayClient", () => {
       "synthetic send failure",
     );
     expect(onSent).not.toHaveBeenCalled();
-    expect(getPendingCount(client)).toBe(0);
+    expect(hasPendingRequests(client)).toBe(false);
   });
 
   test("notifies accepted expectFinal requests while continuing to wait for final", async () => {
@@ -939,7 +949,7 @@ describe("GatewayClient", () => {
 
     expect(onSent).toHaveBeenCalledOnce();
     expect(onAccepted).toHaveBeenCalledWith({ status: "accepted", runId: "run-1" });
-    expect(getPendingCount(client)).toBe(1);
+    expect(hasPendingRequests(client)).toBe(true);
 
     handleGatewayMessage(client, {
       type: "res",
@@ -949,7 +959,7 @@ describe("GatewayClient", () => {
     });
 
     await expect(requestPromise).resolves.toEqual({ status: "ok" });
-    expect(getPendingCount(client)).toBe(0);
+    expect(hasPendingRequests(client)).toBe(false);
   });
 
   test("aborts in-flight requests from caller AbortSignal", async () => {
@@ -961,12 +971,12 @@ describe("GatewayClient", () => {
       timeoutMs: null,
     });
     expect(send).toHaveBeenCalledTimes(1);
-    expect(getPendingCount(client)).toBe(1);
+    expect(hasPendingRequests(client)).toBe(true);
 
     controller.abort();
 
     await expect(requestPromise).rejects.toThrow("gateway request aborted for status");
-    expect(getPendingCount(client)).toBe(0);
+    expect(hasPendingRequests(client)).toBe(false);
   });
 
   test.each([
@@ -984,7 +994,7 @@ describe("GatewayClient", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       expect(isSettled()).toBe(false);
-      expect(getPendingCount(client)).toBe(1);
+      expect(hasPendingRequests(client)).toBe(true);
 
       client.stop();
       await expect(requestPromise).rejects.toThrow("gateway client stopped");

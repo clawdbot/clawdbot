@@ -315,7 +315,7 @@ describe("memory-lancedb provider lifecycle", () => {
         })),
       ]);
     };
-    const closeProvider = vi.fn(async () => {});
+    const closeProvider = vi.fn(async (_agentDir: string, _credential: string) => {});
     const createProvider = vi.fn(async (options: { agentDir?: string }) => {
       const agentDir = expectDefined(options.agentDir, "inherited agent owner");
       const profile = ensureAuthProfileStore(agentDir, {
@@ -336,7 +336,7 @@ describe("memory-lancedb provider lifecycle", () => {
             return [0.1, 0.2, 0.3];
           }),
           embedBatch: vi.fn(async () => [[0.1, 0.2, 0.3]]),
-          close: closeProvider,
+          close: async () => closeProvider(agentDir, credential),
         },
       };
     });
@@ -369,7 +369,12 @@ describe("memory-lancedb provider lifecycle", () => {
       ]);
 
       expect(createProvider).toHaveBeenCalledTimes(4);
-      expect(closeProvider).toHaveBeenCalledTimes(2);
+      expect(closeProvider.mock.calls).toEqual(
+        expect.arrayContaining([
+          [agentDirs.private, "fixture-inherited-old"],
+          [agentDirs.secondary, "fixture-inherited-old"],
+        ]),
+      );
       expect(requests).toEqual(
         expect.arrayContaining([
           {
@@ -398,6 +403,16 @@ describe("memory-lancedb provider lifecycle", () => {
       await embeddings.close?.();
       clearRuntimeAuthProfileStoreSnapshots();
     }
+
+    expect(closeProvider.mock.calls).toHaveLength(4);
+    expect(closeProvider.mock.calls).toEqual(
+      expect.arrayContaining([
+        [agentDirs.private, "fixture-inherited-old"],
+        [agentDirs.secondary, "fixture-inherited-old"],
+        [agentDirs.private, "fixture-inherited-new"],
+        [agentDirs.secondary, "fixture-inherited-new"],
+      ]),
+    );
   });
 
   it("retires cached agent providers and fails closed after runtime config replacement", async () => {

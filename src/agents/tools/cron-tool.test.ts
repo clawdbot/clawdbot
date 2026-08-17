@@ -31,13 +31,26 @@ import {
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
-  runWithCronCreatorAuthority,
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityResolver,
 } from "../cron-creator-authority-context.js";
 import { createCronTool } from "./cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 describe("cron tool", () => {
+  function runWithTestCronCreatorAuthority<T>(
+    runId: string,
+    run: () => T,
+    signal?: AbortSignal,
+  ): T {
+    const capability = createCronCreatorAuthorityCapability(runId);
+    if (!capability) {
+      throw new Error("expected cron creator authority capability");
+    }
+    return runWithCronCreatorAuthorityCapability(capability, run, signal);
+  }
+
   type SchemaLike = {
     anyOf?: Array<SchemaLike>;
     description?: string;
@@ -1571,7 +1584,7 @@ describe("cron tool", () => {
       finishResolution = resolve;
     });
     const abortController = new AbortController();
-    const run = runWithCronCreatorAuthority(
+    const run = runWithTestCronCreatorAuthority(
       "run-timeout",
       () => {
         const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
@@ -1610,7 +1623,7 @@ describe("cron tool", () => {
       finishResolution = resolve;
     });
     const operation = new AbortController();
-    const run = runWithCronCreatorAuthority("run-operation-timeout", () => {
+    const run = runWithTestCronCreatorAuthority("run-operation-timeout", () => {
       const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
         runId: "run-operation-timeout",
         resolve: async (options) => {
@@ -1655,7 +1668,7 @@ describe("cron tool", () => {
       return { ok: true };
     });
 
-    await runWithCronCreatorAuthority("run-operation-retry", async () => {
+    await runWithTestCronCreatorAuthority("run-operation-retry", async () => {
       const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
         runId: "run-operation-retry",
         resolve: async () => {
@@ -1707,7 +1720,7 @@ describe("cron tool", () => {
       committedWrites += 1;
       return { ok: true };
     });
-    const run = runWithCronCreatorAuthority("run-abort-before-commit", () => {
+    const run = runWithTestCronCreatorAuthority("run-abort-before-commit", () => {
       const resolveCreatorToolAuthority = runWithCronCreatorAuthorityResolver({
         runId: "run-abort-before-commit",
         resolve: async () => ({

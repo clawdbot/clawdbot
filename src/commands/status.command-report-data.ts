@@ -35,6 +35,7 @@ import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.sha
 /** Builds all table rows, section lines, and footer data needed by the status report renderer. */
 export async function buildStatusCommandReportData(
   params: {
+    env: NodeJS.ProcessEnv;
     opts: {
       deep?: boolean;
       verbose?: boolean;
@@ -99,6 +100,7 @@ export async function buildStatusCommandReportData(
   } & StatusMemoryStateResolvers,
 ) {
   const overviewRows = buildStatusCommandOverviewRows({
+    env: params.env,
     opts: params.opts,
     surface: params.surface,
     osLabel: params.osSummary.label,

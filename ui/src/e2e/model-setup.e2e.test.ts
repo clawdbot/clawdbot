@@ -24,7 +24,7 @@ const localPrepareOptions = [
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "llama.cpp",
-    hint: "Run one private GGUF model directly inside this Gateway",
+    hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
     actionLabel: "Set up model",
   },
   {
@@ -108,9 +108,13 @@ suite.define(() => {
         await candidate.getByRole("button", { name: "Test & use" }).click();
 
         const detect = await gateway.waitForRequest("openclaw.setup.detect");
-        expect(detect.params).toEqual({});
+        expect(detect.params).toEqual({ agentId: "main" });
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
-        expect(activate.params).toEqual({ kind: "codex-cli", modelRef: "openai/gpt-5" });
+        expect(activate.params).toEqual({
+          kind: "codex-cli",
+          agentId: "main",
+          modelRef: "openai/gpt-5",
+        });
 
         await page.getByRole("heading", { name: "Connection verified" }).waitFor();
         await expect
@@ -182,6 +186,13 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const signInUrl = `https://example.com/device?${new URLSearchParams({
+          client_id: "device-code-client",
+          redirect_uri: "http://localhost:1455/auth/callback",
+          response_type: "code",
+          scope: "openid profile email offline_access",
+          state: "state-1".repeat(16),
+        })}`;
         const initialDetection = {
           candidates: [],
           manualProviders: [],
@@ -228,7 +239,8 @@ suite.define(() => {
                     id: "device-code",
                     type: "note",
                     title: "Authorize device",
-                    externalUrl: "https://example.com/device",
+                    message: `Open this URL in your local browser:\n\n${signInUrl}`,
+                    externalUrl: signInUrl,
                     deviceCode: { code: "ABCD-1234", expiresInMinutes: 14 },
                   },
                 },
@@ -274,7 +286,17 @@ suite.define(() => {
           });
         }
         const signInLink = page.getByRole("link", { name: "Open sign-in page" });
-        await expect.poll(() => signInLink.getAttribute("href")).toBe("https://example.com/device");
+        await expect.poll(() => signInLink.getAttribute("href")).toBe(signInUrl);
+        const wizardBody = page.locator(".model-setup-wizard__body");
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
+        await page.setViewportSize({ height: 844, width: 390 });
+        await expect
+          .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
+          .toBe(true);
+        await page.getByRole("button", { name: "Continue" }).waitFor();
+        await page.getByRole("button", { name: "Cancel" }).waitFor();
 
         await gateway.setMethodResponse("openclaw.setup.detect", {
           ...initialDetection,
@@ -494,6 +516,7 @@ suite.define(() => {
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
         expect(activate.params).toEqual({
           kind: "provider-auto:ollama",
+          agentId: "main",
           modelRef: "ollama/qwen3:0.6b",
         });
 
@@ -624,13 +647,28 @@ suite.define(() => {
           page
             .locator("[data-manual-provider]")
             .evaluateAll((options) => options.some((option) => option === document.activeElement));
-        const waitForProviderHide = () =>
-          providerPicker.evaluate(
-            (element) =>
-              new Promise<void>((resolve) => {
-                element.addEventListener("wa-after-hide", () => resolve(), { once: true });
-              }),
+        const providerHideMarker = "data-openclaw-test-after-hide";
+        const armProviderHide = () =>
+          providerPicker.evaluate((element, marker) => {
+            element.removeAttribute(marker);
+            element.addEventListener("wa-after-hide", () => element.setAttribute(marker, ""), {
+              once: true,
+            });
+          }, providerHideMarker);
+        const waitForProviderHide = async () => {
+          await expect
+            .poll(() =>
+              providerPicker.evaluate(
+                (element, marker) => element.hasAttribute(marker),
+                providerHideMarker,
+              ),
+            )
+            .toBe(true);
+          await providerPicker.evaluate(
+            (element, marker) => element.removeAttribute(marker),
+            providerHideMarker,
           );
+        };
         const providerIds = await page
           .locator("[data-manual-provider]")
           .evaluateAll((options) =>
@@ -673,9 +711,9 @@ suite.define(() => {
           });
           await page.setViewportSize({ height: 1000, width: 1440 });
         }
-        const providerHidden = waitForProviderHide();
+        await armProviderHide();
         await page.keyboard.press("Escape");
-        await providerHidden;
+        await waitForProviderHide();
         await expect
           .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
           .toBe(false);
@@ -698,9 +736,9 @@ suite.define(() => {
         await page.keyboard.press("ArrowDown");
         await page.keyboard.press("ArrowDown");
         await expect.poll(() => manualProviderHasFocus("zai-cn")).toBe(true);
-        const zaiProviderHidden = waitForProviderHide();
+        await armProviderHide();
         await page.keyboard.press("Enter");
-        await zaiProviderHidden;
+        await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Z.AI");
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
@@ -709,9 +747,9 @@ suite.define(() => {
         await accessValue.fill("same-provider-secret");
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        const sameProviderHidden = waitForProviderHide();
+        await armProviderHide();
         await page.locator('[data-manual-provider="zai-cn"]').click();
-        await sameProviderHidden;
+        await waitForProviderHide();
         await expect.poll(() => accessValue.inputValue()).toBe("same-provider-secret");
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
@@ -719,9 +757,9 @@ suite.define(() => {
 
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        const providerHiddenBackward = waitForProviderHide();
+        await armProviderHide();
         await page.keyboard.press("Shift+Tab");
-        await providerHiddenBackward;
+        await waitForProviderHide();
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
           .toBe(true);
@@ -739,9 +777,9 @@ suite.define(() => {
         await accessValue.fill("sk-old-provider-secret");
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        const googleProviderHidden = waitForProviderHide();
+        await armProviderHide();
         await page.locator('[data-manual-provider="gemini-api-key"]').click();
-        await googleProviderHidden;
+        await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Google");
         await expect.poll(() => providerTrigger.textContent()).toContain("AI Studio API key");
         await expect.poll(() => accessValue.inputValue()).toBe("");
@@ -750,9 +788,9 @@ suite.define(() => {
           .toBe(true);
 
         await providerTrigger.click();
-        const qwenProviderHidden = waitForProviderHide();
+        await armProviderHide();
         await page.locator('[data-manual-provider="qwen-cn"]').click();
-        await qwenProviderHidden;
+        await waitForProviderHide();
         await expect
           .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
           .toBe(false);
@@ -769,6 +807,7 @@ suite.define(() => {
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
         expect(activate.params).toEqual({
           kind: "api-key",
+          agentId: "main",
           authChoice: "qwen-cn",
           apiKey: "qwen-test-secret",
         });
@@ -811,9 +850,9 @@ suite.define(() => {
           .toBe(detectCountBeforeDismiss + 1);
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
-        const googleProviderHiddenAfterDismiss = waitForProviderHide();
+        await armProviderHide();
         await page.locator('[data-manual-provider="gemini-api-key"]').click();
-        await googleProviderHiddenAfterDismiss;
+        await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Google");
         await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
       },
@@ -906,7 +945,7 @@ suite.define(() => {
         }
         await page.getByRole("button", { name: "Check model" }).click();
         const verify = await gateway.waitForRequest("openclaw.setup.verify");
-        expect(verify.params).toEqual({});
+        expect(verify.params).toEqual({ agentId: "main" });
         await page.getByText("Ready · 1234 ms").waitFor();
         const detectCountBeforeRefresh = (await gateway.getRequests("openclaw.setup.detect"))
           .length;

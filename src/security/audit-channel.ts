@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Audits channel configuration for exposure, auth, and trust risks.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -21,32 +22,13 @@ import {
   type ResolvedAgentRoute,
 } from "../routing/resolve-route.js";
 import { parseSessionDeliveryRoute, resolveLinkedDirectPeerId } from "../routing/session-key.js";
-import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.types.js";
+import type { SecurityAuditFinding } from "./audit.types.js";
 
 type DmPrincipalRoute = {
   accountKey: string;
   logicalPrincipalKey: string;
   bucketKey: string;
 };
-
-/** Classify free-form channel warnings into audit severities. */
-function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
-  const s = message.toLowerCase();
-  if (
-    s.includes("dms: open") ||
-    s.includes('grouppolicy="open"') ||
-    s.includes('dmpolicy="open"')
-  ) {
-    return "critical";
-  }
-  if (s.includes("allows any") || s.includes("anyone can dm") || s.includes("public")) {
-    return "critical";
-  }
-  if (s.includes("locked") || s.includes("disabled")) {
-    return "info";
-  }
-  return "warn";
-}
 
 function dedupeFindings(findings: SecurityAuditFinding[]): SecurityAuditFinding[] {
   const seen = new Set<string>();
@@ -95,7 +77,7 @@ function formatChannelAccountNote(params: {
 }
 
 /** Collect channel-specific security findings across active channel plugins/accounts. */
-export async function collectChannelSecurityFindings(params: {
+export async function collectChannelSecurityFindingsCore(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
   plugins: ChannelPlugin[];
@@ -155,11 +137,6 @@ export async function collectChannelSecurityFindings(params: {
     });
   };
 
-  const asAccountRecord = (value: unknown): Record<string, unknown> | null =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-
   const resolveChannelAuditAccount = async (
     plugin: (typeof params.plugins)[number],
     accountId: string,
@@ -207,7 +184,7 @@ export async function collectChannelSecurityFindings(params: {
     );
     const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
     const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
-    const accountRecord = asAccountRecord(account);
+    const accountRecord = asNullableRecord(account);
     let enabled =
       typeof selectedInspection?.enabled === "boolean"
         ? selectedInspection.enabled
@@ -492,14 +469,21 @@ export async function collectChannelSecurityFindings(params: {
           accountId,
           account,
         });
-        for (const message of warnings ?? []) {
+        for (const warning of warnings ?? []) {
+          if (typeof warning !== "string") {
+            findings.push(warning);
+            continue;
+          }
+          const message = warning;
           const trimmed = message.trim();
           if (!trimmed) {
             continue;
           }
           findings.push({
             checkId: `channels.${plugin.id}.warning.${findings.length + 1}`,
-            severity: classifyChannelWarningSeverity(trimmed),
+            // The legacy collectWarnings contract records warnings only. Producers that need
+            // critical or informational severity must return a structured audit finding.
+            severity: "warn",
             title: `${plugin.meta.label ?? plugin.id} security warning`,
             detail: trimmed.replace(/^-\s*/, ""),
           });

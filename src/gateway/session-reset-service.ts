@@ -5,6 +5,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
   readAcpSessionMeta,
@@ -15,6 +16,7 @@ import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
 import {
   clearBootstrapSnapshot,
@@ -89,7 +91,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   forgetActiveSessionForShutdown,
-  listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
@@ -116,6 +117,12 @@ import {
   resolveSessionWorkerPlacementMutationError,
   retireSessionWorkerPlacementBeforeMutation,
 } from "./worker-environments/session-placement-lifecycle.js";
+
+function resolveLifecycleAgentId(cfg: OpenClawConfig, agentId?: string): string {
+  return normalizeAgentId(
+    agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg),
+  );
+}
 
 type McpRunEndWatcherState = {
   cancellations: Map<string, () => void>;
@@ -168,7 +175,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   sessionId?: string;
   storePath: string;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
   workspaceDir?: string;
   reason:
     | "new"
@@ -229,7 +236,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   const payload = buildSessionEndHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    cfg: params.cfg,
+    agentId: params.agentId,
     reason: params.reason,
     sessionFile: transcript.sessionFile,
     transcriptArchived: transcript.transcriptArchived,
@@ -250,7 +257,7 @@ export function emitGatewaySessionStartPluginHook(params: {
   resumedFrom?: string;
   storePath?: string;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
 }): void {
   if (!params.sessionId) {
     return;
@@ -278,7 +285,7 @@ export function emitGatewaySessionStartPluginHook(params: {
   const payload = buildSessionStartHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    cfg: params.cfg,
+    agentId: params.agentId,
     resumedFrom: params.resumedFrom,
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
@@ -286,94 +293,6 @@ export function emitGatewaySessionStartPluginHook(params: {
   }).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
-}
-
-const SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS = 2_000;
-
-type DrainActiveSessionsForShutdownResult = {
-  emittedSessionIds: string[];
-  timedOut: boolean;
-};
-
-/**
- * Emit a typed `session_end` for every session that received `session_start`
- * but did not yet receive a paired `session_end`. The bounded total timeout
- * mirrors the gateway lifecycle hook timeout so a slow plugin cannot block
- * SIGTERM/SIGINT past the runtime's overall shutdown grace window.
- *
- * Sessions that have already been finalized through replace / reset / delete /
- * compaction are forgotten from the tracker by `emitGatewaySessionEndPluginHook`
- * before this drain runs, so they will not be double-fired here.
- */
-export async function drainActiveSessionsForShutdown(params: {
-  reason: "shutdown" | "restart";
-  totalTimeoutMs?: number;
-}): Promise<DrainActiveSessionsForShutdownResult> {
-  const tracked = listActiveSessionsForShutdown();
-  if (tracked.length === 0) {
-    return { emittedSessionIds: [], timedOut: false };
-  }
-  const totalTimeoutMs = Math.max(
-    100,
-    Math.floor(params.totalTimeoutMs ?? SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS),
-  );
-  const emittedSessionIds: string[] = [];
-  const hookRunner = getGlobalHookRunner();
-  let settledEmissions = 0;
-  // Inline the session_end emission instead of calling
-  // `emitGatewaySessionEndPluginHook`, because that helper uses fire-and-forget
-  // (`void hookRunner.runSessionEnd(...)`). Start every tracked session's
-  // emission before awaiting the bounded aggregate so one slow plugin write
-  // cannot prevent later active sessions from receiving `session_end`.
-  const drain = Promise.allSettled(
-    tracked.map(async (entry) => {
-      try {
-        forgetActiveSessionForShutdown(entry.sessionId);
-        emittedSessionIds.push(entry.sessionId);
-        if (!hookRunner?.hasHooks("session_end")) {
-          return;
-        }
-        const transcript = resolveStableSessionEndTranscript({
-          sessionId: entry.sessionId,
-          storePath: entry.storePath,
-          sessionFile: entry.sessionFile,
-          agentId: entry.agentId,
-        });
-        const payload = buildSessionEndHookPayload({
-          sessionId: entry.sessionId,
-          sessionKey: entry.sessionKey,
-          cfg: entry.cfg,
-          reason: params.reason,
-          sessionFile: transcript.sessionFile,
-          transcriptArchived: transcript.transcriptArchived,
-        });
-        await hookRunner.runSessionEnd(payload.event, payload.context);
-      } catch (err) {
-        logVerbose(`session_end hook failed during shutdown drain: ${String(err)}`);
-      } finally {
-        settledEmissions++;
-      }
-    }),
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), totalTimeoutMs);
-    timer.unref?.();
-  });
-  try {
-    const result = await Promise.race([drain.then(() => "ok" as const), timeout]);
-    if (result === "timeout") {
-      logVerbose(
-        `shutdown session-end drain timed out after ${totalTimeoutMs}ms with ${tracked.length - settledEmissions} session_end handler(s) still pending`,
-      );
-      return { emittedSessionIds, timedOut: true };
-    }
-    return { emittedSessionIds, timedOut: false };
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
 }
 
 export async function emitSessionUnboundLifecycleEvent(params: {
@@ -454,7 +373,7 @@ async function ensureSessionRuntimeCleanup(params: {
   clearFinishedSessionsForScopes(processScopeKeys);
   clearSessionResetRuntimeState([...queueKeys], {
     activeReplySessionId: params.sessionId,
-    agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
+    agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
   });
   await stopSubagentsForRequester({
     cfg: params.cfg,
@@ -587,6 +506,7 @@ async function runAcpCleanupStep(params: {
 async function closeAcpRuntimeForSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
   fallbackSessionKeys?: Array<string | undefined>;
   reason: "session-reset" | "session-delete";
   onResetMeta?: (params: { sessionKey: string; meta: SessionAcpMeta }) => void;
@@ -609,7 +529,7 @@ async function closeAcpRuntimeForSession(params: {
   let acpMeta: SessionAcpMeta | undefined;
   let acpSessionKey = params.sessionKey;
   for (const sessionKey of sessionKeys) {
-    acpMeta = readAcpSessionMeta({ sessionKey });
+    acpMeta = readAcpSessionMeta({ sessionKey, agentId: params.agentId, cfg: params.cfg });
     if (acpMeta) {
       acpSessionKey = sessionKey;
       break;
@@ -684,6 +604,7 @@ async function closeAcpRuntimeForSession(params: {
     await upsertAcpSessionMeta({
       cfg: params.cfg,
       sessionKey: acpSessionKey,
+      agentId: params.agentId,
       mutate: () => null,
     });
     params.assertCurrent?.();
@@ -696,6 +617,7 @@ async function closeAcpRuntimeForSession(params: {
     const resetMeta = await ensureFreshAcpResetState({
       cfg: params.cfg,
       sessionKey: acpSessionKey,
+      agentId: params.agentId,
       reason: params.reason,
       acpMeta,
       assertCurrent: params.assertCurrent,
@@ -734,6 +656,7 @@ function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionAcpMeta 
 async function ensureFreshAcpResetState(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
   reason: "session-reset" | "session-delete";
   acpMeta: SessionAcpMeta;
   assertCurrent?: () => void;
@@ -745,6 +668,8 @@ async function ensureFreshAcpResetState(params: {
   const latestMeta =
     readAcpSessionMeta({
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      cfg: params.cfg,
     }) ?? params.acpMeta;
   if (
     !latestMeta?.identity ||
@@ -754,25 +679,22 @@ async function ensureFreshAcpResetState(params: {
     return undefined;
   }
 
-  const backendId = (latestMeta.backend || params.cfg.acp?.backend || "").trim() || undefined;
   if (params.shouldApply && !params.shouldApply()) {
     return undefined;
   }
-  try {
-    params.assertCurrent?.();
-    await getAcpRuntimeBackend(backendId)?.runtime.prepareFreshSession?.({
-      sessionKey: params.sessionKey,
-    });
-    if (params.shouldApply && !params.shouldApply()) {
-      return undefined;
-    }
-    params.assertCurrent?.();
-  } catch (error) {
-    params.assertCurrent?.();
-    logVerbose(
-      `sessions.${params.reason}: ACP prepareFreshSession failed for ${params.sessionKey}: ${String(error)}`,
-    );
+  params.assertCurrent?.();
+  // The helper records skipped/failed preparation; only lifecycle staleness aborts here.
+  await tryPrepareFreshManagerRuntimeSession({
+    deps: { getRuntimeBackend: getAcpRuntimeBackend },
+    cfg: params.cfg,
+    meta: latestMeta,
+    sessionKey: params.sessionKey,
+    logPrefix: `sessions.${params.reason}`,
+  });
+  if (params.shouldApply && !params.shouldApply()) {
+    return undefined;
   }
+  params.assertCurrent?.();
 
   const now = Date.now();
   let resetMeta: SessionAcpMeta | undefined;
@@ -783,6 +705,7 @@ async function ensureFreshAcpResetState(params: {
   await upsertAcpSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     mutate: (current) => {
       if (params.shouldApply && !params.shouldApply()) {
         return current;
@@ -900,6 +823,7 @@ export async function cleanupSessionBeforeMutation(params: {
   const parentAcpError = await closeAcpRuntimeForSession({
     cfg: params.cfg,
     sessionKey: parentSessionKey,
+    agentId: params.target.agentId,
     fallbackSessionKeys: [params.canonicalKey, params.legacyKey, params.key],
     reason: params.reason,
     onResetMeta: params.onAcpResetMeta,
@@ -920,7 +844,7 @@ export async function cleanupSessionBeforeMutation(params: {
     // Clear physical harness ownership after the old run drains but before the
     // store can expose a successor generation to a new turn.
     const resetParams = {
-      agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
+      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
       sessionId: params.entry.sessionId,
       sessionKey: params.target.canonicalKey ?? params.key,
       sessionFile: params.target.canonicalKey ?? params.key,
@@ -948,7 +872,7 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 
   const sessionKey = params.target.canonicalKey ?? params.key;
   const sessionId = params.entry?.sessionId;
-  const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
+  const agentId = resolveLifecycleAgentId(params.cfg, params.target.agentId);
   const sessionFile = sessionId
     ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
     : undefined;
@@ -1351,7 +1275,7 @@ export async function performGatewaySessionReset(params: {
         ? normalizeOptionalString(entry?.worktree?.id)
         : undefined;
       const resetLifecycleRevision = entry?.lifecycleRevision;
-      const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
+      const agentId = resolveLifecycleAgentId(cfg, target.agentId);
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const resetPluginRegistry = getActivePluginRegistry();
       const isResetLifecycleCurrent = () => {
@@ -1368,10 +1292,12 @@ export async function performGatewaySessionReset(params: {
         params.reason,
         target.canonicalKey ?? params.key,
         {
+          agentId,
           sessionEntry: entry,
           previousSessionEntry: entry,
           commandSource: params.commandSource,
           cfg,
+          storePath,
           workspaceDir,
         },
       );
@@ -1394,6 +1320,7 @@ export async function performGatewaySessionReset(params: {
       const parentAcpError = await closeAcpRuntimeForSession({
         cfg,
         sessionKey: parentSessionKey,
+        agentId: target.agentId,
         fallbackSessionKeys: [canonicalKey, legacyKey, params.key],
         reason: "session-reset",
         deferResetState: true,
@@ -1432,9 +1359,7 @@ export async function performGatewaySessionReset(params: {
       }
       const beforeResetMessages = getGlobalHookRunner()?.hasHooks("before_reset")
         ? await readGatewayBeforeResetPluginHookMessages({
-            agentId: normalizeAgentId(
-              target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
-            ),
+            agentId: resolveLifecycleAgentId(cfg, target.agentId ?? requestedAgentId),
             entry,
             sessionId: entry?.sessionId,
             sessionKey: target.canonicalKey ?? params.key,
@@ -1481,7 +1406,7 @@ export async function performGatewaySessionReset(params: {
           };
         }
         handleSessionStateSessionDeleted(target.canonicalKey, agentId);
-        notifyGatewaySessionReset(target.canonicalKey);
+        notifyGatewaySessionReset(target.canonicalKey, target.agentId);
         emitGatewaySessionEndPluginHook({
           cfg,
           sessionKey: target.canonicalKey,
@@ -1564,6 +1489,7 @@ export async function performGatewaySessionReset(params: {
                 createdVia: currentEntry.createdVia,
                 createdActor: currentEntry.createdActor,
                 createdAt: currentEntry.createdAt,
+                projectId: currentEntry.projectId,
               }
             : params.creation
               ? buildSessionCreationStamp(params.creation)
@@ -1627,6 +1553,7 @@ export async function performGatewaySessionReset(params: {
               ? undefined
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
+            parentSessionId: currentEntry?.parentSessionId,
             ...creationStamp,
             forkSource: currentEntry?.forkSource,
             forkedFromParent: sessionEntryForkedFromParent(currentEntry) ? true : undefined,
@@ -1636,6 +1563,7 @@ export async function performGatewaySessionReset(params: {
             label: currentEntry?.label,
             displayName: currentEntry?.displayName,
             delivery: currentEntry?.delivery,
+            pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,
             groupId: currentEntry?.groupId,
             subject: currentEntry?.subject,
             groupChannel: currentEntry?.groupChannel,
@@ -1714,17 +1642,16 @@ export async function performGatewaySessionReset(params: {
             sessionId: mutation.nextEntry.sessionId,
           });
           if (committedAcpResetState && isResetLifecycleCurrent()) {
-            try {
-              await getAcpRuntimeBackend(
-                (committedAcpResetState.meta.backend || cfg.acp?.backend || "").trim() || undefined,
-              )?.runtime.prepareFreshSession?.({
-                sessionKey: committedAcpResetState.sessionKey,
-              });
-            } catch (error) {
-              logVerbose(
-                `sessions.session-reset: ACP prepareFreshSession failed for ${committedAcpResetState.sessionKey}: ${String(error)}`,
-              );
-            }
+            // The helper records skipped/failed preparation instead of silently
+            // resuming the old backend conversation after an apparently
+            // successful reset.
+            await tryPrepareFreshManagerRuntimeSession({
+              deps: { getRuntimeBackend: getAcpRuntimeBackend },
+              cfg,
+              meta: committedAcpResetState.meta,
+              sessionKey: committedAcpResetState.sessionKey,
+              logPrefix: "sessions.session-reset",
+            });
           }
           await emitGatewayBeforeResetPluginHook({
             cfg,
@@ -1743,7 +1670,7 @@ export async function performGatewaySessionReset(params: {
       if (!resetSkipped) {
         const resetSessionKey = target.canonicalKey ?? params.key;
         handleSessionStateSessionReset(resetSessionKey);
-        notifyGatewaySessionReset(resetSessionKey);
+        notifyGatewaySessionReset(resetSessionKey, target.agentId);
       }
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);

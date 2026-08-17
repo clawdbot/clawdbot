@@ -1,13 +1,13 @@
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import { sendDurableMessageBatch } from "../channels/message/runtime.js";
+import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import {
   isHeartbeatTypingEnabled,
   heartbeatLog,
-  resolveHeartbeatAckMaxChars,
   resolveHeartbeatChannelPlugin,
   resolveHeartbeatTypingIntervalSeconds,
 } from "./heartbeat-runner-config.js";
@@ -22,7 +22,11 @@ import {
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
-import { HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, type HeartbeatRunResult } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_PREEMPTED,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  type HeartbeatRunResult,
+} from "./heartbeat-wake.js";
 import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 
@@ -37,7 +41,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   if (prepared.kind === "skipped") {
     return { status: "skipped", reason: prepared.reason };
   }
-  const { cfg, agentId, heartbeat, startedAt } = wake;
+  const { cfg, agentId, startedAt } = wake;
   const { delivery, visibility, replyPrefix, runSessionKey } = prepared;
   const { outboundPolicySessionKey, hasRelayableExecCompletion } = prepared;
 
@@ -115,7 +119,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           return false;
         }
       }
-      const send = await sendDurableMessageBatch({
+      const send = await sendDurableMessageBatchCore({
         cfg,
         channel: delivery.channel,
         to: delivery.to,
@@ -147,6 +151,14 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       });
       return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
     }
+    if (agentRun.kind === "preempted") {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_PREEMPTED,
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED };
+    }
     const outcome = classifyHeartbeatAgentOutcome({
       agentRun,
       hasRelayableExecCompletion,
@@ -156,7 +168,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           ctx: { ChatType: delivery.chatType, Provider: delivery.channel },
         }) === "message_tool_only",
       responsePrefix: resolveHeartbeatResponsePrefix(),
-      ackMaxChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
+      ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     });
     return await finalizeHeartbeatOutcome({
       opts,

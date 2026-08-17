@@ -12,6 +12,7 @@ const baseCfg = {
   agents: {
     list: [{ id: "main" }, { id: "codex" }],
   },
+  bindings: [{ agentId: "main", match: { channel: "imessage", accountId: "default" } }],
 } satisfies OpenClawConfig;
 
 describe("resolveIMessageConversationRoute", () => {

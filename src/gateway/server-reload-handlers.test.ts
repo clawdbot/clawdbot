@@ -36,7 +36,13 @@ import {
   createPluginCommandRuntime,
   type PluginCommandCatalogDecision,
 } from "../plugins/plugin-command-runtime.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  resetPluginRuntimeStateForTest,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   enqueueCommandInLane,
@@ -74,6 +80,7 @@ import {
 import { shouldRewarmProviderAuthState } from "./config-reload-recovery.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import { commitHooksConfigReload } from "./hooks.js";
+import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   abortPendingChannelReloads,
@@ -151,12 +158,22 @@ function createDefaultGatewayReloadState(
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,
     heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
-    cronState: {
-      cron: { start: vi.fn(async () => {}), stop: vi.fn() },
-      storePath: "/tmp/cron.json",
-      cronEnabled: false,
-    } as never,
+    cronState: createTestCronState(),
     channelHealthMonitor: null,
+    ...overrides,
+  };
+}
+
+function createTestCronState(overrides: Partial<GatewayCronState> = {}): GatewayCronState {
+  return {
+    cron: { start: vi.fn(async () => {}), stop: vi.fn() } as never,
+    storePath: "/tmp/cron.json",
+    cronEnabled: false,
+    reconcileExitWatchers: vi.fn(async () => {}),
+    stopExitWatchers: vi.fn(),
+    reconcileStreamWatchers: vi.fn(async () => {}),
+    stopStreamWatchers: vi.fn(async () => {}),
+    reconcileHeartbeatJobs: vi.fn(async () => {}),
     ...overrides,
   };
 }
@@ -260,6 +277,9 @@ const hoisted = vi.hoisted(() => ({
     cronEnabled: true,
     reconcileExitWatchers: vi.fn(async () => {}),
     stopExitWatchers: vi.fn(),
+    reconcileStreamWatchers: vi.fn(async () => {}),
+    stopStreamWatchers: vi.fn(async () => {}),
+    reconcileHeartbeatJobs: vi.fn(async () => {}),
   })),
 }));
 
@@ -591,6 +611,7 @@ function createReloadHandlersForTest(
 ) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const stopExitWatchers = vi.fn();
+  const reconcileHeartbeatJobs = vi.fn(async () => {});
   const heartbeatRunner = {
     stop: vi.fn(),
     updateConfig: vi.fn(),
@@ -599,12 +620,11 @@ function createReloadHandlersForTest(
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,
     heartbeatRunner: heartbeatRunner as never,
-    cronState: {
-      cron,
-      storePath: "/tmp/cron.json",
-      cronEnabled: false,
+    cronState: createTestCronState({
+      cron: cron as never,
       stopExitWatchers,
-    } as never,
+      reconcileHeartbeatJobs,
+    }),
     channelHealthMonitor: null,
   };
   const setState = vi.fn((nextState: typeof state) => {
@@ -640,6 +660,7 @@ function createReloadHandlersForTest(
     heartbeatRunner,
     logChannels,
     logCron,
+    reconcileHeartbeatJobs,
     setState,
     stopExitWatchers,
   };
@@ -863,8 +884,11 @@ async function withGatewayRestartSignal(
 // shared vitest worker imports those helpers before this file runs, the leaked
 // env routes reloads into the skip branch and channel restarts never fire.
 const testGatewayRestartListener = () => {};
+let pluginRegistrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 
 beforeEach(() => {
+  pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
+  stageActivePluginRegistry(createTestRegistry([]), null, "default");
   process.on("SIGUSR1", testGatewayRestartListener);
   resetGatewayWorkAdmission();
   resetProcessRegistryForTests();
@@ -874,6 +898,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
   process.removeListener("SIGUSR1", testGatewayRestartListener);
   setGatewaySigusr1RestartPolicy({ allowExternal: false });
   resetGatewayWorkAdmission();
@@ -1181,6 +1206,9 @@ describe("gateway hot reload model state", () => {
       cronEnabled: true,
       reconcileExitWatchers: newReconcileExitWatchers,
       stopExitWatchers: vi.fn(),
+      reconcileStreamWatchers: vi.fn(async () => {}),
+      stopStreamWatchers: vi.fn(async () => {}),
+      reconcileHeartbeatJobs: vi.fn(async () => {}),
     };
     hoisted.buildGatewayCronService.mockImplementationOnce(() => {
       order.push("build-new");
@@ -1241,6 +1269,9 @@ describe("gateway hot reload model state", () => {
       cronEnabled: false,
       reconcileExitWatchers: vi.fn(async () => {}),
       stopExitWatchers: vi.fn(),
+      reconcileStreamWatchers: vi.fn(async () => {}),
+      stopStreamWatchers: vi.fn(async () => {}),
+      reconcileHeartbeatJobs: vi.fn(async () => {}),
     };
     hoisted.buildGatewayCronService.mockReturnValueOnce(rebuiltCronState);
     const { applyHotReload, cronReconciliation } = createReloadHandlersForTest();
@@ -1280,13 +1311,8 @@ describe("gateway hot reload model state", () => {
   });
 
   it("applies an in-place heartbeat update without a recovery restart owner", async () => {
-    const { applyHotReload, heartbeatRunner, setState } = createReloadHandlersForTest(
-      undefined,
-      undefined,
-      undefined,
-      vi.fn(),
-      false,
-    );
+    const { applyHotReload, heartbeatRunner, reconcileHeartbeatJobs, setState } =
+      createReloadHandlersForTest(undefined, undefined, undefined, vi.fn(), false);
     const nextConfig = { agents: { defaults: { heartbeat: { every: "1h" } } } } as OpenClawConfig;
 
     await expect(
@@ -1294,6 +1320,9 @@ describe("gateway hot reload model state", () => {
     ).resolves.toBeUndefined();
 
     expect(heartbeatRunner.updateConfig).toHaveBeenCalledWith(nextConfig);
+    // Heartbeat cadence lives in system-owned cron monitor jobs; the reload
+    // must reconverge them or `heartbeat.every` changes silently never apply.
+    await waitForFast(() => expect(reconcileHeartbeatJobs).toHaveBeenCalledWith(nextConfig));
     expect(setState).toHaveBeenCalledOnce();
   });
 
@@ -1348,6 +1377,9 @@ describe("gateway hot reload model state", () => {
         cronEnabled: true,
         reconcileExitWatchers: vi.fn(async () => {}),
         stopExitWatchers: vi.fn(),
+        reconcileStreamWatchers: vi.fn(async () => {}),
+        stopStreamWatchers: vi.fn(async () => {}),
+        reconcileHeartbeatJobs: vi.fn(async () => {}),
       });
       const { applyHotReload, setState } = createReloadHandlersForTest(logReload);
 
@@ -1381,6 +1413,9 @@ describe("gateway hot reload model state", () => {
       cronEnabled: true,
       reconcileExitWatchers: vi.fn(async () => {}),
       stopExitWatchers: vi.fn(),
+      reconcileStreamWatchers: vi.fn(async () => {}),
+      stopStreamWatchers: vi.fn(async () => {}),
+      reconcileHeartbeatJobs: vi.fn(async () => {}),
     };
     const secondCronState = {
       cron: { start: vi.fn(async () => {}), stop: vi.fn() },
@@ -1388,6 +1423,9 @@ describe("gateway hot reload model state", () => {
       cronEnabled: true,
       reconcileExitWatchers: vi.fn(async () => {}),
       stopExitWatchers: vi.fn(),
+      reconcileStreamWatchers: vi.fn(async () => {}),
+      stopStreamWatchers: vi.fn(async () => {}),
+      reconcileHeartbeatJobs: vi.fn(async () => {}),
     };
     hoisted.buildGatewayCronService
       .mockReturnValueOnce(firstCronState)
@@ -2011,11 +2049,7 @@ describe("gateway hot reload commit policy", () => {
       hooksConfig: {} as never,
       hookClientIpConfig: {} as never,
       heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
-      cronState: {
-        cron: { start: vi.fn(async () => {}), stop: vi.fn() },
-        storePath: "/tmp/cron.json",
-        cronEnabled: false,
-      } as never,
+      cronState: createTestCronState(),
       channelHealthMonitor: oldMonitor as never,
     };
     const setState = vi.fn((nextState: typeof state) => {
@@ -3489,11 +3523,7 @@ describe("gateway Gmail hot reload handlers", () => {
       getState: () =>
         createDefaultGatewayReloadState({
           heartbeatRunner: heartbeatRunner as never,
-          cronState: {
-            cron: { start: vi.fn(async () => {}), stop: vi.fn() },
-            storePath: "/tmp/cron.json",
-            cronEnabled: false,
-          } as never,
+          cronState: createTestCronState(),
         }),
       activateRuntimeSecrets: activateRuntimeSecrets as never,
       commitTerminalConfig,
@@ -4909,6 +4939,9 @@ describe("gateway plugin hot reload handlers", () => {
       cronEnabled: true,
       reconcileExitWatchers: vi.fn(async () => {}),
       stopExitWatchers: vi.fn(),
+      reconcileStreamWatchers: vi.fn(async () => {}),
+      stopStreamWatchers: vi.fn(async () => {}),
+      reconcileHeartbeatJobs: vi.fn(async () => {}),
     };
     hoisted.buildGatewayCronService.mockImplementationOnce((params) => {
       events.push(`cron-build:${params?.env?.[envKey]}:${targetEnv[envKey]}`);

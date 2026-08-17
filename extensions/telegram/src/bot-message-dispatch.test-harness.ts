@@ -226,7 +226,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             cfg: resolved.cfg,
             dispatcherOptions: {
               ...resolved.dispatcherOptions,
-              deliver: delivery.deliverWithProviderMessageSending,
+              deliver: (payload, info) => {
+                const providerInfo = {
+                  ...info,
+                  onPlatformSendDispatch: async () => undefined,
+                };
+                return delivery.deliverWithProviderMessageSending(payload, providerInfo);
+              },
               onError: delivery.onError,
             },
             toolsAllow: resolved.toolsAllow,
@@ -548,18 +554,6 @@ export function allDeliveredReplyTexts(): string[] {
 
 export function expectDispatchParams(expected: Record<string, unknown>) {
   return expectRecordFields(mockCallArg(dispatchReplyWithBufferedBlockDispatcher), expected);
-}
-
-// The collapse bar edits the live window message in place (finalizeToPreview)
-// instead of deleting it and reposting the bar as a new message.
-export function expectWindowCollapsedTo(
-  stream: { finalizeToPreview: { mock: { calls: unknown[][] } } },
-  barText: string,
-) {
-  const calls = stream.finalizeToPreview.mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
-  const preview = calls.at(-1)?.[0] as { text?: string } | undefined;
-  expect(preview?.text).toBe(barText);
 }
 
 export function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {

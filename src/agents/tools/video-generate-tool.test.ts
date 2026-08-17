@@ -10,9 +10,9 @@ import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -363,7 +363,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   afterEach(() => {
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     vi.unstubAllEnvs();
   });
 
@@ -420,24 +420,6 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("hides reference-audio params when the configured video provider does not declare audio inputs", () => {
-    const properties = toolParameterProperties(
-      createVideoGenerateTool({
-        config: asConfig({
-          agents: {
-            defaults: {
-              videoGenerationModel: { primary: "openai/sora-2" },
-            },
-          },
-        }),
-      }),
-    );
-
-    expect(properties.audioRef).toBeUndefined();
-    expect(properties.audioRefs).toBeUndefined();
-    expect(properties.audioRoles).toBeUndefined();
-  });
-
-  it("hides reference-audio params for known video provider aliases without audio input support", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({
         config: asConfig({
@@ -893,7 +875,6 @@ describe("createVideoGenerateTool", () => {
     expect(immediate.mediaUrls ?? []).toEqual([]);
     expect(immediate.replyToId).toBeUndefined();
     expect(immediate.audioAsVoice).toBeUndefined();
-    expect(immediate.reaction).toBeUndefined();
     expect(attachments[0]?.url).toBe(signedUrl);
     expect(attachments[0]?.mimeType).toBe("video/mp4\nMEDIA:/tmp/mime-private.png\u2028\u202e");
     expect((details.media as { mediaUrls: string[] }).mediaUrls).toEqual([signedUrl]);
@@ -921,7 +902,6 @@ describe("createVideoGenerateTool", () => {
     expect(delivered.mediaUrls).toEqual([signedUrl]);
     expect(delivered.replyToId).toBeUndefined();
     expect(delivered.audioAsVoice).toBeUndefined();
-    expect(delivered.reaction).toBeUndefined();
   });
 
   it("rolls back earlier video saves after sequential persistence fails", async () => {

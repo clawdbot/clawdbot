@@ -132,7 +132,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
@@ -153,6 +153,7 @@ jobs:
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
       skip_package_telegram_e2e: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
+      trusted_qa_tooling_eligible: ${{ steps.trusted_qa_tooling.outputs.eligible }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
       repo_live_suite_filter: ${{ steps.inputs.outputs.repo_live_suite_filter }}
@@ -201,6 +202,79 @@ jobs:
             echo "Expected expected_sha to be a full commit SHA; got: ${EXPECTED_SHA}" >&2
             exit 1
           fi
+
+      - name: Validate trusted QA tooling context
+        id: trusted_qa_context
+        if: inputs.target_context_ref != ''
+        env:
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          normalized_context_ref="$TARGET_CONTEXT_REF"
+          case "$normalized_context_ref" in
+            refs/heads/*) normalized_context_ref="${normalized_context_ref#refs/heads/}" ;;
+            refs/tags/*) normalized_context_ref="${normalized_context_ref#refs/tags/}" ;;
+          esac
+          if [[ "$normalized_context_ref" =~ ^(release/[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*|extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
+            context_kind=branch
+            fetch_ref="refs/heads/${normalized_context_ref}"
+          elif [[ "$normalized_context_ref" =~ ^v[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?$ ]]; then
+            context_kind=tag
+            fetch_ref="refs/tags/${normalized_context_ref}"
+          else
+            echo "target_context_ref must be a canonical OpenClaw release branch or tag." >&2
+            exit 1
+          fi
+          if [[ ! "$TARGET_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "target_context_ref requires ref to be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          echo "normalized_ref=${normalized_context_ref}" >> "$GITHUB_OUTPUT"
+          echo "context_kind=${context_kind}" >> "$GITHUB_OUTPUT"
+          echo "fetch_ref=${fetch_ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate trusted QA tooling eligibility
+        id: trusted_qa_tooling
+        if: steps.trusted_qa_context.outputs.fetch_ref != ''
+        env:
+          CONTEXT_FETCH_REF: ${{ steps.trusted_qa_context.outputs.fetch_ref }}
+          CONTEXT_KIND: ${{ steps.trusted_qa_context.outputs.context_kind }}
+          CONTEXT_REF: ${{ steps.trusted_qa_context.outputs.normalized_ref }}
+          TARGET_REF: ${{ inputs.ref }}
+          TRUSTED_REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          context_repo="$(mktemp -d)"
+          trap 'rm -rf -- "$context_repo"' EXIT
+          git init --bare --quiet "$context_repo"
+          if ! GIT_TERMINAL_PROMPT=0 git -C "$context_repo" fetch --quiet --no-tags --filter=blob:none \
+            "$TRUSTED_REPOSITORY_URL" "$CONTEXT_FETCH_REF"; then
+            echo "Failed to fetch trusted QA tooling context ${CONTEXT_REF}." >&2
+            exit 1
+          fi
+          context_sha="$(git -C "$context_repo" rev-parse --verify 'FETCH_HEAD^{commit}')"
+          normalized_context_sha="$(printf '%s' "$context_sha" | tr '[:upper:]' '[:lower:]')"
+          normalized_target_sha="$(printf '%s' "$TARGET_REF" | tr '[:upper:]' '[:lower:]')"
+          case "$CONTEXT_KIND" in
+            tag)
+              if [[ "$normalized_context_sha" != "$normalized_target_sha" ]]; then
+                echo "Trusted QA tooling tag ${CONTEXT_REF} resolves to ${context_sha} and does not match target ${TARGET_REF}." >&2
+                exit 1
+              fi
+              ;;
+            branch)
+              if ! git -C "$context_repo" merge-base --is-ancestor "$normalized_target_sha" "$normalized_context_sha" 2>/dev/null; then
+                echo "Target ${TARGET_REF} is not reachable from branch ${CONTEXT_REF} at ${context_sha}." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Trusted QA tooling context kind is invalid: ${CONTEXT_KIND}." >&2
+              exit 1
+              ;;
+          esac
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout trusted workflow helper
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -290,11 +364,13 @@ jobs:
             echo "Failed to resolve selected ref SHA." >&2
             exit 1
           fi
-          if [[ -n "${EXPECTED_SHA// }" ]] && [[ "${selected_sha,,}" != "${EXPECTED_SHA,,}" ]]; then
+          normalized_selected_sha="$(printf '%s' "$selected_sha" | tr '[:upper:]' '[:lower:]')"
+          normalized_expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
+          if [[ -n "${normalized_expected_sha// }" ]] && [[ "$normalized_selected_sha" != "$normalized_expected_sha" ]]; then
             echo "Ref resolved to ${selected_sha}, expected ${EXPECTED_SHA}." >&2
             exit 1
           fi
-          echo "sha=${selected_sha,,}" >> "$GITHUB_OUTPUT"
+          echo "sha=${normalized_selected_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Validate Tideclaw alpha target matches workflow branch
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
@@ -1258,6 +1334,32 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
+
+      - name: Checkout trusted QA Anthropic mock tooling
+        if: needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-qa-tooling-trusted
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          sparse-checkout: extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
+          sparse-checkout-cone-mode: false
+          submodules: false
+
+      - name: Install trusted QA Anthropic mock tooling
+        if: needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          trusted_checkout=.release-qa-tooling-trusted
+          trap 'rm -rf -- "$trusted_checkout"' EXIT
+          install -m 0644 \
+            "$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \
+            extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
+          rm -rf -- "$trusted_checkout"
+          trap - EXIT
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

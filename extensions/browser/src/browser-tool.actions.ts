@@ -269,6 +269,7 @@ export async function executeTabsAction(params: {
   timeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
   targetId?: string;
+  signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const { baseUrl, profile, timeoutMs, proxyRequest } = params;
   if (proxyRequest) {
@@ -285,9 +286,13 @@ export async function executeTabsAction(params: {
     );
     return formatTabsToolResult(tabs);
   }
-  const tabs = (await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs })).filter(
-    (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
-  );
+  const tabs = (
+    await browserToolActionDeps.browserTabs(baseUrl, {
+      profile,
+      timeoutMs,
+      signal: params.signal,
+    })
+  ).filter((tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId);
   return formatTabsToolResult(tabs);
 }
 
@@ -334,6 +339,7 @@ export async function executeConsoleAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const level = normalizeOptionalString(input.level);
@@ -354,6 +360,7 @@ export async function executeConsoleAction(params: {
     level,
     targetId,
     profile,
+    signal: params.signal,
   });
   return formatConsoleToolResult(result);
 }
@@ -395,6 +402,7 @@ export async function executeDownloadAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  signal?: AbortSignal;
   onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { action, input, baseUrl, profile, proxyRequest } = params;
@@ -419,12 +427,14 @@ export async function executeDownloadAction(params: {
           targetId,
           timeoutMs,
           profile,
+          signal: params.signal,
         })
       : await browserToolActionDeps.browserWaitForDownload(baseUrl, {
           path: request.path,
           targetId,
           timeoutMs,
           profile,
+          signal: params.signal,
         });
   params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
   return formatBrowserExternalToolResult({ kind: "download", payload: result });
@@ -436,15 +446,21 @@ export async function executeActAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  signal?: AbortSignal;
   onTabActivity?: (targetId: string | undefined) => void;
+  onTabClose?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   const effectiveRequest = withConfiguredActTimeout(request, profile);
   // resolvedTargetId is the id the act actually ran against (retry paths swap
   // it), so page-state capture must use it rather than the original request's.
   const finishActResult = async (result: unknown, resolvedTargetId: string | undefined) => {
-    params.onTabActivity?.(resolvedTargetId);
     const aborted = readBrowserBatchAbort(result);
+    const onTabResult =
+      effectiveRequest.kind === "close" || aborted?.reason === "closed"
+        ? params.onTabClose
+        : params.onTabActivity;
+    onTabResult?.(resolvedTargetId);
     const formatted = formatActToolResult(result, aborted);
     if (!actObservedNavigation(result, aborted)) {
       return formatted;
@@ -457,6 +473,7 @@ export async function executeActAction(params: {
       baseUrl,
       profile,
       proxyRequest,
+      signal: params.signal,
     });
   };
   try {
@@ -470,6 +487,7 @@ export async function executeActAction(params: {
         })
       : await browserToolActionDeps.browserAct(baseUrl, effectiveRequest, {
           profile,
+          signal: params.signal,
         });
     return await finishActResult(
       result,
@@ -486,7 +504,12 @@ export async function executeActAction(params: {
               profile,
             })) as { tabs?: unknown[] }
           ).tabs ?? [])
-        : await browserToolActionDeps.browserTabs(baseUrl, { profile }).catch(() => []);
+        : await browserToolActionDeps
+            .browserTabs(baseUrl, { profile, signal: params.signal })
+            .catch(() => {
+              params.signal?.throwIfAborted();
+              return [];
+            });
       const freshTargetId =
         tabs.length === 1
           ? readStringValue((tabs[0] as { targetId?: unknown } | undefined)?.targetId)
@@ -512,6 +535,7 @@ export async function executeActAction(params: {
             })
           : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
               profile,
+              signal: params.signal,
             });
         return await finishActResult(
           retryResult,

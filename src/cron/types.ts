@@ -3,7 +3,11 @@ import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runne
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
-import type { CronScheduledToolPolicy } from "./scheduled-tool-policy.js";
+import type { CronRuntimeAuthority } from "./runtime-authority.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "./scheduled-tool-policy.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
@@ -490,11 +494,17 @@ export type CronJob = CronJobBase<
 export type CronToolsAllowProvenance = {
   version: 1;
   source: "final-executable-surface";
+  /** Store-private creator origin; missing legacy facts normalize to unknown. */
+  callerOrigin?: CronScheduledToolCallerOrigin;
 };
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
   toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** Runtime-private authority omitted from public Gateway and wire contracts. */
+  runtimeAuthority?: CronRuntimeAuthority;
+  /** Authority was explicitly cleared and must be reauthorized before app reuse. */
+  runtimeAuthorityRecoveryRequired?: true;
 };
 
 /** Versioned cron store file shape. */
@@ -532,6 +542,7 @@ export type CronJobPatch = Partial<
     | "owner"
     | "scheduledToolPolicy"
     | "pacing"
+    | "trigger"
   >
 > & {
   displayName?: string | null;

@@ -256,6 +256,56 @@ describe("Codex app-server elicitation bridge", () => {
     vi.restoreAllMocks();
   });
 
+  it("declines app elicitations for scheduled app authority", async () => {
+    const params = {
+      ...createParams(),
+      trigger: "cron",
+      scheduledRuntimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { version: 1 },
+      },
+    } as EmbeddedRunAttemptParams;
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation(),
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps unrelated Computer Use elicitation policy unchanged", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use", decision: "allow-once" });
+    const params = {
+      ...createParams(),
+      trigger: "cron",
+      scheduledRuntimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { version: 1 },
+      },
+    } as EmbeddedRunAttemptParams;
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation(),
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    });
+
+    expect(result).toEqual({ action: "accept", content: null, _meta: null });
+    expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
+  });
+
   it("routes MCP tool approval elicitations through plugin approvals", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-1", status: "accepted" })

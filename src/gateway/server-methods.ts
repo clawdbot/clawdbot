@@ -2,6 +2,7 @@ import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
+  type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -15,6 +16,7 @@ import {
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
+  tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
@@ -44,15 +46,19 @@ import {
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import type {
+  GatewayRequestContext,
   GatewayRequestHandler,
   GatewayRequestHandlers,
   GatewayRequestOptions,
+  SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
+import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 type CoreGatewayHandlerModuleLoader = () => Promise<GatewayRequestHandlers>;
 
@@ -88,7 +94,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   diagnostics: () =>
     import("./server-methods/diagnostics.js").then((module) => module.diagnosticsHandlers),
-  doctor: () => import("./server-methods/doctor.js").then((module) => module.doctorHandlers),
+  doctor: () =>
+    import("./server-methods/doctor.js").then((module) => module.createDoctorHandlers()),
   environments: () =>
     import("./server-methods/environments.js").then((module) => module.environmentsHandlers),
   worktrees: () =>
@@ -123,6 +130,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),
   plugins: () => import("./server-methods/plugins.js").then((module) => module.pluginsHandlers),
   projects: () => import("./server-methods/projects.js").then((module) => module.projectsHandlers),
+  portals: () => import("./server-methods/portals.js").then((module) => module.portalHandlers),
   migrations: () =>
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
@@ -147,6 +155,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   "sessions-create": () =>
     import("./server-methods/sessions-create.js").then((module) => module.sessionCreateHandlers),
+  "sessions-recover": () =>
+    import("./server-methods/sessions-recover.js").then((module) => module.sessionRecoverHandlers),
   "sessions-delete": () =>
     import("./server-methods/sessions-delete.js").then((module) => module.sessionDeleteHandlers),
   "sessions-dispatch": () =>
@@ -292,7 +302,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = Object.fromEntries(
 );
 
 /** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
-function createRequestGatewayMethodRegistry(
+export function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
   // Attached gateway methods must not be shadowed by agent-scoped registry loads.
@@ -335,11 +345,74 @@ function createRequestGatewayMethodRegistry(
   );
 }
 
+/** Applies the router-owned authorization fence before any transport or typed dispatch. */
+export async function authorizeGatewayRequestPreDispatch(params: {
+  method: string;
+  requestParams: unknown;
+  client: GatewayRequestOptions["client"];
+  context: GatewayRequestContext;
+  methodRegistry: GatewayMethodRegistry;
+}): Promise<{
+  error: ErrorShape | null;
+  sessionMutationAuthorization?: SessionMutationAuthorization;
+}> {
+  const authError = authorizeGatewayMethod(
+    params.method,
+    params.client,
+    params.requestParams,
+    params.methodRegistry,
+  );
+  if (authError) {
+    return { error: authError };
+  }
+  const sessionMutation = resolveSessionMutationAuthorization({
+    client: params.client ?? null,
+    method: params.method,
+    requestParams: params.requestParams,
+    context: params.context,
+  });
+  if (sessionMutation.error) {
+    return { error: sessionMutation.error };
+  }
+  if (
+    params.client?.connect.role === "node" &&
+    (!params.client.connId ||
+      !(await params.context.nodeRegistry.isConnectionCurrentPairingState(params.client.connId)))
+  ) {
+    return {
+      error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      }),
+    };
+  }
+  if (params.context.unavailableGatewayMethods?.has(params.method)) {
+    return {
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${params.method} unavailable during gateway startup`,
+        {
+          retryable: true,
+          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+        },
+      ),
+    };
+  }
+  return {
+    error: null,
+    ...(sessionMutation.authorization
+      ? { sessionMutationAuthorization: sessionMutation.authorization }
+      : {}),
+  };
+}
+
 type GatewayRequestEnvelopeOptions<T> = Pick<
   GatewayRequestOptions,
   "context" | "isWebchatConnect"
 > & {
   methodRegistry: GatewayMethodRegistry;
+  requestParams?: unknown;
   reject: (error: ReturnType<typeof errorShape>) => T | Promise<T>;
 };
 
@@ -383,7 +456,12 @@ export async function runWithGatewayRequestEnvelope<T>(
     // Preparation must stay protected even before it owns the root admission that it closes.
     return await options.reject(preAdmissionRateLimitError);
   }
-  const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
+  const rootWorkAdmission =
+    tryBeginGatewayRootWorkAdmission() ??
+    (method === "gateway.restart.request" &&
+    isTargetedNonSafeGatewayRestartRequest(options.requestParams)
+      ? tryBeginGatewayPreparedRestartRootWorkAdmission()
+      : null);
   if (isSuspendPrepare && rootWorkAdmission && !rootWorkAdmission.ownsRoot) {
     return await options.reject(
       errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
@@ -445,6 +523,10 @@ export async function runWithGatewayRequestEnvelope<T>(
       if (error instanceof SessionMutationAuthorizationChangedError) {
         return await options.reject(error.error);
       }
+      const staleInstall = classifyGatewayStaleInstall(error);
+      if (staleInstall) {
+        return await options.reject(staleInstall.error);
+      }
       throw error;
     }
   };
@@ -471,47 +553,15 @@ export async function handleGatewayRequest(
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
       : createRequestGatewayMethodRegistry(opts.extraHandlers);
-  const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
-  if (authError) {
-    respond(false, undefined, authError);
-    return;
-  }
-  const sessionMutation = resolveSessionMutationAuthorization({
-    client: client ?? null,
+  const authorization = await authorizeGatewayRequestPreDispatch({
     method: req.method,
     requestParams: req.params,
+    client,
     context,
+    methodRegistry,
   });
-  if (sessionMutation.error) {
-    respond(false, undefined, sessionMutation.error);
-    return;
-  }
-  if (
-    client?.connect.role === "node" &&
-    (!client.connId || !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId)))
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
-        retryable: true,
-        details: { code: "PAIRING_CHANGED" },
-      }),
-    );
-    return;
-  }
-  if (context.unavailableGatewayMethods?.has(req.method)) {
-    // During startup, methods can be listed before their runtime is ready. Return the protocol
-    // retry shape so clients can back off without treating startup as a permanent unknown method.
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
-        retryable: true,
-        retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-        details: { ...gatewayStartupUnavailableDetails(), method: req.method },
-      }),
-    );
+  if (authorization.error) {
+    respond(false, undefined, authorization.error);
     return;
   }
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
@@ -532,14 +582,15 @@ export async function handleGatewayRequest(
       respond,
       context,
       ...(signal ? { signal } : {}),
-      ...(sessionMutation.authorization
-        ? { sessionMutationAuthorization: sessionMutation.authorization }
+      ...(authorization.sessionMutationAuthorization
+        ? { sessionMutationAuthorization: authorization.sessionMutationAuthorization }
         : {}),
     });
   await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
     context,
     isWebchatConnect,
     methodRegistry,
+    requestParams: req.params,
     reject: (error) => respond(false, undefined, error),
   });
 }

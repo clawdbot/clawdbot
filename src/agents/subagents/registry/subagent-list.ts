@@ -8,7 +8,7 @@ import {
   resolveSubagentLabel,
   sortSubagentRuns,
 } from "../../../auto-reply/reply/subagents-utils.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -66,7 +66,7 @@ type SessionEntryResolution = {
 };
 
 function resolveStorePathForKey(cfg: OpenClawConfig, parsed?: ParsedAgentSessionKey | null) {
-  return resolveStorePath(cfg.session?.store, {
+  return resolveSessionStorePathCore(cfg.session?.store, {
     agentId: parsed?.agentId,
   });
 }

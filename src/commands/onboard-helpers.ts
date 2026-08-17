@@ -15,6 +15,7 @@ import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -190,7 +191,7 @@ export function applyWizardMetadata(
 ): OpenClawConfig {
   const commit =
     normalizeOptionalString(process.env.GIT_COMMIT) ?? normalizeOptionalString(process.env.GIT_SHA);
-  return {
+  return inheritLegacyDefaultAgentId(cfg, {
     ...cfg,
     wizard: {
       ...cfg.wizard,
@@ -200,7 +201,7 @@ export function applyWizardMetadata(
       lastRunCommand: params.command,
       lastRunMode: params.mode,
     },
-  };
+  });
 }
 
 /** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
@@ -536,8 +537,6 @@ function summarizeError(err: unknown): string {
       .find(Boolean) ?? raw;
   return line.length > 120 ? `${truncateUtf16Safe(line, 119)}…` : line;
 }
-
-export const testing = { summarizeError };
 
 /** Default workspace path shown by onboarding prompts. */
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;

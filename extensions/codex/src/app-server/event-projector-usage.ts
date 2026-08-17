@@ -1,10 +1,12 @@
 import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readNonNegativeInteger, readNumber, readString } from "./event-projector-values.js";
+import {
+  asSafeIntegerInRange,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
 function readTokenCount(record: JsonObject, key: string): number | undefined {
-  const value = readNonNegativeInteger(record, key);
-  return value !== undefined && Number.isSafeInteger(value) ? value : undefined;
+  return asSafeIntegerInRange(record[key], { min: 0 });
 }
 
 function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
@@ -13,7 +15,7 @@ function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normal
   return last ? normalizeCodexThreadTokenUsage(last) : undefined;
 }
 
-function readCodexThreadContextSnapshot(params: JsonObject): {
+export function readCodexThreadContextSnapshot(params: JsonObject): {
   activeContextTokens?: number;
   cachedInputTokens?: number;
   cacheWriteInputTokens?: number;
@@ -63,52 +65,40 @@ export function projectCodexThreadUsageUpdate(
 export function normalizeCodexThreadTokenUsage(
   record: JsonObject,
 ): ReturnType<typeof normalizeUsage> {
-  // Thread usage preserves per-response accounting on older app servers, but
-  // its `last` snapshot is not guaranteed to describe the final response.
-  return normalizeCodexTokenUsageBreakdown(record, "thread");
+  return normalizeCodexTokenUsageBreakdown(record);
 }
 
 export function normalizeCodexResponseTokenUsage(
   record: JsonObject,
 ): ReturnType<typeof normalizeUsage> {
-  return normalizeCodexTokenUsageBreakdown(record, "response");
+  return normalizeCodexTokenUsageBreakdown(record);
 }
 
-function normalizeCodexTokenUsageBreakdown(
-  record: JsonObject,
-  source: "thread" | "response",
-): ReturnType<typeof normalizeUsage> {
+function normalizeCodexTokenUsageBreakdown(record: JsonObject): ReturnType<typeof normalizeUsage> {
   // v2 TokenUsageBreakdown. inputTokens includes cached input; OpenClaw usage
   // tracks uncached input, cache reads, and cache writes separately.
-  const readCount = source === "response" ? readTokenCount : readNumber;
-  const totalTokens = readCount(record, "totalTokens");
-  const inputTokens = readCount(record, "inputTokens");
-  const cacheRead = readCount(record, "cachedInputTokens");
-  const output = readCount(record, "outputTokens");
-  const reasoningTokens = readCount(record, "reasoningOutputTokens");
+  const totalTokens = readTokenCount(record, "totalTokens");
+  const inputTokens = readTokenCount(record, "inputTokens");
+  const cacheRead = readTokenCount(record, "cachedInputTokens");
+  const output = readTokenCount(record, "outputTokens");
+  const reasoningTokens = readTokenCount(record, "reasoningOutputTokens");
   const cacheWrite =
-    record.cacheWriteInputTokens === undefined && source === "response"
+    record.cacheWriteInputTokens === undefined
       ? 0
-      : readCount(record, "cacheWriteInputTokens");
-  if (
-    source === "response" &&
-    (totalTokens === undefined ||
-      inputTokens === undefined ||
-      cacheRead === undefined ||
-      cacheWrite === undefined ||
-      output === undefined ||
-      reasoningTokens === undefined ||
-      cacheRead + cacheWrite > inputTokens ||
-      totalTokens !== inputTokens + output)
-  ) {
-    return undefined;
-  }
+      : readTokenCount(record, "cacheWriteInputTokens");
+  const hasCoherentInput =
+    inputTokens !== undefined &&
+    cacheRead !== undefined &&
+    cacheWrite !== undefined &&
+    cacheRead + cacheWrite <= inputTokens;
+  const hasCoherentContext =
+    hasCoherentInput &&
+    totalTokens !== undefined &&
+    output !== undefined &&
+    totalTokens === inputTokens + output;
 
   const usage = normalizeUsage({
-    input:
-      inputTokens === undefined
-        ? undefined
-        : Math.max(0, inputTokens - (cacheRead ?? 0) - (cacheWrite ?? 0)),
+    input: hasCoherentInput ? inputTokens - cacheRead - cacheWrite : undefined,
     output,
     cacheRead,
     cacheWrite,
@@ -119,13 +109,11 @@ function normalizeCodexTokenUsageBreakdown(
     return undefined;
   }
 
-  // Only exact provider completions own fresh context; thread snapshots may be stale.
   return {
     ...usage,
-    contextUsage:
-      source === "response" && inputTokens !== undefined && totalTokens !== undefined
-        ? { state: "available", promptTokens: inputTokens, totalTokens }
-        : { state: "unavailable" },
+    contextUsage: hasCoherentContext
+      ? { state: "available", promptTokens: inputTokens, totalTokens }
+      : { state: "unavailable" },
   };
 }
 

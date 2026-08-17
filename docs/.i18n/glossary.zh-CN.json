@@ -1742,5 +1742,13 @@
   {
     "source": "Updating OpenClaw",
     "target": "更新 OpenClaw"
+  },
+  {
+    "source": "Connect a machine",
+    "target": "连接机器"
+  },
+  {
+    "source": "Portals",
+    "target": "门户"
   }
 ]

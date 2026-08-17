@@ -8,6 +8,10 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import {
+  backfillSubagentRequesterAgentIds,
+  resolveSubagentRequesterAgentId,
+} from "../../subagent-requester-owner.js";
 import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import { retrySubagentCleanup } from "../spawn/subagent-spawn-cleanup.js";
 import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
@@ -18,7 +22,7 @@ import {
   reconcileOrphanedRestoredRuns,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
-import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
@@ -53,13 +57,15 @@ export function createSubagentRegistryRestorer(config: {
   deps: () => SubagentRegistryDeps;
   persist: (...runIds: string[]) => void;
   persistOrThrow: (...runIds: string[]) => void;
-  settleRequesterTurn: ReturnType<
-    typeof createSubagentRegistryLifecycleController
-  >["settleRequesterTurnAfterSessionSpawns"];
+  settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   ensureListener: () => void;
   startSweeper: () => void;
   resumeRun: (runId: string) => void;
-  listSwarmRunsForGroup: (groupId: string, requesterSessionKey?: string) => SubagentRunRecord[];
+  listSwarmRunsForGroup: (
+    groupId: string,
+    requesterSessionKey?: string,
+    requesterAgentId?: string,
+  ) => SubagentRunRecord[];
   startQueuedSubagentRun: (
     runId: string,
     gatewayRunId?: string,
@@ -155,6 +161,9 @@ export function createSubagentRegistryRestorer(config: {
         runs,
         resumedRuns,
       });
+      if (backfillSubagentRequesterAgentIds(cfg, runs.values()) > 0) {
+        restoredStateChanged = true;
+      }
       for (const entry of runs.values()) {
         if (updateSubagentArchiveAtMs(entry, cfg)) {
           restoredStateChanged = true;
@@ -164,24 +173,32 @@ export function createSubagentRegistryRestorer(config: {
         persist();
       }
       const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
+      const resolveRequesterAgentId = (entry: SubagentRunRecord) =>
+        resolveSubagentRequesterAgentId(cfg, entry);
       for (const entry of runs.values()) {
         const requesterTurnRunId = entry.requesterTurnRunId?.trim();
         if (!requesterTurnRunId) {
           continue;
         }
-        let turns = requesterTurns.get(entry.requesterSessionKey);
+        const requesterIdentity = `${resolveRequesterAgentId(entry) ?? "unknown"}\0${entry.requesterSessionKey}`;
+        let turns = requesterTurns.get(requesterIdentity);
         if (!turns) {
           turns = new Map();
-          requesterTurns.set(entry.requesterSessionKey, turns);
+          requesterTurns.set(requesterIdentity, turns);
         }
         const entries = turns.get(requesterTurnRunId) ?? [];
         entries.push(entry);
         turns.set(requesterTurnRunId, entries);
       }
-      for (const [requesterSessionKey, turns] of requesterTurns) {
+      for (const [, turns] of requesterTurns) {
         for (const [requesterTurnRunId, entries] of turns) {
+          const firstEntry = entries[0];
+          if (!firstEntry) {
+            continue;
+          }
           settleRequesterTurn({
-            requesterSessionKey,
+            requesterSessionKey: firstEntry.requesterSessionKey,
+            requesterAgentId: resolveRequesterAgentId(firstEntry),
             requesterTurnRunId,
             requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
             acceptedSessionSpawns: entries.map((entry) => ({
@@ -228,6 +245,7 @@ export function createSubagentRegistryRestorer(config: {
           const groupRuns = listSwarmRunsForGroup(
             entry.groupId ?? "",
             entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
+            entry.requesterAgentId,
           );
           const currentSwarmConfig = resolveSwarmConfig(
             deps().getRuntimeConfig(),
@@ -245,14 +263,24 @@ export function createSubagentRegistryRestorer(config: {
             start: async () => {
               await runWithGatewayIndependentRootWorkAdmission(async () => {
                 launchLifecycleGeneration = getAgentEventLifecycleGeneration();
-                const response = await deps().callGateway({
+                const request = {
                   method: "agent",
                   params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
                   // Restart replay must restore the trusted launch capability; otherwise
                   // the queued child silently falls back to its session/default route.
                   ...(launch.authorization ? { scopes: [ADMIN_SCOPE] } : {}),
                   timeoutMs: launch.timeoutMs,
-                });
+                };
+                const gatewayRuntime = deps().getGatewayRecoveryRuntime();
+                const response = gatewayRuntime
+                  ? await gatewayRuntime.dispatchAgent(
+                      request.params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+                      request.timeoutMs,
+                      launch.authorization
+                        ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
+                        : undefined,
+                    )
+                  : await deps().callGateway(request);
                 const gatewayRunId = readGatewayRunId(response) ?? runId;
                 try {
                   if (!startQueuedSubagentRun(runId, gatewayRunId, launchLifecycleGeneration)) {

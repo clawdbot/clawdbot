@@ -62,7 +62,7 @@ export function withSiblingAccount(config: OpenClawConfig, baseUrl?: string): Op
   };
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
+function assertRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected record, got ${JSON.stringify(value)}`);
   }
@@ -70,33 +70,33 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function readHealthAccounts(payload: unknown): Record<string, AccountState> {
-  const channels = asRecord(asRecord(payload).channels);
-  const channel = asRecord(channels[CHANNEL_ID]);
-  const accounts = asRecord(channel.accounts);
+  const channels = assertRecord(assertRecord(payload).channels);
+  const channel = assertRecord(channels[CHANNEL_ID]);
+  const accounts = assertRecord(channel.accounts);
   return Object.fromEntries(
     Object.entries(accounts).map(([accountId, state]) => [
       accountId,
-      asRecord(state) as AccountState,
+      assertRecord(state) as AccountState,
     ]),
   );
 }
 
 function readStatusAccounts(payload: unknown): Record<string, AccountState> {
-  const channelAccounts = asRecord(asRecord(payload).channelAccounts);
+  const channelAccounts = assertRecord(assertRecord(payload).channelAccounts);
   const accounts = channelAccounts[CHANNEL_ID];
   if (!Array.isArray(accounts)) {
     throw new Error(`channels.status omitted ${CHANNEL_ID} accounts`);
   }
   return Object.fromEntries(
     accounts.map((state) => {
-      const record = asRecord(state) as AccountState;
+      const record = assertRecord(state) as AccountState;
       return [String(record.accountId), record];
     }),
   );
 }
 
 export function statusSummaryMentions(payload: unknown, ...needles: string[]) {
-  const channelSummary = asRecord(payload).channelSummary;
+  const channelSummary = assertRecord(payload).channelSummary;
   if (!Array.isArray(channelSummary) || channelSummary.some((line) => typeof line !== "string")) {
     throw new Error(`status omitted channelSummary lines: ${JSON.stringify(payload)}`);
   }
@@ -127,8 +127,8 @@ async function waitForAccounts(
 }
 
 function readChannelConfig(payload: unknown) {
-  const config = asRecord(asRecord(payload).config);
-  return structuredClone(asRecord(asRecord(config.channels)[CHANNEL_ID]));
+  const config = assertRecord(assertRecord(payload).config);
+  return structuredClone(assertRecord(assertRecord(config.channels)[CHANNEL_ID]));
 }
 
 async function waitForAppliedConfig(
@@ -137,7 +137,7 @@ async function waitForAppliedConfig(
 ) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const payload = asRecord(await gateway.call("config.get", {}));
+    const payload = assertRecord(await gateway.call("config.get", {}));
     if (
       payload.hash === hash &&
       typeof payload.appliedConfigHash === "string" &&
@@ -178,10 +178,10 @@ export async function runGatewayRpcAccountHealthProof(
     const initialHealth = await gateway.call("health", { probe: true });
     const initialStatus = await gateway.call("status", { includeChannelSummary: true });
     const initialAccounts = readHealthAccounts(initialHealth);
-    const beforeConfig = asRecord(await gateway.call("config.get", {}));
+    const beforeConfig = assertRecord(await gateway.call("config.get", {}));
     const beforeChannelConfig = readChannelConfig(beforeConfig);
 
-    const patchResult = asRecord(
+    const patchResult = assertRecord(
       await gateway.call("config.patch", {
         raw: JSON.stringify({
           channels: {
@@ -202,9 +202,9 @@ export async function runGatewayRpcAccountHealthProof(
     const appliedConfig = await waitForAppliedConfig(gateway, patchResult.hash);
     const afterChannelConfig = readChannelConfig(appliedConfig);
     const expectedChannelConfig = structuredClone(beforeChannelConfig);
-    const expectedAccounts = asRecord(expectedChannelConfig.accounts);
+    const expectedAccounts = assertRecord(expectedChannelConfig.accounts);
     expectedAccounts[TARGET_ACCOUNT_ID] = {
-      ...asRecord(expectedAccounts[TARGET_ACCOUNT_ID]),
+      ...assertRecord(expectedAccounts[TARGET_ACCOUNT_ID]),
       enabled: false,
     };
 
@@ -222,7 +222,7 @@ export async function runGatewayRpcAccountHealthProof(
     const finalAccounts = readHealthAccounts(finalHealth);
 
     return {
-      initialHealthOk: asRecord(initialHealth).ok === true,
+      initialHealthOk: assertRecord(initialHealth).ok === true,
       initialStatusVisible:
         statusSummaryMentions(initialStatus, CHANNEL_LABEL, "default", TARGET_ACCOUNT_ID) &&
         initialChannelAccounts.default?.running === true &&

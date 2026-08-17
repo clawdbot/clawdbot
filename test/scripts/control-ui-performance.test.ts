@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CONTROL_UI_PERFORMANCE_BUDGETS,
   collectControlUiPerformanceMetrics,
   evaluateControlUiPerformanceBudgets,
   extractControlUiStartupAssetPaths,
@@ -204,38 +205,64 @@ describe("Control UI performance budgets", () => {
     );
   });
 
-  it("allows startup JS growth within the ratchet tolerance", () => {
+  it("allows CI-measured startup JS growth within the ratchet tolerance", () => {
     const violations = evaluateControlUiPerformanceBudgets(
-      createMetrics(11_024),
-      looseBudgets,
-      startupBaseline(10_000),
+      createMetrics(326_672),
+      { ...looseBudgets, startupJsGzipBytes: 319 * 1024, largestJsGzipBytes: 400_000 },
+      startupBaseline(325_675),
     );
 
     expect(violations).toEqual([]);
   });
 
   it("fails startup JS growth over the ratchet tolerance with update guidance", () => {
-    const metrics = createMetrics(11_025);
-    const baseline = startupBaseline(10_000);
+    const metrics = createMetrics(326_732);
+    const baseline = startupBaseline(325_675);
+    const budgets = {
+      ...looseBudgets,
+      startupJsGzipBytes: 319 * 1024,
+      largestJsGzipBytes: 400_000,
+    };
 
     expect(
-      evaluateControlUiPerformanceBudgets(metrics, looseBudgets, baseline).map(
-        (entry) => entry.metric,
-      ),
-    ).toContain("startup JS gzip vs baseline");
-    expect(formatControlUiPerformanceReport(metrics, looseBudgets, baseline)).toContain(
-      '11025 B exceeds baseline 10000 B + tolerance 1024 B (limit 11024 B); intentionally raise the baseline with node --import tsx scripts/check-control-ui-performance.mts --update-baseline --startup-js-bytes 11025 --reason "<reason>"',
+      evaluateControlUiPerformanceBudgets(metrics, budgets, baseline).map((entry) => entry.metric),
+    ).toContain("startup JS gzip");
+    expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
+      "startup JS gzip: 319.1 KiB exceeds 319.1 KiB (326732 B vs 326731 B)",
+    );
+    expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
+      "limits: 10 requests, 319.1 KiB gzip",
     );
   });
 
-  it("enforces the fixed startup JS ceiling even when the baseline is higher", () => {
-    const budgets = { ...looseBudgets, startupJsGzipBytes: 10_000 };
+  it("rejects committed startup JS baselines above the fixed cap", () => {
+    const budgets = {
+      ...looseBudgets,
+      startupJsGzipBytes: 319 * 1024,
+      largestJsGzipBytes: 400_000,
+    };
 
     expect(
       evaluateControlUiPerformanceBudgets(
-        createMetrics(10_001),
+        createMetrics(319 * 1024),
         budgets,
-        startupBaseline(1_000_000),
+        startupBaseline(319 * 1024 + 1),
+      ).map((entry) => entry.metric),
+    ).toEqual(["startup JS gzip baseline"]);
+  });
+
+  it("rejects startup JS measurements above the cap plus tolerance", () => {
+    const budgets = {
+      ...looseBudgets,
+      startupJsGzipBytes: 319 * 1024,
+      largestJsGzipBytes: 400_000,
+    };
+
+    expect(
+      evaluateControlUiPerformanceBudgets(
+        createMetrics(319 * 1024 + 1057),
+        budgets,
+        startupBaseline(319 * 1024),
       ).map((entry) => entry.metric),
     ).toEqual(["startup JS gzip"]);
   });
@@ -264,6 +291,33 @@ describe("Control UI performance budgets", () => {
 
     expect(() => runControlUiPerformanceCheck(distDir, looseBudgets, baselinePath)).toThrow(
       /Cannot read Control UI startup budget baseline .*--update-baseline/u,
+    );
+  });
+
+  it("fails closed when the startup baseline exceeds the configured cap", () => {
+    const { distDir, writeAsset } = createDistFixture();
+    fs.writeFileSync(
+      path.join(distDir, "index.html"),
+      '<script type="module" src="./assets/index-a.js"></script>\n' +
+        '<link rel="stylesheet" href="./assets/index-c.css">\n',
+    );
+    writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
+    writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+    const baselinePath = path.join(distDir, "baseline.json");
+    fs.writeFileSync(
+      baselinePath,
+      JSON.stringify({
+        startupJsGzipBytes: CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes + 1,
+        reason: "invalid test baseline",
+        updatedAt: "2026-08-11",
+      }),
+    );
+
+    expect(() => runControlUiPerformanceCheck(distDir, undefined, baselinePath)).toThrow(
+      new RegExp(
+        `startupJsGzipBytes at most ${CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes}`,
+        "u",
+      ),
     );
   });
 

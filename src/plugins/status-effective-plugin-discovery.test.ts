@@ -3,22 +3,23 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
 const counters = vi.hoisted(() => ({ manifestRegistryRebuilds: 0, discoveryScans: 0 }));
 
-vi.mock("./plugin-registry-contributions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-registry-contributions.js")>();
+vi.mock("../config/io.plugin-metadata.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.plugin-metadata.js")>();
   return {
     ...actual,
-    loadPluginManifestRegistryForPluginRegistry: (
-      ...args: Parameters<typeof actual.loadPluginManifestRegistryForPluginRegistry>
+    resolveConfigWidePluginManifestRegistry: (
+      ...args: Parameters<typeof actual.resolveConfigWidePluginManifestRegistry>
     ) => {
       counters.manifestRegistryRebuilds += 1;
-      return actual.loadPluginManifestRegistryForPluginRegistry(...args);
+      return actual.resolveConfigWidePluginManifestRegistry(...args);
     },
   };
 });
@@ -89,9 +90,14 @@ function countResolve(metadataSnapshot: PluginMetadataSnapshot): {
 }
 
 beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
   vi.stubEnv("OPENCLAW_HOME", path.join(tempRoot, "home"));
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempRoot, "state"));
+});
+
+afterEach(() => {
+  clearPluginMetadataLifecycleCaches();
 });
 
 afterAll(() => {
@@ -117,11 +123,16 @@ it("only reuses a snapshot that answers for the whole config", () => {
   const env = process.env;
   const withoutSnapshot = resolveEffectivePluginIds({ config, env });
   const full = countResolve(loadPluginMetadataSnapshot({ config, env }));
+  clearPluginMetadataLifecycleCaches();
   // `recordPluginInstallSource` asks for one plugin's effective state, which scopes the
   // snapshot to that plugin and truncates its manifest set to that plugin alone.
-  const scoped = countResolve(
-    loadPluginMetadataSnapshot({ config, env, pluginIds: ["other-plugin"] }),
-  );
+  const scopedSnapshot = loadPluginMetadataSnapshot({
+    config,
+    env,
+    pluginIds: ["other-plugin"],
+  });
+  clearPluginMetadataLifecycleCaches();
+  const scoped = countResolve(scopedSnapshot);
 
   expect({ full: full.ids, scoped: scoped.ids }).toEqual({
     full: withoutSnapshot,

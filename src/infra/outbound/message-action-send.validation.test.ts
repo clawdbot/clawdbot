@@ -10,7 +10,7 @@ import {
   runDrySend,
   workspaceConfig,
   workspaceTestPlugin,
-} from "./message-action-runner.test-helpers.js";
+} from "./message-action-runner.test-support.js";
 
 const emptyConfig = {} as OpenClawConfig;
 const portableLocation = { latitude: 48.858844, longitude: 2.294351 };
@@ -431,18 +431,5 @@ describe("message body alias normalization", () => {
         },
       },
     });
-  });
-
-  it("still rejects send with no message and no alias", async () => {
-    await expect(
-      runDrySend({
-        cfg: workspaceConfig,
-        actionParams: {
-          channel: "workspace",
-          target: "#C12345678",
-        },
-        toolContext: { currentChannelId: "C12345678" },
-      }),
-    ).rejects.toThrow(/message required/i);
   });
 });

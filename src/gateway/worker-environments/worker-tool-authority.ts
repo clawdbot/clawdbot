@@ -6,8 +6,9 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { logWarn } from "../../logger.js";
 import {
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
-  type WorkerLocalToolName,
+  WORKER_SESSION_TOOL_NAMES,
   type WorkerOptionalLocalToolName,
+  type WorkerToolName,
   type WorkerToolAuthority,
 } from "../../worker/tool-authority.js";
 
@@ -80,12 +81,14 @@ export function resolveWorkerToolAuthority(params: {
     return { allowedToolNames: [] };
   }
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
-    [...WORKER_REQUIRED_LOCAL_TOOL_NAMES, ...(params.availableOptionalToolNames ?? [])].map(
-      (name) => ({ name }),
-    ),
+    [
+      ...WORKER_REQUIRED_LOCAL_TOOL_NAMES,
+      ...(params.availableOptionalToolNames ?? []),
+      ...WORKER_SESSION_TOOL_NAMES,
+    ].map((name) => ({ name })),
     turn.toolsAllow,
   );
-  const projected: WorkerLocalToolName[] = projectConversationToolNames({
+  const projected: WorkerToolName[] = projectConversationToolNames({
     capabilityProfile: resolveWorkerCapabilityProfile(params),
     toolNames: runtimeCappedTools.map((tool) => tool.name),
     warn: logWarn,

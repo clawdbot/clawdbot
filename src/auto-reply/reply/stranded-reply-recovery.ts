@@ -1,3 +1,4 @@
+import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -58,12 +59,12 @@ export function resolveStrandedReplyRecovery(params: {
 }
 
 function buildStrandedReplyRetryPrompt(finalText: string): string {
-  return (
-    `[System] Your previous reply was not delivered to the conversation because ` +
-    `you did not call message(action=send). Your reply text was:\n\n` +
-    `"${finalText}"\n\n` +
-    `Please deliver this reply now by calling message(action=send). ` +
-    `Do not add any extra commentary; just deliver the original reply.`
+  return formatSystemTurnPrompt(
+    `Your previous reply was not delivered to the conversation because ` +
+      `you did not call message(action=send). Your reply text was:\n\n` +
+      `"${finalText}"\n\n` +
+      `Please deliver this reply now by calling message(action=send). ` +
+      `Do not add any extra commentary; just deliver the original reply.`,
   );
 }
 

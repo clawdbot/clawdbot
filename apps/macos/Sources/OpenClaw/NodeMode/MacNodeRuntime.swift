@@ -112,12 +112,17 @@ actor MacNodeClaudeSessionCatalogWorker {
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
+    private static let cuaOwnedCommands = Set([
+        MacNodeScreenCommand.snapshot.rawValue,
+        OpenClawComputerCommand.act.rawValue,
+    ])
     private let cameraCapture = CameraCaptureService()
     private let cameraPTZ: any CameraPTZServicing
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private let makeMainActorServices: @Sendable () async -> any MacNodeRuntimeMainActorServices
     // Injectable so tests pin the gate instead of racing on process-global UserDefaults.
     private let computerControlEnabled: @Sendable () -> Bool
+    private let computerControlProvider: @Sendable () -> ComputerControlProvider
     private let canvasHostedSurfaceResolver: MacNodeCanvasHostedSurfaceResolver
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadCatalogClient: MacNodeCodexThreadCatalogClient
@@ -144,6 +149,9 @@ actor MacNodeRuntime {
         computerControlEnabled: @escaping @Sendable () -> Bool = {
             MacNodeRuntime.computerControlEnabledDefault()
         },
+        computerControlProvider: @escaping @Sendable () -> ComputerControlProvider = {
+            ComputerControlProvider.current()
+        },
         canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
             await GatewayConnection.shared.canvasPluginSurfaceUrl()
         },
@@ -168,6 +176,7 @@ actor MacNodeRuntime {
         self.cameraPTZ = cameraPTZ
         self.makeMainActorServices = makeMainActorServices
         self.computerControlEnabled = computerControlEnabled
+        self.computerControlProvider = computerControlProvider
         self.canvasHostedSurfaceResolver = MacNodeCanvasHostedSurfaceResolver(
             currentSurfaceURL: canvasSurfaceUrl,
             refreshSurfaceURL: refreshCanvasSurfaceUrl)
@@ -196,6 +205,9 @@ actor MacNodeRuntime {
                 error: OpenClawNodeError(
                     code: .unavailable,
                     message: "CANVAS_DISABLED: enable Canvas in Settings"))
+        }
+        if let cuaResponse = await self.handleCuaInvokeIfSelected(req) {
+            return cuaResponse
         }
         do {
             switch command {
@@ -260,6 +272,25 @@ actor MacNodeRuntime {
 
     private func isCanvasCommand(_ command: String) -> Bool {
         command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui.")
+    }
+
+    private func handleCuaInvokeIfSelected(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse? {
+        guard self.computerControlProvider() == .cua,
+              Self.cuaOwnedCommands.contains(req.command)
+        else { return nil }
+        guard self.computerControlEnabled() else {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "COMPUTER_DISABLED: enable Computer Control in Settings")
+        }
+        guard let nodeHostWorker, await nodeHostWorker.supports(req.command) else {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: selected CUA provider is not ready")
+        }
+        return await nodeHostWorker.invoke(req)
     }
 
     private func handleCodexThreadInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -500,14 +531,9 @@ extension MacNodeRuntime {
             (Self.locationPreciseEnabled() ? .precise : .balanced)
         let services = await mainActorServices()
         let status = await services.locationAuthorizationStatus()
-        let hasPermission = switch mode {
-        case .always:
-            status == .authorizedAlways
-        case .whileUsing:
-            status == .authorizedAlways
-        case .off:
-            false
-        }
+        let hasPermission = PermissionManager.isLocationAuthorized(
+            status: status,
+            requireAlways: mode == .always)
         if !hasPermission {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -605,16 +631,21 @@ extension MacNodeRuntime {
                         + "under System Settings → Privacy & Security → Accessibility")
             case .noDisplays, .invalidScreenIndex, .missingDisplayFrameId, .displayFrameChanged,
                  .missingCoordinate, .coordinateOutOfBounds, .invalidReferenceWidth, .missingKeys,
-                 .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld:
+                 .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld,
+                 .invalidRequest, .staleObservation, .unsupportedAction:
                 return Self.errorResponse(
                     req,
                     code: .invalidRequest,
-                    message: "INVALID_REQUEST: \(error.localizedDescription)")
-            case .eventCreationFailed, .lifecycleChanged:
+                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                        ? error.localizedDescription
+                        : "INVALID_REQUEST: \(error.localizedDescription)")
+            case .eventCreationFailed, .lifecycleChanged, .refused:
                 return Self.errorResponse(
                     req,
                     code: .unavailable,
-                    message: "UNAVAILABLE: \(error.localizedDescription)")
+                    message: error.localizedDescription.hasPrefix("COMPUTER_")
+                        ? error.localizedDescription
+                        : "UNAVAILABLE: \(error.localizedDescription)")
             }
         }
     }
@@ -764,6 +795,10 @@ extension MacNodeRuntime {
         let lifecycleGeneration = self.computerInputReleaseGeneration
         await self.cachedMainActorServices?.releaseHeldInput(
             lifecycleGeneration: lifecycleGeneration)
+    }
+
+    func shutdown() async {
+        await self.codexThreadCatalogClient.shutdown()
     }
 }
 

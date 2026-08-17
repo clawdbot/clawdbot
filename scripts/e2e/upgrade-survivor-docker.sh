@@ -465,8 +465,13 @@ update_status=$?
 set -e
 if [ "$update_status" -ne 0 ]; then
   echo "openclaw update failed" >&2
-  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.err >&2
-  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2
+  validate_status=0
+  openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate --json >/tmp/openclaw-upgrade-survivor-post-update-validate.json 2>/tmp/openclaw-upgrade-survivor-post-update-validate.err || validate_status=$?
+  echo "post-update config validation probe status=$validate_status" >&2
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.err >&2 || true
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-post-update-validate.json >&2 || true
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.err >&2 || true
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2 || true
   exit "$update_status"
 fi
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then

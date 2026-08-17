@@ -24,6 +24,10 @@ describe("config secret refs schema", () => {
   it("accepts top-level secrets sources and model apiKey refs", () => {
     const result = validateConfigObjectRaw({
       secrets: {
+        egressProxy: {
+          enabled: true,
+          bypassHosts: ["pinned.example.com"],
+        },
         providers: {
           default: { source: "env" },
           filemain: {
@@ -58,6 +62,20 @@ describe("config secret refs schema", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.secrets?.egressProxy).toEqual({
+        enabled: true,
+        bypassHosts: ["pinned.example.com"],
+      });
+    }
+  });
+
+  it("rejects empty secret egress bypass hosts", () => {
+    const result = validateConfigObjectRaw({
+      secrets: { egressProxy: { enabled: false, bypassHosts: [""] } },
+    });
+
+    expect(result.ok).toBe(false);
   });
 
   it("rejects store refs outside the env-name grammar", () => {

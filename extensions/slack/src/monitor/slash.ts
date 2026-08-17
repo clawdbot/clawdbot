@@ -16,8 +16,6 @@ import {
   resolveEffectiveAgentRuntime,
   resolveStoredModelOverride,
   type ChatCommandDefinition,
-} from "openclaw/plugin-sdk/command-auth-native";
-import {
   type CommandArgs,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -53,8 +51,11 @@ import { truncateSlackText } from "../truncate.js";
 import { resolveSlackCommandIngress, resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
-import type { SlackMonitorContext } from "./context.js";
-import { normalizeSlackChannelType, resolveSlackChatType } from "./context.js";
+import {
+  normalizeSlackChannelType,
+  resolveSlackChatType,
+  type SlackMonitorContext,
+} from "./context.js";
 import { resolveSlackDeferredActionTarget } from "./deferred-action-routing.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
 import { resolveSlackListenerEventScope, type SlackEventScope } from "./event-scope.js";
@@ -498,6 +499,7 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       if (
         !ctx.isChannelAllowed({
+          teamId: eventScope?.teamId ?? ctx.teamId,
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channelType,
@@ -557,6 +559,8 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       if (isRoom) {
         channelConfig = resolveSlackChannelConfig({
+          teamId: eventScope?.teamId ?? ctx.teamId,
+          allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channels: ctx.channelsConfig,
@@ -598,6 +602,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       const senderName = sender?.name ?? command.user_name ?? command.user_id;
       const slashIngress = await resolveSlackCommandIngress({
         ctx,
+        teamId: eventScope?.teamId ?? ctx.teamId,
         senderId: command.user_id,
         senderName,
         channelType: channelType ?? "channel",

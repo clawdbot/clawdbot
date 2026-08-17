@@ -9,7 +9,7 @@ import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.
 import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import type { ReplyDispatchRuntimeInfo } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type {
   FinalizedMsgContext,
   InboundSourceModality,
@@ -156,8 +156,15 @@ export type PreflightFacts = {
 };
 
 /** Delivery metadata for one reply payload dispatch. */
-export type ChannelDeliveryInfo = {
-  kind: ReplyDispatchKind;
+export type ChannelDeliveryInfo = ReplyDispatchRuntimeInfo;
+
+type ChannelCoreManagedDeliveryInfo = Omit<
+  ChannelDeliveryInfo,
+  "bindPendingFinalDelivery" | "onPlatformSendDispatch"
+>;
+
+type ChannelProviderOwnedDeliveryInfo = ChannelDeliveryInfo & {
+  onPlatformSendDispatch: () => Promise<void>;
 };
 
 /** Durable delivery queue intent recorded when a reply is deferred. */
@@ -183,7 +190,7 @@ export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
   deliveryIntent?: ChannelDeliveryIntent;
   /** Intentional no-send outcome after payload policy or modifying hooks settle. */
   suppression?: {
-    reason: OutboundPayloadDeliverySuppressionReason | "no_visible_result";
+    reason: OutboundPayloadDeliverySuppressionReason | "channel_transform" | "no_visible_result";
     cancelReason?: string;
     metadata?: Record<string, unknown>;
   };
@@ -220,7 +227,7 @@ type ChannelDeliveryAdapterBase = {
 export type ChannelCoreManagedTurnDeliveryAdapter = ChannelDeliveryAdapterBase & {
   deliver: (
     payload: ReplyPayload,
-    info: ChannelDeliveryInfo,
+    info: ChannelCoreManagedDeliveryInfo,
   ) => Promise<ChannelDeliveryResult | void>;
   durable?:
     | false
@@ -245,7 +252,7 @@ export type ChannelProviderOwnedMessageSendingDeliveryAdapter = ChannelDeliveryA
    */
   deliverWithProviderMessageSending: (
     payload: ReplyPayload,
-    info: ChannelDeliveryInfo,
+    info: ChannelProviderOwnedDeliveryInfo,
   ) => Promise<ChannelDeliveryResult | void>;
   deliver?: never;
   durable?: never;

@@ -9,7 +9,7 @@ import {
   DISMISS_TASK_TOOL_DISPLAY_SUMMARY,
   SUGGEST_TASK_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
-import { type AnyAgentTool, ToolInputError, jsonResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, ToolInputError, jsonResult, readToolStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 
 const SuggestTaskToolSchema = Type.Object(
@@ -91,10 +91,10 @@ export function createTaskSuggestionTools(params: {
       outputSchema: SuggestTaskOutputSchema,
       execute: async (_toolCallId, args) => {
         const input = args as Record<string, unknown>;
-        const title = readStringParam(input, "title", { required: true });
-        const prompt = readStringParam(input, "prompt", { required: true });
-        const tldr = readStringParam(input, "tldr", { required: true });
-        const cwd = readStringParam(input, "cwd") ?? params.cwd;
+        const title = readToolStringParam(input, "title", { required: true });
+        const prompt = readToolStringParam(input, "prompt", { required: true });
+        const tldr = readToolStringParam(input, "tldr", { required: true });
+        const cwd = readToolStringParam(input, "cwd") ?? params.cwd;
         if (title.length > 60) {
           throw new ToolInputError("title must be at most 60 characters");
         }
@@ -128,8 +128,8 @@ export function createTaskSuggestionTools(params: {
       parameters: DismissTaskToolSchema,
       execute: async (_toolCallId, args) => {
         const input = args as Record<string, unknown>;
-        const taskId = readStringParam(input, "task_id", { required: true });
-        const reason = readStringParam(input, "reason");
+        const taskId = readToolStringParam(input, "task_id", { required: true });
+        const reason = readToolStringParam(input, "reason");
         const result = await gatewayCall<TaskSuggestionsDismissResult>(
           "taskSuggestions.dismiss",
           {},

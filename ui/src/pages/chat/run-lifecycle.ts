@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -16,7 +17,6 @@ import {
   resolveUiGlobalAliasAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -41,7 +41,7 @@ export type ChatRunUiStatus = {
 
 type TerminalSessionRunStatus = Exclude<SessionRunStatus, "running">;
 
-type LocalTerminalReconcile = {
+export type LocalTerminalReconcile = {
   sessionKey: string;
   runId: string | null;
   phase: ChatRunUiStatus["phase"];
@@ -70,7 +70,7 @@ type RunLifecycleHost = Omit<
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
-  sessions?: Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">;
+  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">>;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   requestUpdate?: () => void;
 };
@@ -153,7 +153,8 @@ export function hasAbortableSessionRun(host: {
   return Boolean(
     host.sessionsResult?.sessions.some(
       (session) =>
-        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
+        areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
+        (isSessionRunActive(session) || session.hasActiveSubagentRun === true),
     ),
   );
 }
@@ -409,7 +410,7 @@ function reconcileSessionRows(
   if (host.sessionsResult) {
     host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
   }
-  host.sessions?.reconcileRunTerminal(terminal);
+  host.sessions?.reconcileRunTerminal?.(terminal);
 }
 
 function reconcileYieldedSessionRows(
@@ -429,7 +430,7 @@ function reconcileYieldedSessionRows(
   if (host.sessionsResult) {
     host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
   }
-  host.sessions?.reconcileRunTerminal(terminal);
+  host.sessions?.reconcileRunTerminal?.(terminal);
 }
 
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {

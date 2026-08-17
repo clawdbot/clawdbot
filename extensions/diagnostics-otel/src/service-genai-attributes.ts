@@ -1,6 +1,7 @@
 import { SpanKind } from "@opentelemetry/api";
 import { GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT } from "@opentelemetry/semantic-conventions/incubating";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asFiniteNumber, asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { DiagnosticEventPayload } from "../api.js";
 import { redactSensitiveText } from "../api.js";
 import {
@@ -48,11 +49,11 @@ export function genAiOperationName(
 }
 
 export function positiveFiniteNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return asFiniteNumberInRange(value, { min: 0, minExclusive: true });
 }
 
 function nonNegativeFiniteNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asFiniteNumberInRange(value, { min: 0 });
 }
 
 export function assignPositiveNumberAttr(
@@ -88,8 +89,9 @@ function assignNumberAttr(
   key: string,
   value: number | undefined,
 ): void {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    attrs[key] = value;
+  const normalized = asFiniteNumber(value);
+  if (normalized !== undefined) {
+    attrs[key] = normalized;
   }
 }
 

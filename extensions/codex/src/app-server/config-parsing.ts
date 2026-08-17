@@ -2,8 +2,7 @@ import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import {
-  CODEX_PLUGINS_MARKETPLACE_NAME,
-  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
   type CodexPluginConfig,
   type CodexPluginDestructiveApprovalMode,
@@ -89,9 +88,7 @@ const codexAppServerNetworkProxySchema = z
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    marketplaceName: z
-      .enum([CODEX_PLUGINS_MARKETPLACE_NAME, CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME])
-      .optional(),
+    marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN).optional(),
     pluginName: z.string().trim().min(1).optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
   })
@@ -209,8 +206,23 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
   return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
 }
 
-export function isCodexSandboxExecServerEnabled(pluginConfig?: unknown): boolean {
-  return readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true;
+export function isCodexSandboxExecServerEnabled(
+  pluginConfig?: unknown,
+  sandbox?: unknown,
+): boolean {
+  return (
+    isCodexRemoteExecPlacementSandbox(sandbox) ||
+    readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true
+  );
+}
+
+export function isCodexRemoteExecPlacementSandbox(sandbox: unknown): boolean {
+  return (
+    typeof sandbox === "object" &&
+    sandbox !== null &&
+    "placementExecutionMode" in sandbox &&
+    sandbox.placementExecutionMode === "remote-exec"
+  );
 }
 
 export function assertCodexAppServerCommandHasNoInlineArgs(params: {
@@ -274,9 +286,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
 function isCodexPluginMarketplaceName(
   value: string | undefined,
 ): value is CodexPluginMarketplaceName {
-  return (
-    value === CODEX_PLUGINS_MARKETPLACE_NAME || value === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
-  );
+  return typeof value === "string" && CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN.test(value);
 }
 
 function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolicy): {

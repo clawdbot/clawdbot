@@ -69,10 +69,7 @@ extension DashboardWindowController {
     }
 
     static func isExpectedTLSAuthority(host: String, port: Int, dashboardURL: URL) -> Bool {
-        let expectedHost = dashboardURL.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let challengedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let expectedPort = dashboardURL.port ?? (dashboardURL.scheme?.lowercased() == "https" ? 443 : 80)
-        return expectedHost?.isEmpty == false && challengedHost == expectedHost && port == expectedPort
+        GatewayTLSAuthority(url: dashboardURL)?.matches(host: host, port: port) == true
     }
 
     static func gatewaysRequest(from body: Any) -> DashboardGatewaysRequest? {

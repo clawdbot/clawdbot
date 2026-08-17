@@ -6,7 +6,7 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
-import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
+import type { McpCodexToolApprovalMode, McpServerToolFilterConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { McpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
@@ -40,10 +40,7 @@ export type McpServerCatalog = {
   };
   requestTimeoutMs?: number;
   supportsParallelToolCalls?: boolean;
-  toolFilter?: {
-    include?: string[];
-    exclude?: string[];
-  };
+  toolFilter?: McpServerToolFilterConfig;
   deniedToolNames?: string[];
   codexApprovalMode?: McpCodexToolApprovalMode;
 };
@@ -74,6 +71,14 @@ export type McpToolCatalog = {
   diagnostics?: readonly McpToolCatalogDiagnostic[];
 };
 
+/** Transient requester sign-in surface kept outside the remembered live catalog. */
+export type RequesterMcpConnect = {
+  catalog: McpToolCatalog;
+  authorizedServerNames: readonly string[];
+  configFingerprint: string;
+  createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
+};
+
 export type McpToolCatalogDiagnostic = {
   serverName: string;
   safeServerName: string;
@@ -101,6 +106,7 @@ export type SessionMcpRuntime = {
   configFingerprint: string;
   /** Present when this runtime is keyed by requester-scoped connection identity. */
   requesterScope?: SessionMcpRequesterScope;
+  requesterConnect?: RequesterMcpConnect;
   /**
    * True when the named server's connection is requester-scoped. App views for
    * such servers stay fail-closed: views outlive the requester-authenticated

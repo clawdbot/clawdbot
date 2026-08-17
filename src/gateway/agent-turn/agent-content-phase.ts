@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -15,11 +14,7 @@ import {
 } from "../../infra/voicewake-routing.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import {
-  classifySessionKeyShape,
-  isAcpSessionKey,
-  normalizeAgentId,
-} from "../../routing/session-key.js";
+import { classifySessionKeyShape, isAcpSessionKey } from "../../routing/session-key.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
@@ -35,9 +30,12 @@ import {
   logAttachmentFailure,
   parseMessageWithAttachments,
   type ChatAttachment,
+  type ChatImageContent,
+  type OffloadedRef,
 } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
@@ -57,9 +55,10 @@ type AgentContentPhaseResult = {
   requestedSessionKey?: string;
   effectiveTranscriptInputText: string;
   message: string;
-  images: Array<{ type: "image"; data: string; mimeType: string }>;
+  images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
   media: MediaFact[];
+  offloadedRefs: OffloadedRef[];
   replyTo: string;
   recipientChannel?: string;
   recipientAccountId?: string;
@@ -93,6 +92,7 @@ export async function prepareAgentContentPhase(params: {
   let images: AgentContentPhaseResult["images"] = [];
   let imageOrder: PromptImageOrderEntry[] = [];
   let media: MediaFact[] = [];
+  let offloadedRefs: OffloadedRef[] = [];
   let agentId = params.agentId;
   let requestedSessionKey = params.requestedSessionKey;
 
@@ -106,8 +106,7 @@ export async function prepareAgentContentPhase(params: {
         ...(agentId ? { agentId } : {}),
         clone: false,
       });
-      const sessionAgentId =
-        canonicalKey === "global" && agentId ? agentId : resolveAgentIdFromSessionKey(canonicalKey);
+      const sessionAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
       catalogAgentId = sessionAgentId;
       const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
       baseProvider = modelRef.provider;
@@ -138,6 +137,7 @@ export async function prepareAgentContentPhase(params: {
       images = parsed.images;
       imageOrder = parsed.imageOrder;
       media = parsed.media;
+      offloadedRefs = parsed.offloadedRefs;
     } catch (err) {
       logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
       params.respond(
@@ -182,22 +182,26 @@ export async function prepareAgentContentPhase(params: {
   const to = params.sessionKeyFromTo
     ? ""
     : (params.explicitRecipientSession?.to ?? params.requestedToRaw ?? "");
-  const explicitVoiceWakeSessionTarget =
-    !agentId && params.requestedSessionKeyRaw
-      ? (() => {
-          const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
-            clone: false,
-          });
-          const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
-          const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-          if (routedAgentId !== defaultAgentId) {
-            return true;
-          }
-          return canonicalKey !== resolveAgentMainSessionKey({ cfg, agentId: routedAgentId });
-        })()
-      : false;
+  const explicitVoiceWakeSessionTarget = params.requestedSessionKeyRaw
+    ? (() => {
+        const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
+          ...(agentId ? { agentId } : {}),
+          clone: false,
+        });
+        const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
+        const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
+        if (!compatibilityOwner || routedAgentId !== compatibilityOwner) {
+          return true;
+        }
+        return canonicalKey !== resolveAgentMainSessionKey({ cfg, agentId: routedAgentId });
+      })()
+    : false;
   const canAutoRouteVoiceWake =
-    !agentId && !explicitVoiceWakeSessionTarget && !params.requestedSessionId && !replyTo && !to;
+    !normalizeOptionalString(params.request.agentId) &&
+    !explicitVoiceWakeSessionTarget &&
+    !params.requestedSessionId &&
+    !replyTo &&
+    !to;
   if (Object.hasOwn(params.request, "voiceWakeTrigger") && canAutoRouteVoiceWake) {
     try {
       const route = resolveVoiceWakeRouteByTrigger({
@@ -244,6 +248,7 @@ export async function prepareAgentContentPhase(params: {
     images,
     imageOrder,
     media,
+    offloadedRefs,
     replyTo,
     recipientChannel,
     recipientAccountId,

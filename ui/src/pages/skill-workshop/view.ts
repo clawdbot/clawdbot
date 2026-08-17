@@ -7,6 +7,7 @@ import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
@@ -760,9 +761,11 @@ function renderEvaluationOutcome(outcome: SkillWorkshopEvaluationOutcome) {
       </div>
       ${result?.summary ? html`<p class="sw-evaluation__summary">${result.summary}</p>` : nothing}
       ${result?.decisionReason
-        ? html`<p class="sw-evaluation__reason">${result.decisionReason}</p>`
+        ? html`<p class="sw-evaluation__reason">${formatUiExternalText(result.decisionReason)}</p>`
         : nothing}
-      ${outcome.error ? html`<p class="sw-evaluation__error">${outcome.error}</p>` : nothing}
+      ${outcome.error
+        ? html`<p class="sw-evaluation__error">${formatUiExternalText(outcome.error)}</p>`
+        : nothing}
       ${result?.findings?.length ? renderEvaluationFindings(result.findings) : nothing}
       ${result?.metrics && Object.keys(result.metrics).length > 0
         ? renderEvaluationMetrics(result.metrics)
@@ -808,7 +811,8 @@ function renderEvaluationFindings(findings: SkillWorkshopEvaluationFinding[]) {
               </span>
               <span>
                 <code class="sw-evaluation__rule">${finding.ruleId}</code>
-                ${finding.message} ${location ? html`<small>${location}</small>` : nothing}
+                ${formatUiExternalText(finding.message)}
+                ${location ? html`<small>${location}</small>` : nothing}
               </span>
             </li>
           `;

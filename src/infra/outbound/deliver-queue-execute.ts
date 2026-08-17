@@ -24,23 +24,19 @@ import {
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { runOutboundDeliveryCommitHooks } from "./delivery-commit-hooks.js";
-import {
-  completeDurableDelivery,
-  rejectDurableDelivery,
-  suppressDurableDelivery,
-} from "./delivery-completion.js";
+import { rejectDurableDelivery, settleDurableDelivery } from "./delivery-completion.js";
 import {
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,
+  emitOutboundAuditLifecycle,
   emitOutboundAuditTerminals,
   failedOutboundAuditTerminals,
-  uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 
@@ -87,9 +83,23 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     params.requireUnknownSendReconciliation === true && platformQueueId !== undefined;
   let queuedPreSendState: QueuedPreSendState | undefined;
   let queuedPostSendState: QueuedPostSendState | undefined;
+  let platformSendStarted = false;
   let platformSendRoute: PlatformSendRoute | undefined;
+  const auditPlatformStartedPayloads = new Set<number>();
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
+  const settleDeliveryCompletion = async (
+    result: OutboundDeliveryResult | undefined,
+  ): Promise<void> => {
+    if (!params.deliveryCompletion) {
+      return;
+    }
+    await settleDurableDelivery(
+      params.deliveryCompletion,
+      result ? { result } : { platformSendStarted },
+      platformQueueStateDir,
+    );
+  };
   // Deliberately process-local: message_sent is best-effort after queue
   // settlement, not a durable plugin outbox or a reason to retry delivery.
   const messageSentEvents: MessageSentEvent[] = [];
@@ -186,7 +196,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       ? { deliveryQueueId: platformQueueId }
       : { deliveryQueueId: undefined }),
     requiredUnknownSendReconciliation: exactReconciliationRequired,
-    onPlatformSendStart: async (route) => {
+    onPlatformSendStart: async (route, sourceIndex) => {
       params.abortSignal?.throwIfAborted();
       platformSendRoute = route;
       if (platformQueueId && !exactReconciliationRequired && queuedPreSendState === undefined) {
@@ -204,9 +214,24 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           queuedPostSendState = "acked";
         }
       }
+      if (
+        platformQueueId &&
+        sourceIndex !== undefined &&
+        !auditPlatformStartedPayloads.has(sourceIndex)
+      ) {
+        auditPlatformStartedPayloads.add(sourceIndex);
+        emitOutboundAuditLifecycle({
+          context: params,
+          outcome: "platform_started",
+          queueId: platformQueueId,
+          startedAt: auditStartedAt,
+          payloadIndexes: [sourceIndex],
+        });
+      }
       params.abortSignal?.throwIfAborted();
       await params.onPlatformSendStart?.(route);
       params.abortSignal?.throwIfAborted();
+      platformSendStarted = true;
     },
     onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
@@ -301,13 +326,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       });
     }
     if (!queueId) {
-      if (params.deliveryCompletion) {
-        if (results.length > 0) {
-          completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
-        } else {
-          suppressDurableDelivery(params.deliveryCompletion);
-        }
-      }
+      await settleDeliveryCompletion(results.at(-1));
       if (!params.deferCommitHooks) {
         flushMessageSentEvents();
         await runOutboundDeliveryCommitHooks(results);
@@ -361,13 +380,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       } else {
-        if (params.deliveryCompletion) {
-          if (results.length > 0) {
-            completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
-          } else {
-            suppressDurableDelivery(params.deliveryCompletion);
-          }
-        }
         const postSendState =
           queuedPostSendState ??
           (results.length > 0 || queuedPreSendState === "marked"
@@ -375,6 +387,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             : queuedPreSendState === "acked"
               ? "acked"
               : undefined);
+        await settleDeliveryCompletion(results.at(-1));
         if (results.length === 0 && postSendState === "marked") {
           // The provider was invoked but returned no recipient-visible identity;
           // never convert that ambiguous platform outcome into a success receipt.
@@ -383,12 +396,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             "platform send returned no delivery identity",
           );
           queuedPostSendState = "failed";
-          emitTerminals(() =>
-            uniformOutboundAuditTerminals(payloadCount, {
-              outcome: "unknown",
-              failureStage: "platform_send",
-            }),
-          );
+          // Durable custody remains with recovery. Publishing a terminal here
+          // would make a later reconciliation reuse the same audit identity.
           return results;
         }
         const acked =
@@ -480,12 +489,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             );
             queuedPostSendState = "failed";
           }
-          emitTerminals(() =>
-            uniformOutboundAuditTerminals(payloadCount, {
-              outcome: "unknown",
-              failureStage: "platform_send",
-            }),
-          );
         } else if (params.abortSignal?.aborted !== true) {
           await recordOwnedQueueFailure(failDelivery, formatErrorMessage(err)).catch(
             (failErr: unknown) => {
@@ -562,7 +565,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                 terminalRejectionHandled = true;
               } else {
                 if (params.deliveryCompletion) {
-                  rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
+                  await rejectDurableDelivery(
+                    params.deliveryCompletion,
+                    permanentRejection.message,
+                    platformQueueStateDir,
+                  );
                   ownerRejected = true;
                 }
                 await (producerClaimId

@@ -116,7 +116,7 @@ export function createBeforeGitMutation(params: {
   };
 }
 
-export async function runGitUpdate(params: {
+export async function updateGitInstall(params: {
   root: string;
   switchToGit: boolean;
   installKind: "git" | "package" | "unknown";
