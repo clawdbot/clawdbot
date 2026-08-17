@@ -42,4 +42,28 @@ describe("clearAgentSkillFilter", () => {
     await expect(clearAgentSkillFilter(runtimeConfig, "main", () => false)).resolves.toBe(false);
     expect(patch).not.toHaveBeenCalled();
   });
+
+  it("clears skills through the authored list roster", async () => {
+    const patch = vi.fn(async () => true);
+    const runtimeConfig = {
+      agentEntry: vi.fn(() => ({
+        path: ["agents", "list", 1],
+        entry: { id: "research", skills: ["coding-agent"] },
+      })),
+      patch,
+    } as unknown as RuntimeConfigCapability;
+
+    await expect(clearAgentSkillFilter(runtimeConfig, "research")).resolves.toBe(true);
+
+    expect(patch).toHaveBeenCalledWith({
+      raw: {
+        agents: {
+          list: [{ id: "research", skills: null }],
+        },
+      },
+      note: "Reset agent skills to inherited defaults",
+      replacePaths: ["agents.list[].skills"],
+      canDispatch: expect.any(Function),
+    });
+  });
 });
