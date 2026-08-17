@@ -26,6 +26,7 @@ import {
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
+import { FAILED_TOOL_OUTCOME_INSTRUCTION } from "../tool-outcome-instructions.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import {
   repairMainSessionRecoveryMutation,
@@ -45,7 +46,8 @@ const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
   "Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. Continue from the existing " +
-    "transcript and finish the interrupted response.",
+    "transcript and finish the interrupted response. Treat any interrupted tool call without " +
+    `a successful matching result as having an unknown outcome. ${FAILED_TOOL_OUTCOME_INSTRUCTION}`,
 );
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";

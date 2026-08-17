@@ -282,7 +282,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
       expect(instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
       expect(instruction).toContain(
-        "If any tool failed, state that failure plainly and do not claim it succeeded.",
+        "If any tool failed, state that failure plainly and do not claim it completed or succeeded.",
       );
     },
   );

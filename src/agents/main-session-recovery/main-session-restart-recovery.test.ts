@@ -4792,6 +4792,26 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
   });
 
+  it("reports an interrupted native tool outcome as unknown", async () => {
+    await writeMainSessionTranscript([
+      { role: "user", content: "run the command" },
+      createAssistantToolCallMessage([
+        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+      ]),
+      {
+        role: "toolResult",
+        toolName: "bash",
+        toolCallId: "call-bash-1",
+        content: "native tool call had no matching result",
+        isError: true,
+      },
+    ]);
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams().message).toContain("unknown outcome");
+    expect(gatewayParams().message).toContain("do not claim it completed or succeeded");
+  });
+
   it("keeps a dangling side-effecting call in an aborted tail restricted", async () => {
     await writeMainSessionTranscript([
       { role: "user", content: "do the thing" },
