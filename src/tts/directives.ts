@@ -320,5 +320,3 @@ export function parseTtsDirectives(
     ...resolved,
   };
 }
-
-export { extractTtsDirectiveFacts };
