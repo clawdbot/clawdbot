@@ -1,7 +1,7 @@
 // Hashes installed plugin index records for change detection.
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { stableStringify } from "@openclaw/normalization-core";
 import type { PluginDiagnostic } from "./manifest-types.js";
 
 /** File metadata signature used to skip unchanged installed plugin files. */
