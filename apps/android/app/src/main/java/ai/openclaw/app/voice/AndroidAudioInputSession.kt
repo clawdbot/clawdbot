@@ -9,6 +9,8 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioRouting
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AudioEffect
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -21,10 +23,22 @@ internal data class AudioInputDeviceOption(
   val type: Int,
 )
 
+/** Selects the Android capture semantics for one [AndroidAudioInputSession]. */
+internal enum class AndroidAudioInputProfile(
+  internal val audioSource: Int,
+) {
+  /** Manual Mic/STT: unchanged recognition-oriented capture. */
+  VoiceRecognition(MediaRecorder.AudioSource.VOICE_RECOGNITION),
+
+  /** Realtime Talk: communication-oriented capture, paired with platform AEC ownership. */
+  VoiceCommunication(MediaRecorder.AudioSource.VOICE_COMMUNICATION),
+}
+
 /** Owns one recorder and its Bluetooth route for the full capture lifecycle. */
 internal class AndroidAudioInputSession private constructor(
   private val audioManager: AudioManager,
   private val audioRecord: AudioRecord,
+  private val acousticEchoCanceler: AcousticEchoCanceler?,
   private val preferredInputKey: String?,
   private val onAppliedPreferredDeviceChanged: (String?) -> Unit,
   private val setPreferredDevice: (AudioDeviceInfo?) -> Boolean,
@@ -40,6 +54,7 @@ internal class AndroidAudioInputSession private constructor(
       preferredDeviceKey: String? = null,
       onAppliedPreferredDeviceChanged: (String?) -> Unit = {},
       setPreferredDevice: ((AudioDeviceInfo?) -> Boolean)? = null,
+      profile: AndroidAudioInputProfile = AndroidAudioInputProfile.VoiceRecognition,
     ): AndroidAudioInputSession {
       val minBuffer =
         AudioRecord.getMinBufferSize(
@@ -53,7 +68,7 @@ internal class AndroidAudioInputSession private constructor(
       val audioRecord =
         AudioRecord
           .Builder()
-          .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+          .setAudioSource(profile.audioSource)
           .setAudioFormat(
             AudioFormat
               .Builder()
@@ -63,10 +78,21 @@ internal class AndroidAudioInputSession private constructor(
               .build(),
           ).setBufferSizeInBytes(maxOf(minBuffer, frameBytes * 4))
           .build()
+      // AEC is optional. The caller's forwarding policy already falls back to safe
+      // half-duplex capture when it is absent, so an effect that cannot be set up
+      // must never cost the session its microphone.
+      val acousticEchoCanceler =
+        try {
+          openAcousticEchoCanceler(profile, audioRecord.audioSessionId)
+        } catch (err: RuntimeException) {
+          Log.w(tag, "AcousticEchoCanceler setup failed: ${err.message ?: err::class.simpleName}")
+          null
+        }
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
       return AndroidAudioInputSession(
         audioManager = audioManager,
         audioRecord = audioRecord,
+        acousticEchoCanceler = acousticEchoCanceler,
         preferredInputKey = preferredDeviceKey,
         onAppliedPreferredDeviceChanged = onAppliedPreferredDeviceChanged,
         setPreferredDevice = setPreferredDevice ?: audioRecord::setPreferredDevice,
@@ -78,6 +104,33 @@ internal class AndroidAudioInputSession private constructor(
           throw err
         }
       }
+    }
+
+    /**
+     * Communication-profile capture only: attaches platform AEC to the just-built
+     * [AudioRecord] and reads back the enabled state Android actually applied — a
+     * successful [AcousticEchoCanceler.create] does not itself mean AEC is active.
+     */
+    private fun openAcousticEchoCanceler(
+      profile: AndroidAudioInputProfile,
+      audioSessionId: Int,
+    ): AcousticEchoCanceler? {
+      if (profile != AndroidAudioInputProfile.VoiceCommunication) return null
+      if (!AcousticEchoCanceler.isAvailable()) return null
+      val canceler = AcousticEchoCanceler.create(audioSessionId) ?: return null
+      val enableResult = runCatching { if (canceler.enabled) AudioEffect.SUCCESS else canceler.setEnabled(true) }
+      val result = enableResult.getOrNull()
+      if (result == null) {
+        // Release the half-configured effect rather than leaking it, and report
+        // no AEC so the caller keeps its half-duplex fallback.
+        Log.w(tag, "AcousticEchoCanceler enable threw: ${enableResult.exceptionOrNull()?.message ?: "unknown"}")
+        runCatching { canceler.release() }
+        return null
+      }
+      if (result != AudioEffect.SUCCESS) {
+        Log.w(tag, "AcousticEchoCanceler enable failed result=$result")
+      }
+      return canceler
     }
 
     fun listAvailableDevices(context: Context): List<AudioInputDeviceOption> {
@@ -145,6 +198,17 @@ internal class AndroidAudioInputSession private constructor(
 
   internal val appliedPreferredDeviceKey: String?
     get() = synchronized(lock) { appliedPreferredInputKey }
+
+  /** The rate AudioRecord actually negotiated, which need not be the requested one;
+   * callers converting capture to a wire rate must build that conversion from this. */
+  internal val actualSampleRateHz: Int
+    get() = audioRecord.sampleRate
+
+  /** Whether platform AEC was created for this session and Android accepted enabling it,
+   * read back from the effect rather than inferred from
+   * [AndroidAudioInputProfile.VoiceCommunication] alone. Snapshotted at open time on
+   * purpose: the effect is released in [close], so a live read could outlive it. */
+  internal val communicationEchoCancellationEnabled: Boolean = acousticEchoCanceler?.enabled == true
 
   fun startRecording() {
     synchronized(lock) {
@@ -270,6 +334,9 @@ internal class AndroidAudioInputSession private constructor(
       requestedInput = null
       selectedInput = null
       setAppliedPreferredInputKey(null)
+      // The effect is attached to the recorder's audio session, so it is released
+      // first — releasing the recorder destroys the session it is bound to.
+      runCatching { acousticEchoCanceler?.release() }
       if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
         runCatching { audioRecord.stop() }
       }

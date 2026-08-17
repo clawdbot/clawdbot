@@ -5,9 +5,12 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.media.audiofx.AudioEffect
 import android.os.Looper
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -18,8 +21,10 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.AudioDeviceInfoBuilder
+import org.robolectric.shadows.ShadowAudioEffect
 import org.robolectric.shadows.ShadowAudioManager
 import org.robolectric.util.ReflectionHelpers
+import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -39,6 +44,7 @@ class AndroidAudioInputSessionTest {
     shadowAudioManager.setInputDevices(emptyList())
     shadowAudioManager.setAvailableCommunicationDevices(emptyList())
     audioManager.clearCommunicationDevice()
+    ShadowAudioEffect.reset()
   }
 
   @Test
@@ -230,6 +236,97 @@ class AndroidAudioInputSessionTest {
     val unknown = runCatching { checkAudioRecordReadResult(-99) }.exceptionOrNull()
     assertTrue(unknown is IllegalStateException)
     assertEquals("microphone read failed: code=-99", unknown?.message)
+  }
+
+  @Test
+  fun defaultProfileOpensVoiceRecognitionAudioSource() {
+    val session = AndroidAudioInputSession.open(context, sampleRateHz = 24_000, frameBytes = 4_800)
+
+    assertEquals(MediaRecorder.AudioSource.VOICE_RECOGNITION, capturedAudioSource(session))
+    session.close()
+  }
+
+  @Test
+  fun communicationProfileOpensVoiceCommunicationAudioSource() {
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+
+    assertEquals(MediaRecorder.AudioSource.VOICE_COMMUNICATION, capturedAudioSource(session))
+    session.close()
+  }
+
+  @Test
+  fun recognitionProfileNeverCreatesAcousticEchoCanceler() {
+    val session = AndroidAudioInputSession.open(context, sampleRateHz = 24_000, frameBytes = 4_800)
+
+    assertFalse(session.communicationEchoCancellationEnabled)
+    session.close()
+  }
+
+  @Test
+  fun communicationProfileWithoutPlatformAecReportsDisabled() {
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+
+    // No AudioEffect.Descriptor registered in this Robolectric environment, so
+    // platform AEC is unavailable — the safe-fallback surface (no crash, no
+    // false "enabled") that a device without AEC hardware also exercises.
+    assertFalse(session.communicationEchoCancellationEnabled)
+    session.close()
+  }
+
+  @Test
+  fun communicationProfileWithPlatformAecReportsEnabled() {
+    registerFakeAcousticEchoCancelerEffect()
+
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+
+    assertTrue(session.communicationEchoCancellationEnabled)
+    session.close()
+  }
+
+  @Test
+  fun recognitionProfileIgnoresAvailablePlatformAec() {
+    registerFakeAcousticEchoCancelerEffect()
+
+    val session = AndroidAudioInputSession.open(context, sampleRateHz = 24_000, frameBytes = 4_800)
+
+    // Manual Mic/STT never requests communication-profile AEC ownership, even
+    // when the platform effect is available for other capture sessions.
+    assertFalse(session.communicationEchoCancellationEnabled)
+    session.close()
+  }
+
+  private fun registerFakeAcousticEchoCancelerEffect() {
+    val descriptor = AudioEffect.Descriptor()
+    descriptor.type = AudioEffect.EFFECT_TYPE_AEC
+    descriptor.uuid = UUID.randomUUID()
+    descriptor.connectMode = AudioEffect.EFFECT_PRE_PROCESSING
+    descriptor.name = "Test AEC"
+    descriptor.implementor = "Test"
+    ShadowAudioEffect.addEffect(descriptor)
+  }
+
+  private fun capturedAudioSource(session: AndroidAudioInputSession): Int {
+    val field = session.javaClass.getDeclaredField("audioRecord")
+    field.isAccessible = true
+    return (field.get(session) as AudioRecord).audioSource
   }
 
   private fun audioDevice(type: Int): AudioDeviceInfo {
