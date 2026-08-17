@@ -418,12 +418,31 @@ describe("provider-catalog-shared manifest provider configs", () => {
           name: "Gemini 3 Pro Preview",
           reasoning: true,
           input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          // Rate-less manifest row: the zero-filled rates are placeholder
+          // zeros (unknown pricing), so provenance must be marked.
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, pricingUnavailable: true },
           contextWindow: 1_048_576,
           maxTokens: 65_536,
         },
       ],
     });
+  });
+
+  it("keeps explicit all-zero manifest pricing unmarked as confirmed free", () => {
+    const catalog: ModelCatalogProvider = {
+      baseUrl: "https://api.example.test/v1",
+      models: [
+        {
+          id: "free-model",
+          contextWindow: 1024,
+          maxTokens: 1024,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    };
+
+    const model = buildManifestModelProviderConfig({ providerId: "example", catalog }).models[0];
+    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
   it("rejects incomplete manifest rows before building provider runtime config", () => {

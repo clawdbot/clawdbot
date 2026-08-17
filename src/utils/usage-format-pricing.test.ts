@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { buildManifestModelProviderConfig } from "../plugin-sdk/provider-catalog-shared.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   resetUsageFormatCachesForTest,
@@ -55,6 +56,61 @@ describe("usage-format pricing provenance", () => {
         cost: confirmedFree,
       }),
     ).toBe(0);
+  });
+
+  it("omits cost for a missing-price static manifest model through the usage boundary", () => {
+    // Mirrors the Claude CLI rows in extensions/anthropic/openclaw.plugin.json,
+    // which omit cost entirely: the shared manifest producer must mark the
+    // zero-filled rates as unknown pricing so usage stays omitted, not $0.
+    const providerConfig = buildManifestModelProviderConfig({
+      providerId: "acme-cli",
+      catalog: {
+        baseUrl: "https://api.acme.test/v1",
+        models: [
+          {
+            id: "acme-opus",
+            name: "Acme Opus",
+            contextWindow: 200_000,
+            maxTokens: 64_000,
+          },
+          {
+            id: "acme-free",
+            name: "Acme Free",
+            contextWindow: 200_000,
+            maxTokens: 64_000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+    });
+    const config = {
+      models: { providers: { "acme-cli": providerConfig } },
+    } as unknown as OpenClawConfig;
+
+    const unknownCost = resolveModelCostConfig({
+      provider: "acme-cli",
+      model: "acme-opus",
+      config,
+    });
+    expect(unknownCost).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      pricingUnavailable: true,
+    });
+    expect(
+      estimateUsageCost({ usage: { input: 1000, output: 500 }, cost: unknownCost }),
+    ).toBeUndefined();
+
+    // Explicit all-zero manifest pricing stays a confirmed free $0.
+    const freeCost = resolveModelCostConfig({
+      provider: "acme-cli",
+      model: "acme-free",
+      config,
+    });
+    expect(freeCost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(estimateUsageCost({ usage: { input: 1000, output: 500 }, cost: freeCost })).toBe(0);
   });
 
   it("refreshes the cached cost index when only pricingUnavailable mutates", () => {

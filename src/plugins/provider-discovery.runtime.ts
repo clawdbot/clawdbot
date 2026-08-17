@@ -132,26 +132,24 @@ function hasProviderAuthEnvCredential(
 function modelDefinitionCostFromManifestRow(
   row: NormalizedModelCatalogRow,
 ): ModelDefinitionConfig["cost"] {
-  if (
-    !row.cost ||
-    row.cost.input === undefined ||
-    row.cost.output === undefined ||
-    row.cost.cacheRead === undefined ||
-    row.cost.cacheWrite === undefined
-  ) {
-    return {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    };
-  }
+  // Same provenance rule as cloneManifestCatalogCost: a manifest row without
+  // rates yields placeholder zeros (unknown), not a confirmed free price, and
+  // the marker must survive into the discovered provider config or usage
+  // reports a confident $0.
+  const cost = row.cost;
+  const hasRates =
+    cost?.input !== undefined ||
+    cost?.output !== undefined ||
+    cost?.cacheRead !== undefined ||
+    cost?.cacheWrite !== undefined ||
+    (cost?.tieredPricing !== undefined && cost.tieredPricing.length > 0);
   return {
-    input: row.cost.input,
-    output: row.cost.output,
-    cacheRead: row.cost.cacheRead,
-    cacheWrite: row.cost.cacheWrite,
-    ...(row.cost.tieredPricing ? { tieredPricing: row.cost.tieredPricing } : {}),
+    input: cost?.input ?? 0,
+    output: cost?.output ?? 0,
+    cacheRead: cost?.cacheRead ?? 0,
+    cacheWrite: cost?.cacheWrite ?? 0,
+    ...(!hasRates ? { pricingUnavailable: true } : {}),
+    ...(cost?.tieredPricing ? { tieredPricing: cost.tieredPricing } : {}),
   };
 }
 
