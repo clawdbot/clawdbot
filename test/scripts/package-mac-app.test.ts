@@ -332,6 +332,16 @@ function runRealCompiledPeekabooHarness(
       cwd: gitlinkCheckout,
       encoding: "utf8",
     }).stdout.trim();
+    writeFileSync(
+      path.join(checkout, ".gitmodules"),
+      `[submodule "fixture"]\n\tpath = ${gitlinkPath}\n\turl = https://example.invalid/vendor.git\n`,
+      "utf8",
+    );
+    const stagedModules = spawnSync("git", ["add", ".gitmodules"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    expect(stagedModules.status, stagedModules.stderr).toBe(0);
     const added = spawnSync(
       "git",
       ["update-index", "--add", "--cacheinfo", `160000,${gitlinkHead},${gitlinkPath}`],
