@@ -58,10 +58,16 @@ function getCompatReasoningConfig<TApi extends Api>(
     return undefined;
   }
   const compat = model.compat;
-  if (!compat || typeof compat !== "object" || !("supportsReasoningEffort" in compat)) {
+  if (!compat || typeof compat !== "object") {
     return undefined;
   }
-  return compat;
+  return {
+    supportsReasoningEffort:
+      "supportsReasoningEffort" in compat ? compat.supportsReasoningEffort : undefined,
+    supportedReasoningEfforts:
+      "supportedReasoningEfforts" in compat ? compat.supportedReasoningEfforts : undefined,
+    reasoningEffortMap: "reasoningEffortMap" in compat ? compat.reasoningEffortMap : undefined,
+  };
 }
 
 function normalizeReasoningEffort(value: unknown): string {
