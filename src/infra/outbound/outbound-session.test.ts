@@ -100,6 +100,61 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.chatType).toBe("direct");
   });
 
+  it.each([
+    {
+      name: "group binding collapses an exact room into main",
+      globalSession: { groupScope: "per-group" as const },
+      peer: { kind: "group" as const, id: "team-room" },
+      bindingSession: { groupScope: "main" as const },
+      pluginBaseKey: "agent:main:bound-channel:group:team-room",
+      pluginSessionKey: "agent:main:bound-channel:group:team-room",
+      expectedSessionKey: "agent:main:main",
+    },
+    {
+      name: "DM binding collapses an exact peer into main and preserves its thread",
+      globalSession: { dmScope: "per-channel-peer" as const },
+      peer: { kind: "direct" as const, id: "alice" },
+      bindingSession: { dmScope: "main" as const },
+      pluginBaseKey: "agent:main:bound-channel:direct:alice",
+      pluginSessionKey: "agent:main:bound-channel:direct:alice:thread:topic-1",
+      expectedSessionKey: "agent:main:main:thread:topic-1",
+    },
+  ])("applies $name before returning the canonical route", async (testCase) => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "bound-channel" }),
+      messaging: {
+        resolveOutboundSessionRoute: () => ({
+          sessionKey: testCase.pluginSessionKey,
+          baseSessionKey: testCase.pluginBaseKey,
+          recipientSessionExact: true as const,
+          peer: testCase.peer,
+          chatType: testCase.peer.kind === "direct" ? ("direct" as const) : ("group" as const),
+          from: `bound-channel:${testCase.peer.id}`,
+          to: testCase.peer.id,
+        }),
+      },
+    } satisfies ChannelPlugin;
+    const route = await resolveOutboundSessionRoute({
+      cfg: {
+        session: testCase.globalSession,
+        bindings: [
+          {
+            agentId: "main",
+            match: { channel: "bound-channel", peer: testCase.peer },
+            session: testCase.bindingSession,
+          },
+        ],
+      } as OpenClawConfig,
+      channel: "bound-channel",
+      plugin,
+      agentId: "main",
+      target: testCase.peer.id,
+    });
+
+    expect(route?.sessionKey).toBe(testCase.expectedSessionKey);
+    expect(route?.baseSessionKey).toBe("agent:main:main");
+  });
+
   async function expectResolvedRoute(params: {
     cfg: OpenClawConfig;
     channel: string;
