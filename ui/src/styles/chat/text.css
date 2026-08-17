@@ -198,9 +198,6 @@
 
 :is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
   list-style: none;
-}
-
-:is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
   margin-inline-start: calc(-1 * var(--chat-markdown-indent));
   padding-inline-start: calc(var(--space-4) + var(--chat-markdown-marker-gap));
 }
