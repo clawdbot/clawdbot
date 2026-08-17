@@ -90,8 +90,8 @@ suite.define(() => {
 
           const section = page.locator(".settings-section", { hasText: "Skills" }).first();
           await expect
-            .poll(() => section.getByRole("button", { name: "Enable All" }).isDisabled())
-            .toBe(true);
+            .poll(() => section.getByRole("button", { name: "Enable All" }).count())
+            .toBe(0);
           await expect
             .poll(() => section.getByRole("button", { name: "Disable All" }).isDisabled())
             .toBe(false);
