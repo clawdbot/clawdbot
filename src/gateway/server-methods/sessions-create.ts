@@ -34,8 +34,6 @@ import {
   createGatewaySession,
   resolveSessionCreateModelSelection as resolveCreateTitleEntry,
 } from "../session-create-service.js";
-import { ensureSessionGroupRegistered } from "../session-groups.js";
-import type { PrepareGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
@@ -47,6 +45,7 @@ import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { registerCreatedSessionCategory } from "./session-create-category.js";
 import { captureCreatedSessionDiffBaseline } from "./session-create-diff-baseline.js";
 import {
   resolveSessionCreateInitialTurn,
@@ -57,24 +56,6 @@ import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
-
-function registerCreatedSessionCategory(
-  category: string | undefined,
-  context: Parameters<typeof emitSessionsChanged>[0],
-): void {
-  if (!category) {
-    return;
-  }
-  try {
-    if (ensureSessionGroupRegistered(category)) {
-      // Catalog bookkeeping follows the authoritative session commit and has
-      // its own invalidation. Its failure must not make a durable create ambiguous.
-      emitSessionsChanged(context, { reason: "groups" });
-    }
-  } catch (error) {
-    sessionLog.warn(`failed to register created session category: ${formatErrorMessage(error)}`);
-  }
-}
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
   "sessions.create": async ({
@@ -90,6 +71,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
+    const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
+    const requestedModel = normalizeOptionalString(p.model);
     const cfg = context.getRuntimeConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     const commitGuard =
@@ -236,17 +219,26 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const explicitSessionLabel = normalizeOptionalString(p.label);
     const titleAgentId = normalizeAgentId(explicitlyRequestedAgent.agentId);
-    // Start before repository resolution; the bounded request falls back to raw source after 8s.
-    const worktreeTitle =
-      p.worktree === true && !requestedWorktreeName && !explicitSessionLabel
+    const shouldPrepareWorktreeTitle =
+      p.worktree === true && !requestedWorktreeName && !explicitSessionLabel;
+    const deferWorktreeTitle =
+      shouldPrepareWorktreeTitle && Boolean(parentSessionKey) && !catalogTarget && !requestedModel;
+    const worktreeTitleParams = shouldPrepareWorktreeTitle
+      ? {
+          cfg,
+          agentId: titleAgentId,
+          userMessage: initialMessage ?? "",
+          attachments: initialAttachments,
+          onError: (error: unknown) =>
+            sessionLog.warn(`worktree title failed: ${formatErrorMessage(error)}`),
+        }
+      : undefined;
+    // Known routes start before repository resolution; inherited routes wait for parent validation.
+    let worktreeTitle =
+      worktreeTitleParams && !deferWorktreeTitle
         ? prepareWorktreeSessionTitle({
-            cfg,
-            agentId: titleAgentId,
+            ...worktreeTitleParams,
             entry: resolveCreateTitleEntry(cfg, titleAgentId, catalogTarget?.target ?? p.model),
-            userMessage: initialMessage ?? "",
-            attachments: initialAttachments,
-            onError: (error) =>
-              sessionLog.warn(`worktree title failed: ${formatErrorMessage(error)}`),
           })
         : undefined;
     let projectRoot: string | undefined;
@@ -289,7 +281,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
-    let prepareLifecycle: PrepareGatewaySessionLifecycle | undefined;
+    let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
     if (sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true)) {
       const targetAgentId = normalizeAgentId(
         sessionAgentId ??
@@ -334,7 +326,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       );
       let targetKey = explicitKey;
       let preservesUnspecifiedKey = false;
-      const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
       if (
         !targetKey &&
         parentSessionKey &&
@@ -396,6 +387,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
       prepareLifecycle = async (lifecycleTarget) => {
         try {
+          if (deferWorktreeTitle && worktreeTitleParams) {
+            worktreeTitle = prepareWorktreeSessionTitle({
+              ...worktreeTitleParams,
+              entry: lifecycleTarget.titleModelSelection,
+            });
+          }
           const boundId = normalizeOptionalString(lifecycleTarget.entry?.worktree?.id);
           let existing = boundId ? managedWorktrees.findLiveById(boundId) : undefined;
           if (
@@ -514,7 +511,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (
       sessionCreation.inheritedToolPolicy &&
       spawnActorSessionKey &&
-      normalizeOptionalString(p.parentSessionKey) !== spawnActorSessionKey
+      parentSessionKey !== spawnActorSessionKey
     ) {
       respond(
         false,
@@ -535,21 +532,20 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
-    const category = normalizeOptionalString(p.category);
     const created = await createGatewaySession({
       cfg,
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
       category: p.category,
-      ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
+      ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
       thinkingLevel: p.thinkingLevel,
       projectId: requestedProjectId,
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
       visibility: p.visibility,
       allowExistingModelSelection,
-      parentSessionKey: p.parentSessionKey,
+      parentSessionKey,
       spawnDepth: p.spawnDepth,
       spawnToolPolicy:
         sessionCreation.via === "spawn" && sessionCreation.inheritedToolPolicy
@@ -639,7 +635,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, created.error);
       return;
     }
-    registerCreatedSessionCategory(category, context);
+    registerCreatedSessionCategory(p.category, context);
     if (created.resetExisting) {
       await captureCreatedSessionDiffBaseline({
         key: created.key,

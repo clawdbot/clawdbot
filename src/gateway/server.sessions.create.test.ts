@@ -1355,6 +1355,7 @@ test.each([
     name: "agent default",
     request: {},
     catalogTarget: undefined,
+    parentEntry: undefined,
     expectedEntry: {},
     expectedTitleSelection: { regularModelRef: "openai/gpt-5.6-luna" },
   },
@@ -1362,6 +1363,7 @@ test.each([
     name: "explicit model",
     request: { model: "anthropic/sonnet-4.6@work" },
     catalogTarget: undefined,
+    parentEntry: undefined,
     expectedEntry: {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
@@ -1379,6 +1381,7 @@ test.each([
       model: "anthropic/sonnet-4.6@catalog-work",
       agentRuntime: "claude-cli",
     },
+    parentEntry: undefined,
     expectedEntry: {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
@@ -1391,9 +1394,33 @@ test.each([
       preferredProfile: "catalog-work",
     },
   },
+  {
+    name: "inherited parent",
+    request: { parentSessionKey: "main" },
+    catalogTarget: undefined,
+    parentEntry: {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.6-sol",
+      modelOverrideSource: "user" as const,
+      agentRuntimeOverride: "codex",
+      authProfileOverride: "parent-work",
+      authProfileOverrideSource: "user" as const,
+    },
+    expectedEntry: {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.6-sol",
+      agentRuntimeOverride: "codex",
+      authProfileOverride: "parent-work",
+    },
+    expectedTitleSelection: {
+      regularModelRef: "openai/gpt-5.6-sol@parent-work",
+      agentHarnessRuntimeOverride: "codex",
+      preferredProfile: "parent-work",
+    },
+  },
 ])(
   "sessions.create shares a title routed through the $name selection with its worktree and first chat send",
-  async ({ request, catalogTarget, expectedEntry, expectedTitleSelection }) => {
+  async ({ request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection }) => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-session-worktree-title-selection-",
@@ -1407,6 +1434,7 @@ test.each([
     agentDiscoveryMock.enabled = true;
     agentDiscoveryMock.models = [
       { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
+      { id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" },
       { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
     ];
     if (catalogTarget) {
@@ -1435,6 +1463,11 @@ test.each([
       setActivePluginRegistry(registry);
     }
     const { storePath } = await createSessionStoreDir();
+    if (parentEntry) {
+      await writeSessionStore({
+        entries: { main: sessionStoreEntry("worktree-title-parent", parentEntry) },
+      });
+    }
     let worktreeId: string | undefined;
     const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
     const message = "Review this rollout [[reply_to_current]]";

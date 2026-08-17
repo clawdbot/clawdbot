@@ -72,6 +72,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import {
+  type GatewaySessionTitleModelSelection,
   type PreparedGatewaySessionLifecycle,
   type PrepareGatewaySessionLifecycle,
   rollbackGatewaySessionPreparation,
@@ -99,16 +100,17 @@ export function resolveSessionCreateModelSelection(
   cfg: OpenClawConfig,
   agentId: string,
   input: string | { model: string; agentRuntime?: string } | undefined,
-):
-  | Pick<
-      SessionEntry,
-      "providerOverride" | "modelOverride" | "agentRuntimeOverride" | "authProfileOverride"
-    >
-  | null
-  | undefined {
+  parentEntry?: SessionEntry,
+): GatewaySessionTitleModelSelection | null {
   const model = normalizeOptionalString(typeof input === "string" ? input : input?.model);
   if (!model) {
-    return undefined;
+    const inherited = inheritSessionSelection(parentEntry);
+    return {
+      providerOverride: inherited.providerOverride,
+      modelOverride: inherited.modelOverride,
+      agentRuntimeOverride: inherited.agentRuntimeOverride,
+      authProfileOverride: inherited.authProfileOverride,
+    };
   }
   const defaults = resolveDefaultModelForAgent({ cfg, agentId });
   // Reuse patch policy with the config-owned catalog projection. Persisted creation
@@ -849,12 +851,19 @@ export async function createGatewaySession(params: {
     const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
     }).entry;
+    const titleModelSelection = resolveSessionCreateModelSelection(
+      params.cfg,
+      target.agentId,
+      params.catalogTarget ?? params.model,
+      currentParentSessionEntry,
+    );
     const preparationResult = params.prepareLifecycle
       ? await params.prepareLifecycle({
           agentId: target.agentId,
           entry: currentTargetEntry,
           key: target.canonicalKey,
           storePath: target.storePath,
+          titleModelSelection,
         })
       : undefined;
     if (preparationResult && !preparationResult.ok) {
