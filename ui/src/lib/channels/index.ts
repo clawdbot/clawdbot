@@ -202,7 +202,6 @@ async function loadChannels(
   state.channelsRefreshSeq = refreshSeq;
   state.channelsLoading = true;
   state.channelsLoadingProbe = probe;
-  state.channelsError = null;
   const refresh = (async () => {
     try {
       const res = await client.request<ChannelsStatusSnapshot | null>("channels.status", {
@@ -213,6 +212,7 @@ async function loadChannels(
         return;
       }
       state.channelsSnapshot = res;
+      state.channelsError = null;
       state.channelsLastSuccess = Date.now();
     } catch (err) {
       if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
