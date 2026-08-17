@@ -709,7 +709,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.deferredSessionHydrationRequestVersion += 1;
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
-    this.taskSuggestions = [];
+    this.setTaskSuggestions([]);
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
     this.resetTaskSuggestionCloudProfiles();

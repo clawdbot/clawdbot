@@ -189,25 +189,83 @@ describe("chat task suggestions", () => {
     expect(container.querySelector(".task-suggestion__dismiss")).not.toBeNull();
   });
 
-  it("shows one suggestion at a time and preserves dismissal for the active task", () => {
+  it("keeps reactive navigation active across rerenders and restarts repeated animations", () => {
     const secondSuggestion = { ...suggestion, id: "task_456", title: "Trim old fixtures" };
-    const { container, onDismiss } = renderSuggestion({
-      taskSuggestions: [suggestion, secondSuggestion],
-    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    let activeId = suggestion.id;
+    let direction: "next" | "previous" | undefined;
+    let generation = 0;
+    const draw = () =>
+      render(
+        renderChatTaskSuggestionTray({
+          taskSuggestions: [suggestion, secondSuggestion],
+          activeTaskSuggestionId: activeId,
+          taskSuggestionSwapDirection: direction,
+          taskSuggestionSwapGeneration: generation,
+          onNavigateTaskSuggestion: (taskId, nextDirection) => {
+            const current = taskId === suggestion.id ? 0 : 1;
+            activeId = [suggestion, secondSuggestion][
+              (current + (nextDirection === "next" ? 1 : -1) + 2) % 2
+            ]!.id;
+            direction = nextDirection;
+            generation += 1;
+            draw();
+            container
+              .querySelector<HTMLElement>(
+                `.task-suggestion:not([hidden]) [data-task-${nextDirection === "next" ? "next" : "prev"}]`,
+              )
+              ?.focus();
+          },
+        }),
+        container,
+      );
+    draw();
 
-    const cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    let cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(cards.map((card) => card.hidden)).toEqual([false, true]);
     expect(cards[0]?.querySelector(".task-suggestion__position")?.textContent).toContain("1 / 2");
 
     cards[0]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
+    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(cards.map((card) => card.hidden)).toEqual([true, false]);
     expect(cards[1]?.dataset.swapDirection).toBe("next");
-    cards[1]?.querySelector<HTMLButtonElement>(".task-suggestion__dismiss")?.click();
-    expect(onDismiss).toHaveBeenCalledWith(secondSuggestion);
+    expect(document.activeElement).toBe(cards[1]?.querySelector("[data-task-next]"));
 
-    cards[1]?.querySelector<HTMLButtonElement>("[data-task-prev]")?.click();
+    // An unrelated Lit update must render the owner-selected card, not card zero.
+    draw();
+    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    expect(cards.map((card) => card.hidden)).toEqual([true, false]);
+
+    cards[1]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
+    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(cards.map((card) => card.hidden)).toEqual([false, true]);
-    expect(cards[0]?.dataset.swapDirection).toBe("previous");
+    expect(cards[0]?.dataset.swapDirection).toBe("next");
+    const firstVisit = cards[0];
+
+    cards[0]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
+    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    cards[1]?.querySelector<HTMLButtonElement>("[data-task-next]")?.click();
+    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    expect(cards[0]).not.toBe(firstVisit);
+    expect(cards[0]?.dataset.swapDirection).toBe("next");
+
+    cards[0]?.querySelector<HTMLButtonElement>("[data-task-prev]")?.click();
+    cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    expect(document.activeElement).toBe(cards[1]?.querySelector("[data-task-prev]"));
+    container.remove();
+  });
+
+  it("dismisses the currently active task", () => {
+    const secondSuggestion = { ...suggestion, id: "task_456", title: "Trim old fixtures" };
+    const { container, onDismiss } = renderSuggestion({
+      taskSuggestions: [suggestion, secondSuggestion],
+      activeTaskSuggestionId: secondSuggestion.id,
+    });
+
+    const active = container.querySelector<HTMLElement>(".task-suggestion:not([hidden])");
+    active?.querySelector<HTMLButtonElement>(".task-suggestion__dismiss")?.click();
+    expect(onDismiss).toHaveBeenCalledWith(secondSuggestion);
   });
 
   it("strips bidi controls from every displayed field", () => {

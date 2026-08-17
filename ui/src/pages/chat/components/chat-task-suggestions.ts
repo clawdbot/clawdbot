@@ -1,5 +1,6 @@
 // Chat UI cards for model-proposed follow-up tasks.
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import type { TaskSuggestion } from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
@@ -14,6 +15,10 @@ export type ChatTaskSuggestionTrayProps = {
   taskSuggestionBusyIds?: ReadonlySet<string>;
   taskSuggestionCloudProfiles?: TaskSuggestionCloudProfile[];
   taskSuggestionCopiedIds?: ReadonlySet<string>;
+  activeTaskSuggestionId?: string;
+  taskSuggestionSwapDirection?: "next" | "previous";
+  taskSuggestionSwapGeneration?: number;
+  onNavigateTaskSuggestion?: (taskId: string, direction: "next" | "previous") => void;
   onCopyTaskSuggestionPrompt?: (suggestion: TaskSuggestion) => void;
   canAcceptTaskSuggestions?: boolean;
   canAcceptTaskSuggestionModes?: boolean;
@@ -32,6 +37,9 @@ export function renderChatTaskSuggestionTray(props: ChatTaskSuggestionTrayProps)
     busyIds: props.taskSuggestionBusyIds ?? new Set(),
     cloudProfiles: props.taskSuggestionCloudProfiles ?? [],
     copiedIds: props.taskSuggestionCopiedIds ?? new Set(),
+    activeId: props.activeTaskSuggestionId,
+    swapDirection: props.taskSuggestionSwapDirection,
+    swapGeneration: props.taskSuggestionSwapGeneration ?? 0,
     onCopyPrompt: (suggestion) => props.onCopyTaskSuggestionPrompt?.(suggestion),
     canAccept: props.canAcceptTaskSuggestions === true,
     canAcceptModes: props.canAcceptTaskSuggestionModes === true,
@@ -39,6 +47,7 @@ export function renderChatTaskSuggestionTray(props: ChatTaskSuggestionTrayProps)
     onAccept: (suggestion, mode, cloudProfileId) =>
       props.onAcceptTaskSuggestion?.(suggestion, mode, cloudProfileId),
     onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
+    onNavigate: (taskId, direction) => props.onNavigateTaskSuggestion?.(taskId, direction),
   });
 }
 
@@ -63,16 +72,22 @@ function renderChatTaskSuggestions(props: {
   onCopyPrompt: (suggestion: TaskSuggestion) => void;
   copiedIds: ReadonlySet<string>;
   canAcceptModes: boolean;
+  activeId?: string;
+  swapDirection?: "next" | "previous";
+  swapGeneration: number;
+  onNavigate: (taskId: string, direction: "next" | "previous") => void;
 }) {
   if (props.suggestions.length === 0) {
     return nothing;
   }
   const multiple = props.suggestions.length > 1;
+  const activeId = props.suggestions.some((suggestion) => suggestion.id === props.activeId)
+    ? props.activeId
+    : props.suggestions[0]?.id;
   return html`
     <div
       class="task-suggestions ${multiple ? "task-suggestions--stack" : ""}"
       aria-live="polite"
-      @click=${handleTaskSuggestionNavigation}
     >
       ${props.suggestions.map((suggestion, index) => {
         const busy = props.busyIds.has(suggestion.id);
@@ -90,8 +105,14 @@ function renderChatTaskSuggestions(props: {
             props.onAccept(suggestion, mode, cloudProfileId);
           }
         };
-        return html`
-          <article class="task-suggestion" data-task-id=${suggestion.id} ?hidden=${index > 0}>
+        const active = suggestion.id === activeId;
+        const card = html`
+          <article
+            class="task-suggestion"
+            data-task-id=${suggestion.id}
+            data-swap-direction=${active && props.swapDirection ? props.swapDirection : nothing}
+            ?hidden=${!active}
+          >
             <header class="task-suggestion__header">
               <div class="task-suggestion__eyebrow" title=${cwd}>
                 ${t("chat.taskSuggestions.eyebrow", { repo })}
@@ -109,6 +130,7 @@ function renderChatTaskSuggestions(props: {
                         type="button"
                         aria-label=${t("chat.taskSuggestions.previous")}
                         data-task-prev
+                        @click=${() => props.onNavigate(suggestion.id, "previous")}
                       >
                         ${icons.chevronLeft}
                       </button>
@@ -117,6 +139,7 @@ function renderChatTaskSuggestions(props: {
                         type="button"
                         aria-label=${t("chat.taskSuggestions.next")}
                         data-task-next
+                        @click=${() => props.onNavigate(suggestion.id, "next")}
                       >
                         ${icons.chevronRight}
                       </button>
@@ -251,35 +274,12 @@ function renderChatTaskSuggestions(props: {
             </div>
           </article>
         `;
+        // A fresh keyed card restarts the directional entrance even when this
+        // task and direction were used before; ordinary rerenders retain it.
+        return active
+          ? keyed(`${suggestion.id}:${props.swapGeneration}`, card)
+          : keyed(`${suggestion.id}:inactive`, card);
       })}
     </div>
   `;
-}
-
-function handleTaskSuggestionNavigation(event: Event): void {
-  const target = event.target;
-  if (!(target instanceof Element)) {
-    return;
-  }
-  const direction = target.closest("[data-task-prev]")
-    ? -1
-    : target.closest("[data-task-next]")
-      ? 1
-      : 0;
-  if (direction === 0) {
-    return;
-  }
-  const tray = target.closest<HTMLElement>(".task-suggestions");
-  const cards = tray ? [...tray.querySelectorAll<HTMLElement>(".task-suggestion")] : [];
-  const current = cards.findIndex((card) => !card.hidden);
-  if (current < 0 || cards.length < 2) {
-    return;
-  }
-  const next = cards[(current + direction + cards.length) % cards.length];
-  if (!next) {
-    return;
-  }
-  cards[current]!.hidden = true;
-  next.dataset.swapDirection = direction > 0 ? "next" : "previous";
-  next.hidden = false;
 }
