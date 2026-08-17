@@ -29,6 +29,7 @@ import {
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
+  readOpenAICompletionsReasoningBatch,
   throwIfModelStreamAborted,
   type MutableAssistantOutput,
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
@@ -84,6 +85,7 @@ export async function processCompletionsStream(
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
+  const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
   const shouldFilterDeepSeekDsmlText = compat.thinkingFormat === "deepseek";
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
   const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
@@ -214,6 +216,22 @@ export async function processCompletionsStream(
       queuePostToolCallDelta({ kind: "text", text });
     } else {
       appendTextDelta(text);
+    }
+  };
+  const appendReasoningDeltas = (reasoningDeltas: readonly CompletionsReasoningDelta[]) => {
+    for (const reasoningDelta of reasoningDeltas) {
+      if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+        continue;
+      }
+      if (currentBlock?.type === "toolCall") {
+        queuePostToolCallDelta({ ...reasoningDelta });
+        continue;
+      }
+      if (reasoningDelta.kind === "text") {
+        appendTextDelta(reasoningDelta.text);
+      } else if (emitReasoning) {
+        appendThinkingDelta(reasoningDelta);
+      }
     }
   };
   const appendRecoveredToolCall = (toolCall: RecoveredDeepSeekDsmlToolCall) => {
@@ -410,52 +428,27 @@ export async function processCompletionsStream(
     }
     for (const normalizedDelta of normalizeToolCallDeltas(rawChoiceDelta, choice.finish_reason)) {
       const choiceDelta = normalizedDelta.delta;
-      const reasoningDeltas = getCompletionsReasoningDeltas(
+      const reasoningBatch = readOpenAICompletionsReasoningBatch(
         choiceDelta as Record<string, unknown>,
-        compat.visibleReasoningDetailTypes,
+        visibleReasoningDetailTypes,
       );
-      const hasMirroredReasoning = reasoningDeltas.some((delta) => delta.kind === "thinking");
+      const reasoningDeltas = reasoningBatch.deltas;
+      const hasReasoningThinking = reasoningBatch.hasThinking;
       // Share the content/refusal owner to avoid duplicate mirrored refusals.
       const contentDeltas = readOpenAICompletionsContentDeltas(
         choiceDelta.content,
         choiceDelta.refusal,
-        reasoningDeltas
-          .filter((reasoningDelta) => reasoningDelta.kind === "thinking")
-          .map((reasoningDelta) => reasoningDelta.text),
+        reasoningBatch.mirroredThinking,
       );
-      const hasSameChunkVisibleText =
-        reasoningDeltas.some((delta) => delta.kind === "text") ||
-        contentDeltas.some((delta) => delta.kind === "text");
-      if (hasMirroredReasoning) {
-        beginReasoning(hasSameChunkVisibleText, true);
-      }
-      // Compat-classified visible details are explicit output items. Preserve
-      // their order with adjacent structured thinking instead of inferring commentary.
-      const appendReasoningDeltas = () => {
-        for (const reasoningDelta of reasoningDeltas) {
-          if (reasoningDelta.kind === "thinking" && !emitReasoning) {
-            continue;
-          }
-          if (currentBlock?.type === "toolCall") {
-            queuePostToolCallDelta({ ...reasoningDelta });
-            continue;
-          }
-          if (reasoningDelta.kind === "text") {
-            appendTextDelta(reasoningDelta.text);
-          } else if (emitReasoning) {
-            appendThinkingDelta(reasoningDelta);
-          }
-        }
-      };
-      // The dedicated field owns reasoning order/signature; a distinct content
-      // thought follows it, while an exact mirror was removed by the decoder.
-      if (hasMirroredReasoning) {
-        appendReasoningDeltas();
-      }
       const lastVisibleTextIndex = contentDeltas.findLastIndex((delta) => delta.kind === "text");
+      const hasSameChunkVisibleText = reasoningBatch.hasVisibleText || lastVisibleTextIndex !== -1;
+      if (hasReasoningThinking) {
+        beginReasoning(hasSameChunkVisibleText, true);
+        appendReasoningDeltas(reasoningDeltas);
+      }
       for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
         if (contentDelta.kind === "text") {
-          const routedDeltas = hasMirroredReasoning
+          const routedDeltas = hasReasoningThinking
             ? reasoningTagTextPartitioner.push(contentDelta.text)
             : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
           for (const routedDelta of routedDeltas) {
@@ -467,8 +460,8 @@ export async function processCompletionsStream(
           appendRoutedContentDelta(contentDelta);
         }
       }
-      if (!hasMirroredReasoning) {
-        appendReasoningDeltas();
+      if (!hasReasoningThinking) {
+        appendReasoningDeltas(reasoningDeltas);
       }
       const toolCallDeltas = normalizedDelta.toolCalls;
       if (toolCallDeltas.length > 0) {
@@ -582,59 +575,6 @@ export async function processCompletionsStream(
   if (output.stopReason === "toolUse") {
     tagPendingCommentaryText(output.content);
   }
-}
-
-function getCompletionsReasoningDeltas(
-  delta: Record<string, unknown>,
-  visibleReasoningDetailTypes: readonly string[],
-): CompletionsReasoningDelta[] {
-  const output: CompletionsReasoningDelta[] = [];
-  const pushDelta = (next: CompletionsReasoningDelta) => {
-    const previous = output[output.length - 1];
-    if (!previous || previous.kind !== next.kind) {
-      output.push(next);
-      return;
-    }
-    if (next.kind === "thinking" && previous.kind === "thinking") {
-      if (previous.signature !== next.signature) {
-        output.push(next);
-        return;
-      }
-      previous.text += next.text;
-      return;
-    }
-    previous.text += next.text;
-  };
-  const reasoningDetails = delta.reasoning_details;
-  let usedReasoningThinkingDetails = false;
-  if (Array.isArray(reasoningDetails)) {
-    const visibleTypes = new Set(visibleReasoningDetailTypes);
-    for (const item of reasoningDetails) {
-      const detail = item as { type?: unknown; text?: unknown };
-      if (typeof detail.text !== "string" || !detail.text) {
-        continue;
-      }
-      if (detail.type === "reasoning.text") {
-        usedReasoningThinkingDetails = true;
-        pushDelta({ kind: "thinking", signature: "reasoning_details", text: detail.text });
-        continue;
-      }
-      if (typeof detail.type === "string" && visibleTypes.has(detail.type)) {
-        pushDelta({ kind: "text", text: detail.text });
-      }
-    }
-  }
-  if (!usedReasoningThinkingDetails) {
-    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
-    for (const field of reasoningFields) {
-      const value = delta[field];
-      if (typeof value === "string" && value.length > 0) {
-        pushDelta({ kind: "thinking", signature: field, text: value });
-        break;
-      }
-    }
-  }
-  return output;
 }
 
 function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {

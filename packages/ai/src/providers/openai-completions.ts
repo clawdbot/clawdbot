@@ -23,6 +23,8 @@ import {
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
+  readOpenAICompletionsReasoningBatch,
+  type OpenAICompletionsContentDelta,
 } from "../transports/openai-transport-shared.js";
 import {
   transportAbortError,
@@ -150,6 +152,12 @@ export const streamOpenAICompletions: StreamFunction<
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const compat = resolveOpenAICompletionsCompat(model);
+      const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
+      const shouldEmitReasoning = Boolean(
+        model.reasoning &&
+        options?.reasoningEffort &&
+        isOpenAICompletionsThinkingEnabled(options.reasoningEffort),
+      );
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
       const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
@@ -314,6 +322,23 @@ export const streamOpenAICompletions: StreamFunction<
           partial: output,
         });
       };
+      const appendReasoningDeltas = (reasoningDeltas: readonly OpenAICompletionsContentDelta[]) => {
+        for (const reasoningDelta of reasoningDeltas) {
+          if (reasoningDelta.kind === "thinking") {
+            if (!shouldEmitReasoning) {
+              continue;
+            }
+            const signature = reasoningDelta.signature;
+            const thinkingSignature =
+              model.provider === "opencode-go" && signature === "reasoning"
+                ? "reasoning_content"
+                : signature;
+            appendThinkingDelta(thinkingSignature, reasoningDelta.text);
+          } else {
+            appendTextDelta(reasoningDelta.text);
+          }
+        }
+      };
       const ensureToolCallBlock = (toolCall: StreamingToolCallDelta) => {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
         let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
@@ -465,47 +490,27 @@ export const streamOpenAICompletions: StreamFunction<
             choice.finish_reason,
           )) {
             const choiceDelta = normalizedDelta.delta;
-            // Some endpoints return reasoning in reasoning_content (llama.cpp),
-            // or reasoning (other openai compatible endpoints)
-            // Use the first non-empty reasoning field to avoid duplication
-            // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
-            const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
             const deltaFields = choiceDelta as Record<string, unknown>;
-            const shouldEmitReasoning = Boolean(
-              model.reasoning &&
-              options?.reasoningEffort &&
-              isOpenAICompletionsThinkingEnabled(options.reasoningEffort),
+            const reasoningBatch = readOpenAICompletionsReasoningBatch(
+              deltaFields,
+              visibleReasoningDetailTypes,
             );
-            let foundReasoningField: string | null = null;
-            for (const field of reasoningFields) {
-              const value = deltaFields[field];
-              if (typeof value === "string" && value.length > 0) {
-                foundReasoningField = field;
-                break;
-              }
-            }
+            const reasoningDeltas = reasoningBatch.deltas;
+            const hasReasoningThinking = reasoningBatch.hasThinking;
             const contentDeltas = readOpenAICompletionsContentDeltas(
               choiceDelta.content,
               choiceDelta.refusal,
-              foundReasoningField ? [deltaFields[foundReasoningField] as string] : [],
+              reasoningBatch.mirroredThinking,
             );
-            const hasSameChunkVisibleText = contentDeltas.some((delta) => delta.kind === "text");
-            if (foundReasoningField) {
-              beginReasoning(hasSameChunkVisibleText, true);
-            }
-            if (shouldEmitReasoning && foundReasoningField) {
-              const delta = deltaFields[foundReasoningField];
-              if (typeof delta === "string" && delta.length > 0) {
-                const thinkingSignature =
-                  model.provider === "opencode-go" && foundReasoningField === "reasoning"
-                    ? "reasoning_content"
-                    : foundReasoningField;
-                appendThinkingDelta(thinkingSignature, delta);
-              }
-            }
             const lastVisibleTextIndex = contentDeltas.findLastIndex(
               (delta) => delta.kind === "text",
             );
+            const hasSameChunkVisibleText =
+              reasoningBatch.hasVisibleText || lastVisibleTextIndex !== -1;
+            if (hasReasoningThinking) {
+              beginReasoning(hasSameChunkVisibleText, true);
+              appendReasoningDeltas(reasoningDeltas);
+            }
             for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
               if (contentDelta.kind === "thinking") {
                 const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
@@ -514,8 +519,11 @@ export const streamOpenAICompletions: StreamFunction<
                   appendThinkingDelta(contentDelta.signature, contentDelta.text);
                 }
               } else {
-                appendPartitionedContent(contentDelta.text, Boolean(foundReasoningField));
+                appendPartitionedContent(contentDelta.text, hasReasoningThinking);
               }
+            }
+            if (!hasReasoningThinking) {
+              appendReasoningDeltas(reasoningDeltas);
             }
 
             const toolCallDeltas = normalizedDelta.toolCalls;

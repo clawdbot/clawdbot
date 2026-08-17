@@ -200,6 +200,18 @@ const openAiTypedReasoningChunks = [
   makeOpenAiChunk({}, "stop"),
 ] satisfies OpenAIChunk[];
 
+const openAiStructuredReasoningChunks = [
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "reasoning.text", text: "First thought." }],
+  }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({
+    reasoning_details: [{ type: "reasoning.text", text: "Second thought." }],
+  }),
+  makeOpenAiChunk({ content: "Final." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
 const openAiTrailingReasoningChunks = [
   makeOpenAiChunk({ reasoning_content: "First thought." }),
   makeOpenAiChunk({ content: "Answer." }),
@@ -499,6 +511,34 @@ describe("provider and transport observable parity fixtures", () => {
           textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
         },
         { type: "thinking", thinking: "Second thought." },
+        {
+          type: "text",
+          text: "Final.",
+          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        },
+      ]);
+
+      const structuredReasoningResult = await runOpenAi(
+        implementation,
+        "success",
+        openAiStructuredReasoningChunks,
+      );
+      expect(structuredReasoningResult.terminal.content).toEqual([
+        {
+          type: "thinking",
+          thinking: "First thought.",
+          thinkingSignature: "reasoning_details",
+        },
+        {
+          type: "text",
+          text: "Interim.",
+          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        },
+        {
+          type: "thinking",
+          thinking: "Second thought.",
+          thinkingSignature: "reasoning_details",
+        },
         {
           type: "text",
           text: "Final.",
