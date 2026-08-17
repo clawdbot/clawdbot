@@ -17,6 +17,7 @@ import {
 } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
+  loadSessionEntryReadOnly: vi.fn(),
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly,
   patchSessionEntryCore: hoisted.patchSessionEntryCore,
 }));
 
@@ -575,6 +577,7 @@ describe("ensureSessionDiffBaseline", () => {
       sessionId: "existing-session",
       updatedAt: Date.now(),
     };
+    hoisted.loadSessionEntryReadOnly.mockReturnValue(entry);
 
     const result = await ensureSessionDiffBaseline({
       cwd: "/unused",
