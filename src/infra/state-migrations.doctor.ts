@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { listAgentIds, tryResolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
@@ -281,8 +282,9 @@ function createPluginDoctorStateMigrationContext(
 }
 
 function tryResolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string | undefined {
-  const agentId = tryResolveLegacyCompatibilityAgentId(cfg);
-  return agentId ? normalizeAgentId(agentId) : undefined;
+  const agentId =
+    tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveSystemAgentTargetAgentId(cfg);
+  return agentId && listAgentIds(cfg).includes(agentId) ? agentId : undefined;
 }
 
 function tryResolveDoctorSessionMigrationAgentId(cfg: OpenClawConfig): string | undefined {
