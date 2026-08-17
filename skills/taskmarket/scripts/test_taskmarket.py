@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Tests for the taskmarket OpenClaw skill's client script (pure logic + CLI behavior)."""
+"""Tests for the taskmarket OpenClaw skill's CLI wrapper.
+
+Tests exercise the wrapper's exit-code contract and argument handling with a
+stub `taskmarket` binary on PATH, so they run offline and deterministically.
+"""
 
 import json
 import os
@@ -8,21 +12,36 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parent / "taskmarket.js"
 
 
+def make_stub(tmpdir, behavior):
+    """Write a stub `taskmarket` executable.
+
+    behavior: dict mapping 'exit_code' (int), 'stdout' (str), 'stderr' (str).
+    """
+    stub = Path(tmpdir) / "taskmarket"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f"echo {json.dumps(behavior.get('stdout', '{}'))}\n"
+        f"exit {behavior.get('exit_code', 0)}\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return str(tmpdir)
+
+
 class TaskmarketCliTest(unittest.TestCase):
-    def exec_node(self, *args, env=None):
-        merged = {**os.environ, "PATH": os.environ.get("PATH", "")}
-        if env:
-            merged.update(env)
+    def exec_node(self, *args, stub_dir=None):
+        env = dict(os.environ)
+        if stub_dir:
+            env["PATH"] = stub_dir + os.pathsep + env.get("PATH", "")
         return subprocess.run(
             ["node", str(SCRIPT), *args],
             capture_output=True,
             text=True,
-            env=merged,
+            env=env,
             timeout=30,
         )
 
@@ -36,49 +55,62 @@ class TaskmarketCliTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("unknown action", r.stderr)
 
-    def test_create_without_key_exits_not_authorized(self):
-        env = {k: v for k, v in os.environ.items() if k not in ("TASKMARKET_API_KEY",)}
-        r = self.exec_node("create", "t", "d", env=env)
+    def test_create_without_confirm_exits_not_authorized(self):
+        r = self.exec_node("create", "desc", "5", "24", "crypto")
         self.assertEqual(r.returncode, 3)
-        self.assertIn("TASKMARKET_API_KEY not set", r.stderr)
+        self.assertIn("TASKMARKET_NOT_AUTHORIZED", r.stderr)
 
-    def test_submit_without_key_exits_not_authorized(self):
-        env = {k: v for k, v in os.environ.items() if k not in ("TASKMARKET_API_KEY", "TASKMARKET_WORKER_ADDRESS")}
-        r = self.exec_node("submit", "0xabc", "msg", env=env)
+    def test_submit_without_confirm_exits_not_authorized(self):
+        r = self.exec_node("submit", "0xabc", "msg", "/tmp/f")
         self.assertEqual(r.returncode, 3)
-        self.assertIn("TASKMARKET_API_KEY not set", r.stderr)
+        self.assertIn("TASKMARKET_NOT_AUTHORIZED", r.stderr)
 
-    def test_submit_with_key_but_no_worker_address(self):
-        env = {**os.environ, "TASKMARKET_API_KEY": "k-test"}
-        env = {k: v for k, v in env.items() if k != "TASKMARKET_WORKER_ADDRESS"}
-        r = self.exec_node("submit", "0xabc", "msg", env=env)
-        self.assertEqual(r.returncode, 3)
-        self.assertIn("TASKMARKET_WORKER_ADDRESS not set", r.stderr)
-
-    def test_create_missing_description_usage(self):
-        env = {**os.environ, "TASKMARKET_API_KEY": "k-test"}
-        r = self.exec_node("create", "title-only", env=env)
+    def test_create_missing_reward_usage(self):
+        r = self.exec_node("create", "desc", "--confirm")
         self.assertEqual(r.returncode, 2)
         self.assertIn("create requires", r.stderr)
 
-    def test_browse_hits_live_api_and_prints_rows(self):
-        # Live connectivity test against the public read-only endpoint.
-        r = self.exec_node("browse")
-        if r.returncode == 4:
-            # Network-isolated environments: script must still fail cleanly.
-            self.assertIn("browse failed", r.stderr)
-            return
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("reward=", r.stdout)
+    def test_submit_missing_file_usage(self):
+        r = self.exec_node("submit", "0xabc", "msg", "--confirm")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("submit requires", r.stderr)
 
-    def test_browse_json_output_parses(self):
-        r = self.exec_node("browse", "--json")
-        if r.returncode == 4:
-            self.assertIn("browse failed", r.stderr)
-            return
-        self.assertEqual(r.returncode, 0)
-        data = json.loads(r.stdout)
-        self.assertIsInstance(data, list)
+    def test_browse_forwards_to_cli(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = json.dumps({
+                "ok": True,
+                "data": {"tasks": [{
+                    "id": "0x1234567890abcdef",
+                    "reward": "1000000",
+                    "submissionCount": 3,
+                    "expiryTime": "2026-08-25T00:00:00.000Z",
+                    "description": "Build a thing - Longer description",
+                    "status": "open",
+                }]},
+            })
+            stub_dir = make_stub(td, {"exit_code": 0, "stdout": out})
+            r = self.exec_node("browse", stub_dir=stub_dir)
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("reward=$1.00", r.stdout)
+            self.assertIn("subs=3", r.stdout)
+
+    def test_review_missing_taskid_usage(self):
+        r = self.exec_node("review")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("review requires", r.stderr)
+
+    def test_create_confirm_forwards_to_cli(self):
+        with tempfile.TemporaryDirectory() as td:
+            stub_dir = make_stub(td, {"exit_code": 0, "stdout": '{"ok":true,"data":{"id":"0xabc"}}'})
+            r = self.exec_node("create", "desc", "5", "24", "crypto", "--confirm", stub_dir=stub_dir)
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("0xabc", r.stdout)
+
+    def test_cli_failure_propagates(self):
+        with tempfile.TemporaryDirectory() as td:
+            stub_dir = make_stub(td, {"exit_code": 1, "stderr": "boom"})
+            r = self.exec_node("create", "desc", "5", "24", "--confirm", stub_dir=stub_dir)
+            self.assertEqual(r.returncode, 4)
 
 
 if __name__ == "__main__":
