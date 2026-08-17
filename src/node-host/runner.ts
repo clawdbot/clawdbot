@@ -255,6 +255,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       )
     : [gateway];
 
+  const plaintextAccessCandidate = gatewayCandidates.find(
+    (candidate) => candidate.cloudflareAccess && candidate.tls !== true,
+  );
+  if (plaintextAccessCandidate) {
+    throw new Error("Cloudflare Access credentials require a TLS Gateway connection");
+  }
+
   const resolvedCloudflareAccess = await Promise.all(
     gatewayCandidates.map(
       async (candidate) =>
