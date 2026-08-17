@@ -107,6 +107,8 @@ async function deliverNextcloudTalkReply(params: {
   const { cfg, payload, roomToken, accountId, statusSink } = params;
   const visibleReplySent = await deliverFormattedTextWithAttachments({
     payload,
+    cfg,
+    surface: "nextcloud-talk",
     send: async ({ text, replyToId }) => {
       await sendMessageNextcloudTalk(roomToken, text, {
         cfg,

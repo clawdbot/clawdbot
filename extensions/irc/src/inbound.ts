@@ -205,6 +205,8 @@ async function deliverIrcReply(params: {
       ...params.payload,
       text: sanitizeIrcAssistantText(params.payload.text ?? ""),
     },
+    cfg: params.cfg,
+    surface: "irc",
     send: async ({ text, replyToId }) => {
       if (params.sendReply) {
         await params.sendReply(params.target, text, replyToId);
