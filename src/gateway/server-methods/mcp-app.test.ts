@@ -31,7 +31,11 @@ vi.mock("../mcp-app-standalone.js", () => ({
   createMcpAppStandaloneTicket: mocks.createMcpAppStandaloneTicket,
 }));
 
-import { resolveMcpAppAllowedToolNames } from "../mcp-app-operations.js";
+import {
+  resolveMcpAppAllowedToolNames,
+  resolveMcpAppBootstrapTimeoutMs,
+  withMcpAppActiveView,
+} from "../mcp-app-operations.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 
 const view = {
@@ -610,5 +614,60 @@ describe("MCP App gateway bridge", () => {
       messageSupported: false,
       updateModelContextSupported: false,
     });
+  });
+
+  it("bounds stalled restart reconstruction before the client watchdog is disabled", async () => {
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    mocks.peekSessionMcpRuntime.mockReturnValue(undefined);
+    mocks.restoreMcpAppView.mockReturnValue(new Promise(() => {}));
+
+    try {
+      const invocation = invoke("mcp.app.view", {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+      });
+      await vi.waitFor(() => expect(mocks.restoreMcpAppView).toHaveBeenCalledOnce());
+
+      controller.abort(new Error("MCP App bootstrap timed out"));
+      const respond = await invocation;
+
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(mocks.acquireMcpAppViewRequest).not.toHaveBeenCalled();
+      expect(timeoutSpy).toHaveBeenCalledWith(10 * 60_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("does not run an active-view callback after reconstruction exhausts its deadline", async () => {
+    const activeRuntime = runtime();
+    const operation = vi.fn();
+
+    await expect(
+      withMcpAppActiveView(
+        { runtime: activeRuntime as never, view: view as never },
+        "read",
+        operation,
+        { timeoutStartedAtMs: Date.now() - view.operationTimeoutMs },
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+
+    expect(operation).not.toHaveBeenCalled();
+    expect(activeRuntime.markUsed).not.toHaveBeenCalled();
+  });
+
+  it("widens restart reconstruction for configured MCP request deadlines", () => {
+    expect(
+      resolveMcpAppBootstrapTimeoutMs({
+        mcp: {
+          servers: {
+            fast: { command: "fast", requestTimeoutMs: 45_000 },
+            slow: { command: "slow", requestTimeoutMs: 12 * 60_000 },
+            disabled: { command: "disabled", requestTimeoutMs: 20 * 60_000, enabled: false },
+          },
+        },
+      }),
+    ).toBe(12 * 60_000);
   });
 });

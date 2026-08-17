@@ -14,6 +14,7 @@ import {
   type McpAppOperation,
   requireMcpAppInteraction,
   resolveMcpAppActiveView,
+  resolveMcpAppBootstrapTimeoutMs,
   withMcpAppActiveView,
 } from "../mcp-app-operations.js";
 import { createMcpAppStandaloneTicket } from "../mcp-app-standalone.js";
@@ -87,63 +88,77 @@ async function handle(
 }
 
 export const mcpAppHandlers: GatewayRequestHandlers = {
-  "mcp.app.view": async ({ respond, params, context }) => {
+  "mcp.app.view": async ({ respond, params, context, signal: callerSignal }) => {
     await handle(respond, async () => {
+      const cfg = context.getRuntimeConfig();
+      const timeoutStartedAtMs = Date.now();
+      // The server owns bootstrap timing before a reconstructed view can expose
+      // its exact deadline; configured MCP timeouts may exceed the view floor.
+      const bootstrapTimeoutSignal = AbortSignal.timeout(resolveMcpAppBootstrapTimeoutMs(cfg));
+      const resolutionSignal = callerSignal
+        ? AbortSignal.any([callerSignal, bootstrapTimeoutSignal])
+        : bootstrapTimeoutSignal;
       const active = await resolveMcpAppActiveView({
         sessionKey: requireString(params, "sessionKey"),
-        agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
+        agentId: resolveMcpAppSessionOwner(params, cfg),
         viewId: requireString(params, "viewId"),
-        cfg: context.getRuntimeConfig(),
+        cfg,
+        signal: resolutionSignal,
       });
-      return await withMcpAppActiveView(active, "read", async (signal) => {
-        const { view } = active;
-        let interactive = false;
-        try {
-          await requireMcpAppInteraction(view, signal);
-          interactive = true;
-        } catch {
-          signal.throwIfAborted();
-          // Stale board leases remain renderable but lose every interactive capability.
-        }
-        const updateModelContextSupported =
-          interactive && active.runtime.mcpAppModelContextRevoked !== true;
-        const sandboxPort =
-          context.getMcpAppSandboxPort?.() ?? (await context.ensureSandboxHostPort?.());
-        if (sandboxPort === undefined) {
-          throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
-        }
-        const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
-        let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
-        try {
-          standalone = createMcpAppStandaloneTicket({
-            sessionKey: requireString(params, "sessionKey"),
-            view,
-          });
-        } catch (error) {
-          // Standalone links are additive; issuance must never break the
-          // existing authenticated Control UI view payload.
-          logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
-        }
-        return {
-          sandboxUrl: buildMcpAppSandboxPath(view.csp),
-          sandboxPort,
-          ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
-          html: view.html,
-          ...(view.csp ? { csp: view.csp } : {}),
-          toolInput: view.toolInput,
-          toolResult: view.toolResult,
-          operationTimeoutMs: view.operationTimeoutMs,
-          ...(standalone
-            ? {
-                standaloneUrl: standalone.url,
-                standaloneExpiresAtMs: standalone.expiresAtMs,
-              }
-            : {}),
-          // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
-          messageSupported: interactive,
-          updateModelContextSupported,
-        };
-      });
+      return await withMcpAppActiveView(
+        active,
+        "read",
+        async (signal) => {
+          const { view } = active;
+          let interactive = false;
+          try {
+            await requireMcpAppInteraction(view, signal);
+            interactive = true;
+          } catch {
+            signal.throwIfAborted();
+            // Stale board leases remain renderable but lose every interactive capability.
+          }
+          const updateModelContextSupported =
+            interactive && active.runtime.mcpAppModelContextRevoked !== true;
+          const sandboxPort =
+            context.getMcpAppSandboxPort?.() ?? (await context.ensureSandboxHostPort?.());
+          if (sandboxPort === undefined) {
+            throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
+          }
+          const configuredOrigin = cfg.mcp?.apps?.sandboxOrigin;
+          let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
+          try {
+            standalone = createMcpAppStandaloneTicket({
+              sessionKey: requireString(params, "sessionKey"),
+              view,
+            });
+          } catch (error) {
+            // Standalone links are additive; issuance must never break the
+            // existing authenticated Control UI view payload.
+            logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
+          }
+          return {
+            sandboxUrl: buildMcpAppSandboxPath(view.csp),
+            sandboxPort,
+            ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
+            html: view.html,
+            ...(view.csp ? { csp: view.csp } : {}),
+            toolInput: view.toolInput,
+            toolResult: view.toolResult,
+            operationTimeoutMs: view.operationTimeoutMs,
+            ...(standalone
+              ? {
+                  standaloneUrl: standalone.url,
+                  standaloneExpiresAtMs: standalone.expiresAtMs,
+                }
+              : {}),
+            // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
+            messageSupported: interactive,
+            updateModelContextSupported,
+          };
+        },
+        { signal: callerSignal, timeoutStartedAtMs },
+      );
     });
   },
   "mcp.app.updateModelContext": async ({ respond, params, context }) => {

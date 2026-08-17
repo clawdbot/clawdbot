@@ -13,6 +13,7 @@ import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
 const MCP_APP_VIEW_TTL_MS = 10 * 60_000;
+export const MCP_APP_VIEW_OPERATION_MIN_TIMEOUT_MS = MCP_APP_VIEW_TTL_MS;
 const MCP_APP_VIEW_MAX_ENTRIES = 32;
 const MCP_APP_VIEW_MAX_BYTES = 6 * 1024 * 1024;
 const MCP_APP_VIEW_STORE_MAX_BYTES = 64 * 1024 * 1024;
@@ -279,8 +280,9 @@ export async function fetchMcpAppView(params: {
     // resources/read established the authoritative server session above. Carry
     // its deadline into the view so catalog invalidation cannot change it later.
     const operationTimeoutMs = Math.max(
-      MCP_APP_VIEW_TTL_MS,
-      params.runtime.getServerRequestTimeoutMs?.(params.serverName) ?? MCP_APP_VIEW_TTL_MS,
+      MCP_APP_VIEW_OPERATION_MIN_TIMEOUT_MS,
+      params.runtime.getServerRequestTimeoutMs?.(params.serverName) ??
+        MCP_APP_VIEW_OPERATION_MIN_TIMEOUT_MS,
     );
     releaseRuntimeLease = params.runtime.acquireLease?.();
     deleteView(viewId);

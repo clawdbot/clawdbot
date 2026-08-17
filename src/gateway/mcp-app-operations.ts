@@ -20,8 +20,10 @@ import {
   acquireMcpAppViewRequest,
   getMcpAppViewLease,
   getMcpAppViewLeaseForSession,
+  MCP_APP_VIEW_OPERATION_MIN_TIMEOUT_MS,
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
+import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -46,6 +48,16 @@ export type McpAppOperation =
   | Pick<ListResourcesRequest, "method" | "params">
   | Pick<ListResourceTemplatesRequest, "method" | "params">
   | Pick<ReadResourceRequest, "method" | "params">;
+
+export function resolveMcpAppBootstrapTimeoutMs(cfg: OpenClawConfig): number {
+  return Object.values(cfg.mcp?.servers ?? {}).reduce(
+    (timeoutMs, server) =>
+      server.enabled === false
+        ? timeoutMs
+        : Math.max(timeoutMs, resolveMcpRequestTimeoutMs(server)),
+    MCP_APP_VIEW_OPERATION_MIN_TIMEOUT_MS,
+  );
+}
 
 function isAppCallableTool(tool: McpCatalogTool): boolean {
   return tool.uiVisibility === undefined || tool.uiVisibility.includes("app");
@@ -154,7 +166,9 @@ export async function resolveMcpAppActiveView(params: {
   agentId?: string;
   viewId: string;
   cfg?: OpenClawConfig;
+  signal?: AbortSignal;
 }): Promise<McpAppActiveView> {
+  params.signal?.throwIfAborted();
   if (params.cfg && params.cfg.mcp?.apps?.enabled !== true) {
     throw new Error("MCP App runtime is unavailable");
   }
@@ -183,13 +197,19 @@ export async function resolveMcpAppActiveView(params: {
     existingRuntime?.mcpAppsEnabled === true && existingView
       ? { runtime: existingRuntime, view: existingView }
       : params.cfg
-        ? await restoreMcpAppView({
-            cfg: params.cfg,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            viewId: params.viewId,
-          })
+        ? await waitForMcpAppOperation(
+            // Reconstruction is shared across callers. A request deadline detaches
+            // this waiter without cancelling the runtime-owned reconstruction.
+            restoreMcpAppView({
+              cfg: params.cfg,
+              agentId: params.agentId,
+              sessionKey: params.sessionKey,
+              viewId: params.viewId,
+            }),
+            params.signal,
+          )
         : undefined;
+  params.signal?.throwIfAborted();
   if (!restored) {
     throw new McpAppViewExpiredError();
   }
@@ -200,9 +220,19 @@ export async function withMcpAppActiveView<T>(
   active: McpAppActiveView,
   kind: "read" | "tool",
   operation: (signal: AbortSignal) => Promise<T> | T,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; timeoutStartedAtMs?: number },
 ): Promise<T> {
-  const timeoutSignal = AbortSignal.timeout(active.view.operationTimeoutMs);
+  const elapsedMs =
+    options?.timeoutStartedAtMs === undefined
+      ? 0
+      : Math.max(0, Date.now() - options.timeoutStartedAtMs);
+  // Bootstrap restoration and the active-view callback share one budget.
+  // Subtract earlier work so reconstruction cannot reset the operation clock.
+  const remainingTimeoutMs = active.view.operationTimeoutMs - elapsedMs;
+  if (remainingTimeoutMs <= 0) {
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  }
+  const timeoutSignal = AbortSignal.timeout(remainingTimeoutMs);
   const signal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
   signal.throwIfAborted();
   active.runtime.markUsed();
