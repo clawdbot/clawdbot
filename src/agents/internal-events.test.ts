@@ -7,6 +7,8 @@ import {
 
 const MAX_CHILD_RESULT_CHARS = 6_000;
 const CHILD_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
+const MAX_STATUS_LABEL_CHARS = 500;
+const STATUS_LABEL_TRUNCATION_MARKER = "…[truncated]";
 
 function taskCompletionEvent(result: string): AgentInternalEvent {
   return {
@@ -21,6 +23,14 @@ function taskCompletionEvent(result: string): AgentInternalEvent {
     result,
     replyInstruction: "Review the result.",
   };
+}
+
+function extractStatusLine(prompt: string): string {
+  const status = prompt.match(/^status: (.*)$/m)?.[1];
+  if (status === undefined) {
+    throw new Error("Expected status line");
+  }
+  return status;
 }
 
 function extractChildResult(prompt: string): string {
@@ -51,5 +61,31 @@ describe("agent internal events", () => {
     expect(
       extractChildResult(formatAgentInternalEventsForPrompt([taskCompletionEvent(result)])),
     ).toBe(result);
+  });
+
+  it("bounds status labels carrying caller-supplied error text", () => {
+    const event = {
+      ...taskCompletionEvent("result"),
+      status: "timeout",
+      statusLabel: `timed out: ${"e".repeat(MAX_STATUS_LABEL_CHARS)}-unbounded-tail`,
+    } satisfies AgentInternalEvent;
+    const status = extractStatusLine(formatAgentInternalEventsForPrompt([event]));
+
+    expect(status.length).toBeLessThanOrEqual(MAX_STATUS_LABEL_CHARS);
+    expect(status.endsWith(STATUS_LABEL_TRUNCATION_MARKER)).toBe(true);
+    expect(status).not.toContain("unbounded-tail");
+    expect(status.startsWith("timed out: ")).toBe(true);
+  });
+
+  it("keeps ordinary status labels unchanged", () => {
+    const event = {
+      ...taskCompletionEvent("result"),
+      status: "error",
+      statusLabel: "failed: model returned no output",
+    } satisfies AgentInternalEvent;
+
+    expect(extractStatusLine(formatAgentInternalEventsForPrompt([event]))).toBe(
+      "failed: model returned no output",
+    );
   });
 });
