@@ -58,6 +58,7 @@ import type {
 } from "./chat-transcript-controller.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 
 type ChatTranscriptProjection = {
   isDirectThread: boolean;
@@ -599,6 +600,10 @@ export function projectChatTranscript(
       key: "background-tasks",
       content: backgroundTasks,
     });
+  }
+  const typingIndicator = renderChatTypingIndicator(props.typingActors);
+  if (typingIndicator) {
+    transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
   trackTranscriptRenderDependencies(state, [
     chatItems,

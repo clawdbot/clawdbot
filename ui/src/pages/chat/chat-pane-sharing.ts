@@ -17,6 +17,7 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -683,6 +684,27 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       }, 2_500),
     );
     this.requestUpdate();
+  }
+
+  protected clearTypingActorsForSessionTurn(payload: unknown): void {
+    const event = readSessionChangedEvent(payload);
+    const state = this.state;
+    if (
+      !event?.isChatTurn ||
+      !state ||
+      !uiSessionEventMatches(
+        {
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+          sessionKey: state.sessionKey,
+        },
+        event.key,
+        event.agentId ?? undefined,
+      )
+    ) {
+      return;
+    }
+    this.clearTypingActors();
   }
 
   protected typingActorViews(): { id: string; label: string }[] {

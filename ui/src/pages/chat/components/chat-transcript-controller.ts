@@ -557,6 +557,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       ...virtualizer.options,
       count: keys.length,
       getItemKey: (index) => keys[index] ?? `missing:${index}`,
+      // Presence is an ordinary measured tail row, but it follows an append
+      // only when TanStack observed the reader already at the transcript end.
+      followOnAppend: keys.at(-1) === "presence:typing" ? "auto" : false,
     });
   }
 

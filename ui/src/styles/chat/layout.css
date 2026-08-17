@@ -1794,6 +1794,9 @@ button.chat-reply-preview--message:disabled {
   color: var(--muted);
   font-size: 11px;
   font-style: italic;
+  width: fit-content;
+  margin-top: 8px;
+  padding: 4px 0;
 }
 
 .agent-chat__typing-avatars {
@@ -1814,14 +1817,6 @@ button.chat-reply-preview--message:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.agent-chat__typing-indicator--outside {
-  box-sizing: border-box;
-  width: calc(100% - 36px);
-  max-width: var(--chat-thread-max-width, 48rem);
-  margin: 0 auto -2px;
-  padding-inline: 8px;
 }
 
 @media (max-width: 640px) {
