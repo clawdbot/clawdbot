@@ -8,10 +8,7 @@ import {
 } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  readJsonBodyWithLimit,
-  WEBHOOK_BODY_READ_DEFAULTS,
-} from "openclaw/plugin-sdk/webhook-request-guards";
+import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
 import type { TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
@@ -94,25 +91,16 @@ async function handleAuth(
     return;
   }
 
-  const body = await readJsonBodyWithLimit(req, {
+  const body = await readJsonWebhookBodyOrReject({
+    req,
+    res,
     maxBytes: MAX_BODY_BYTES,
-    timeoutMs: WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs,
+    profile: "pre-auth",
     emptyObjectOnEmpty: false,
+    invalidJsonMessage: TELEGRAM_MINIAPP_EXPIRED_MESSAGE,
+    invalidJsonStatusCode: 401,
   });
   if (!body.ok) {
-    if (body.code === "PAYLOAD_TOO_LARGE") {
-      sendText(res, 413, body.error);
-      return;
-    }
-    if (body.code === "REQUEST_BODY_TIMEOUT") {
-      sendText(res, 408, body.error);
-      return;
-    }
-    if (body.code === "CONNECTION_CLOSED") {
-      sendText(res, 400, body.error);
-      return;
-    }
-    sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     return;
   }
   const authBody = parseAuthBody(body.value);
