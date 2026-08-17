@@ -209,6 +209,24 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
   });
 
+  it("records an unavailable outcome when live catalog discovery throws", async () => {
+    mocks.runProviderCatalog.mockRejectedValueOnce(new Error("provider hook failed"));
+    const outcomes: Array<{ provider: string; status: string }> = [];
+
+    await expect(
+      resolveImplicitProviders({
+        agentDir: "/tmp/openclaw-agent",
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        explicitProviders: {},
+        providerDiscoveryProviderIds: ["openai"],
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      }),
+    ).resolves.toEqual({});
+
+    expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+  });
+
   it("can keep startup discovery on provider discovery entries only", async () => {
     await resolveImplicitProviders({
       agentDir: "/tmp/openclaw-agent",

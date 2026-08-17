@@ -505,16 +505,16 @@ async function runProviderCatalogWithTimeout(
     timeoutMs: number | null;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
-  const catalogRun = runProviderCatalog(params);
   const timeoutMs = params.timeoutMs ?? undefined;
-  if (!timeoutMs) {
-    return await catalogRun;
-  }
-
-  // Live discovery should not hang startup; timeout means skip this provider,
-  // while non-timeout catalog failures still surface to the caller.
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    const catalogRun = runProviderCatalog(params);
+    if (!timeoutMs) {
+      return await catalogRun;
+    }
+
+    // Live discovery should not hang startup; timeout or hook failure means skip
+    // this provider while preserving the rest of the prepared catalog.
     return await Promise.race([
       catalogRun,
       new Promise<never>((_, reject) => {
@@ -528,15 +528,9 @@ async function runProviderCatalogWithTimeout(
     ]);
   } catch (error) {
     const message = formatErrorMessage(error);
-    if (message.includes("provider catalog timed out after")) {
-      params.reportCatalogOutcome?.({
-        provider: params.provider.id,
-        status: "unavailable",
-      });
-      log.warn(`${message}; skipping provider discovery`);
-      return undefined;
-    }
-    throw error;
+    params.reportCatalogOutcome?.({ provider: params.provider.id, status: "unavailable" });
+    log.warn(`${message}; skipping provider discovery`);
+    return undefined;
   } finally {
     if (timer) {
       clearTimeout(timer);
