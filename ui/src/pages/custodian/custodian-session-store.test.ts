@@ -240,13 +240,24 @@ describe("CustodianSessionStore", () => {
     setGatewaySnapshot({ phase: "reconnecting", client: null });
     expect(store.abandonedTurnOutcomeUnknown).toBe(true);
 
-    const reconnectRequest = vi.fn((method: string) => {
+    const liveStep = { id: "repair-step", type: "text", message: "Which channel?" };
+    const reconnectRequest = vi.fn((method: string, params: { sessionId?: string }) => {
       if (method === "openclaw.chat.history") {
         return Promise.resolve({
           turns: [
             { role: "user", text: "Finish the repair", at: 20 },
             { role: "assistant", text: "Repair complete", at: 21 },
           ],
+        });
+      }
+      if (method === "openclaw.chat") {
+        // The full rejoin projects the authoritative live interaction.
+        return Promise.resolve({
+          sessionId: params.sessionId,
+          reply: "Welcome back.",
+          action: "none",
+          wizardInputPending: true,
+          step: liveStep,
         });
       }
       throw new Error(`Unexpected reconnect method: ${method}`);
@@ -256,10 +267,51 @@ describe("CustodianSessionStore", () => {
       client: { request: reconnectRequest } as unknown as GatewayBrowserClient,
     });
     await interruptedSend;
-    await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Repair complete"));
-
+    // An unknown-outcome turn triggers a full rejoin, not just a history
+    // refresh: the Gateway decides whether the answer was consumed and which
+    // control is live now.
+    await waitForFast(() =>
+      expect(store.messages.at(-1)?.step).toMatchObject({ id: "repair-step" }),
+    );
     expect(store.abandonedTurnOutcomeUnknown).toBe(false);
-    expect(reconnectRequest).toHaveBeenCalledWith("openclaw.chat.history", {}, expect.any(Object));
+    expect(store.wizardInputPending).toBe(true);
+    expect(store.messages.some((message) => message.text === "Repair complete")).toBe(true);
+    expect(reconnectRequest.mock.calls.some(([method]) => method === "openclaw.chat")).toBe(true);
+  });
+
+  it("reconciles history persisted behind a racing turn on rejoin", async () => {
+    const historyBatches = [
+      { turns: [] },
+      {
+        turns: [
+          { role: "user", text: "Earlier ask", at: 30 },
+          { role: "assistant", text: "Racing turn landed", at: 31 },
+        ],
+      },
+    ];
+    let historyCall = 0;
+    const request = vi.fn((method: string, params: { sessionId?: string }) => {
+      if (method === "openclaw.chat.history") {
+        const batch = historyBatches[Math.min(historyCall, historyBatches.length - 1)];
+        historyCall += 1;
+        return Promise.resolve(batch);
+      }
+      return Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" });
+    });
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    // A restored persisted id is what makes this a rejoin candidate.
+    localStorage.setItem("openclaw.custodian.session.v1", "persisted-session-1");
+    const store = new CustodianSessionStore();
+
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.sending).toBe(false));
+
+    // The welcome-only rejoin queues behind any in-flight turn server-side, so
+    // the post-response refresh must surface rows that turn persisted after
+    // the initial (empty) history fetch.
+    expect(historyCall).toBe(2);
+    expect(store.messages.some((message) => message.text === "Racing turn landed")).toBe(true);
+    expect(store.messages.at(-1)?.text).toBe("Ready.");
   });
 
   it("blocks messages until inference setup succeeds", async () => {

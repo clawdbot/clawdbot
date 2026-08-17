@@ -25,7 +25,12 @@ export function persistCustodianSessionId(sessionId: string): void {
   }
 }
 
-export function loadCustodianSessionId(): string {
+/**
+ * Restore the persisted companion session id, or mint and persist a fresh one.
+ * `restored` marks a rejoin candidate: the id may address a live Gateway
+ * session whose queue can hold an in-flight turn from a previous page.
+ */
+export function loadCustodianSessionId(): { sessionId: string; restored: boolean } {
   let stored: string | null = null;
   try {
     stored = getSafeLocalStorage()?.getItem(CUSTODIAN_SESSION_STORAGE_KEY) ?? null;
@@ -33,11 +38,11 @@ export function loadCustodianSessionId(): string {
     // Fall through to a process-local id when storage is unavailable.
   }
   if (isStoredCustodianSessionId(stored)) {
-    return stored;
+    return { sessionId: stored, restored: true };
   }
   const sessionId = createCustodianSessionId();
   persistCustodianSessionId(sessionId);
-  return sessionId;
+  return { sessionId, restored: false };
 }
 
 export class CustodianSessionOwner {

@@ -7,11 +7,15 @@ import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
 describe("custodian page", () => {
   beforeEach(() => {
+    // A persisted companion id would turn every mount into a rejoin candidate;
+    // tests exercising the rejoin path seed the key explicitly instead.
+    localStorage.clear();
     vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
     window.history.replaceState({}, "", "/");
   });
 
   afterEach(() => {
+    localStorage.clear();
     document.body.replaceChildren();
     vi.restoreAllMocks();
   });
@@ -614,11 +618,21 @@ describe("custodian page", () => {
           // The user turn may reach the old gateway before its client is replaced.
         }),
       );
-    const replacementRequest = vi.fn().mockResolvedValue({
-      turns: [
-        { role: "user", text: "check this system", at: 1 },
-        { role: "assistant", text: "System check completed", at: 2 },
-      ],
+    const replacementRequest = vi.fn((method: string, params: { sessionId?: string }) => {
+      if (method === "openclaw.chat.history") {
+        return Promise.resolve({
+          turns: [
+            { role: "user", text: "check this system", at: 1 },
+            { role: "assistant", text: "System check completed", at: 2 },
+          ],
+        });
+      }
+      // The unknown-outcome turn triggers a full rejoin on the new client.
+      return Promise.resolve({
+        sessionId: params.sessionId,
+        reply: "Welcome back.",
+        action: "none",
+      });
     });
     const { context, setGatewaySnapshot } = createContext(request, [
       "openclaw.chat",
@@ -639,7 +653,13 @@ describe("custodian page", () => {
     });
     await waitForFast(() => expect(page.textContent).toContain("System check completed"));
 
-    expect(replacementRequest).toHaveBeenCalledOnce();
+    // Full rejoin: history, welcome-only chat, then one barrier refresh behind
+    // the rejoin in case the interrupted turn persisted rows meanwhile.
+    expect(replacementRequest.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.chat.history",
+      "openclaw.chat",
+      "openclaw.chat.history",
+    ]);
     expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
