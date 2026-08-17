@@ -1915,6 +1915,7 @@ describe("update-startup", () => {
       reason: "update.auto",
       skipCooldown: true,
       skipDeferral: true,
+      successorOwner: "managed-update-handoff",
     });
     expect(log.info).toHaveBeenCalledWith(
       "update campaign waiting-for-idle",
@@ -2018,6 +2019,7 @@ describe("update-startup", () => {
       reason: "update.auto",
       skipCooldown: true,
       skipDeferral: true,
+      successorOwner: "managed-update-handoff",
     });
   });
 

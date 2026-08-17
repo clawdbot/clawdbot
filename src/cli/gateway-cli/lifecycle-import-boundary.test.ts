@@ -13,6 +13,7 @@ function readSource(relativePath: string): string {
 describe("gateway lifecycle hub import boundaries", () => {
   it("re-exports primed symbols from their defining modules instead of facades", () => {
     const hub = readSource("src/cli/gateway-cli/lifecycle.runtime.ts");
+    const successorOwner = readSource("src/infra/managed-update-successor.ts");
 
     // server-reload-handlers.ts also re-exports server-reload-hot.ts and
     // server-reload-managed.ts, so routing through it loads the hot-reload and
@@ -28,6 +29,14 @@ describe("gateway lifecycle hub import boundaries", () => {
     expect(hub).not.toContain(
       'from "../../agents/main-session-recovery/main-session-restart-recovery.js"',
     );
+
+    // Service-manager control graphs are needed only after a managed update
+    // handoff commits to one platform, never while priming normal lifecycle paths.
+    expect(hub).toContain('from "../../infra/managed-update-successor.js"');
+    expect(successorOwner).not.toContain('from "../daemon/');
+    expect(successorOwner).toContain('import("../daemon/launchd-stop.js")');
+    expect(successorOwner).toContain('import("../daemon/systemd-lifecycle.js")');
+    expect(successorOwner).toContain("parkManagedUpdateSuccessor");
   });
 
   it("still primes the hub eagerly so signal handlers survive dist chunk rotation", () => {

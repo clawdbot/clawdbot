@@ -16,7 +16,12 @@ const consumeGatewayRestartIntentPayloadSync = vi.fn<
   () => { reason?: string; force?: boolean; waitMs?: number } | null
 >(() => null);
 const consumeGatewaySigusr1RestartIntent = vi.fn<
-  () => { reason?: string; force?: boolean; waitMs?: number } | null
+  () => {
+    reason?: string;
+    force?: boolean;
+    waitMs?: number;
+    successorOwner?: "managed-update-handoff";
+  } | null
 >(() => null);
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const consumeGatewayRestartIntentSync = vi.fn(() => false);
@@ -112,6 +117,7 @@ const respawnGatewayProcessForUpdate = vi.fn<
 const markUpdateRestartSentinelFailure = vi.fn<(reason: string) => Promise<null>>(
   async (_reason: string) => null,
 );
+const parkManagedUpdateSuccessor = vi.fn(async (_supervisor?: unknown) => {});
 const abortPendingChannelReloads = vi.fn();
 const abortEmbeddedAgentRun = vi.fn(
   (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
@@ -182,6 +188,10 @@ vi.mock("../../infra/restart-sentinel.js", () => ({
 
 vi.mock("../../infra/restart-handoff.js", () => ({
   writeGatewayRestartHandoffSync: (opts: unknown) => writeGatewayRestartHandoffSync(opts),
+}));
+
+vi.mock("../../infra/managed-update-successor.js", () => ({
+  parkManagedUpdateSuccessor: (supervisor: unknown) => parkManagedUpdateSuccessor(supervisor),
 }));
 
 vi.mock("../../process/command-queue.js", async (importOriginal) => {
@@ -387,7 +397,6 @@ async function runLoopWithStart(params: {
   healthHost?: string;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
 }) {
-  vi.resetModules();
   const { runGatewayLoop } = await import("./run-loop.js");
   const loopPromise = runGatewayLoop({
     start: params.start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
@@ -452,11 +461,21 @@ function expectRestartHandoffCall(expected: {
   });
 }
 
-let gatewayWorkAdmissionActual: typeof import("../../process/gateway-work-admission.js");
+const gatewayWorkAdmissionActual = await vi.importActual<
+  typeof import("../../process/gateway-work-admission.js")
+>("../../process/gateway-work-admission.js");
 
-beforeEach(async () => {
-  gatewayWorkAdmissionActual = await vi.importActual("../../process/gateway-work-admission.js");
+beforeEach(() => {
   gatewayWorkAdmissionActual.resetGatewayWorkAdmission();
+  consumeGatewaySigusr1RestartIntent.mockReturnValue(null);
+  respawnGatewayProcessForUpdate.mockReset();
+  respawnGatewayProcessForUpdate.mockReturnValue({
+    mode: "disabled",
+    detail: "OPENCLAW_NO_RESPAWN",
+  });
+  restartGatewayProcessWithFreshPid.mockReset();
+  restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
+  parkManagedUpdateSuccessor.mockResolvedValue(undefined);
 });
 
 describe("runGatewayLoop", () => {
@@ -609,7 +628,7 @@ describe("runGatewayLoop", () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, runtime, exited } = await createSignaledLoopHarness();
+      const { close, start, runtime, exited, loopPromise } = await createSignaledLoopHarness();
       const sigterm = captureSignal("SIGTERM");
       flushLogger.mockImplementationOnce(async () => {
         expect(runtime.exit).not.toHaveBeenCalled();
@@ -618,6 +637,7 @@ describe("runGatewayLoop", () => {
       sigterm();
 
       await expect(exited).resolves.toBe(0);
+      await expect(loopPromise).resolves.toBeUndefined();
       expect(close).toHaveBeenCalledWith({
         reason: "gateway stopping",
         restartExpectedMs: null,
@@ -2281,16 +2301,73 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("parks a managed systemd successor before gateway close can wedge", async () => {
+    vi.clearAllMocks();
+    consumeGatewaySigusr1RestartIntent.mockReturnValue({
+      reason: "update.auto",
+      successorOwner: "managed-update-handoff",
+    });
+    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+    waitForActiveTasks.mockResolvedValueOnce({ drained: false });
+    let releaseClose: () => void = () => {};
+    const close = vi.fn<GatewayCloseFn>(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        }),
+    );
+
+    try {
+      setPlatform("linux");
+      process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { start, started } = createSignaledStart(close);
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        await runLoopWithStart({ start, runtime });
+        await waitForStart(started);
+
+        captureSignal("SIGUSR1")();
+        await waitForLoopCondition(
+          () => close.mock.calls.length === 1,
+          "restart close did not start",
+        );
+
+        expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+        expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
+        expect(parkManagedUpdateSuccessor).toHaveBeenCalledWith("systemd");
+        expect(parkManagedUpdateSuccessor).toHaveBeenCalledTimes(1);
+        expect(parkManagedUpdateSuccessor.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+          close.mock.invocationCallOrder[0] ?? Infinity,
+        );
+        expect(runtime.exit).not.toHaveBeenCalled();
+
+        releaseClose();
+        await expect(exited).resolves.toBe(0);
+        expect(parkManagedUpdateSuccessor).toHaveBeenCalledTimes(1);
+        expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+        expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+      });
+    } finally {
+      delete process.env.OPENCLAW_SYSTEMD_UNIT;
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    }
+  });
+
   it.each(["update.run", "update.auto"] as const)(
     "writes a handoff before exiting for supervised %s restarts",
     async (reason) => {
       vi.clearAllMocks();
       peekGatewaySigusr1RestartReason.mockReturnValue(reason);
-      respawnGatewayProcessForUpdate.mockReturnValueOnce({
+      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
         mode: "supervised",
       });
       try {
         setPlatform("freebsd");
+        process.env.OPENCLAW_SUPERVISOR_MODE = "external";
         await withIsolatedSignals(async ({ captureSignal }) => {
           const { runtime, exited } = await createSignaledLoopHarness();
           const sigusr1 = captureSignal("SIGUSR1");
@@ -2306,6 +2383,7 @@ describe("runGatewayLoop", () => {
           });
         });
       } finally {
+        delete process.env.OPENCLAW_SUPERVISOR_MODE;
         if (originalPlatformDescriptor) {
           Object.defineProperty(process, "platform", originalPlatformDescriptor);
         }
@@ -2316,7 +2394,7 @@ describe("runGatewayLoop", () => {
   it("falls back in-process when a launchd update handoff fails to spawn", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue("update.run");
-    respawnGatewayProcessForUpdate.mockReturnValueOnce({
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
       mode: "supervised",
       handoffSpawned: Promise.resolve(false),
     });
@@ -2354,7 +2432,7 @@ describe("runGatewayLoop", () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue("update.run");
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    respawnGatewayProcessForUpdate.mockReturnValueOnce({
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
       mode: "supervised",
     });
     writeGatewayRestartHandoffSync.mockReturnValueOnce(null);
@@ -2384,41 +2462,57 @@ describe("runGatewayLoop", () => {
     }
   });
 
-  it("upgrades an accepted restart when a managed update arrives during shutdown", async () => {
+  it("falls back in-process when managed update parking fails during an accepted restart", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReset();
     consumeGatewayRestartIntentPayloadSync.mockReturnValue(null);
     consumeGatewaySigusr1RestartIntent.mockReset();
-    consumeGatewaySigusr1RestartIntent.mockReturnValue(null);
+    consumeGatewaySigusr1RestartIntent.mockReturnValueOnce(null).mockReturnValueOnce({
+      reason: "update.auto",
+      successorOwner: "managed-update-handoff",
+    });
     consumeGatewaySigusr1RestartAuthorization.mockReset();
     consumeGatewaySigusr1RestartAuthorization.mockReturnValue(true);
     peekGatewaySigusr1RestartReason.mockReset();
     peekGatewaySigusr1RestartReason
       .mockReturnValueOnce("config.patch")
       .mockReturnValueOnce("update.auto");
-    respawnGatewayProcessForUpdate.mockReturnValueOnce({ mode: "supervised" });
-
-    let releaseClose: () => void = () => {};
-    const close = vi.fn<GatewayCloseFn>(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseClose = resolve;
-        }),
+    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+    let releaseDrain: (result: { drained: boolean }) => void = () => {};
+    waitForActiveTasks.mockReturnValueOnce(
+      new Promise<{ drained: boolean }>((resolve) => {
+        releaseDrain = resolve;
+      }),
     );
+    parkManagedUpdateSuccessor.mockRejectedValueOnce(new Error("systemctl unavailable"));
 
     try {
       setPlatform("freebsd");
+      process.env.OPENCLAW_SUPERVISOR_MODE = "external";
       await withIsolatedSignals(async ({ captureSignal }) => {
-        const { start, started } = createSignaledStart(close);
+        const closeFirst = createCloseMock();
+        const closeSecond = createCloseMock();
+        let resolveStarted: () => void = () => {};
+        const started = new Promise<void>((resolve) => {
+          resolveStarted = resolve;
+        });
+        const start = vi
+          .fn()
+          .mockImplementationOnce(async () => {
+            resolveStarted();
+            return createGatewayServer(closeFirst);
+          })
+          .mockResolvedValueOnce(createGatewayServer(closeSecond));
         const { runtime, exited } = createRuntimeWithExitSignal();
         await runLoopWithStart({ start, runtime });
         await waitForStart(started);
         const sigusr1 = captureSignal("SIGUSR1");
+        const sigint = captureSignal("SIGINT");
 
         sigusr1();
         await waitForLoopCondition(
-          () => close.mock.calls.length === 1,
-          "restart close did not start",
+          () => waitForActiveTasks.mock.calls.length === 1,
+          "restart drain did not start",
         );
         sigusr1();
         await waitForLoopCondition(
@@ -2429,16 +2523,25 @@ describe("runGatewayLoop", () => {
           "accepted restart was not upgraded",
         );
 
-        releaseClose();
+        releaseDrain({ drained: true });
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 2,
+          "parking failure did not restart in-process",
+        );
+        expect(parkManagedUpdateSuccessor).toHaveBeenCalledWith("external");
+        expect(markUpdateRestartSentinelFailure).toHaveBeenCalledWith(
+          "restart-handoff-unavailable",
+        );
+        expect(closeFirst).toHaveBeenCalledTimes(1);
+        expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+        expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+        expect(runtime.exit).not.toHaveBeenCalled();
+
+        sigint();
         await expect(exited).resolves.toBe(0);
-        expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
-        expectRestartHandoffCall({
-          restartKind: "update-process",
-          reason: "update.auto",
-          supervisorMode: "external",
-        });
       });
     } finally {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
       if (originalPlatformDescriptor) {
         Object.defineProperty(process, "platform", originalPlatformDescriptor);
       }
@@ -2457,7 +2560,7 @@ describe("runGatewayLoop", () => {
     peekGatewaySigusr1RestartReason
       .mockReturnValueOnce("config.patch")
       .mockReturnValueOnce("update.auto");
-    respawnGatewayProcessForUpdate.mockReturnValueOnce({ mode: "supervised" });
+    restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
 
     let releaseLock: () => void = () => {};
     const lockReleaseBlocked = new Promise<void>((resolve) => {
@@ -2468,30 +2571,35 @@ describe("runGatewayLoop", () => {
     });
     acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
 
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { runtime, exited } = await createSignaledLoopHarness();
-      const sigusr1 = captureSignal("SIGUSR1");
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { runtime, exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
 
-      sigusr1();
-      await waitForLoopCondition(
-        () => lockRelease.mock.calls.length === 1,
-        "restart did not reach lock release",
-      );
-      sigusr1();
-      await waitForLoopCondition(
-        () =>
-          gatewayLog.info.mock.calls.some(([message]) =>
-            String(message).includes("upgrading to update.auto"),
-          ),
-        "lock-release restart was not upgraded",
-      );
+        sigusr1();
+        await waitForLoopCondition(
+          () => lockRelease.mock.calls.length === 1,
+          "restart did not reach lock release",
+        );
+        sigusr1();
+        await waitForLoopCondition(
+          () =>
+            gatewayLog.info.mock.calls.some(([message]) =>
+              String(message).includes("upgrading to update.auto"),
+            ),
+          "lock-release restart was not upgraded",
+        );
 
-      releaseLock();
-      await expect(exited).resolves.toBe(0);
-      expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
-      expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-    });
+        releaseLock();
+        await expect(exited).resolves.toBe(0);
+        expect(restartGatewayProcessWithFreshPid).toHaveBeenCalledTimes(1);
+        expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+      });
+    } finally {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+    }
   });
 
   it("probes the configured gateway host for update respawn health", async () => {
@@ -2546,9 +2654,7 @@ describe("runGatewayLoop", () => {
         .mockResolvedValueOnce(createGatewayServer(closeSecond));
 
       await runLoopWithStart({ start, runtime, lockPort: 18789, waitForHealthyChild });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await waitForLoopCondition(() => start.mock.calls.length === 1, "gateway did not start");
       const sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
 

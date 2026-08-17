@@ -1,7 +1,7 @@
 import type { ViteUserConfig } from "vitest/config";
 import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
-// CLI process tests run serially in isolated forks so child startup deadlines
-// measure the CLI rather than contention from the shared CLI test graph.
+// CLI process/lifecycle tests run serially in isolated forks so process-global
+// state and child startup deadlines stay independent of the shared CLI graph.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createCliProcessVitestConfig(
@@ -10,6 +10,7 @@ export function createCliProcessVitestConfig(
   const config = createScopedVitestConfig(cliProcessTestFiles, {
     env,
     fileParallelism: false,
+    includeOpenClawRuntimeSetup: false,
     isolate: true,
     name: "cli-process",
     passWithNoTests: true,

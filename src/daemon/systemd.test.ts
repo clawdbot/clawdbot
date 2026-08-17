@@ -85,6 +85,7 @@ vi.mock("./exec-file.js", () => {
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
+import { parkCurrentSystemdServiceForMaintenance } from "./systemd-lifecycle.js";
 import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
 import {
   findInstalledSystemdGatewayScope,
@@ -3167,6 +3168,17 @@ describe("systemd service control", () => {
         "write.mock.invocationCallOrder[0] test invariant",
       ),
     );
+  });
+
+  it("parks the current user unit without waiting for its own exit", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "--no-block", "stop", "openclaw-gateway-work.service");
+      cb(null, "", "");
+    });
+
+    await parkCurrentSystemdServiceForMaintenance({ OPENCLAW_PROFILE: "work" });
+
+    expect(execFileMock).toHaveBeenCalledOnce();
   });
 
   it("audits a successful stop before a later output failure", async () => {

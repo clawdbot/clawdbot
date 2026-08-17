@@ -4817,72 +4817,65 @@ describe("update-cli", () => {
     processOffSpy.mockRestore();
   });
 
-  it.each([
-    { platform: "darwin" as const, handoff: undefined },
-    { platform: "linux" as const, handoff: "1" },
-    { platform: "win32" as const, handoff: "1" },
-  ])(
-    "quiesces a stopped loaded managed gateway on $platform before package replacement",
-    async ({ platform, handoff }) => {
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      const tempDir = await createTrackedTempDir(`openclaw-update-stopped-loaded-${platform}-`);
-      const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
-      primeServiceCommand(["node", entryPath, "gateway", "run"], {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
+  it("quiesces a stopped loaded LaunchAgent before package replacement", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const tempDir = await createTrackedTempDir("openclaw-update-stopped-loaded-darwin-");
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    primeServiceCommand(["node", entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    let finishStop: (() => void) | undefined;
+    let markStopStarted: (() => void) | undefined;
+    const stopStarted = new Promise<void>((resolve) => {
+      markStopStarted = resolve;
+    });
+    serviceStop.mockImplementationOnce(() => {
+      markStopStarted?.();
+      return new Promise<void>((resolve) => {
+        finishStop = resolve;
       });
-      serviceLoaded.mockResolvedValue(true);
-      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-      mockFileBackedPathExists();
-      mockNpmGlobalRoot(nodeModules);
-      let finishStop: (() => void) | undefined;
-      let markStopStarted: (() => void) | undefined;
-      const stopStarted = new Promise<void>((resolve) => {
-        markStopStarted = resolve;
+    });
+
+    try {
+      await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, async () => {
+        const updatePromise = updateCommand({ yes: true });
+        const firstOutcome = await Promise.race([
+          stopStarted.then(() => "stop" as const),
+          updatePromise.then(() => "update" as const),
+        ]);
+
+        expect(firstOutcome).toBe("stop");
+        expect(serviceStop).toHaveBeenCalledOnce();
+        expect(packageInstallCommandCall()).toBeUndefined();
+        const pluginRecordCallsBeforeStop =
+          loadInstalledPluginIndexInstallRecords.mock.calls.length;
+        if (!finishStop) {
+          throw new Error("expected the managed service stop to remain pending");
+        }
+        finishStop();
+        await updatePromise;
+        expect(loadInstalledPluginIndexInstallRecords.mock.calls.length).toBeGreaterThan(
+          pluginRecordCallsBeforeStop,
+        );
       });
-      serviceStop.mockImplementationOnce(() => {
-        markStopStarted?.();
-        return new Promise<void>((resolve) => {
-          finishStop = resolve;
-        });
-      });
+    } finally {
+      platformSpy.mockRestore();
+    }
 
-      try {
-        await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, async () => {
-          const updatePromise = updateCommand({ yes: true });
-          const firstOutcome = await Promise.race([
-            stopStarted.then(() => "stop" as const),
-            updatePromise.then(() => "update" as const),
-          ]);
-
-          expect(firstOutcome).toBe("stop");
-          expect(serviceStop).toHaveBeenCalledOnce();
-          expect(packageInstallCommandCall()).toBeUndefined();
-          const pluginRecordCallsBeforeStop =
-            loadInstalledPluginIndexInstallRecords.mock.calls.length;
-          if (!finishStop) {
-            throw new Error("expected the managed service stop to remain pending");
-          }
-          finishStop();
-          await updatePromise;
-          expect(loadInstalledPluginIndexInstallRecords.mock.calls.length).toBeGreaterThan(
-            pluginRecordCallsBeforeStop,
-          );
-        });
-      } finally {
-        platformSpy.mockRestore();
-      }
-
-      expect(packageInstallCommandCall()).toBeDefined();
-      expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalled();
-      expect(serviceStop.mock.invocationCallOrder[0]).toBeLessThan(
-        requireValue(
-          loadInstalledPluginIndexInstallRecords.mock.invocationCallOrder.at(-1),
-          "owned managed update context capture order",
-        ),
-      );
-    },
-  );
+    expect(packageInstallCommandCall()).toBeDefined();
+    expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalled();
+    expect(serviceStop.mock.invocationCallOrder[0]).toBeLessThan(
+      requireValue(
+        loadInstalledPluginIndexInstallRecords.mock.invocationCallOrder.at(-1),
+        "owned managed update context capture order",
+      ),
+    );
+  });
 
   it.each([
     { name: "an unloaded Darwin LaunchAgent", platform: "darwin" as const, loaded: false },

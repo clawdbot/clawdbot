@@ -684,6 +684,7 @@ describe("update.run restart scheduling", () => {
         reason: "update.run",
         skipCooldown: true,
         skipDeferral: true,
+        successorOwner: "managed-update-handoff",
       }),
     );
   });

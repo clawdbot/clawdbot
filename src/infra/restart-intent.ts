@@ -32,6 +32,7 @@ export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
+  successorOwner?: "managed-update-handoff";
 };
 
 function normalizeRestartIntentPid(pid: number | undefined): number | null {

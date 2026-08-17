@@ -479,16 +479,12 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     };
   }
 
-  // A loaded LaunchAgent can be between KeepAlive respawns. Other supervisors
-  // need the handoff marker to distinguish that transition from operator-stopped state.
+  // A loaded LaunchAgent can be between KeepAlive respawns.
   const launchAgentMayRespawn =
     process.platform === "darwin" &&
     serviceState.loaded &&
     (await service.isEnabled?.({ env: serviceState.env })) === true;
-  const handoffSupervisorMayRespawn =
-    process.platform !== "darwin" && process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1";
-  const supervisorMayRespawn =
-    serviceState.loaded && (launchAgentMayRespawn || handoffSupervisorMayRespawn);
+  const supervisorMayRespawn = serviceState.loaded && launchAgentMayRespawn;
   if (!serviceState.running && !supervisorMayRespawn) {
     const windowsTaskAutoStartRecovery = await maybeSuspendWindowsTaskAutoStartForPackageUpdate({
       updateInstallKind: params.updateInstallKind,

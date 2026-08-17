@@ -106,6 +106,18 @@ export async function stopSystemdService({
   });
 }
 
+export async function parkCurrentSystemdServiceForMaintenance(
+  env: GatewayServiceEnv = process.env,
+): Promise<void> {
+  const unitName = `${resolveSystemdServiceName(env)}.service`;
+  // Queue an explicit stop before this process exits. systemd suppresses
+  // Restart=always for an operator stop, leaving the updater as successor owner.
+  const res = await execSystemctlUser(env, ["--no-block", "stop", unitName]);
+  if (res.code !== 0) {
+    throw new Error(`systemctl stop failed: ${res.stderr || res.stdout}`.trim());
+  }
+}
+
 export async function restartSystemdService({
   stdout,
   env,

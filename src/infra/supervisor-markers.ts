@@ -23,7 +23,7 @@ export const SUPERVISOR_HINT_ENV_VARS = [
 
 /** Supported supervisor families that can respawn the gateway after update/restart handoff. */
 export type RespawnSupervisor = "launchd" | "systemd" | "schtasks";
-type GatewayRespawnSupervisor = RespawnSupervisor | "external";
+export type GatewayRespawnSupervisor = RespawnSupervisor | "external";
 
 interface DetectRespawnSupervisorOptions {
   includeLinuxOpenClawGatewayServiceMarker?: boolean;

@@ -11,6 +11,7 @@ import {
 type RestartModule = typeof import("./restart.js");
 
 let consumeGatewaySigusr1RestartAuthorization: RestartModule["consumeGatewaySigusr1RestartAuthorization"];
+let consumeGatewaySigusr1RestartIntent: RestartModule["consumeGatewaySigusr1RestartIntent"];
 let deferGatewayRestartUntilIdle: RestartModule["deferGatewayRestartUntilIdle"];
 let isGatewaySigusr1RestartExternallyAllowed: RestartModule["isGatewaySigusr1RestartExternallyAllowed"];
 let markGatewaySigusr1RestartHandled: RestartModule["markGatewaySigusr1RestartHandled"];
@@ -114,6 +115,7 @@ describe("infra runtime", () => {
       );
       ({
         consumeGatewaySigusr1RestartAuthorization,
+        consumeGatewaySigusr1RestartIntent,
         deferGatewayRestartUntilIdle,
         isGatewaySigusr1RestartExternallyAllowed,
         markGatewaySigusr1RestartHandled,
@@ -465,6 +467,7 @@ describe("infra runtime", () => {
           delayMs: 0,
           reason: "update.auto",
           skipDeferral: true,
+          successorOwner: "managed-update-handoff",
         });
         expect(update.coalesced).toBe(true);
 
@@ -472,6 +475,10 @@ describe("infra runtime", () => {
         await signalEmitted;
 
         expect(peekGatewaySigusr1RestartReason()).toBe("update.auto");
+        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+          reason: "update.auto",
+          successorOwner: "managed-update-handoff",
+        });
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -1137,6 +1144,28 @@ describe("infra runtime", () => {
         expect(pendingCheck).not.toHaveBeenCalled();
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
         expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("carries managed handoff successor ownership into the emitted restart", async () => {
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipDeferral: true,
+          successorOwner: "managed-update-handoff",
+        });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+          reason: "update.run",
+          successorOwner: "managed-update-handoff",
+        });
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
