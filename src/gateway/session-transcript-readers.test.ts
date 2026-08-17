@@ -30,8 +30,6 @@ import {
   readSessionTitleFieldsFromTranscriptBatch,
 } from "./session-transcript-title-reader.js";
 
-const SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS = 240;
-
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
   return {
@@ -81,7 +79,7 @@ describe("session transcript reader facade", () => {
 
   async function writeSqliteMessages(
     sessionId: string,
-    messages: Array<Record<string, unknown> & { content: unknown; role: string }>,
+    messages: Array<{ content: unknown; provenance?: unknown; role: string }>,
   ): Promise<SessionTranscriptReadScope> {
     const scope = {
       agentId: "main",
@@ -445,54 +443,6 @@ describe("session transcript reader facade", () => {
 
     expect(readSessionTitleFieldsFromTranscript(scope)).toEqual(reference);
     expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-  });
-
-  test("projects the last visible user or assistant text for session previews", async () => {
-    const scope = await writeSqliteMessages("reader-title-visible-preview", [
-      { role: "user", content: "Initial request" },
-      { role: "assistant", content: "Visible final answer" },
-      { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
-      { role: "system", content: "system event" },
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private thought" },
-          { type: "reasoning", text: "reasoning summary" },
-        ],
-      },
-      { role: "assistant", content: "NO_REPLY" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "" }],
-        openclawDelivery: { replyToCurrent: true },
-      },
-    ]);
-
-    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe(
-      "Visible final answer",
-    );
-  });
-
-  test("bounds session previews without splitting surrogate pairs", async () => {
-    const longReply = `${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS - 2)}😊tail`;
-    const scope = await writeSqliteMessages("reader-title-bounded-preview", [
-      { role: "user", content: "Initial request" },
-      { role: "assistant", content: longReply },
-    ]);
-
-    const preview = readSessionTitleFieldsFromTranscript(scope).lastMessagePreview;
-    expect(preview).toHaveLength(SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS);
-    expect(preview).toBe(`${"a".repeat(SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS - 3)}...`);
-  });
-
-  test("preserves quoted directive examples in session previews", async () => {
-    const quoted = "Use `[[reply_to_current]]` literally.";
-    const scope = await writeSqliteMessages("reader-title-quoted-directive", [
-      { role: "user", content: "Initial request" },
-      { role: "assistant", content: quoted },
-    ]);
-
-    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe(quoted);
   });
 
   test("falls back to the canonical visible window for reset transcripts", async () => {

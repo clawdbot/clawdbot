@@ -1,5 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -29,6 +27,7 @@ import {
   getRestartRecoveryReplayError,
   isRestartRecoveryLifecycleCurrent,
 } from "./subagent-registry-restart-recovery-helpers.js";
+import { readSubagentRecoveryTranscriptMessage } from "./subagent-registry-restart-recovery-message.js";
 import { settleAcceptedRecoverySession } from "./subagent-registry-restart-recovery-session.js";
 import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type {
@@ -41,31 +40,6 @@ import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 const MAX_RECOVERY_ATTEMPTS = 2;
 const RECOVERY_ATTEMPT_WINDOW_MS = 2 * 60_000;
 type SubagentRunManager = ReturnType<typeof createSubagentRunManager>;
-
-function readRecoveryTranscriptMessage(
-  message: unknown,
-): { role?: string; text: string | null } | null {
-  const record = asOptionalRecord(message);
-  if (!record) {
-    return null;
-  }
-  const role = readStringValue(record.role);
-  if (typeof record.content === "string") {
-    return { role, text: record.content.trim() || null };
-  }
-  if (Array.isArray(record.content)) {
-    const text = record.content
-      .flatMap((block) => {
-        const blockText = readStringValue(asOptionalRecord(block)?.text)?.trim();
-        return blockText ? [blockText] : [];
-      })
-      .join("\n")
-      .trim();
-    return { role, text: text || null };
-  }
-  const text = readStringValue(record.text)?.trim();
-  return { role, text: text || null };
-}
 
 export type RestartRecoveryResult =
   | { status: "ignored" }
@@ -503,7 +477,7 @@ export async function recoverInterruptedSubagentRow(
       return { status: "handled" };
     }
     const recoveryMessages = messages.flatMap((message) => {
-      const projected = readRecoveryTranscriptMessage(message);
+      const projected = readSubagentRecoveryTranscriptMessage(message);
       return projected ? [projected] : [];
     });
     const lastHumanMessage = recoveryMessages

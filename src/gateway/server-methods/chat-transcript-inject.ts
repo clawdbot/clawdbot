@@ -103,7 +103,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
     // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
-    content: resolvedContent.map((block) => ({ ...block })) as unknown as Extract<
+    content: resolvedContent.map((block) => Object.assign({}, block)) as unknown as Extract<
       AppendMessageArg,
       { role: "assistant" }
     >["content"],
