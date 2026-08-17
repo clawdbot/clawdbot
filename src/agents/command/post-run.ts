@@ -237,7 +237,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
       }
     }
 
-    if (sessionEntry && sessionStore && sessionKey && !params.suppressVisibleSessionEffects) {
+    // Embedded runs own transcript persistence; CLI runs must prove their explicit append succeeded.
+    const turnTranscriptPersisted =
+      transcriptPersistenceRunner === "embedded" || persistedCliTurnTranscript;
+    if (
+      turnTranscriptPersisted &&
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      !params.suppressVisibleSessionEffects
+    ) {
       const flushProvider = result.meta.agentMeta?.provider ?? fallbackProvider;
       const flushModel = result.meta.agentMeta?.model ?? fallbackModel;
       const followupRun: FollowupRun = {

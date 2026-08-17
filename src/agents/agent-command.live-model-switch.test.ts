@@ -64,6 +64,10 @@ const state = vi.hoisted(() => ({
   persistAcpTurnTranscriptMock: vi.fn(),
   appendExactAssistantMessageMock: vi.fn(),
   runCliTurnCompactionLifecycleMock: vi.fn(),
+  runMemoryFlushIfNeededMock: vi.fn(async ({ sessionEntry }: { sessionEntry?: SessionEntry }) => ({
+    sessionEntry,
+    outcome: "skipped" as const,
+  })),
   resolveAcpAgentPolicyErrorMock: vi.fn(),
   resolveAcpDispatchPolicyErrorMock: vi.fn(),
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
@@ -196,10 +200,8 @@ vi.mock("./command/cli-compaction.js", () => ({
 }));
 
 vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
-  runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: SessionEntry }) => ({
-    sessionEntry,
-    outcome: "skipped" as const,
-  }),
+  runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
+    state.runMemoryFlushIfNeededMock(params),
 }));
 
 vi.mock("./command/run-context.js", () => ({
@@ -2138,6 +2140,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
   });
@@ -2179,6 +2182,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(findPersistedTranscriptRepair()).toEqual([
       expect.objectContaining({ text: "ok", provider: "openai", model: "gpt-5.4" }),
     ]);
+    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
   });
 
   it("does not queue repair for a final owned by another transcript writer", async () => {
