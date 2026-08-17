@@ -192,9 +192,10 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   protected async indexFile(
     entry: MemoryIndexEntry,
     _options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  ): Promise<{ status: "committed" }> {
     this.indexedPaths.push(entry.path);
     this.onIndexFile(this.indexedPaths.length);
+    return { status: "committed" };
   }
 }
 

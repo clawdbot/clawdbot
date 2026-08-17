@@ -91,7 +91,9 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
   protected async indexFile(
     _entry: MemoryIndexEntry,
     _options: { source: MemorySource; content?: string },
-  ): Promise<void> {}
+  ): Promise<{ status: "committed" }> {
+    return { status: "committed" };
+  }
 }
 
 describe("MemoryManagerSyncOps interval sync", () => {

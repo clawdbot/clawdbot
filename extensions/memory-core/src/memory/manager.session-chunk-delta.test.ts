@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/config-runtime";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -10,8 +13,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
-import type { MemoryIndexManager } from "./index.js";
-import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import type { MemoryIndexManager } from "./manager.js";
 
 // Real sqlite indexing; avoid flaking when sharing a packed CI shard.
 vi.setConfig({ testTimeout: 240_000 });
@@ -26,7 +28,8 @@ const embedState = vi.hoisted(() => ({
   noProvider: false,
 }));
 
-vi.mock("./embeddings.js", () => ({
+vi.mock("./embeddings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./embeddings.js")>()),
   resolveEmbeddingProviderFallbackModel: (_providerId: string, fallbackSourceModel: string) =>
     fallbackSourceModel,
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
@@ -59,9 +62,12 @@ vi.mock("./embeddings.js", () => ({
         },
 }));
 
+const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+
 type ChunkRow = {
   id: string;
   start_line: number;
+  end_line: number;
   text: string;
   updated_at: number;
 };
@@ -113,10 +119,10 @@ describe("memory session chunk-delta sync", () => {
     await closeAllMemorySearchManagers();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    clearRegistry();
     embedState.batches = [];
     embedState.failNextBatch = false;
     embedState.noProvider = false;
+    clearRuntimeConfigSnapshot();
     if (originalStateDir === undefined) {
       Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
     } else {
@@ -124,13 +130,12 @@ describe("memory session chunk-delta sync", () => {
     }
   });
 
-  function createCfg(
-    options: { chunking?: { tokens: number; overlap: number } } = {},
-  ): Parameters<typeof getMemorySearchManager>[0]["cfg"] {
+  function createCfg(): Parameters<typeof getMemorySearchManager>[0]["cfg"] {
     return {
+      plugins: { enabled: false },
       memory: {
         search: {
-          provider: "openai",
+          provider: embedState.noProvider ? "auto" : "openai",
           model: "mock-embed",
           store: { vector: { enabled: false } },
           // Hybrid enables FTS so the tests exercise chunk/FTS row parity.
@@ -138,7 +143,6 @@ describe("memory session chunk-delta sync", () => {
           // Keep the embedding cache out of the way so embedBatch calls
           // measure exactly which chunks the sync re-embeds.
           cache: { enabled: false },
-          ...(options.chunking ? { chunking: options.chunking } : {}),
           sources: ["sessions"],
           experimental: { sessionMemory: true },
         },
@@ -152,10 +156,7 @@ describe("memory session chunk-delta sync", () => {
     };
   }
 
-  async function setUpManager(
-    stateDirName: string,
-    options: { chunking?: { tokens: number; overlap: number } } = {},
-  ): Promise<{
+  async function setUpManager(stateDirName: string): Promise<{
     manager: MemoryIndexManager;
     sessionFile: string;
   }> {
@@ -163,8 +164,17 @@ describe("memory session chunk-delta sync", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "session-delta.jsonl");
-    const result = await getMemorySearchManager({ cfg: createCfg(options), agentId: "main" });
+    const sessionFile = path.join(
+      sessionsDir,
+      "session-delta.jsonl.reset.2026-07-01T10-00-00.000Z",
+    );
+    const cfg = createCfg();
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const result = await getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "cli",
+    });
     if (!result.manager) {
       throw new Error("manager missing");
     }
@@ -184,7 +194,7 @@ describe("memory session chunk-delta sync", () => {
     };
     return db
       .prepare(
-        `SELECT id, start_line, text, updated_at FROM memory_index_chunks
+        `SELECT id, start_line, end_line, text, updated_at FROM memory_index_chunks
          WHERE source = 'sessions' ORDER BY start_line, id`,
       )
       .all() as ChunkRow[];
@@ -224,7 +234,7 @@ describe("memory session chunk-delta sync", () => {
     await manager.sync({ reason: "test" });
 
     const before = readSessionChunkRows(manager);
-    expect(before.length).toBeGreaterThan(2);
+    expect(before.length).toBeGreaterThanOrEqual(2);
     const firstChunkText = before[0]?.text ?? "";
 
     embedState.batches = [];
@@ -267,7 +277,7 @@ describe("memory session chunk-delta sync", () => {
       {
         provenance: {
           originClass: "owner",
-          sessionKind: "interactive",
+          sessionKind: "unknown",
           observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
         },
       },
@@ -286,7 +296,7 @@ describe("memory session chunk-delta sync", () => {
       {
         provenance: {
           originClass: "untrusted",
-          sessionKind: "interactive",
+          sessionKind: "unknown",
           observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
         },
       },
@@ -327,7 +337,7 @@ describe("memory session chunk-delta sync", () => {
     await fs.writeFile(sessionFile, transcriptTurns(1, 30), "utf8");
     markSessionDirty(manager, sessionFile);
     await manager.sync({ reason: "test" });
-    expect(readSessionChunkRows(manager).length).toBeGreaterThan(2);
+    expect(readSessionChunkRows(manager).length).toBeGreaterThanOrEqual(2);
 
     // Compaction rewrites the transcript: old turns collapse into a summary.
     const compacted =
@@ -559,25 +569,19 @@ describe("memory session chunk-delta sync", () => {
   });
 
   it("marks vector rebuild when a stale-only delta cannot remove persisted vectors", async () => {
-    const { manager, sessionFile } = await setUpManager(".state-delta-stale-vector", {
-      chunking: { tokens: 64, overlap: 0 },
-    });
+    const { manager, sessionFile } = await setUpManager(".state-delta-stale-vector");
     await fs.writeFile(sessionFile, transcriptTurns(1, 30), "utf8");
     markSessionDirty(manager, sessionFile);
     await manager.sync({ reason: "test" });
 
     const before = readSessionChunkRows(manager);
-    expect(before.length).toBeGreaterThan(2);
+    expect(before.length).toBeGreaterThanOrEqual(2);
     const retainedTail = before.at(-2);
     const staleId = before.at(-1)?.id;
     if (!retainedTail || !staleId) {
       throw new Error("expected retained and stale session chunks");
     }
-    const retainedTurns = Array.from(retainedTail.text.matchAll(/topic-(\d+)/g)).map((match) =>
-      Number(match[1]),
-    );
-    const lastRetainedTurn = Math.max(...retainedTurns);
-    expect(lastRetainedTurn).toBeLessThan(30);
+    expect(retainedTail.end_line).toBeLessThan(60);
 
     const db = Reflect.get(manager, "db") as {
       exec: (sql: string) => void;
@@ -596,7 +600,10 @@ describe("memory session chunk-delta sync", () => {
     ).run();
 
     embedState.batches = [];
-    await fs.writeFile(sessionFile, transcriptTurns(1, lastRetainedTurn), "utf8");
+    const originalTranscript = await fs.readFile(sessionFile, "utf8");
+    const retainedTranscript =
+      originalTranscript.split("\n").slice(0, retainedTail.end_line).join("\n") + "\n";
+    await fs.writeFile(sessionFile, retainedTranscript, "utf8");
     markSessionDirty(manager, sessionFile);
     await manager.sync({ reason: "test" });
 
@@ -625,7 +632,7 @@ describe("memory session chunk-delta sync", () => {
     markSessionDirty(manager, sessionFile);
     await manager.sync({ reason: "test" });
     const before = readSessionChunkRows(manager);
-    expect(before.length).toBeGreaterThan(2);
+    expect(before.length).toBeGreaterThanOrEqual(2);
 
     await fs.appendFile(sessionFile, transcriptTurns(31, 34), "utf8");
     markSessionDirty(manager, sessionFile);

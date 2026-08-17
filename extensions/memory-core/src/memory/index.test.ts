@@ -22,6 +22,7 @@ import {
   type ManagerIndexFixture,
 } from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import type { MemorySourceSyncPlan } from "./manager-source-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -1902,12 +1903,12 @@ describe("memory index", () => {
       try {
         const fields = nextManager as unknown as {
           dirty: boolean;
-          syncArchiveFiles: (params: unknown) => Promise<void>;
+          syncArchiveFiles: (params: unknown) => Promise<MemorySourceSyncPlan>;
         };
         const syncArchiveFiles = fields.syncArchiveFiles.bind(nextManager);
         fields.syncArchiveFiles = async (params) => {
           fields.dirty = true;
-          await syncArchiveFiles(params);
+          return await syncArchiveFiles(params);
         };
 
         await nextManager.sync({ reason: "test", force: true });

@@ -58,7 +58,6 @@ import type { MemoryWatchSettleQueue } from "./watch-settle.js";
 export type {
   MemoryIndexEntry,
   MemoryIndexWorkItem,
-  MemoryIndexWriteResult,
   MemorySourceSyncPlan,
 } from "./manager-source-state.js";
 

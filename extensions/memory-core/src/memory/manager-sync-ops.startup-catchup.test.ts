@@ -386,9 +386,10 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected async indexFile(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  ): Promise<{ status: "committed" }> {
     this.indexedPaths.push(entry.path);
     this.indexedContents.push(options.content ?? "");
+    return { status: "committed" };
   }
 }
 
