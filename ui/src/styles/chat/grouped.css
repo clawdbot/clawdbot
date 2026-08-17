@@ -358,7 +358,7 @@
 .chat-divider {
   display: grid;
   gap: 7px;
-  margin: 18px 8px;
+  margin: var(--space-7) 8px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0;
@@ -681,9 +681,10 @@ img.chat-avatar.chat-avatar--logo {
 .chat-duplicate-count {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
+  align-self: baseline;
   min-height: 22px;
-  margin-top: 8px;
+  margin-top: 0;
+  margin-inline-start: 6px;
   padding: 2px 7px;
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   border-radius: var(--radius-sm);
@@ -692,6 +693,19 @@ img.chat-avatar.chat-avatar--logo {
   font-size: 12px; /* was 11px */
   font-weight: 700;
   line-height: 1;
+}
+
+.chat-bubble:has(> .chat-duplicate-count) > .chat-text,
+.chat-bubble:has(> .chat-duplicate-count) > .chat-message-disclosure {
+  display: inline;
+}
+
+.chat-bubble:has(> .chat-duplicate-count) > .chat-text > p:last-child {
+  display: inline;
+}
+
+.chat-bubble:has(> .chat-duplicate-count) > .chat-duplicate-count {
+  vertical-align: 0.08em;
 }
 
 .chat-group.user .chat-duplicate-count {
