@@ -178,6 +178,29 @@ async function postOpenAIResponsesCompaction(params: {
   });
   const output = isRecord(response) && Array.isArray(response.output) ? response.output : [];
   const item = output.at(-1);
+  const retainedItems = output.slice(0, -1);
+  const retainedMessagesAreValid = retainedItems.every(
+    (candidate) =>
+      isRecord(candidate) &&
+      candidate.type === "message" &&
+      (candidate.role === "user" ||
+        candidate.role === "developer" ||
+        candidate.role === "system") &&
+      Array.isArray(candidate.content),
+  );
+  const retainedUserMessageCount = retainedItems.filter(
+    (candidate) =>
+      isRecord(candidate) &&
+      candidate.type === "message" &&
+      candidate.role === "user" &&
+      Array.isArray(candidate.content),
+  ).length;
+  const inputUserMessageCount = Array.isArray(params.request.input)
+    ? params.request.input.filter(
+        (candidate) =>
+          isRecord(candidate) && candidate.type === "message" && candidate.role === "user",
+      ).length
+    : 0;
   const compactionItems = output.filter(
     (candidate) => isRecord(candidate) && candidate.type === "compaction",
   );
@@ -187,6 +210,8 @@ async function postOpenAIResponsesCompaction(params: {
     response.object !== "response.compaction" ||
     compactionItems.length !== 1 ||
     compactionItems[0] !== item ||
+    !retainedMessagesAreValid ||
+    (retainedItems.length > 0 && retainedUserMessageCount !== inputUserMessageCount) ||
     !isRecord(item) ||
     item.type !== "compaction" ||
     typeof item.encrypted_content !== "string" ||
@@ -199,6 +224,7 @@ async function postOpenAIResponsesCompaction(params: {
   }
   return {
     item,
+    historyMode: retainedUserMessageCount > 0 ? "retained-users" : "compacted-prefix",
     usage,
     model: params.model,
     replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(params.model, {

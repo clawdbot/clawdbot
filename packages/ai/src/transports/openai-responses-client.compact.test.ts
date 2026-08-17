@@ -53,6 +53,11 @@ describe("responses compact endpoint", () => {
       output: [
         {
           type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "Retain the conversation." }],
+        },
+        {
+          type: "message",
           role: "user",
           content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
         },
@@ -86,6 +91,7 @@ describe("responses compact endpoint", () => {
     );
     expect(result).toMatchObject({
       item: { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      historyMode: "retained-users",
       usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
       model,
       replayMetadata: {
@@ -98,6 +104,20 @@ describe("responses compact endpoint", () => {
 
   it.each([
     ["missing", [{ type: "message", role: "user", content: [] }]],
+    [
+      "malformed retained-message",
+      [
+        { type: "message", role: "assistant", content: [] },
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
+    ],
+    [
+      "retained tool-output",
+      [
+        { type: "function_call_output", call_id: "call_1", output: "result" },
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
+    ],
     [
       "duplicated",
       [
@@ -127,6 +147,23 @@ describe("responses compact endpoint", () => {
         { apiKey: "test-key" },
       ),
     ).rejects.toThrow("one trailing compaction item");
+  });
+
+  it("keeps the checkpoint-only response shape distinct from retained user history", async () => {
+    sdkState.post.mockResolvedValue({
+      object: "response.compaction",
+      output: [{ type: "compaction", id: "cmp_1", encrypted_content: "opaque" }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+
+    await expect(
+      requestPreparedOpenAIResponsesCompaction(
+        createOpenAIResponsesTransportStreamFn(),
+        model,
+        context,
+        { apiKey: "test-key" },
+      ),
+    ).resolves.toMatchObject({ historyMode: "compacted-prefix" });
   });
 
   it.each([
