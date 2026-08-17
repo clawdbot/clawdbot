@@ -815,11 +815,13 @@ Gateway or node host and check `openclaw nodes pending` again.
   `tailscale.mode = "serve"`, OpenClaw checks `tailscale funnel status` before
   re-applying Serve at startup. If that status cannot be inspected, startup
   fails before the ordinary Gateway listener opens. An external Funnel that
-  still targets the ordinary Gateway port cannot provide request provenance.
-  OpenClaw leaves the
-  external route unchanged and warns; plugin-authenticated webhooks retain
-  their own authentication, while Gateway-authenticated routes reject that
-  ingress. First configure `gateway.auth.password` (prefer a SecretRef) or
+  still targets the ordinary Gateway port does not receive managed-ingress
+  provenance. OpenClaw leaves the external route unchanged and warns. The
+  route can use generic proxy attribution only through an explicitly configured
+  `gateway.trustedProxies` source with a valid forwarded client address;
+  Gateway-protected routes then require configured auth, while aggregate probes
+  and plugin-authenticated webhooks retain their own response and authentication
+  policies. First configure `gateway.auth.password` (prefer a SecretRef) or
   `OPENCLAW_GATEWAY_PASSWORD`, and set `gateway.auth.mode` to `password`. Then
   run `openclaw config set gateway.tailscale.mode funnel`, followed by
   `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.

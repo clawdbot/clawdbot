@@ -646,7 +646,7 @@ Gateway HTTP bearer auth is effectively all-or-nothing operator access. Credenti
 
 Tokenless Serve auth assumes the gateway host itself is trusted - it is not protection against hostile same-host processes. If untrusted local code may run on the gateway host, disable `allowTailscale` and require explicit shared-secret auth (`token` or `password`).
 
-An externally managed Tailscale Serve or Funnel route may forward these headers to the ordinary listener only through an explicitly configured `gateway.trustedProxies` source with a valid non-loopback forwarded client address. OpenClaw treats that request as generic proxy ingress: normal gateway auth remains required, `allowTailscale` grants nothing, and no WhoIs lookup runs. See [Tailscale](/gateway/tailscale#externally-managed-serve-and-funnel) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+An externally managed Tailscale Serve or Funnel route may forward these headers to the ordinary listener only through an explicitly configured `gateway.trustedProxies` source with a valid non-loopback forwarded client address. OpenClaw treats that request as generic proxy ingress: the configured gateway auth applies, `allowTailscale` grants nothing, and no WhoIs lookup runs. Gateway-protected routes reject external Funnel ingress when auth mode is `none`; aggregate health, readiness, and startup probes keep their bounded unauthenticated responses. See [Tailscale](/gateway/tailscale#externally-managed-serve-and-funnel), [Health and readiness](/gateway/health), and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
