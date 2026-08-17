@@ -61,7 +61,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
-import { handleChatSend } from "./chat-send-handler.js";
+import { handleChatSend, handleChatSendWithRuntimeTools } from "./chat-send-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -1161,6 +1161,7 @@ async function runNonStreamingChatSend(params: {
   waitForCompletion?: boolean;
   waitForDedupe?: boolean;
   waitFor?: NonStreamingChatSendWaitFor;
+  runtimeToolsAllow?: string[];
 }): Promise<Record<string, any> | undefined> {
   const sendParams: {
     sessionKey: string;
@@ -1179,7 +1180,7 @@ async function runNonStreamingChatSend(params: {
     params.directExternal === false
       ? handleChatSend
       : expectDefined(chatHandlers["chat.send"], 'chatHandlers["chat.send"] test invariant');
-  await handler({
+  const handlerOptions = {
     params: {
       ...sendParams,
       ...params.requestParams,
@@ -1189,7 +1190,12 @@ async function runNonStreamingChatSend(params: {
     client: (params.client ?? null) as never,
     isWebchatConnect: () => false,
     context: params.context,
-  });
+  };
+  if (params.runtimeToolsAllow) {
+    await handleChatSendWithRuntimeTools(handlerOptions, params.runtimeToolsAllow);
+  } else {
+    await handler(handlerOptions);
+  }
 
   const waitFor =
     params.waitFor ??
@@ -1358,6 +1364,22 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.runtimeAssistantContentBeforeDelivery = null;
     mockState.runtimeAssistantTextsBeforeDelivery = [];
     mockState.cronAuthorityProbe = undefined;
+  });
+
+  it("carries an internal runtime tool cap into agent dispatch", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-runtime-tools-");
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-runtime-tools",
+      directExternal: false,
+      runtimeToolsAllow: ["read"],
+      waitFor: "dedupe",
+    });
+
+    expect(dispatchInboundMessageMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ toolsAllow: ["read"] }),
+    );
   });
 
   it.each([

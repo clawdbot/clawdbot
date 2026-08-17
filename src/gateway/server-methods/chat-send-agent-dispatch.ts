@@ -60,6 +60,7 @@ type StartChatDispatchParams = {
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
+  toolsAllow?: string[];
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
@@ -89,6 +90,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     attachments,
     client,
     context,
+    toolsAllow,
     cronCreatorAuthority,
     externalAuthorityAdmission,
     injection,
@@ -248,6 +250,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
+              toolsAllow,
               dispatcherOptions: replyDispatch.dispatcherOptions,
               onSessionMetadataChanges: (changes) =>
                 changes.forEach((change) => emitSessionsChanged(context, change)),
