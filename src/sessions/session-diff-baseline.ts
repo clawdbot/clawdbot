@@ -1,4 +1,5 @@
 import {
+  isSessionWorkStartInvalidatedError,
   resolveSessionWorkStartError,
   SessionWorkStartInvalidatedError,
 } from "../config/sessions/lifecycle.js";
@@ -124,6 +125,9 @@ async function settleCapture(params: {
       sessionId: params.sessionId,
     });
   } catch (error) {
+    if (isSessionWorkStartInvalidatedError(error)) {
+      throw error;
+    }
     const entry = await persistCaptureResult(params);
     logVerbose(
       `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
