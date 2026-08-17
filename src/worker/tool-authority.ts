@@ -39,15 +39,16 @@ export function isWorkerToolName(value: unknown): value is WorkerToolName {
   return typeof value === "string" && WORKER_TOOL_NAME_SET.has(value);
 }
 
+type WorkerExecAuthority = {
+  security: ExecSecurity;
+  ask: ExecAsk;
+} & ({ host: Exclude<ExecHost, "node">; node?: never } | { host: "node"; node?: string });
+
 export type WorkerToolAuthority = {
   allowedToolNames: WorkerToolName[];
   /**
    * Effective exec policy resolved at the Gateway. Optional for protocol compatibility only;
    * consumers must treat an absent value as denied rather than re-deriving it worker-side.
    */
-  exec?: {
-    host: ExecHost;
-    security: ExecSecurity;
-    ask: ExecAsk;
-  };
+  exec?: WorkerExecAuthority;
 };

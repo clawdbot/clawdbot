@@ -284,9 +284,12 @@ describe("worker launch descriptor", () => {
       { security: null, ask: "off" },
       { security: "deny", ask: false },
       { host: "gateway", security: "full", ask: "off", unexpected: true },
+      { host: "gateway", security: "full", ask: "off", node: "worker-node" },
       { host: "elsewhere", security: "full", ask: "off" },
       { host: "gateway", security: "unrestricted", ask: "off" },
       { host: "gateway", security: "full", ask: "sometimes" },
+      { host: "node", security: "full", ask: "off", node: "" },
+      { host: "node", security: "full", ask: "off", node: " worker-node" },
     ];
 
     for (const exec of cases) {
@@ -305,7 +308,10 @@ describe("worker launch descriptor", () => {
     for (const host of ["sandbox", "gateway", "node"] as const) {
       for (const security of ["deny", "allowlist", "full"] as const) {
         for (const ask of ["off", "on-miss", "always"] as const) {
-          descriptor.assignment.toolAuthority.exec = { host, security, ask };
+          descriptor.assignment.toolAuthority.exec =
+            host === "node"
+              ? { host, security, ask, node: "worker-node" }
+              : { host, security, ask };
           expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
         }
       }

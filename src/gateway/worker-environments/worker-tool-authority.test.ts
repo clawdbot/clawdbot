@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
+import type { ExecuteNodeHostCommandParams } from "../../agents/bash-tools.exec-host-node.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
+
+const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
+
+vi.mock("../../agents/tools/gateway.js", () => ({
+  callGatewayTool: gatewayMocks.callGatewayTool,
+}));
 
 function turn(overrides: Partial<SessionPlacementTurnParams> = {}): SessionPlacementTurnParams {
   return {
@@ -37,6 +45,10 @@ function resolvedAuthority(overrides: Partial<SessionPlacementTurnParams> = {}) 
     turn: turn(overrides),
   });
 }
+
+afterEach(() => {
+  gatewayMocks.callGatewayTool.mockReset();
+});
 
 describe("resolveWorkerToolAuthority", () => {
   it.each([
@@ -77,6 +89,48 @@ describe("resolveWorkerToolAuthority", () => {
       });
     },
   );
+
+  it("keeps the resolved node binding authoritative when a worker request names another node", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [
+        {
+          nodeId: "bound-node",
+          displayName: "Bound Node",
+          platform: process.platform,
+          commands: ["system.run"],
+        },
+        {
+          nodeId: "other-node",
+          displayName: "Other Node",
+          platform: process.platform,
+          commands: ["system.run"],
+        },
+      ],
+    });
+    const resolved = resolvedAuthority({
+      config: { tools: { exec: { host: "node", mode: "full", node: "bound-node" } } },
+      toolsAllow: ["exec", "process"],
+    });
+    if (resolved.exec?.host !== "node") {
+      throw new Error("expected node-host worker authority");
+    }
+    const request = {
+      command: "echo worker-node-binding",
+      workdir: undefined,
+      env: {},
+      requestedNode: "other-node",
+      boundNode: resolved.exec.node,
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+    } satisfies ExecuteNodeHostCommandParams;
+
+    await expect(resolveNodeExecutionTarget(request)).rejects.toThrow(
+      "exec node not allowed (bound to bound-node, requested resolved to other-node)",
+    );
+  });
 
   it("still carries exec authority when every tool is withheld", () => {
     expect(resolvedAuthority({ disableTools: true })).toMatchObject({

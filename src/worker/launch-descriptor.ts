@@ -118,6 +118,7 @@ function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
 
 function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
   const exec = isRecord(value) ? value.exec : undefined;
+  const node = isRecord(exec) ? exec.node : undefined;
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ["allowedToolNames"], ["exec"]) ||
@@ -126,18 +127,35 @@ function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
     new Set(value.allowedToolNames).size !== value.allowedToolNames.length ||
     (exec !== undefined &&
       (!isRecord(exec) ||
-        !hasExactKeys(exec, ["host", "security", "ask"]) ||
+        !hasExactKeys(exec, ["host", "security", "ask"], exec.host === "node" ? ["node"] : []) ||
         (exec.host !== "sandbox" && exec.host !== "gateway" && exec.host !== "node") ||
         (exec.security !== "deny" && exec.security !== "allowlist" && exec.security !== "full") ||
-        (exec.ask !== "off" && exec.ask !== "on-miss" && exec.ask !== "always")))
+        (exec.ask !== "off" && exec.ask !== "on-miss" && exec.ask !== "always") ||
+        (node !== undefined &&
+          (exec.host !== "node" ||
+            typeof node !== "string" ||
+            node.length === 0 ||
+            node.trim() !== node))))
   ) {
     return undefined;
   }
+  const allowedToolNames = [...value.allowedToolNames];
+  if (exec === undefined) {
+    return { allowedToolNames };
+  }
+  const execAuthority = (
+    exec.host === "node"
+      ? {
+          host: exec.host,
+          security: exec.security,
+          ask: exec.ask,
+          ...(typeof node === "string" ? { node } : {}),
+        }
+      : { host: exec.host, security: exec.security, ask: exec.ask }
+  ) as NonNullable<WorkerToolAuthority["exec"]>;
   return {
-    allowedToolNames: [...value.allowedToolNames],
-    ...(exec === undefined
-      ? {}
-      : { exec: { ...exec } as NonNullable<WorkerToolAuthority["exec"]> }),
+    allowedToolNames,
+    exec: execAuthority,
   };
 }
 

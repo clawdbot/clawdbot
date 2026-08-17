@@ -84,13 +84,16 @@ export function resolveWorkerToolAuthority(params: {
     effectiveHost: host,
     security,
     ask,
+    node: configuredNode,
   } = resolveExecDefaults({
     cfg: turn.config,
     execOverrides: turn.execOverrides,
     agentId: turn.agentId,
     sessionKey: turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId,
   });
-  const exec = { host, security, ask };
+  const node = configuredNode?.trim();
+  const exec: NonNullable<WorkerToolAuthority["exec"]> =
+    host === "node" ? { host, security, ask, ...(node ? { node } : {}) } : { host, security, ask };
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
     return { allowedToolNames: [], exec };
   }
