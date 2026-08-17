@@ -2221,9 +2221,10 @@ describe("update-cli", () => {
     );
     spawn.mockImplementationOnce((_command: string, _args: string[], options: unknown) => {
       const child = new EventEmitter() as EventEmitter & { kill: () => void };
-      const resultPath = (options as { env: Record<string, string> }).env[
-        "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH"
-      ];
+      const resultPath = expectDefined(
+        (options as { env: Record<string, string> }).env["OPENCLAW_UPDATE_POST_CORE_RESULT_PATH"],
+        "post-core result path test invariant",
+      );
       fsSync.writeFileSync(resultPath, JSON.stringify({ status: "ok" }), "utf8");
       child.kill = () => {
         child.emit("exit", null, "SIGTERM");
