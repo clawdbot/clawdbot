@@ -2080,6 +2080,39 @@ NODE
     }
   });
 
+  it("leaves a profile intact and reports failure when its metadata copy fails", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-profile-copy-failure-"));
+    const home = join(tmp, "home");
+    const profile = join(home, ".profile");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(profile, "# original profile\n");
+    chmodSync(profile, 0o600);
+    const originalInode = statSync(profile).ino;
+
+    try {
+      const result = runInstallShell(
+        [
+          `source "${SCRIPT_PATH}"`,
+          "cp() { return 73; }",
+          `if ! persist_path_line_to_profile ${JSON.stringify(profile)} 'export PATH="$HOME/.local/bin:$PATH"'; then`,
+          "  printf 'installer-reported-failure\\n'",
+          "else",
+          "  exit 90",
+          "fi",
+        ].join("\n"),
+        { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/bash" },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout + result.stderr).toContain("Failed to copy shell profile");
+      expect(result.stdout).toContain("installer-reported-failure");
+      expect(readFileSync(profile, "utf8")).toBe("# original profile\n");
+      expect(statSync(profile).ino).toBe(originalInode);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("continues installation when an outside-home profile symlink is refused", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-outside-profile-link-"));
     const home = join(tmp, "home");

@@ -1842,7 +1842,10 @@ persist_path_line_to_profile() {
     tmp_rc="$(mktemp "${rc}.openclaw-tmp.XXXXXX")"
     TMPFILES+=("$tmp_rc")
     if [[ -f "$rc" ]]; then
-        cp -p "$rc" "$tmp_rc"
+        if ! cp -p "$rc" "$tmp_rc"; then
+            ui_warn "Failed to copy shell profile: ${profile}"
+            return 1
+        fi
     fi
     {
         printf '%s\n' "$path_line"
