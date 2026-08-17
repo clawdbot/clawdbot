@@ -65,8 +65,6 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { inferMSTeamsTargetChatType, resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
-import { resolveMSTeamsCredentials } from "./token.js";
-
 const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
   "ChannelMessage.Read.All": "channel history",
   "Chat.Read.All": "chat history",
