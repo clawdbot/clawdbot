@@ -11,6 +11,7 @@ import {
   type DocumentExtractorPlugin,
 } from "openclaw/plugin-sdk/document-extractor";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
 const MAX_RENDER_DIMENSION = 10_000;
@@ -101,12 +102,8 @@ function toDocumentImage(image: PdfImage): DocumentExtractedImage {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function isPdfPasswordError(err: unknown): boolean {
-  return isRecord(err) && err.code === "password";
+  return Boolean(err && typeof err === "object" && (err as { code?: unknown }).code === "password");
 }
 
 async function openPdfDocument(params: {
@@ -214,11 +211,7 @@ function resolvePdfExtractionWorkerUrl(currentModuleUrl = import.meta.url): URL 
   const distIndex = normalized.lastIndexOf(distMarker);
   const pathWithinDist =
     distIndex >= 0 ? normalized.slice(distIndex + distMarker.length) : undefined;
-  if (
-    pathWithinDist &&
-    !pathWithinDist.includes("/") &&
-    path.extname(currentPath) === ".js"
-  ) {
+  if (pathWithinDist && !pathWithinDist.includes("/") && path.extname(currentPath) === ".js") {
     // Bundling may hoist this implementation into a shared root dist chunk while
     // the worker stays in the plugin artifact directory.
     const distRoot = currentPath.slice(0, distIndex + distMarker.length);
@@ -294,9 +287,7 @@ class PdfWorkerPool {
           if (!this.waiters.delete(waiter)) {
             return;
           }
-          reject(
-            toErrorObject(signal.reason, "PDF extraction aborted while waiting for a worker"),
-          );
+          reject(toErrorObject(signal.reason, "PDF extraction aborted while waiting for a worker"));
         },
       };
       this.waiters.add(waiter);
@@ -418,9 +409,7 @@ class PdfWorkerPool {
       try {
         const idleWorker = this.idle.pop();
         waiter.resolve(
-          idleWorker
-            ? this.createLease(idleWorker)
-            : this.createWorkerLease(waiter.createWorker),
+          idleWorker ? this.createLease(idleWorker) : this.createWorkerLease(waiter.createWorker),
         );
       } catch (error) {
         waiter.reject(toErrorObject(error, "PDF extraction worker failed to start"));
@@ -431,10 +420,7 @@ class PdfWorkerPool {
 
 // The public artifact module is process-cached, so this pool owns warm PDFium
 // workers for the same lifecycle while still replacing any cancelled worker.
-const sharedPdfWorkerPool = new PdfWorkerPool(
-  MAX_CONCURRENT_PDF_WORKERS,
-  MAX_PENDING_PDF_REQUESTS,
-);
+const sharedPdfWorkerPool = new PdfWorkerPool(MAX_CONCURRENT_PDF_WORKERS, MAX_PENDING_PDF_REQUESTS);
 
 function parseWorkerResult(message: unknown): PdfExtractionWorkerResult | undefined {
   if (!isRecord(message)) {
@@ -536,28 +522,25 @@ async function extractPdfContentInWorker(
         };
         const onMessage = (message: unknown) => {
           const result = parseWorkerResult(message);
-          settle(
-            () => {
-              if (!result) {
-                reject(new Error("PDF extraction worker returned an invalid result"));
-                return;
+          settle(() => {
+            if (!result) {
+              reject(new Error("PDF extraction worker returned an invalid result"));
+              return;
+            }
+            try {
+              for (const error of result.imageExtractionErrors) {
+                request.onImageExtractionError?.(new Error(error));
               }
-              try {
-                for (const error of result.imageExtractionErrors) {
-                  request.onImageExtractionError?.(new Error(error));
-                }
-              } catch (error) {
-                reject(toErrorObject(error, "PDF image extraction error callback failed"));
-                return;
-              }
-              if (result.status === "error") {
-                reject(new Error(result.error));
-                return;
-              }
-              resolve(result.result);
-            },
-            Boolean(result),
-          );
+            } catch (error) {
+              reject(toErrorObject(error, "PDF image extraction error callback failed"));
+              return;
+            }
+            if (result.status === "error") {
+              reject(new Error(result.error));
+              return;
+            }
+            resolve(result.result);
+          }, Boolean(result));
         };
         const onError = (error: unknown) => {
           settle(() => reject(toErrorObject(error, "PDF extraction worker failed")), false);
@@ -581,10 +564,7 @@ async function extractPdfContentInWorker(
         try {
           worker.postMessage(workerInput, []);
         } catch (error) {
-          settle(
-            () => reject(toErrorObject(error, "PDF extraction worker request failed")),
-            false,
-          );
+          settle(() => reject(toErrorObject(error, "PDF extraction worker request failed")), false);
         }
       }),
   );
@@ -612,10 +592,7 @@ export function createPdfDocumentExtractor(
 
 export const testOnlyDocumentExtractor = {
   createPdfWorkerPool: (maxConcurrent: number, maxPending = maxConcurrent * 2) =>
-    new PdfWorkerPool(
-      Math.max(1, Math.floor(maxConcurrent)),
-      Math.max(0, Math.floor(maxPending)),
-    ),
+    new PdfWorkerPool(Math.max(1, Math.floor(maxConcurrent)), Math.max(0, Math.floor(maxPending))),
   maxConcurrentPdfWorkers: MAX_CONCURRENT_PDF_WORKERS,
   maxPendingPdfRequests: MAX_PENDING_PDF_REQUESTS,
   resolvePdfExtractionWorkerUrl,

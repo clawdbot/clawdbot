@@ -346,8 +346,7 @@ describe("PDF document extractor", () => {
   it.each([
     {
       label: "source checkout beneath a dist directory",
-      moduleUrl:
-        "file:///srv/dist/openclaw/extensions/document-extract/document-extractor.ts",
+      moduleUrl: "file:///srv/dist/openclaw/extensions/document-extract/document-extractor.ts",
       workerUrl:
         "file:///srv/dist/openclaw/extensions/document-extract/document-extractor.worker.ts",
     },
@@ -358,8 +357,7 @@ describe("PDF document extractor", () => {
     },
     {
       label: "built plugin output",
-      moduleUrl:
-        "file:///opt/openclaw/dist/extensions/document-extract/document-extractor.js",
+      moduleUrl: "file:///opt/openclaw/dist/extensions/document-extract/document-extractor.js",
       workerUrl:
         "file:///opt/openclaw/dist/extensions/document-extract/document-extractor.worker.js",
     },
