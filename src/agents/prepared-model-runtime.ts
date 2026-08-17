@@ -462,7 +462,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     }
   }
   const candidates = entries.map(({ owner: existing, input }) => {
-    const catalogMode = options.catalogModeForAgent?.(input.agentId) ?? defaultCatalogMode;
+    const catalogMode = defaultCatalogMode;
     // Dynamic and standalone owners have different lifetime contracts. A configured publication
     // must replace them so an older lease release cannot remove the committed generation.
     const owner =
