@@ -1,4 +1,4 @@
-export type SnapshotInvalidation = { sessionKey: string } | { sessionKey?: undefined };
+type SnapshotInvalidation = { sessionKey: string } | { sessionKey?: undefined };
 
 type SnapshotInvalidationListener = (invalidation: SnapshotInvalidation) => void | Promise<void>;
 
