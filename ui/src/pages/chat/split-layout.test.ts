@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { normalizeChatSplitLayout } from "./split-layout-persistence.ts";
 import {
   applyUiCommandToSplitLayout,
   closePane,
   findPane,
   insertPane,
-  normalizeChatSplitLayout,
   panesOf,
   resizeColumns,
   resizePanes,
