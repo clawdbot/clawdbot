@@ -111,6 +111,10 @@ function renderTranscriptShell(
           </div>
         `
       : projection.renderRows(historySentinel);
+  const handleScroll = (event: Event) => {
+    props.onChatScroll?.(event);
+    updateMarkdownCodeBlockOverflow(event);
+  };
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
@@ -120,7 +124,7 @@ function renderTranscriptShell(
       tabindex="0"
       @focusin=${(event: FocusEvent) => transcript.handleFocusIn(event)}
       @focusout=${(event: FocusEvent) => transcript.handleFocusOut(event)}
-      @scroll=${props.onChatScroll}
+      @scroll=${{ handleEvent: handleScroll, capture: true }}
       @wheel=${props.onHistoryIntent ? { handleEvent: props.onHistoryIntent, passive: true } : null}
       @keydown=${(event: KeyboardEvent) => {
         const target = markdownFileLinkFromKeyboardEvent(event);
@@ -149,7 +153,6 @@ function renderTranscriptShell(
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
       @pointerover=${updateMarkdownCodeBlockOverflow}
-      @scroll=${{ handleEvent: updateMarkdownCodeBlockOverflow, capture: true }}
       @click=${(event: MouseEvent) => {
         handleMarkdownCodeBlockCopy(event);
         const target = markdownFileLinkFromEvent(event);
