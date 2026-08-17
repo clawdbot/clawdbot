@@ -16,13 +16,17 @@ vi.mock("../../gateway/node-plugin-tool-snapshot.js", () => ({
 
 const { executeNodeCommandAction } = await import("./nodes-tool-commands.js");
 
-async function invoke(command: string) {
+async function execute(action: "device_status" | "invoke", input: Record<string, unknown>) {
   return executeNodeCommandAction({
-    action: "invoke",
-    input: { node: "macbook", invokeCommand: command, invokeParamsJson: "{}" },
+    action,
+    input: { node: "macbook", ...input },
     gatewayOpts: {},
     mediaInvokeActions: {},
   });
+}
+
+async function invoke(command: string) {
+  return execute("invoke", { invokeCommand: command, invokeParamsJson: "{}" });
 }
 
 describe("generic node invoke policy", () => {
@@ -62,6 +66,32 @@ describe("generic node invoke policy", () => {
     mocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
 
     await invoke("device.status");
+
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      expect.objectContaining({ nodeId: "node-1", command: "device.status" }),
+    );
+  });
+
+  it("blocks a typed action when the selected node publishes its command as an agent tool", async () => {
+    mocks.listConnectedNodePluginTools.mockReturnValue([
+      { nodeId: "node-1", descriptor: { name: "remote_status", command: "device.status" } },
+    ]);
+
+    await expect(execute("device_status", {})).rejects.toThrow(
+      "use the dedicated remote_status tool",
+    );
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("allows a typed action when only another node publishes its command", async () => {
+    mocks.listConnectedNodePluginTools.mockReturnValue([
+      { nodeId: "node-2", descriptor: { name: "remote_status", command: "device.status" } },
+    ]);
+    mocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+
+    await execute("device_status", {});
 
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
