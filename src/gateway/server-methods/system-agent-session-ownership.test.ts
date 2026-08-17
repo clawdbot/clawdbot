@@ -47,6 +47,7 @@ type FakeEngine = {
   dispose: ReturnType<typeof vi.fn>;
   loadOverview: ReturnType<typeof vi.fn>;
   noteAssistantMessage: ReturnType<typeof vi.fn>;
+  decorateRejoinReply: ReturnType<typeof vi.fn>;
 };
 
 function makeEngine(): FakeEngine {
@@ -66,6 +67,7 @@ function makeEngine(): FakeEngine {
     dispose: vi.fn(async () => undefined),
     loadOverview: vi.fn(async () => ({})),
     noteAssistantMessage: vi.fn(),
+    decorateRejoinReply: vi.fn((reply: unknown) => reply),
   };
 }
 
