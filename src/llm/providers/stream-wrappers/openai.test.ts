@@ -211,6 +211,66 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(diagnostic).not.toContain(secretFixture);
   });
 
+  it("emits one complete diagnostic through composed wrappers after async replacement", async () => {
+    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", "1");
+    let payloadResult: unknown;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      payloadResult = options?.onPayload?.(
+        {
+          tools: [
+            { type: "function", name: "exec" },
+            { type: "function", name: "wait" },
+            { type: "function", name: "computer" },
+            { type: "function", name: "image" },
+            { type: "file_search" },
+          ],
+        },
+        model,
+      );
+      return createAssistantMessageEventStream();
+    };
+    const inner = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
+    const wrapped = createCodexNativeWebSearchWrapper(inner, {
+      codeModeToolSurfaceEnabled: true,
+    });
+
+    void wrapped(
+      codexModel,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {
+        onPayload: async () => ({
+          tools: [
+            { type: "function", name: "exec" },
+            { type: "function", name: "wait" },
+            { type: "function", name: "browser" },
+            { type: "file_search" },
+          ],
+        }),
+      },
+    );
+    await payloadResult;
+
+    expect(logger.info).toHaveBeenCalledOnce();
+    const diagnostic = JSON.parse(
+      String(logger.info.mock.calls[0]?.[0]).slice("code-mode diagnostic ".length),
+    ) as {
+      boundary?: string;
+      removedToolIdentities?: string[];
+    };
+    expect(diagnostic.boundary).toBe("provider-tool-surface");
+    expect(new Set(diagnostic.removedToolIdentities)).toEqual(
+      new Set(["client:browser", "client:computer", "client:image", "hosted:file_search"]),
+    );
+  });
+
   it.each(["", "0", "false", "off", "no"])(
     "does not emit dedicated diagnostics for false-like flag %j",
     (flag) => {

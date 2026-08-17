@@ -664,37 +664,43 @@ export function createCodexNativeWebSearchWrapper(
       }
       const originalOnPayload = options?.onPayload;
       const codeModeDiagnosticsEnabled = isCodeModeDiagnosticEnabled();
+      const existingToolSurfaceObserver = codeModeToolSurfaceObserver.get(options);
+      const existingToolSurfaceCollector = codeModeToolSurfaceObserver.getCollector(options);
       const observedBeforeToolIdentities = new Set<string>();
-      const collectToolSurface = codeModeDiagnosticsEnabled
-        ? ({ beforeToolIdentities }: CodeModeToolSurfaceObservation) => {
-            for (const identity of beforeToolIdentities) {
-              observedBeforeToolIdentities.add(identity);
+      const collectToolSurface =
+        existingToolSurfaceCollector ??
+        (codeModeDiagnosticsEnabled
+          ? ({ beforeToolIdentities }: CodeModeToolSurfaceObservation) => {
+              for (const identity of beforeToolIdentities) {
+                observedBeforeToolIdentities.add(identity);
+              }
             }
-          }
-        : undefined;
+          : undefined);
       let diagnosticEmitted = false;
-      const observeToolSurface = codeModeDiagnosticsEnabled
-        ? ({ beforeToolIdentities, afterToolIdentities }: CodeModeToolSurfaceObservation) => {
-            for (const identity of beforeToolIdentities) {
-              observedBeforeToolIdentities.add(identity);
+      const observeToolSurface =
+        existingToolSurfaceObserver ??
+        (codeModeDiagnosticsEnabled
+          ? ({ beforeToolIdentities, afterToolIdentities }: CodeModeToolSurfaceObservation) => {
+              for (const identity of beforeToolIdentities) {
+                observedBeforeToolIdentities.add(identity);
+              }
+              if (diagnosticEmitted) {
+                return;
+              }
+              diagnosticEmitted = true;
+              const retained = new Set(afterToolIdentities);
+              const allBeforeToolIdentities = [...observedBeforeToolIdentities];
+              logCodeModeDiagnostic(log, "provider-tool-surface", {
+                provider: readStringValue(model.provider),
+                model: readStringValue(model.id),
+                beforeToolIdentities: allBeforeToolIdentities,
+                afterToolIdentities,
+                removedToolIdentities: allBeforeToolIdentities.filter(
+                  (identity) => !retained.has(identity),
+                ),
+              });
             }
-            if (diagnosticEmitted) {
-              return;
-            }
-            diagnosticEmitted = true;
-            const retained = new Set(afterToolIdentities);
-            const allBeforeToolIdentities = [...observedBeforeToolIdentities];
-            logCodeModeDiagnostic(log, "provider-tool-surface", {
-              provider: readStringValue(model.provider),
-              model: readStringValue(model.id),
-              beforeToolIdentities: allBeforeToolIdentities,
-              afterToolIdentities,
-              removedToolIdentities: allBeforeToolIdentities.filter(
-                (identity) => !retained.has(identity),
-              ),
-            });
-          }
-        : undefined;
+          : undefined);
       const codeModeOptions: OpenClawSimpleStreamOptions = {
         ...options,
         openclawCodeModeToolSurface: true,
@@ -731,8 +737,8 @@ export function createCodexNativeWebSearchWrapper(
           );
         },
       };
-      if (observeToolSurface) {
-        codeModeToolSurfaceObserver.set(codeModeOptions, observeToolSurface);
+      if (observeToolSurface && !existingToolSurfaceObserver) {
+        codeModeToolSurfaceObserver.set(codeModeOptions, observeToolSurface, collectToolSurface);
       }
       return underlying(model, context, codeModeOptions);
     }

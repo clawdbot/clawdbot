@@ -14,11 +14,19 @@ export type CodeModeToolSurfaceObservation = {
 };
 
 const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");
+const CODE_MODE_TOOL_SURFACE_COLLECTOR = Symbol("openaiCodeModeToolSurfaceCollector");
 type CodeModeToolSurfaceObserver = (observation: CodeModeToolSurfaceObservation) => void;
 
 export const codeModeToolSurfaceObserver = {
-  set(options: object, observer: CodeModeToolSurfaceObserver): void {
+  set(
+    options: object,
+    observer: CodeModeToolSurfaceObserver,
+    collector?: CodeModeToolSurfaceObserver,
+  ): void {
     Reflect.set(options, CODE_MODE_TOOL_SURFACE_OBSERVER, observer);
+    if (collector) {
+      Reflect.set(options, CODE_MODE_TOOL_SURFACE_COLLECTOR, collector);
+    }
   },
   get(options: object | undefined): CodeModeToolSurfaceObserver | undefined {
     if (!options) {
@@ -26,6 +34,13 @@ export const codeModeToolSurfaceObserver = {
     }
     const observer: unknown = Reflect.get(options, CODE_MODE_TOOL_SURFACE_OBSERVER);
     return typeof observer === "function" ? (observation) => observer(observation) : undefined;
+  },
+  getCollector(options: object | undefined): CodeModeToolSurfaceObserver | undefined {
+    if (!options) {
+      return undefined;
+    }
+    const collector: unknown = Reflect.get(options, CODE_MODE_TOOL_SURFACE_COLLECTOR);
+    return typeof collector === "function" ? (observation) => collector(observation) : undefined;
   },
 };
 
