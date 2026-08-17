@@ -445,7 +445,7 @@ async function runSideQuestionWithManagedWebSearchCall(
       {
         name: "web_search",
         description: "Search the web",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, additionalProperties: true },
         execute: toolExecuteMock,
       },
     ]);
@@ -516,13 +516,13 @@ describe("runCodexAppServerSideQuestion", () => {
       {
         name: "wiki_status",
         description: "Check wiki status",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, additionalProperties: true },
         execute: toolExecuteMock,
       },
       {
         name: "web_search",
         description: "Search the web",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, additionalProperties: true },
         execute: toolExecuteMock,
       },
     ]);
@@ -1160,7 +1160,7 @@ describe("runCodexAppServerSideQuestion", () => {
             {
               name: "web_search",
               description: "Search the web",
-              parameters: { type: "object", properties: {} },
+              parameters: { type: "object", properties: {}, additionalProperties: true },
               execute: toolExecuteMock,
             },
           ],
@@ -1236,7 +1236,7 @@ describe("runCodexAppServerSideQuestion", () => {
               {
                 name: "web_search",
                 description: "Search the web",
-                parameters: { type: "object", properties: {} },
+                parameters: { type: "object", properties: {}, additionalProperties: true },
                 execute: toolExecuteMock,
               },
             ]
@@ -2404,7 +2404,7 @@ describe("runCodexAppServerSideQuestion", () => {
       {
         name: "computer",
         description: "Control a desktop",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, additionalProperties: true },
         execute: computerExecute,
       },
     ]);

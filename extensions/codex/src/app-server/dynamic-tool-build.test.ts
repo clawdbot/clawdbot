@@ -137,7 +137,7 @@ function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
     parameters: {
       type: "object",
       properties: {},
-      additionalProperties: false,
+      additionalProperties: true,
     },
     execute: vi.fn(async () => ({
       content: [{ type: "text" as const, text: `${name} done` }],

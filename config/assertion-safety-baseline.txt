@@ -191,7 +191,7 @@ extensions/codex/src/app-server/config-utils.ts	1
 extensions/codex/src/app-server/context-engine-projection.ts	4
 extensions/codex/src/app-server/dynamic-tool-build.ts	1
 extensions/codex/src/app-server/dynamic-tool-response-state.ts	1
-extensions/codex/src/app-server/dynamic-tools.ts	7
+extensions/codex/src/app-server/dynamic-tools.ts	6
 extensions/codex/src/app-server/effective-mcp-catalog.ts	1
 extensions/codex/src/app-server/elicitation-bridge.ts	1
 extensions/codex/src/app-server/event-projector-reasoning.ts	1
