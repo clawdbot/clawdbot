@@ -28,9 +28,9 @@ import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
+  sidebarPanelActions,
   sidebarPanelDefinitions,
   sidebarPanelTemplates,
-  sidePanelHeaderActions,
 } from "./chat-pane-embedded-panels.ts";
 import {
   createChatPaneSessionActionCallbacks,
@@ -658,11 +658,16 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       onCompanionDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
       onCompanionVisibilityChange: this.setSessionObserverVisibility,
+      connected: state.connected,
+      pendingQuestion: companionThread.pendingQuestion,
+      onClearCompanion: () => void this.clearSessionCompanion(),
       discussion,
+      discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
     });
     const availableSlots = availableSidebarSlots(panelDefinitions);
     const panelTemplates = sidebarPanelTemplates(panelDefinitions);
+    const panelActions = sidebarPanelActions(panelDefinitions);
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
       availableSlots,
@@ -678,12 +683,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       }),
       layout: sidebarLayout,
       panelDefinitions,
-      panelActions: sidePanelHeaderActions({
-        connected: state.connected,
-        pendingQuestion: companionThread.pendingQuestion,
-        discussionOpenUrl: discussion?.openUrl ?? null,
-        onClearCompanion: () => void this.clearSessionCompanion(),
-      }),
+      panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
       primary,

@@ -102,6 +102,29 @@ async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
 }
 
 suite.define(() => {
+  it("preserves the production header-action shapes for Side chat and Discussion", async () => {
+    const context = await suite.newBrowserContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
+    const choices = await openColdSidebar(page);
+
+    await choices.filter({ hasText: "Side chat" }).click();
+    const contentActions = page.locator(".side-panel__action-group--content");
+    const companionMenu = contentActions.locator("wa-dropdown.chat-session-rail__menu");
+    await companionMenu.waitFor();
+    expect(await companionMenu.count()).toBe(1);
+    expect(await contentActions.locator(":scope > button").count()).toBe(0);
+
+    await page.locator(".side-panel-type-menu__trigger").click();
+    await page.locator(".side-panel-type-menu__item").filter({ hasText: "Discussion" }).click();
+    const discussionAction = contentActions.locator(
+      ':scope > a.rail-header__action[target="_blank"]',
+    );
+    await discussionAction.waitFor();
+    expect(await discussionAction.getAttribute("href")).toBe("https://discussion.example/session");
+
+    await suite.closeBrowserContext(context);
+  });
+
   it("accounts for every offered slot when opened cold", async () => {
     const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
     const probePage = await probeContext.newPage();

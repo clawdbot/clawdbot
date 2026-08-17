@@ -31,7 +31,11 @@ type SidebarPanelDefinitionParams = {
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
   onCompanionVisibilityChange: (visible: boolean) => void;
+  connected: boolean;
+  pendingQuestion: string | null;
+  onClearCompanion: () => void;
   discussion: SessionDiscussionPanelConfig | null;
+  discussionOpenUrl: string | null;
   discussionSourceGeneration: number;
 };
 
@@ -46,66 +50,13 @@ type SidebarPanelTextKey =
   | "tasks"
   | "terminal";
 
-/**
- * Header actions contributed by the panels that own content actions. Panels
- * have no header of their own in the tabbed model, so anything acting on the
- * active panel — the destructive side-chat clear, the discussion's external
- * link — is only reachable through the shared side-panel header.
- */
-export function sidePanelHeaderActions(params: {
-  connected: boolean;
-  pendingQuestion: string | null;
-  discussionOpenUrl: string | null;
-  onClearCompanion: () => void;
-}): SidebarPanelTemplates {
-  return {
-    ...(params.discussionOpenUrl
-      ? {
-          discussion: html`<a
-            class="rail-header__action"
-            href=${params.discussionOpenUrl}
-            target="_blank"
-            rel="noopener"
-            aria-label=${t("chat.sessionDiscussion.openExternal")}
-            title=${t("chat.sessionDiscussion.openExternal")}
-            >${icons.externalLink}</a
-          >`,
-        }
-      : {}),
-    companion: html`<wa-dropdown
-      class="chat-session-rail__menu"
-      placement="bottom-end"
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        if (event.detail.item.value === "clear") {
-          params.onClearCompanion();
-        }
-      }}
-    >
-      <button
-        slot="trigger"
-        class="rail-header__action"
-        type="button"
-        aria-label=${t("chat.rail.moreActions")}
-        aria-haspopup="menu"
-        aria-expanded="false"
-      >
-        ${icons.moreHorizontal}
-      </button>
-      <wa-dropdown-item
-        value="clear"
-        ?disabled=${!params.connected || params.pendingQuestion !== null}
-      >
-        ${t("chat.rail.clear")}
-      </wa-dropdown-item>
-    </wa-dropdown>`,
-  };
-}
-
 /** One ordered declaration for every chat side-panel slot. */
 export function sidebarPanelDefinitions(
   params?: SidebarPanelDefinitionParams,
 ): SidebarPanelDefinition[] {
   const state = params?.state;
+  // Metadata-only definitions have no pane context, so they describe types without offering tabs.
+  const hasPaneContext = params !== undefined;
   const terminalAvailable = state?.terminalAvailable === true;
   const browserAvailable = state?.browserPanelAvailable === true;
   const desktopAvailable = params?.desktopAvailable === true;
@@ -114,14 +65,15 @@ export function sidebarPanelDefinitions(
     textKey: SidebarPanelTextKey,
     icon: TemplateResult,
     content: TemplateResult | typeof nothing | null,
-    options?: { available?: boolean; shortcut?: string },
+    options?: { available?: boolean; headerAction?: TemplateResult; shortcut?: string },
   ): SidebarPanelDefinition => ({
     slot,
     label: t(`chat.sidePanel.${textKey}`),
     icon,
-    available: options?.available ?? params !== undefined,
+    available: options?.available ?? hasPaneContext,
     content,
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
+    ...(options?.headerAction ? { headerAction: options.headerAction } : {}),
     ...(options?.shortcut ? { shortcut: options.shortcut } : {}),
   });
   const terminal =
@@ -193,11 +145,59 @@ export function sidebarPanelDefinitions(
     definePanel("workspace", "files", icons.fileText, params?.workspace ?? null, {
       shortcut: "⇧⌘B",
     }),
-    definePanel("companion", "companion", icons.bot, companion),
+    definePanel(
+      "companion",
+      "companion",
+      icons.bot,
+      companion,
+      params
+        ? {
+            headerAction: html`<wa-dropdown
+              class="chat-session-rail__menu"
+              placement="bottom-end"
+              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                if (event.detail.item.value === "clear") {
+                  params.onClearCompanion();
+                }
+              }}
+            >
+              <button
+                slot="trigger"
+                class="rail-header__action"
+                type="button"
+                aria-label=${t("chat.rail.moreActions")}
+                aria-haspopup="menu"
+                aria-expanded="false"
+              >
+                ${icons.moreHorizontal}
+              </button>
+              <wa-dropdown-item
+                value="clear"
+                ?disabled=${!params.connected || params.pendingQuestion !== null}
+              >
+                ${t("chat.rail.clear")}
+              </wa-dropdown-item>
+            </wa-dropdown>`,
+          }
+        : undefined,
+    ),
     definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null),
     definePanel("desktop", "desktop", icons.monitor, desktop, { available: desktopAvailable }),
     definePanel("discussion", "discussion", icons.messageSquare, discussion, {
       available: discussion !== null,
+      ...(params?.discussionOpenUrl
+        ? {
+            headerAction: html`<a
+              class="rail-header__action"
+              href=${params.discussionOpenUrl}
+              target="_blank"
+              rel="noopener"
+              aria-label=${t("chat.sessionDiscussion.openExternal")}
+              title=${t("chat.sessionDiscussion.openExternal")}
+              >${icons.externalLink}</a
+            >`,
+          }
+        : {}),
     }),
     definePanel("chat", "boardChat", icons.messageSquare, params?.chat ?? null, {
       available: params?.hasBoard === true,
@@ -221,4 +221,14 @@ export function sidebarPanelTemplates(
     }
   }
   return templates;
+}
+
+export function sidebarPanelActions(definitions: SidebarPanelDefinition[]): SidebarPanelTemplates {
+  const actions: SidebarPanelTemplates = {};
+  for (const definition of definitions) {
+    if (definition.headerAction) {
+      actions[definition.slot] = definition.headerAction;
+    }
+  }
+  return actions;
 }
