@@ -1,6 +1,7 @@
 // Telegram plugin module implements approval handler behavior.
 import type {
   ChannelApprovalCapabilityHandlerContext,
+  ChannelApprovalKind,
   PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
@@ -76,7 +77,7 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
 
 function buildPendingPayload(params: {
   request: ApprovalRequest;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   nowMs: number;
   view: PendingApprovalView;
 }): TelegramPendingDelivery {

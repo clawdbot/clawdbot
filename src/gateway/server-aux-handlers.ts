@@ -6,6 +6,7 @@ import {
   type AgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
 } from "../infra/agent-run-registry.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import {
@@ -204,7 +205,7 @@ export function createGatewayAuxHandlers(params: {
   );
   const pluginApprovalIosPushDelivery = createPluginApprovalIosPushDelivery({ log: params.log });
   type PendingAuthorityPublication = {
-    kind: "exec" | "plugin";
+    kind: ChannelApprovalKind;
     record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"];
     liveRecord: Parameters<typeof publishAppliedApprovalResolution>[0]["liveRecord"];
   };
@@ -291,7 +292,7 @@ export function createGatewayAuxHandlers(params: {
   };
   const cancelRunBoundApprovals = (runId: string, context: GatewayRequestContext): number => {
     const publish = (
-      kind: "exec" | "plugin",
+      kind: ChannelApprovalKind,
       record: Parameters<typeof publishAppliedApprovalResolution>[0]["record"],
       liveRecord: Parameters<typeof publishAppliedApprovalResolution>[0]["liveRecord"],
     ) => {

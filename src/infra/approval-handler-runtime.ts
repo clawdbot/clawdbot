@@ -35,7 +35,6 @@ import type {
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
 import type { ExecApprovalChannelRuntime } from "./exec-approval-channel-runtime.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 
 export type {
   ApprovalActionView,
@@ -312,7 +311,7 @@ type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   clientDisplayName: string;
   cfg: OpenClawConfig;
   gatewayUrl?: string;
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
   channel?: string;
   channelLabel?: string;
   accountId?: string | null;

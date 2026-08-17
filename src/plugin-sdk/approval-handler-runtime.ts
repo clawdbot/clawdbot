@@ -45,6 +45,7 @@ export {
   type PluginApprovalResolvedView,
   type ResolvedApprovalView,
 } from "../infra/approval-handler-runtime.js";
+export type { ChannelApprovalKind } from "../infra/approval-handler-runtime-types.js";
 export { resolveApprovalOverGateway } from "./approval-gateway-runtime.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
