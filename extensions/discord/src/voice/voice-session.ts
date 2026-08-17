@@ -203,6 +203,16 @@ export class DiscordVoiceSessions {
     try {
       channelInfo = await this.params.client.fetchChannel(channelId);
     } catch (err) {
+      // A leave or replacement can invalidate the join while the REST lookup is pending;
+      // cancellation remains authoritative over a stale lookup failure.
+      if (authority && !authority.isCurrent()) {
+        return {
+          ok: false,
+          message: "Discord voice join was cancelled.",
+          guildId,
+          channelId,
+        };
+      }
       return {
         ok: false,
         message: `Failed to resolve Discord channel ${channelId}: ${formatErrorMessage(err)}`,

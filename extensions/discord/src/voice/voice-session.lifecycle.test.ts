@@ -615,6 +615,30 @@ defineDiscordVoiceTests(
       ]);
     });
 
+    it("keeps cancellation authoritative when channel lookup later rejects", async () => {
+      let rejectChannelLookup!: (reason: unknown) => void;
+      const client = createClient();
+      client.fetchChannel.mockImplementationOnce(
+        async () =>
+          await new Promise<never>((_, reject) => {
+            rejectChannelLookup = reject;
+          }),
+      );
+      const manager = createManager(undefined, client);
+
+      const join = manager.join({ guildId: "g1", channelId: "1001" });
+      await vi.waitFor(() => expect(client.fetchChannel).toHaveBeenCalledOnce());
+      await manager.leave({ guildId: "g1" });
+      rejectChannelLookup(missingAccessError);
+
+      await expect(join).resolves.toEqual({
+        ok: false,
+        message: "Discord voice join was cancelled.",
+        guildId: "g1",
+        channelId: "1001",
+      });
+    });
+
     it("removes voice listeners on leave", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
