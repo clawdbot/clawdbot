@@ -220,6 +220,7 @@
   border-right: 0;
   border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
   overflow-wrap: normal;
+  white-space: nowrap;
   word-break: normal;
 }
 
