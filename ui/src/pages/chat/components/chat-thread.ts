@@ -1,7 +1,10 @@
 // Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
-import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import {
+  handleMarkdownCodeBlockCopy,
+  updateMarkdownCodeBlockOverflow,
+} from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
@@ -145,6 +148,8 @@ function renderTranscriptShell(
         : null}
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
+      @pointerover=${updateMarkdownCodeBlockOverflow}
+      @scroll=${{ handleEvent: updateMarkdownCodeBlockOverflow, capture: true }}
       @click=${(event: MouseEvent) => {
         handleMarkdownCodeBlockCopy(event);
         const target = markdownFileLinkFromEvent(event);

@@ -2444,7 +2444,24 @@ openclaw-chat-session-rail {
   border-radius: 0;
   background: transparent;
   overflow-x: auto;
-  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent 100%);
+}
+
+.code-block-wrapper.has-scroll-right pre {
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+}
+
+.code-block-wrapper.has-scroll-left:not(.has-scroll-right) pre {
+  mask-image: linear-gradient(to right, transparent, #000 36px);
+}
+
+.code-block-wrapper.has-scroll-left.has-scroll-right pre {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 36px,
+    #000 calc(100% - 36px),
+    transparent
+  );
 }
 
 .code-block-wrapper :where(pre code.markdown-block-art) {
