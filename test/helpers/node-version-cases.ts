@@ -21,4 +21,5 @@ export const NODE_RELEASE_VERSION_CASES = [
   "24.15.0+local..1",
   "24.15.0+",
   "9007199254740992.0.0",
+  "10000000000000000.0.0",
 ] as const;
