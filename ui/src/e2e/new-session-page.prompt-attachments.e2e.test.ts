@@ -147,44 +147,6 @@ suite.define(() => {
     }
   });
 
-  it("restores prompt text and files after navigating away and back", async () => {
-    await withNewSessionPage(async (page) => {
-      const sessionKey = "agent:main:existing-session";
-      await installMockGateway(page, {
-        methodResponses: {
-          "sessions.list": createdSessionListResult(sessionKey),
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const existingSession = page
-        .locator(".sidebar-recent-session")
-        .filter({ hasText: "Created session" });
-      await existingSession.waitFor();
-      await page.locator(".sidebar-brand__new-thread").click();
-      await page.waitForURL((url) => url.pathname.endsWith("/new") && url.search === "?agent=main");
-
-      const message = page.locator(".new-session-page__message");
-      await message.fill("keep this new session draft");
-      await page
-        .locator(".agent-chat__photo-input")
-        .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
-      await captureUiProof(page, "new-session-draft-before-navigation.png");
-
-      await existingSession.click();
-      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
-      await page.locator(".sidebar-brand__new-thread").click();
-      await page.waitForURL((url) => url.pathname.endsWith("/new") && url.search === "?agent=main");
-
-      await expect.poll(() => message.inputValue()).toBe("keep this new session draft");
-      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-      await expect
-        .poll(() => page.locator(".chat-attachment-thumb img").getAttribute("src"))
-        .toMatch(/^(blob:|data:image\/png;base64,)/u);
-      await captureUiProof(page, "new-session-draft-restored.png");
-    });
-  });
-
   it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);

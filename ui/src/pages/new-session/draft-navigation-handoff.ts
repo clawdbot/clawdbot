@@ -46,7 +46,7 @@ export function restoreDraft(
     submission.restoreMessage(ownedMessage || draft?.message || "");
   }
   if (draft) {
-    submission.attachmentDraft.replace(draft.attachments);
+    submission.attachmentDraft.restore(draft.attachments);
   }
   activateDraft(submission, routeKey);
   return routeKey;
