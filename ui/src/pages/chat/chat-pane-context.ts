@@ -101,8 +101,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         agentId,
       ),
     );
-    for (const { key } of stateValue.deletedSessions) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key });
+    for (const { key, agentId } of stateValue.deletedSessions) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
     }
     state.sessionsResult = stateValue.result;
     state.sessionsResultAgentId = stateValue.agentId;

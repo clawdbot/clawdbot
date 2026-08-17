@@ -65,7 +65,12 @@ import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitInitialUserMessageHandoff } from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
-import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import {
+  applyChatCacheSnapshot,
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  resolveChatSnapshotKey,
+} from "./session-message-cache.ts";
 import { closeSlot, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
@@ -86,6 +91,32 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   private chatRouteReadyReported = false;
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
+
+  private hydrateStoredChatSnapshot(
+    state: NonNullable<ChatPaneLifecycle["state"]>,
+    sessionKey: string,
+  ): void {
+    const store = this.sessionSnapshotStore;
+    if (!store) {
+      return;
+    }
+    const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
+    void store.read(cacheKey).then((snapshot) => {
+      if (
+        !snapshot ||
+        this.state !== state ||
+        !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+        readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
+      ) {
+        return;
+      }
+      // The memory miss is the ordering fence: any network replacement or live
+      // append that landed while IndexedDB was pending remains authoritative.
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, snapshot);
+      applyChatCacheSnapshot(state, snapshot);
+      state.requestUpdate?.();
+    });
+  }
 
   public discardStagedAttachments(): void {
     // Explicit pane disposal is terminal. The DOM disconnect that follows must
@@ -448,10 +479,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
           sessionKey: initialSessionKey,
         });
         if (snapshot) {
-          pageState.chatMessages = snapshot.messages;
-          pageState.chatHistoryPagination = snapshot.pagination;
-          pageState.currentSessionId = snapshot.sessionId;
-          pageState.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
+          applyChatCacheSnapshot(pageState, snapshot);
+        } else {
+          this.hydrateStoredChatSnapshot(pageState, initialSessionKey);
         }
         if (admitInitialTurnHandoff(pageState, initialSessionKey)) {
           pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
