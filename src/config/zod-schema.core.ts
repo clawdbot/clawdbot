@@ -409,7 +409,10 @@ const ModelDefinitionSchema = z
         output: z.number().optional(),
         cacheRead: z.number().optional(),
         cacheWrite: z.number().optional(),
-        pricingUnavailable: z.boolean().optional(),
+        // pricingUnavailable stays catalog-owned runtime metadata and is
+        // deliberately not accepted here: user config expresses unknown
+        // pricing structurally by omitting cost rates, and defaulting
+        // derives the marker (see resolveModelCost).
         tieredPricing: z
           .array(
             z
