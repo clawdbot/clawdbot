@@ -37,7 +37,7 @@ export function createDeferredTurnMaintenanceAbortSignal(params?: {
   abort: (reason: Error) => void;
   dispose: () => void;
 } {
-  const processLike = (params?.processLike ?? process) as DeferredTurnMaintenanceProcessLike;
+  const processLike: DeferredTurnMaintenanceProcessLike = params?.processLike ?? process;
   const state = (processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY] ??= {
     controllers: new Set<AbortController>(),
     cleanupHandlers: new Map<DeferredTurnMaintenanceSignal, () => void>(),

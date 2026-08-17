@@ -20,12 +20,16 @@ export class DeferredContextEngineMaintenanceBlockedError extends Error {
 export function resolveDeferredContextEngineMaintenanceBlockedMessage(
   error: unknown,
 ): string | undefined {
-  if (!error || typeof error !== "object") {
+  if (typeof error !== "object" || error === null) {
     return undefined;
   }
-  const candidate = error as Record<PropertyKey, unknown>;
-  return candidate[DEFERRED_MAINTENANCE_BLOCKED_ERROR] === true &&
-    typeof candidate.userMessage === "string"
-    ? candidate.userMessage
+  if (
+    !(DEFERRED_MAINTENANCE_BLOCKED_ERROR in error) ||
+    error[DEFERRED_MAINTENANCE_BLOCKED_ERROR] !== true
+  ) {
+    return undefined;
+  }
+  return "userMessage" in error && typeof error.userMessage === "string"
+    ? error.userMessage
     : undefined;
 }

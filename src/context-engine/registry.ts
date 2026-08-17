@@ -1,5 +1,4 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import type {
@@ -11,12 +10,11 @@ import type {
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
-  clearPersistedContextEngineQuarantineForProcess,
-  listPersistedContextEngineQuarantines,
-  recordPersistedContextEngineQuarantine,
-} from "./quarantine-health.js";
+  clearContextEngineRuntimeQuarantine,
+  getContextEngineQuarantine,
+  recordContextEngineQuarantine,
+} from "./quarantine-state.js";
 import type {
   BootstrapResult,
   ContextEngine,
@@ -26,6 +24,7 @@ import type {
 } from "./types.js";
 
 export type { ContextEngineFactory } from "../plugins/registry-contribution-types.js";
+export { listContextEngineQuarantines } from "./quarantine-state.js";
 
 /**
  * Runtime context passed to context engine factories during resolution.
@@ -207,29 +206,7 @@ function wrapResolvedContextEngine(
 // Registry (module-level singleton)
 // ---------------------------------------------------------------------------
 
-const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 const CORE_CONTEXT_ENGINE_OWNER = "core";
-
-type ContextEngineRuntimeQuarantine = {
-  engineId: string;
-  owner?: string;
-  operation: string;
-  reason: string;
-  failedAt: Date;
-};
-
-type ContextEngineRegistryState = {
-  quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
-};
-
-// Keep context-engine registrations process-global so duplicated dist chunks
-// still share one registry map at runtime.
-const contextEngineRegistryState = resolveGlobalSingleton<ContextEngineRegistryState>(
-  CONTEXT_ENGINE_REGISTRY_STATE,
-  () => ({
-    quarantinedEngines: new Map(),
-  }),
-);
 
 const getContextEngines = () => requireActivePluginRegistry().contextEngines;
 
@@ -241,60 +218,6 @@ function requireContextEngineOwner(owner: string): string {
     );
   }
   return normalizedOwner;
-}
-
-function recordContextEngineQuarantine(params: {
-  engineId: string;
-  owner?: string;
-  operation: string;
-  error: unknown;
-  defaultEngineId: string;
-}): ContextEngineRuntimeQuarantine {
-  const existing = contextEngineRegistryState.quarantinedEngines.get(params.engineId);
-  if (existing) {
-    // First failure wins so logs and diagnostics point at the root cause, not follow-on fallback use.
-    return existing;
-  }
-
-  const quarantine: ContextEngineRuntimeQuarantine = {
-    engineId: params.engineId,
-    operation: params.operation,
-    reason: params.error instanceof Error ? params.error.message : String(params.error),
-    failedAt: new Date(),
-    ...(params.owner ? { owner: params.owner } : {}),
-  };
-  contextEngineRegistryState.quarantinedEngines.set(params.engineId, quarantine);
-  try {
-    recordPersistedContextEngineQuarantine(quarantine);
-  } catch {
-    // Quarantine behavior must not depend on the best-effort health mirror.
-  }
-  const ownerSuffix = params.owner ? ` owner=${sanitizeForLog(params.owner)}` : "";
-  console.error(
-    `[context-engine] Context engine "${sanitizeForLog(params.engineId)}"${ownerSuffix} failed during ${sanitizeForLog(params.operation)}: ` +
-      `${sanitizeForLog(quarantine.reason)}; quarantining it for this process and falling back to default engine "${params.defaultEngineId}".`,
-  );
-  return quarantine;
-}
-
-function getContextEngineQuarantine(engineId: string): ContextEngineRuntimeQuarantine | undefined {
-  return contextEngineRegistryState.quarantinedEngines.get(engineId);
-}
-
-export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[] {
-  const quarantines = Array.from(
-    contextEngineRegistryState.quarantinedEngines.values(),
-    ({ failedAt, ...quarantine }) => ({ ...quarantine, failedAt: new Date(failedAt) }),
-  );
-  const seenEngineIds = new Set(quarantines.map((entry) => entry.engineId));
-  return quarantines.concat(
-    listPersistedContextEngineQuarantines().filter(({ engineId }) => !seenEngineIds.has(engineId)),
-  );
-}
-
-function clearContextEngineRuntimeQuarantine(engineId: string): void {
-  contextEngineRegistryState.quarantinedEngines.delete(engineId);
-  clearPersistedContextEngineQuarantineForProcess(engineId, process.pid);
 }
 
 /**
