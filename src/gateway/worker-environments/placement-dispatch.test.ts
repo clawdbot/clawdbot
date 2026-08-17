@@ -677,7 +677,7 @@ describe("worker placement dispatch", () => {
     harness.markEnvironmentProtocolFeatures(["worker-execution-context-v1"]);
 
     await expect(harness.service.dispatch(REQUEST)).rejects.toThrow(
-      "current execution-context contract",
+      "current worker launch contract",
     );
 
     expect(harness.placements.current()).toMatchObject({ state: "failed" });

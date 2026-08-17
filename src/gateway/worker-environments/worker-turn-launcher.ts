@@ -18,7 +18,7 @@ import { prepareGitHubPublicationAvailability } from "../github-publication-avai
 import {
   STALE_WORKER_BUILD_REASON,
   StaleWorkerBuildError,
-  supportsWorkerExecutionContextLaunch,
+  supportsCurrentWorkerLaunch,
 } from "./admission.js";
 import { placementTurnOwner, sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
@@ -116,9 +116,9 @@ async function executeWorkerTurn(params: {
   ) {
     throw new Error("Active worker placement does not match its attached environment");
   }
-  if (!supportsWorkerExecutionContextLaunch(bootstrapReceipt)) {
+  if (!supportsCurrentWorkerLaunch(bootstrapReceipt)) {
     throw new Error(
-      "Active worker bundle lacks the current execution-context capability; reprovision the worker before launch",
+      "Active worker bundle lacks the current launch capability; reprovision the worker before launch",
     );
   }
   await recoverWorkspaceBeforeTurn(params);

@@ -888,7 +888,7 @@ describe("worker turn launcher local placement", () => {
     },
   );
 
-  it("rejects a reused worker bundle without execution context before launch", async () => {
+  it("rejects a reused worker bundle without the current launch contract", async () => {
     seedActivePlacement();
     const oldEnvironment = attachedEnvironment();
     oldEnvironment.bootstrapReceipt = {

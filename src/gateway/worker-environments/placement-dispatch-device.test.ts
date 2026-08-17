@@ -3,7 +3,10 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
@@ -15,6 +18,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { VERSION } from "../../version.js";
 import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST, type PlacementStore } from "./placement-dispatch-test-fixtures.js";
@@ -135,7 +139,10 @@ describe("device worker placement dispatch", () => {
       bootstrapReceipt: {
         bundleHash: "a".repeat(64),
         openclawVersion: "2026.8.12",
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+        ],
         installKind: "bundle",
       },
       sharedHost: true,
@@ -696,5 +703,43 @@ describe("device worker placement dispatch", () => {
     expect(harness.placements.current()).toMatchObject({ state: "active" });
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
+  it("never hands a descriptor to a same-version local worker with the older strict parser", async () => {
+    const harness = createHarness(placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => ({ available: true }));
+    vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
+      ...harness.ready,
+      providerId: "device",
+      profileId: "device:device-1",
+      profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
+      leaseId: "device-lease-1",
+      sshEndpoint: null,
+      bootstrapReceipt: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: VERSION,
+        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        installKind: "local",
+      },
+      sharedHost: true,
+      tunnelStatus: "stopped",
+    });
+    const request = {
+      ...REQUEST,
+      profileId: "device:device-1",
+      deviceId: "device-1",
+      inheritedProfile: {
+        providerId: "device",
+        profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
+      },
+    };
+
+    await expect(harness.service.dispatch(request)).rejects.toThrow(
+      "current worker launch contract",
+    );
+
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledWith(harness.ready.environmentId);
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
   });
 });

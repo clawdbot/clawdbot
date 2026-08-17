@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
 import {
@@ -45,7 +48,10 @@ const BUNDLE_HASH = "a".repeat(64);
 const RECEIPT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.8.1",
-  protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+  protocolFeatures: [
+    WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+    WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+  ],
 };
 const INSTALLATION: WorkerInstallationArtifact = {
   install: "bundle",
