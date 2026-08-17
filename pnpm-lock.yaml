@@ -2193,12 +2193,20 @@ importers:
       ws:
         specifier: 8.21.1
         version: 8.21.1
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/gateway-protocol:
     dependencies:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/llm-core:
     dependencies:

@@ -304,7 +304,7 @@ extensions/cua-computer/src/driver-artifact-verification.ts	2
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	15
 extensions/cua-computer/src/driver-result.ts	10
-extensions/cua-computer/src/mcp-driver-client.ts	6
+extensions/cua-computer/src/mcp-driver-client.ts	5
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/embedding-adapter.ts	1
 extensions/deepinfra/provider-models.ts	3
@@ -1593,8 +1593,6 @@ packages/gateway-client/src/gateway-origin-scope.ts	1
 packages/gateway-client/src/pending-request.ts	2
 packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
-packages/gateway-client/src/session-projection-run-event.ts	1
-packages/gateway-client/src/session-projection.ts	1
 packages/gateway-client/src/websocket-transport.ts	3
 packages/gateway-protocol/src/clawhub-trust-error-details.ts	1
 packages/gateway-protocol/src/client-info.ts	4
@@ -2390,7 +2388,7 @@ src/claws/doctor.ts	2
 src/claws/export.ts	8
 src/claws/lifecycle-delete-support.ts	7
 src/claws/mcp.ts	4
-src/claws/openclaw-profile.ts	3
+src/claws/openclaw-profile.ts	2
 src/claws/package-update.ts	1
 src/claws/packages.ts	1
 src/claws/project-build.ts	4
