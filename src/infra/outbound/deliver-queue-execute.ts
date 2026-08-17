@@ -361,6 +361,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
               log.warn(
                 `failed to remove queued delivery ${queueId} after proven-not-sent partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
               );
+              // SAFETY: empty array is always a valid string[]
               return [] as string[];
             });
             if (spoolPaths.length > 0) {
