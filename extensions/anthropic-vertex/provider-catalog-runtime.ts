@@ -10,7 +10,7 @@ const PROVIDER_ID = "anthropic-vertex";
 
 /** Merge an implicit Anthropic Vertex provider with explicit user config. */
 export function mergeImplicitAnthropicVertexProvider(params: {
-  existing?: ModelProviderConfig;
+  existing: ModelProviderConfig | undefined;
   implicit: ModelProviderConfig;
 }): ModelProviderConfig {
   return mergeImplicitProviderCatalog(params);
