@@ -42,7 +42,7 @@ describe("config: tools.alsoAllow", () => {
   it("allows profile + alsoAllow", () => {
     const res = validateConfigObject({
       tools: {
-        profile: "coding",
+        profile: "productivity",
         alsoAllow: ["lobster"],
       },
     });

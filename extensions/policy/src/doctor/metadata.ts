@@ -250,7 +250,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsProfileUnapproved],
     emptyList: "disabled",
-    allowedValues: ["minimal", "coding", "messaging", "full"],
+    allowedValues: ["minimal", "productivity", "coding", "messaging", "full"],
     scopeSelectors: ["agentIds"],
   },
   {

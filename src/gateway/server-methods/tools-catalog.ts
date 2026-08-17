@@ -34,7 +34,7 @@ type ToolCatalogEntry = {
   optional?: boolean;
   risk?: "low" | "medium" | "high";
   tags?: string[];
-  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
+  defaultProfiles: Array<"minimal" | "productivity" | "coding" | "messaging" | "full">;
 };
 
 type ToolCatalogGroup = {

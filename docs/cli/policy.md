@@ -513,7 +513,7 @@ only reviewed exec approval posture for selected agents.
 
 | Policy field                    | Observed state                                              | Use when                                                                                                 |
 | ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `tools.profiles.allow`          | `tools.profile` and `agents.entries.*.tools.profile`        | Allow only tool profile ids such as `minimal`, `messaging`, or `coding`.                                 |
+| `tools.profiles.allow`          | `tools.profile` and `agents.entries.*.tools.profile`        | Allow only tool profile ids such as `minimal`, `productivity`, `messaging`, or `coding`.                 |
 | `tools.fs.requireWorkspaceOnly` | `tools.fs.workspaceOnly` and per-agent `tools.fs` overrides | Set to `true` to require workspace-only filesystem tool posture.                                         |
 | `tools.exec.allowSecurity`      | `tools.exec.security` and per-agent exec security           | Allow only exec security modes such as `deny` or `allowlist`.                                            |
 | `tools.exec.requireAsk`         | `tools.exec.ask` and per-agent exec ask mode                | Require approval posture such as `always`.                                                               |

@@ -72,6 +72,7 @@ type CatalogGroup = {
 };
 type CatalogPayload = {
   agentId?: string;
+  profiles?: Array<{ id?: string; label?: string }>;
   groups: CatalogGroup[];
 };
 
@@ -149,6 +150,13 @@ describe("tools.catalog handler", () => {
     await invoke();
     const payload = expectCatalogPayload(respond);
     expect(payload.agentId).toBe("main");
+    expect(payload.profiles).toEqual([
+      { id: "minimal", label: "Minimal" },
+      { id: "productivity", label: "Productivity" },
+      { id: "coding", label: "Coding" },
+      { id: "messaging", label: "Messaging" },
+      { id: "full", label: "Full" },
+    ]);
     const groups = payload.groups ?? [];
     expect(groups.some((group) => group.source === "plugin")).toBe(false);
     const media = groups.find((group) => group.id === "media");

@@ -101,6 +101,30 @@ describe("tool-catalog", () => {
     expect(requirePolicyAllow("minimal")).toEqual(["session_status"]);
   });
 
+  it("provides a productivity profile without runtime, messaging, delegation, or plugin tools", () => {
+    expect(requirePolicyAllow("productivity")).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "web_search",
+      "web_fetch",
+      "x_search",
+      "memory_search",
+      "memory_get",
+      "sessions_list",
+      "sessions_history",
+      "session_status",
+      "cron",
+      "get_goal",
+      "create_goal",
+      "update_goal",
+      "update_plan",
+      "ask_user",
+      "image",
+    ]);
+  });
+
   it("full profile uses wildcard to grant all tools (#76507)", () => {
     const policy = requireCoreToolProfilePolicy("full");
     expect(policy.allow).toEqual(["*"]);

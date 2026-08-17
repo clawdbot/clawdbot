@@ -51,6 +51,7 @@ openclaw doctor
 Common causes:
 
 - `tools.profile: "minimal"` allows only `session_status`.
+- `tools.profile: "productivity"` allows file, web/X research, memory, session inspection, planning, interactive questions, cron, and image-understanding tools without command execution, general-purpose messaging, delegation, or plugin/MCP tools. Cron jobs may still use their configured chat or webhook delivery.
 - `tools.profile: "messaging"` is narrow, for chat-only agents.
 - `tools.profile: "coding"` is the default for new local configs (repo, file,
   shell, and runtime work).

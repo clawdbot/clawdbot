@@ -1024,6 +1024,7 @@ export const ToolsInvokeParamsSchema = closedObject({
 export const ToolCatalogProfileSchema = closedObject({
   id: Type.Union([
     Type.Literal("minimal"),
+    Type.Literal("productivity"),
     Type.Literal("coding"),
     Type.Literal("messaging"),
     Type.Literal("full"),
@@ -1046,6 +1047,7 @@ export const ToolCatalogEntrySchema = closedObject({
   defaultProfiles: Type.Array(
     Type.Union([
       Type.Literal("minimal"),
+      Type.Literal("productivity"),
       Type.Literal("coding"),
       Type.Literal("messaging"),
       Type.Literal("full"),
