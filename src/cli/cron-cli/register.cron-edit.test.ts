@@ -1124,4 +1124,48 @@ describe("cron edit command", () => {
 
     errorSpy.mockRestore();
   });
+
+  it("rejects orphaned --precheck-timeout-ms without existing gate or --precheck-command", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return { id: "job-1", name: "n" };
+      }
+      return { ok: true };
+    });
+    await expectCronEditRejection(
+      ["--precheck-timeout-ms", "5000"],
+      "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
+    );
+  });
+
+  it("merges --precheck-timeout-ms onto an existing precheck gate", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          name: "n",
+          precheck: { kind: "exec", command: "test -f /tmp/flag", timeoutMs: 1000 },
+        };
+      }
+      return { ok: true };
+    });
+    await createCronProgram().parseAsync(
+      ["edit", "job-1", "--precheck-timeout-ms", "5000", "--json"],
+      { from: "user" },
+    );
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        precheck: { kind: "exec", command: "test -f /tmp/flag", timeoutMs: 5000 },
+      },
+    });
+  });
+
+  it("rejects invalid --precheck-timeout-ms on edit", async () => {
+    await expectCronEditRejection(
+      ["--precheck-command", "true", "--precheck-timeout-ms", "0"],
+      "Invalid --precheck-timeout-ms (must be a positive integer).",
+    );
+  });
+
 });

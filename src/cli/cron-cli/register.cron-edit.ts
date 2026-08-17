@@ -291,23 +291,82 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           const precheckCommand = normalizeOptionalString(opts.precheckCommand);
-          if (opts.clearPrecheck && precheckCommand) {
-            throw new Error("Use --clear-precheck or --precheck-command, not both");
+          const precheckTimeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
+          const precheckCwd = normalizeOptionalString(opts.precheckCwd);
+          const hasPrecheckAncillary =
+            precheckTimeoutRaw !== undefined || precheckCwd !== undefined;
+          if (opts.clearPrecheck && (precheckCommand || hasPrecheckAncillary)) {
+            throw new Error(
+              "Use --clear-precheck alone, or --precheck-command/--precheck-timeout-ms/--precheck-cwd without --clear-precheck",
+            );
           }
           if (opts.clearPrecheck) {
             patch.precheck = null;
-          } else if (precheckCommand) {
-            const timeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
-            const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
+          } else if (precheckCommand || hasPrecheckAncillary) {
+            const parsePositiveTimeoutMs = (raw: string): number => {
+              const timeoutMs = Number(raw);
+              if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+                throw new Error("Invalid --precheck-timeout-ms (must be a positive integer).");
+              }
+              return Math.floor(timeoutMs);
+            };
+            // Ancillary-only edits must merge onto an existing gate (ClawSweeper P2).
+            const existingPrecheck =
+              !precheckCommand && hasPrecheckAncillary
+                ? (await readExistingCronJob()).precheck
+                : undefined;
+            if (!precheckCommand && hasPrecheckAncillary) {
+              const existingCommand =
+                existingPrecheck &&
+                typeof existingPrecheck === "object" &&
+                "command" in existingPrecheck
+                  ? normalizeOptionalString(
+                      (existingPrecheck as { command?: unknown }).command as string,
+                    )
+                  : undefined;
+              if (!existingCommand) {
+                throw new Error(
+                  "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
+                );
+              }
+            }
+            const baseCommand =
+              precheckCommand ??
+              (existingPrecheck &&
+              typeof existingPrecheck === "object" &&
+              "command" in existingPrecheck
+                ? normalizeOptionalString(
+                    (existingPrecheck as { command?: unknown }).command as string,
+                  )
+                : undefined);
+            if (!baseCommand) {
+              throw new Error(
+                "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
+              );
+            }
+            const existingTimeoutMs =
+              existingPrecheck &&
+              typeof existingPrecheck === "object" &&
+              "timeoutMs" in existingPrecheck &&
+              typeof (existingPrecheck as { timeoutMs?: unknown }).timeoutMs === "number"
+                ? (existingPrecheck as { timeoutMs: number }).timeoutMs
+                : undefined;
+            const existingCwd =
+              existingPrecheck &&
+              typeof existingPrecheck === "object" &&
+              "cwd" in existingPrecheck
+                ? normalizeOptionalString((existingPrecheck as { cwd?: unknown }).cwd as string)
+                : undefined;
+            const timeoutMs =
+              precheckTimeoutRaw !== undefined
+                ? parsePositiveTimeoutMs(precheckTimeoutRaw)
+                : existingTimeoutMs;
+            const cwd = precheckCwd !== undefined ? precheckCwd : existingCwd;
             patch.precheck = {
               kind: "exec",
-              command: precheckCommand,
-              ...(timeoutMs !== undefined && Number.isFinite(timeoutMs)
-                ? { timeoutMs: Math.floor(timeoutMs) }
-                : {}),
-              ...(normalizeOptionalString(opts.precheckCwd)
-                ? { cwd: normalizeOptionalString(opts.precheckCwd) }
-                : {}),
+              command: baseCommand,
+              ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+              ...(cwd ? { cwd } : {}),
             };
           }
           if (opts.clearTrigger) {
