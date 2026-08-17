@@ -12,21 +12,18 @@ import {
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isPathInside } from "../../infra/path-guards.js";
 import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveUserPath } from "../../utils.js";
 import { prepareWorktreeSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import {
@@ -51,6 +48,7 @@ import {
   resolveSessionCreateInitialTurn,
   shouldAttachPendingMessageSeq,
 } from "./session-create-initial-turn.js";
+import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -289,68 +287,28 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
-    let sessionRoot: string | undefined;
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
-    if (sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true)) {
-      const targetAgentId = normalizeAgentId(
+    const preparedRoot = prepareSessionCreateFilesystemRoot({
+      cfg,
+      enforceSandboxContainment: Boolean(
+        sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true),
+      ),
+      requestedExecNode,
+      requestedProjectId,
+      sessionCwd,
+      sessionKey,
+      targetAgentId: normalizeAgentId(
         sessionAgentId ??
           parseAgentSessionKey(sessionKey ?? "")?.agentId ??
           explicitlyRequestedAgent.agentId,
-      );
-      const targetSessionKey = sessionKey ?? `agent:${targetAgentId}:dashboard:pending`;
-      const targetRuntime = resolveSandboxRuntimeStatus({
-        cfg,
-        agentId: targetAgentId,
-        sessionKey: targetSessionKey,
-      });
-      // Sandboxed dashboard sessions mount only their configured agent workspace.
-      if (
-        targetRuntime.sandboxed &&
-        !isPathInside(
-          resolveUserPath(resolveAgentWorkspaceDir(cfg, targetAgentId)),
-          resolveUserPath(sessionCwd),
-        )
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            requestedProjectId
-              ? "sessions.create project is outside the sandboxed agent workspace"
-              : "sessions.create cwd is outside the sandboxed agent workspace",
-          ),
-        );
-        return;
-      }
+      ),
+    });
+    if (!preparedRoot.ok) {
+      respond(false, undefined, preparedRoot.error);
+      return;
     }
-    if (!requestedExecNode) {
-      const targetAgentId = normalizeAgentId(
-        sessionAgentId ??
-          parseAgentSessionKey(sessionKey ?? "")?.agentId ??
-          explicitlyRequestedAgent.agentId,
-      );
-      const rootCandidate = sessionCwd ?? resolveAgentWorkspaceDir(cfg, targetAgentId);
-      try {
-        if (!sessionCwd) {
-          fs.mkdirSync(rootCandidate, { recursive: true });
-        }
-        sessionRoot = fs.realpathSync(rootCandidate);
-        if (sessionCwd) {
-          sessionCwd = sessionRoot;
-        }
-      } catch (error) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `sessions.create cwd is unavailable: ${formatErrorMessage(error)}`,
-          ),
-        );
-        return;
-      }
-    }
+    sessionCwd = preparedRoot.value.sessionCwd;
+    const sessionRoot = preparedRoot.value.sessionRoot;
     if (p.worktree === true) {
       // Workspace-contained cwd and registry-authorized projects stay at operator.write;
       // arbitrary host paths still require operator.admin before reaching this block.

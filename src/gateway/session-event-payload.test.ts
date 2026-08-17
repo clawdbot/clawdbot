@@ -39,6 +39,7 @@ it("projects the prepared permission boundary", () => {
         kind: "direct",
         permissionMode: "workspace",
         sessionRoot: "/workspace/project",
+        updatedAt: 3,
       },
     }),
   ).toMatchObject({ permissionMode: "workspace", sessionRoot: "/workspace/project" });

@@ -14,4 +14,5 @@ export function resolveSessionPermissionExecMode(
     case "full":
       return "full";
   }
+  return policy.mode satisfies never;
 }

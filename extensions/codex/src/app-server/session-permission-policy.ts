@@ -54,6 +54,7 @@ function tupleForMode(
         approvalsReviewer: "user",
       };
   }
+  return mode satisfies never;
 }
 
 function requirementsAllowTuple(
@@ -87,6 +88,7 @@ function tightenTupleForExecMode(
     case undefined:
       return tuple;
   }
+  return execMode satisfies never;
 }
 
 function clampSessionPermissionTuple(params: {

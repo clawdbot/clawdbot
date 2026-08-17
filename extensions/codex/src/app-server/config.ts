@@ -34,10 +34,7 @@ export {
   resolveCodexAppServerUserHomeDir,
   resolveCodexModelBackedReviewerPolicyContext,
 } from "./config-reviewer.js";
-export {
-  isCodexAppServerApprovalPolicyAllowedByRequirements,
-  readCodexRequirementsToml,
-} from "./config-requirements.js";
+export { readCodexRequirementsToml } from "./config-requirements.js";
 export {
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,

@@ -7,11 +7,8 @@ import type {
 } from "@openclaw/acp-core/types";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionRow, SessionRunStatus } from "../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type {
-  SessionPermissionMode,
-  SessionRunStatus,
-} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -309,7 +306,8 @@ export type RestartRecoveryRun = {
 };
 
 type SessionEntryCore = SessionRestartRecoveryState &
-  SessionEntryProvenance & {
+  SessionEntryProvenance &
+  Pick<SessionRow, "permissionMode" | "sessionRoot"> & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: SessionVisibility;
     /**
@@ -370,10 +368,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     spawnedWorkspaceDir?: string;
     /** Task working directory inherited by spawned sessions and reused on later turns. */
     spawnedCwd?: string;
-    /** Session-scoped reviewer and tool-access posture. */
-    permissionMode?: SessionPermissionMode;
-    /** Canonical absolute boundary interpreted by permissionMode. */
-    sessionRoot?: string;
     /** Content-free fingerprints for checkout changes that predate this session generation. */
     sessionDiffBaseline?: SessionDiffBaseline;
     /**
