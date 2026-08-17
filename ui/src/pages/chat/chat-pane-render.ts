@@ -299,6 +299,18 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       onFork: (entryId) => this.forkFromMessage(entryId),
       onReset: () => void clearChatHistory(state),
     });
+    const composerControls = catalogKey
+      ? undefined
+      : renderChatPaneComposerControls({
+          state,
+          selectedSession,
+          agentDefaultModel,
+          modelAccess: mutationAccess.model,
+          effortAccess: mutationAccess.effort,
+          permissionAccess: mutationAccess.permission,
+          canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
+          onModelSetup: () => this.context.navigate("model-setup"),
+        });
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.presentationId,
@@ -434,18 +446,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
       },
-      composerControls: catalogKey
-        ? nothing
-        : renderChatPaneComposerControls({
-            state,
-            selectedSession,
-            agentDefaultModel,
-            modelAccess: mutationAccess.model,
-            effortAccess: mutationAccess.effort,
-            permissionAccess: mutationAccess.permission,
-            canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
-            onModelSetup: () => this.context.navigate("model-setup"),
-          }),
+      composerControls: composerControls?.composerControls ?? nothing,
+      permissionPicker: composerControls?.permissionPicker,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(

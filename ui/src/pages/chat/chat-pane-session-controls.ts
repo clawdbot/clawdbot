@@ -13,7 +13,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
-import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
+import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
@@ -55,7 +55,10 @@ export function renderChatPaneComposerControls(params: {
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
   onModelSetup: () => void;
-}) {
+}): {
+  composerControls: NonNullable<ChatProps["composerControls"]>;
+  permissionPicker: ChatPermissionPickerProps;
+} {
   const {
     state,
     selectedSession,
@@ -69,80 +72,82 @@ export function renderChatPaneComposerControls(params: {
   const hasModelSnapshot =
     state.chatModelCatalog.length > 0 || (!state.chatModelsLoading && !state.chatModelCatalogError);
   const refreshModelCatalog = () => refreshChatModelCatalogOnDemand(state);
-  return html`
-    <div class="chat-composer-model-control">
-      ${renderChatModelControls({
-        activeRunId: state.chatRunId,
-        agentDefaultModel,
-        connected: state.connected,
-        gatewayAvailable: Boolean(state.client),
-        loading: state.chatLoading,
-        modelCatalog: state.chatModelCatalog,
-        modelCatalogState: {
-          hasSnapshot: hasModelSnapshot,
-          onRetry: () => void refreshModelCatalog(),
-          status: state.chatModelCatalogError
-            ? "error"
-            : state.chatModelsLoading
-              ? hasModelSnapshot
-                ? "refreshing"
-                : "loading"
-              : "ready",
-        },
-        modelOverrides: state.sessions.state.modelOverrides,
-        modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
-        modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
-        modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-        modelsLoading: state.chatModelsLoading,
-        modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
-        effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
-        sending: state.chatSending,
-        sessionKey: state.sessionKey,
-        sessionsResult: state.sessionsResult,
-        stream: state.chatStream,
-        onRequestUpdate: () => state.requestUpdate?.(),
-        onModelSetup,
-        onFastModeSelect: (next, targetSessionKey) =>
-          effortAccess.allowed
-            ? switchChatFastMode(state, next, targetSessionKey)
-            : Promise.resolve(false),
-        onModelPickerOpen: refreshModelCatalog,
-        onModelSelect: (next, targetSessionKey) =>
-          modelAccess.allowed
-            ? switchChatModel(state, next, targetSessionKey)
-            : Promise.resolve(false),
-        onThinkingSelect: (next, targetSessionKey) =>
-          effortAccess.allowed
-            ? switchChatThinkingLevel(state, next, targetSessionKey)
-            : Promise.resolve(false),
-      })}
-      ${renderChatPermissionPicker({
-        canSelectFull,
-        disabled: !permissionAccess.allowed,
-        disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
-        mode: selectedSession?.permissionMode,
-        sessionRoot: selectedSession?.sessionRoot,
-        onSelect: async (permissionMode) => {
-          if (!permissionAccess.allowed) {
-            return;
-          }
-          try {
-            state.chatError = null;
-            await state.sessions.patch(
-              state.sessionKey,
-              { permissionMode },
-              scopedAgentParamsForSession(state, state.sessionKey),
-            );
-          } catch (error) {
-            state.chatError = t("chat.permissionControls.updateFailed", {
-              error: String(error),
-            });
-            state.requestUpdate?.();
-          }
-        },
-      })}
-    </div>
-  `;
+  return {
+    composerControls: html`
+      <div class="chat-composer-model-control">
+        ${renderChatModelControls({
+          activeRunId: state.chatRunId,
+          agentDefaultModel,
+          connected: state.connected,
+          gatewayAvailable: Boolean(state.client),
+          loading: state.chatLoading,
+          modelCatalog: state.chatModelCatalog,
+          modelCatalogState: {
+            hasSnapshot: hasModelSnapshot,
+            onRetry: () => void refreshModelCatalog(),
+            status: state.chatModelCatalogError
+              ? "error"
+              : state.chatModelsLoading
+                ? hasModelSnapshot
+                  ? "refreshing"
+                  : "loading"
+                : "ready",
+          },
+          modelOverrides: state.sessions.state.modelOverrides,
+          modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
+          modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
+          modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
+          modelsLoading: state.chatModelsLoading,
+          modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
+          effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
+          sending: state.chatSending,
+          sessionKey: state.sessionKey,
+          sessionsResult: state.sessionsResult,
+          stream: state.chatStream,
+          onRequestUpdate: () => state.requestUpdate?.(),
+          onModelSetup,
+          onFastModeSelect: (next, targetSessionKey) =>
+            effortAccess.allowed
+              ? switchChatFastMode(state, next, targetSessionKey)
+              : Promise.resolve(false),
+          onModelPickerOpen: refreshModelCatalog,
+          onModelSelect: (next, targetSessionKey) =>
+            modelAccess.allowed
+              ? switchChatModel(state, next, targetSessionKey)
+              : Promise.resolve(false),
+          onThinkingSelect: (next, targetSessionKey) =>
+            effortAccess.allowed
+              ? switchChatThinkingLevel(state, next, targetSessionKey)
+              : Promise.resolve(false),
+        })}
+      </div>
+    `,
+    permissionPicker: {
+      canSelectFull,
+      disabled: !permissionAccess.allowed,
+      disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
+      mode: selectedSession?.permissionMode,
+      sessionRoot: selectedSession?.sessionRoot,
+      onSelect: async (permissionMode) => {
+        if (!permissionAccess.allowed) {
+          return;
+        }
+        try {
+          state.chatError = null;
+          await state.sessions.patch(
+            state.sessionKey,
+            { permissionMode },
+            scopedAgentParamsForSession(state, state.sessionKey),
+          );
+        } catch (error) {
+          state.chatError = t("chat.permissionControls.updateFailed", {
+            error: String(error),
+          });
+          state.requestUpdate?.();
+        }
+      },
+    },
+  };
 }
 
 export function createChatPaneSessionActionCallbacks(params: {

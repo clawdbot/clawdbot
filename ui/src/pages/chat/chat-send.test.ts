@@ -458,19 +458,17 @@ describe("refreshChat", () => {
     expect(host.chatModelCatalog).toEqual([cachedModel]);
     expect(asChatPageHost(host).chatModelsLoading).toBe(true);
     const container = document.createElement("div");
-    render(
-      renderChatPaneComposerControls({
-        state: asChatPageHost(host),
-        selectedSession: undefined,
-        agentDefaultModel: undefined,
-        modelAccess: { allowed: true, requiredScope: "operator.write" },
-        effortAccess: { allowed: true, requiredScope: "operator.write" },
-        permissionAccess: { allowed: true, requiredScope: "operator.write" },
-        canSelectFull: true,
-        onModelSetup: vi.fn(),
-      }),
-      container,
-    );
+    const controls = renderChatPaneComposerControls({
+      state: asChatPageHost(host),
+      selectedSession: undefined,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      onModelSetup: vi.fn(),
+    });
+    render(controls.composerControls, container);
     expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
     expect(container.textContent).toContain("Refreshing models…");
     expect(container.textContent).not.toContain("Loading models…");

@@ -131,6 +131,7 @@ suite.define(() => {
                 label: "Main",
                 model: "gpt-5.5",
                 modelProvider: "openai",
+                permissionMode: "workspace",
                 status: "done",
                 totalTokens: 46_000,
                 totalTokensFresh: true,
@@ -151,6 +152,7 @@ suite.define(() => {
       const chatMain = page.locator(".chat-workbench__main");
       const model = composer.locator('[data-chat-model-select="true"]');
       const effort = composer.locator('[data-chat-thinking-select="true"]');
+      const permission = composer.locator('[data-chat-permission-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
       const contextUsage = composer.locator(".context-ring");
       const textarea = composer.locator("textarea");
@@ -166,6 +168,7 @@ suite.define(() => {
       const microphonePickerShell = page.locator(".chat-talk-input-picker");
 
       await expect.poll(() => model.isVisible()).toBe(true);
+      await expect.poll(() => permission.isVisible()).toBe(true);
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
@@ -198,6 +201,25 @@ suite.define(() => {
         .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))
         .toBe(true);
       await expect
+        .poll(() =>
+          permission.evaluate((node) => node.closest(".agent-chat__composer-meta") != null),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          permission.evaluate((node) => node.closest(".chat-composer-model-control") == null),
+        )
+        .toBe(true);
+      await expect
+        .poll(async () => {
+          const [permissionBox, modelBox] = await Promise.all([
+            permission.boundingBox(),
+            model.boundingBox(),
+          ]);
+          return Boolean(permissionBox && modelBox && permissionBox.x < modelBox.x);
+        })
+        .toBe(true);
+      await expect
         .poll(() => settings.evaluate((node) => node.closest(".chat-pane__header") != null))
         .toBe(true);
       await expect.poll(() => composer.locator(".agent-chat__composer-header").count()).toBe(0);
@@ -217,7 +239,7 @@ suite.define(() => {
         .toBe("Session context usage: 46k of 200k (23%)");
       await expect
         .poll(() =>
-          contextUsage.evaluate((node) => node.closest(".agent-chat__composer-meta") != null),
+          contextUsage.evaluate((node) => node.closest(".agent-chat__composer-context") != null),
         )
         .toBe(true);
       await contextUsage.click();
