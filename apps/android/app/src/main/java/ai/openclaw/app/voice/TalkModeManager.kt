@@ -454,8 +454,9 @@ class TalkModeManager internal constructor(
 
   // True only while communication-profile capture reports platform AEC actually
   // enabled; drives the full-duplex forwarding policy in
-  // shouldSuppressRealtimeCaptureForPlayback. Cleared whenever the capture job
-  // that set it ends, so a later session/profile never inherits a stale true.
+  // shouldSuppressRealtimeCaptureForPlayback. Cleared at the start of every
+  // capture generation and again when the job that set it ends, so it only ever
+  // describes the capture session currently running - never the previous one.
   @Volatile private var realtimeAecEnabled = false
 
   private val finishingPttLock = Any()
@@ -1417,6 +1418,12 @@ class TalkModeManager internal constructor(
     realtimeCaptureJob?.cancel()
     realtimeAppendJob?.cancel()
     val inputGeneration = audioInputGeneration.incrementAndGet()
+    // The superseded job's finally is generation-guarded, so it will decline to
+    // clear this - by then the generation is already this one's. Clearing here,
+    // at the boundary itself, is what keeps the flag from describing the session
+    // that just ended: until the new capture reports its own AEC state, no
+    // session has reported one, and the safe answer is "not enabled".
+    realtimeAecEnabled = false
     onAppliedAudioInputChanged(null)
     val audioFrames =
       Channel<ByteArray>(

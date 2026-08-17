@@ -1556,6 +1556,45 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun replacingCaptureClearsTheAecFlagBeforeTheNewSessionReportsItsOwn() =
+    runTest {
+      // realtimeAecEnabled is the gate that lets the microphone stay live during
+      // playback, so it must never describe a capture session that has ended. The
+      // superseded job's finally is generation-guarded and therefore declines to
+      // clear it -- by the time it runs, the generation already belongs to the new
+      // job. Without a reset at the generation boundary the flag stays true from the
+      // previous session until the new capture finishes opening and reports its own
+      // state, and suppression is lifted for that whole window even if the new
+      // session has no AEC at all.
+      val manager =
+        createManager(
+          scope = this,
+          realtimePlaybackOwnerScope = backgroundScope,
+          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
+        )
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      setPrivateField(pause, "sessionId", "relay-1")
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "realtimeWireAudioEncoding", "pcm16")
+      setPrivateField(manager, "realtimeWireAudioSampleRateHz", 24_000)
+      // The session being replaced had platform AEC enabled.
+      setPrivateField(manager, "realtimeAecEnabled", true)
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+
+      // The new capture job has not reported yet (its dispatcher has not run), so the
+      // only correct answer is the safe one.
+      assertFalse(readPrivateField(manager, "realtimeAecEnabled") as Boolean)
+      // And the gate that reads it suppresses again, rather than forwarding on the
+      // strength of the previous session's hardware.
+      setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 1_000)
+      assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+      manager.stopAllCapture()
+    }
+
+  @Test
   fun absentAudioContractParsesToTheLegacyPcm16TwentyFourKhzWireFormat() {
     // talk.session.create's `audio` field is optional (TalkSessionCreateResultSchema);
     // older/simpler Gateway peers omit it, and iOS's RealtimeTalkRelaySession still
