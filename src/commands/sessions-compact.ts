@@ -28,7 +28,6 @@ type SessionsCompactResult = {
   compacted?: boolean;
   reason?: string;
   kept?: number;
-  archived?: string;
   result?: {
     tokensBefore?: number;
     tokensAfter?: number;
@@ -125,7 +124,4 @@ export async function sessionsCompactCommand(
   }
 
   runtime.log(describeCompaction(result ?? {}, opts.key));
-  if (result?.archived) {
-    runtime.log(`Archived transcript: ${result.archived}`);
-  }
 }

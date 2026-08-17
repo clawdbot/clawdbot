@@ -496,9 +496,16 @@ export function createTelegramThreadBindingManager(params: {
         accountId,
         adapter: sessionBindingAdapter,
       });
-      const existingManager = getThreadBindingsState().managersByAccountId.get(accountId);
+      const state = getThreadBindingsState();
+      const existingManager = state.managersByAccountId.get(accountId);
       if (existingManager === manager) {
-        getThreadBindingsState().managersByAccountId.delete(accountId);
+        state.managersByAccountId.delete(accountId);
+        // Live bindings belong to this manager generation; persisted rows reload on restart.
+        for (const binding of listBindingsForAccount(accountId)) {
+          state.bindingsByAccountConversation.delete(
+            resolveBindingKey({ accountId, conversationId: binding.conversationId }),
+          );
+        }
       }
     },
   };
@@ -781,15 +788,6 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
       lastActivityAt: now,
     }),
   });
-}
-
-export function resetTelegramThreadBindingsForTests(): Promise<void> {
-  for (const manager of getThreadBindingsState().managersByAccountId.values()) {
-    manager.stop();
-  }
-  getThreadBindingsState().managersByAccountId.clear();
-  getThreadBindingsState().bindingsByAccountConversation.clear();
-  return Promise.resolve();
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

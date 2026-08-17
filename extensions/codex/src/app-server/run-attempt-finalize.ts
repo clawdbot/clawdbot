@@ -481,6 +481,9 @@ export async function finalizeCodexAttempt(
   );
   const finalizedResult: EmbeddedRunAttemptResult = {
     ...result,
+    ...(toolState.yieldAcknowledgment
+      ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
+      : {}),
     terminal: attemptTerminal.normalize({
       timedOut: effectiveTimedOut,
       aborted: finalAborted,
@@ -494,6 +497,7 @@ export async function finalizeCodexAttempt(
     ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
+    ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),

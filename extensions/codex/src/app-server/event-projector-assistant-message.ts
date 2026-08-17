@@ -103,7 +103,9 @@ export function createAssistantCommentaryMessage(
   timestamp: number,
 ): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
-  return {
+  const message: AssistantMessage & {
+    openclawStreamFallback: { replacementText: string; source: "segment"; itemId: string };
+  } = {
     role: "assistant",
     content: [{ type: "text", text }],
     api: attribution.api ?? "openai-chatgpt-responses",
@@ -119,7 +121,8 @@ export function createAssistantCommentaryMessage(
       source: "segment",
       itemId,
     },
-  } as unknown as AssistantMessage;
+  };
+  return message;
 }
 
 export function createAssistantMirrorMessage(

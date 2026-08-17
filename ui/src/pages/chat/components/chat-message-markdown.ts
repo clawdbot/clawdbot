@@ -7,8 +7,10 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
-import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../../../lib/chat/message-normalizer.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
@@ -232,12 +234,11 @@ export function renderUserMessageMarkdown(
 
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
+  const visibleMarkdown = expanded ? markdown : preview;
   return html`
     <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
       <div class="chat-message-disclosure__content">
-        ${expanded
-          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
-          : html`<div class="chat-message-disclosure__preview">${preview}</div>`}
+        ${renderMarkdownText(visibleMarkdown, opts.isStreaming, markdownRenderOptions)}
       </div>
       <button
         class="chat-message-disclosure__toggle"

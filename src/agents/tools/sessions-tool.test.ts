@@ -8,7 +8,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
@@ -25,10 +24,6 @@ import {
 type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
 
 describe("sessions tool", () => {
-  it("uses the core owner gate", () => {
-    expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("sessions");
-  });
-
   it("carries the persisted fixed-store owner for a bare patch key", async () => {
     const callGateway = vi.fn().mockResolvedValue({});
     const tool = createSessionsTool({
@@ -154,6 +149,7 @@ describe("sessions tool", () => {
             "patch",
             "reset",
             "delete",
+            "assign_owner",
             "group_list",
             "group_set",
             "group_rename",
@@ -162,6 +158,12 @@ describe("sessions tool", () => {
         },
         deleteTranscript: { type: "boolean" },
         label: { type: "string", description: expect.stringContaining("Empty string clears") },
+        icon: {
+          type: "string",
+          description: expect.stringContaining(
+            "named icon: braces, book, monitor, bot, kanban, coins",
+          ),
+        },
         statusNote: { type: "string", maxLength: 120 },
         attention: {
           type: "string",
@@ -189,6 +191,51 @@ describe("sessions tool", () => {
     expect(tool.parameters).not.toHaveProperty("properties.agentId");
     expect(tool.parameters).not.toHaveProperty("properties.fork");
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("assigns a visible session owner and returns the projected identity", async () => {
+    const callGateway = vi.fn(async (request: { method: string }) => {
+      if (request.method !== "sessions.assignOwner") {
+        throw new Error(`unexpected method: ${request.method}`);
+      }
+      return {
+        ok: true,
+        key: "agent:main:main",
+        owner: {
+          actor: { type: "human", id: "profile-colin", label: "Colin" },
+          assignedBy: { type: "agent", id: "main" },
+          assignedAt: 10,
+        },
+      };
+    });
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    const result = await tool.execute("assign-colin", {
+      action: "assign_owner",
+      ownerType: "human",
+      ownerId: "profile-colin",
+    });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.assignOwner",
+      params: {
+        key: "agent:main:main",
+        owner: { type: "human", id: "profile-colin" },
+      },
+      agentToolCaller: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    expect(result).toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining('"label": "Colin"'),
+        },
+      ],
+    });
   });
 
   it("archives a visible target before write-scoped session deletion", async () => {
@@ -946,7 +993,7 @@ describe("sessions tool", () => {
     });
   });
 
-  it("patches and clears title, status, attention, and archive state", async () => {
+  it("patches and clears title, icon, status, attention, and archive state", async () => {
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
@@ -958,12 +1005,13 @@ describe("sessions tool", () => {
     await tool.execute("declare", {
       action: "patch",
       label: "Waiting on staging",
+      icon: "🦞",
       statusNote: "Blocked: need the staging password",
       attention: "key",
       ttlMinutes: 45,
       archived: true,
     });
-    await tool.execute("clear", { action: "patch", label: "", attention: "clear" });
+    await tool.execute("clear", { action: "patch", label: "", icon: "", attention: "clear" });
 
     expect(callGateway.mock.calls).toEqual([
       [
@@ -972,6 +1020,7 @@ describe("sessions tool", () => {
           params: {
             key: "agent:main:main",
             label: "Waiting on staging",
+            icon: "🦞",
             statusNote: "Blocked: need the staging password",
             attention: "key",
             ttlMinutes: 45,
@@ -983,7 +1032,7 @@ describe("sessions tool", () => {
       [
         {
           method: "sessions.patch",
-          params: { key: "agent:main:main", label: null, attention: null },
+          params: { key: "agent:main:main", label: null, icon: null, attention: null },
         },
       ],
     ]);
@@ -1003,10 +1052,10 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("denies patch targets outside the caller session tree", async () => {
+  it("denies patch targets outside a non-main caller's session tree", async () => {
     const callGateway = vi.fn(async () => ({ sessions: [] }));
     const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
+      agentSessionKey: "agent:main:dashboard:caller",
       callGateway: callGateway as never,
     });
 
@@ -1014,6 +1063,7 @@ describe("sessions tool", () => {
       tool.execute("patch-other", {
         action: "patch",
         sessionKey: "agent:main:other",
+        expectedSessionId: "other-session",
         archived: true,
       }),
     ).rejects.toThrow("Session status visibility is restricted");

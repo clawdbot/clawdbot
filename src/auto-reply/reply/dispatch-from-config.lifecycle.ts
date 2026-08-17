@@ -212,7 +212,6 @@ export function createDispatchReplyOperationCoordinator(params: {
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
       onLifecycleInterrupt,
-      onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
     });
     if (
       admission.status === "skipped" &&
@@ -261,7 +260,6 @@ export function createDispatchReplyOperationCoordinator(params: {
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
           onLifecycleInterrupt,
-          onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
         });
       }
     }
@@ -382,10 +380,12 @@ export function createDispatchReplyOperationCoordinator(params: {
   };
   const getReplyOptions = (): DispatchFromConfigParams["replyOptions"] => {
     const abortSignal = getDispatchAbortSignal();
-    const onAgentRunStart = (runId: string) => {
+    const onAgentRunStart: NonNullable<
+      NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunStart"]
+    > = (runId, executionIdentityToken) => {
       agentRunTerminalOutcome = "completed";
       params.messageAuditTerminal?.observeRunId(runId);
-      params.replyOptions?.onAgentRunStart?.(runId);
+      params.replyOptions?.onAgentRunStart?.(runId, executionIdentityToken);
     };
     return {
       ...params.replyOptions,

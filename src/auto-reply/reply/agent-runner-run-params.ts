@@ -93,6 +93,8 @@ export function buildEmbeddedRunBaseParams(params: {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     cwd: params.run.cwd,
+    permissionMode: params.run.permissionMode,
+    sessionRoot: params.run.sessionRoot,
     agentDir: params.run.agentDir,
     config,
     toolOverrides: params.run.toolOverrides,

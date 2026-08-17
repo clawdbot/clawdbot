@@ -114,9 +114,8 @@ describe("Control UI mount fallback", () => {
     },
   );
 
-  it("shows the static troubleshooting panel when the app element is never registered", async () => {
+  it("shows the static troubleshooting panel when the app never renders", async () => {
     const frameWindow = createIsolatedWindow();
-    expect(frameWindow.customElements.get("openclaw-app")).toBeUndefined();
     installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
     await waitForWindowTimeout(frameWindow, 10);
 
@@ -147,20 +146,25 @@ describe("Control UI mount fallback", () => {
     expect(fallback.hidden).toBe(false);
   });
 
-  it("keeps the fallback hidden when the app element registers before the timeout", async () => {
+  it("keeps the fallback visible until the app completes its first render", async () => {
     const frameWindow = createIsolatedWindow();
-    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(25));
+    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
     if (!frameWindow.customElements.get("openclaw-app")) {
       frameWindow.customElements.define("openclaw-app", class extends frameWindow.HTMLElement {});
     }
     await frameWindow.customElements.whenDefined("openclaw-app");
-    await waitForWindowTimeout(frameWindow, 35);
+    await waitForWindowTimeout(frameWindow, 10);
 
     const fallback = requireElementById(
       frameWindow,
       "openclaw-mount-fallback",
       frameWindow.HTMLElement,
     );
+    expect(fallback.hidden).toBe(false);
+    expect([...frameWindow.document.body.classList]).toEqual(["openclaw-mount-fallback-active"]);
+
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-rendered"));
+
     expect(fallback.hidden).toBe(true);
     expect([...frameWindow.document.body.classList]).toEqual([]);
   });

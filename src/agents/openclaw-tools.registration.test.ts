@@ -4,8 +4,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { withEnv } from "../test-utils/env.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "./cron-creator-authority-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   collectPresentOpenClawTools,
@@ -164,6 +169,25 @@ describe("openclaw-tools update_plan gating", () => {
     ).toBe(false);
   });
 
+  it("injects reachable Control UI session links into all session lookup tools", () => {
+    const tools = createTestOpenClawTools({
+      config: {
+        gateway: {
+          publicOrigin: "http://127.0.0.1:18789",
+          controlUi: { basePath: " /control/// " },
+        },
+      } as OpenClawConfig,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+    const guidance =
+      "When pointing the user at a session, cite its Control UI URL: main session -> `http://127.0.0.1:18789/control/chat/<agentId>`; any other display session key -> `http://127.0.0.1:18789/control/chat/<agentId>/~key/` + key minus `agent:<agentId>:`, with `:` replaced by `/`.";
+
+    for (const name of ["sessions_list", "sessions_history", "sessions_search"]) {
+      expect(expectToolNamed(tools, name).description).toContain(guidance);
+    }
+  });
+
   it("keeps message tool in embedded message-tool-only completions", () => {
     setEmbeddedMode(true);
     const tools = createTestOpenClawTools({
@@ -202,13 +226,21 @@ describe("openclaw-tools update_plan gating", () => {
     expect(embedded).not.toContain("openclaw");
   });
 
-  it("registers transcripts by default with an explicit global opt-out", () => {
-    const defaultTools = createFastToolNames({
-      config: {} as OpenClawConfig,
-    });
-    const disabledTools = createFastToolNames({
-      config: { transcripts: { enabled: false } } as OpenClawConfig,
-    });
+  it("registers transcripts for an active local operator with an explicit global opt-out", () => {
+    const capability = createCronCreatorAuthorityCapability("run-local", { kind: "local" })!;
+    const { defaultTools, disabledTools } = runWithCronCreatorAuthorityCapability(
+      capability,
+      () => ({
+        defaultTools: createFastToolNames({
+          config: {} as OpenClawConfig,
+          runId: "run-local",
+        }),
+        disabledTools: createFastToolNames({
+          config: { transcripts: { enabled: false } } as OpenClawConfig,
+          runId: "run-local",
+        }),
+      }),
+    );
 
     expect(defaultTools).toContain("transcripts");
     expect(disabledTools).not.toContain("transcripts");
@@ -279,6 +311,29 @@ describe("openclaw-tools update_plan gating", () => {
     expect(defaultTools).not.toContain("sessions_send");
     expect(gatewayBoundTools).toContain("sessions_spawn");
     expect(gatewayBoundTools).not.toContain("sessions_send");
+  });
+
+  it("advertises sessions_spawn from agents_list only when spawn is available", () => {
+    setEmbeddedMode(true);
+    const createTools = (allowGatewaySubagentBinding: boolean) =>
+      applyToolAvailabilityDescriptions(
+        createTestOpenClawTools({
+          allowGatewaySubagentBinding,
+          config: {} as OpenClawConfig,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+      );
+    const withoutSpawn = createTools(false);
+    const withSpawn = createTools(true);
+
+    expect(toolNames(withoutSpawn)).not.toContain("sessions_spawn");
+    expect(expectToolNamed(withoutSpawn, "agents_list").description).not.toContain(
+      "sessions_spawn",
+    );
+    expect(toolNames(withSpawn)).toContain("sessions_spawn");
+    expect(expectToolNamed(withSpawn, "agents_list").description).toContain("sessions_spawn");
   });
 
   it("registers update_plan when explicitly enabled", () => {
@@ -446,6 +501,32 @@ describe("Swarm registration", () => {
         },
       }),
     ).not.toContain("agents_wait");
+  });
+
+  it("advertises sessions_spawn from agents_wait only when spawn is available", () => {
+    setEmbeddedMode(true);
+    try {
+      const createTools = (allowGatewaySubagentBinding: boolean) =>
+        createTestOpenClawTools({
+          agentSessionKey: "agent:main:main",
+          allowGatewaySubagentBinding,
+          config: { tools: { swarm: true } } as OpenClawConfig,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        });
+      const withoutSpawn = applyToolAvailabilityDescriptions(createTools(false));
+      const withSpawn = applyToolAvailabilityDescriptions(createTools(true));
+
+      expect(toolNames(withoutSpawn)).not.toContain("sessions_spawn");
+      expect(expectToolNamed(withoutSpawn, "agents_wait").description).not.toContain(
+        "sessions_spawn",
+      );
+      expect(toolNames(withSpawn)).toContain("sessions_spawn");
+      expect(expectToolNamed(withSpawn, "agents_wait").description).toContain("sessions_spawn");
+    } finally {
+      setEmbeddedMode(false);
+    }
   });
 
   it("injects structured_output only for schema-backed collector runs", () => {

@@ -2,6 +2,13 @@
   "id": "policy",
   "name": "Policy",
   "description": "Adds policy-backed doctor checks for workspace conformance.",
+  "cliCommands": [
+    {
+      "name": "policy",
+      "description": "Check policy requirements and emit audit evidence",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": true,
     "onCommands": ["doctor", "policy"]

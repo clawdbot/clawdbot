@@ -31,7 +31,11 @@ const candidates = [
   { host: "gateway.tailnet.example", port: 443, tls: true },
 ];
 
-function createConnection() {
+function createConnection(
+  cloudflareAccessByCandidate?: Parameters<
+    typeof createNodeHostGatewayCandidateConnection
+  >[0]["cloudflareAccessByCandidate"],
+) {
   const callbacks = {
     onEvent: vi.fn(),
     onHelloOk: vi.fn(),
@@ -45,6 +49,7 @@ function createConnection() {
     connection: createNodeHostGatewayCandidateConnection({
       candidates,
       clientOptions: {},
+      cloudflareAccessByCandidate,
       ...callbacks,
     }),
   };
@@ -175,5 +180,23 @@ describe("gateway candidate connection", () => {
     await Promise.resolve();
 
     expect(mocks.clients).toHaveLength(1);
+  });
+
+  it("never carries origin-bound Access credentials to another candidate host", async () => {
+    const credentials = { clientId: "cf-pinned-id", clientSecret: "cf-pinned-secret" };
+    createConnection(new Map([[candidates[0]!, credentials]]));
+
+    expect(mocks.options[0]?.cloudflareAccess).toEqual(credentials);
+    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      connectRequestSent: false,
+      transientPreHelloCleanClose: false,
+    });
+    await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
+
+    expect(mocks.options[1]?.url).toBe("wss://gateway.tailnet.example:443");
+    expect(mocks.options[1]?.cloudflareAccess).toBeUndefined();
   });
 });

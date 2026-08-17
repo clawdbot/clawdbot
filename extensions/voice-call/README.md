@@ -38,7 +38,7 @@ Put under `plugins.entries.voice-call.config`:
   provider: "twilio", // or "telnyx" | "plivo" | "mock"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
-  sessionScope: "per-phone", // or "per-call"
+  sessionScope: "per-phone", // or "per-call" | "main"
 
   twilio: {
     accountSid: "ACxxxxxxxx",
@@ -104,7 +104,7 @@ Notes:
 - Runtime accepts canonical config only. If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `openclaw doctor --fix` to rewrite them.
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
 - `responseModel` is optional. When unset, voice responses use the runtime default model.
-- `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh.
+- `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh. Use `main` to share the configured agent's main session, honoring core `session.mainKey` and global scope.
 - `realtime.consultThinkingLevel` is optional. When set, it overrides the thinking level used by the model behind realtime `openclaw_agent_consult` calls.
 - `realtime.consultFastMode` is optional. When set, it toggles fast mode for realtime `openclaw_agent_consult` calls.
 

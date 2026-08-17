@@ -24,6 +24,10 @@ async function makeLauncherVersionFixture(
     path.resolve(process.cwd(), "openclaw.mjs"),
     path.join(fixtureRoot, "openclaw.mjs"),
   );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-version.mjs"),
+    path.join(fixtureRoot, "node-version.mjs"),
+  );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   await fs.writeFile(
     path.join(fixtureRoot, "package.json"),

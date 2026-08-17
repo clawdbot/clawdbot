@@ -1,10 +1,11 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
-import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
+  type ChatItem,
   type ChatStreamSegment,
+  type MessageGroup,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normalizer.ts";
@@ -234,6 +235,7 @@ function sameChatItemsStructuralInput(
     previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
+    previous.guardianNotices === next.guardianNotices &&
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
@@ -390,7 +392,7 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
 export type AssistantMessageExpansionState =
   | { status: "loading"; revision: number }
   | { status: "error"; revision: number }
-  | { status: "loaded"; expanded: boolean; markdown: string; revision: number };
+  | { status: "loaded"; markdown: string; revision: number };
 
 export function getExpandedAssistantMessages(
   sessionKey: string,

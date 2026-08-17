@@ -108,6 +108,7 @@ suite.define(() => {
           padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
           scrollbarWidth: style.scrollbarWidth,
           webkitScrollbarWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
+          webkitThumbInset: getComputedStyle(element, "::-webkit-scrollbar-thumb").borderLeftWidth,
         };
       });
 
@@ -117,7 +118,14 @@ suite.define(() => {
       );
       expect(tenLines.overflowY).toBe("hidden");
       expect(tenLines.scrollbarWidth).toBe("thin");
-      expect(Number.parseFloat(tenLines.webkitScrollbarWidth)).toBeLessThanOrEqual(6);
+      // The composer used to buy thinness by shrinking its hit target to 6px.
+      // The canonical profile keeps the full 12px drag target and paints a 6px
+      // thumb inside it (transparent border + content-box clip), so this asserts
+      // the visible thumb stays as thin as before without a cramped grab area.
+      const composerScrollbar = Number.parseFloat(tenLines.webkitScrollbarWidth);
+      const composerThumbInset = Number.parseFloat(tenLines.webkitThumbInset);
+      expect(composerScrollbar).toBe(12);
+      expect(composerScrollbar - composerThumbInset * 2).toBe(6);
       await captureUiProof(page, "new-session-composer-ten-lines.png");
 
       const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");

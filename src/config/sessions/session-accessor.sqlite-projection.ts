@@ -12,6 +12,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
 import {
+  prunePublishedSessionArchivesByRetention,
+  publishSessionStateArchives,
+} from "./session-accessor.sqlite-archive-store.js";
+import {
   materializeSessionStateDeletePlans,
   type MaterializedSessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
@@ -26,6 +30,7 @@ import type {
   SessionEntryReplacementUpdate,
   SessionEntryStatus,
 } from "./session-accessor.sqlite-contract.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
@@ -34,7 +39,6 @@ import {
   readSessionEntryCount,
   readSessionEntryStore,
   rehomeSessionWindows,
-  sqliteSessionEntriesEqual,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
@@ -260,18 +264,28 @@ export async function applySessionEntryLifecycleMutation(params: {
     });
   });
   let materializedRemovalPlans: MaterializedSessionStateDeletePlan[] = [];
+  let removalArchiveMaterializationFailed = false;
   try {
     materializedRemovalPlans = await materializeSessionStateDeletePlans(projected.deletePlans);
   } catch (error) {
+    removalArchiveMaterializationFailed = true;
     captureArtifactCleanupError(error);
   }
   const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let beforeCount = 0;
     const removedSessionKeys: string[] = [];
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     const maintenancePlans: SessionEntryMaintenancePlan[] = [];
     runOpenClawAgentWriteTransaction((transactionDb) => {
       params.beforeCommitInTransaction?.();
+      beforeCount = readSessionEntryCount(transactionDb);
       const validatedRemovals = projected.removals.filter((removal) => {
+        if (
+          removalArchiveMaterializationFailed &&
+          removal.removal.archiveRemovedTranscript === true
+        ) {
+          return false;
+        }
         const entry = readProjectedRemovalEntry(
           transactionDb,
           removal,
@@ -418,14 +432,23 @@ export async function applySessionEntryLifecycleMutation(params: {
       );
     }, toDatabaseOptions(resolved));
     emitCommittedLifecycleIdentityMutations({ projected, removedSessionKeys });
-    return { archivedTranscripts, maintenancePlans, removedSessionKeys };
+    return { archivedTranscripts, beforeCount, maintenancePlans, removedSessionKeys };
   });
-  const maintenanceArchivedTranscripts =
+  const { archivedTranscripts: maintenanceArchivedTranscripts, ...maintenance } =
     await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,
       committed.maintenancePlans,
     );
-  const archivedTranscripts = [...committed.archivedTranscripts, ...maintenanceArchivedTranscripts];
+  let publishedRemovalTranscripts: SessionLifecycleArchivedTranscript[] = [];
+  try {
+    publishedRemovalTranscripts = await publishSessionStateArchives(
+      resolved,
+      committed.archivedTranscripts,
+    );
+  } catch (error) {
+    captureArtifactCleanupError(error);
+  }
+  const archivedTranscripts = [...publishedRemovalTranscripts, ...maintenanceArchivedTranscripts];
   const afterCount = readSessionEntryCount(openOpenClawAgentDatabase(toDatabaseOptions(resolved)));
   emitArchivedTranscriptUpdates(archivedTranscripts);
   const archivedTranscriptDirectories = uniqueStrings(
@@ -439,16 +462,21 @@ export async function applySessionEntryLifecycleMutation(params: {
         rules: params.cleanupArchivedTranscripts.rules,
         nowMs: params.cleanupArchivedTranscripts.nowMs,
       });
+      await prunePublishedSessionArchivesByRetention({
+        scope: resolved,
+        rules: params.cleanupArchivedTranscripts.rules,
+        nowMs: params.cleanupArchivedTranscripts.nowMs,
+      });
     } catch (error) {
       captureArtifactCleanupError(error);
     }
   }
   return {
+    beforeCount: committed.beforeCount,
     removedEntries: committed.removedSessionKeys.length,
     removedSessionKeys: committed.removedSessionKeys,
+    ...maintenance,
     archivedTranscriptDirectories,
-    unreferencedArtifacts: null,
-    maintenanceReport: null,
     afterCount,
     artifactCleanupError,
   };
@@ -457,7 +485,7 @@ export async function applySessionEntryLifecycleMutation(params: {
 /** Purges entries owned by a deleted agent from SQLite session rows. */
 export async function purgeDeletedAgentSessionEntries(
   params: DeletedAgentSessionEntryPurgeParams,
-): Promise<SessionEntryLifecycleMutationResult> {
+): Promise<void> {
   const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.storeAgentId });
   const prepared = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
@@ -500,7 +528,6 @@ export async function purgeDeletedAgentSessionEntries(
   });
   const materializedPlans = await materializeSessionStateDeletePlans(prepared.deletePlans);
   const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const removedSessionKeys = prepared.entryRemovals.map((removal) => removal.sessionKey);
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     const maintenancePlans: SessionEntryMaintenancePlan[] = [];
     runOpenClawAgentWriteTransaction((transactionDb) => {
@@ -537,27 +564,18 @@ export async function purgeDeletedAgentSessionEntries(
       );
     }, toDatabaseOptions(resolved));
     emitCommittedSessionEntryRemovals(prepared.entryRemovals);
-    return { archivedTranscripts, maintenancePlans, removedSessionKeys };
+    return { archivedTranscripts, maintenancePlans };
   });
-  const archivedTranscripts = [
-    ...committed.archivedTranscripts,
-    ...(await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+  const { archivedTranscripts: maintenanceArchivedTranscripts } =
+    await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
       resolved,
       committed.maintenancePlans,
-    )),
+    );
+  const archivedTranscripts = [
+    ...(await publishSessionStateArchives(resolved, committed.archivedTranscripts)),
+    ...maintenanceArchivedTranscripts,
   ];
-  const afterCount = readSessionEntryCount(openOpenClawAgentDatabase(toDatabaseOptions(resolved)));
   emitArchivedTranscriptUpdates(archivedTranscripts);
-  return {
-    removedEntries: committed.removedSessionKeys.length,
-    removedSessionKeys: committed.removedSessionKeys,
-    archivedTranscriptDirectories: uniqueStrings(
-      archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
-    ).toSorted(),
-    unreferencedArtifacts: null,
-    maintenanceReport: null,
-    afterCount,
-  };
 }
 
 /** Fully replaces rows for one transcript in the additive SQLite transcript store. */

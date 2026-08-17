@@ -116,10 +116,11 @@ Replace `youruser` with the account you created, and the IP with your VM's IP.
 
 ## 6) Install OpenClaw
 
-Inside the VM:
+Inside the VM, use the following command on npm 12 or npm 11.16+. On npm 11.12
+and earlier, omit `--allow-scripts=openclaw`; upgrade npm 11.13–11.15 first.
 
 ```bash
-npm install -g openclaw@latest
+npm install -g openclaw@latest --allow-scripts=openclaw
 openclaw onboard --install-daemon
 ```
 

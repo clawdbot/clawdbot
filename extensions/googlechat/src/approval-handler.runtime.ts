@@ -1,5 +1,6 @@
 import type {
   ChannelApprovalCapabilityHandlerContext,
+  ChannelApprovalKind,
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
@@ -43,7 +44,7 @@ type GoogleChatApprovalActionToken = {
 
 type GoogleChatPendingDelivery = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   expiresAtMs: number;
   cardsV2: GoogleChatCardV2[];
   actionTokens: GoogleChatApprovalActionToken[];

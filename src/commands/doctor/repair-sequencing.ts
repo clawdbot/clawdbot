@@ -65,7 +65,10 @@ export async function runDoctorRepairSequence(params: {
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 }): Promise<{
   state: DoctorConfigMutationState;
+  /** Notes for repairs already committed to durable state (SQLite/filesystem). */
   changeNotes: string[];
+  /** Notes for candidate-config mutations that are durable only after the config write. */
+  configChangeNotes: string[];
   warningNotes: string[];
   authProfilesRepaired: boolean;
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
@@ -74,6 +77,7 @@ export async function runDoctorRepairSequence(params: {
   let state = params.state;
   const pluginMetadataSnapshotState = params.pluginMetadataSnapshotState ?? {};
   const changeNotes: string[] = [];
+  const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
   const env = params.env ?? process.env;
   const resolveCurrentPluginMetadataScope = () => {
@@ -112,7 +116,8 @@ export async function runDoctorRepairSequence(params: {
     warnings?: string[];
   }) => {
     if (mutation.changes.length > 0) {
-      appendNotes(changeNotes, mutation.changes);
+      // Candidate-only mutation: report as applied only after the config write lands.
+      appendNotes(configChangeNotes, mutation.changes);
       state = applyDoctorConfigMutation({
         state,
         mutation,
@@ -363,6 +368,7 @@ export async function runDoctorRepairSequence(params: {
   return {
     state,
     changeNotes,
+    configChangeNotes,
     warningNotes,
     authProfilesRepaired,
     ...(openAICodexAuthProfileIdMap.size > 0 ? { openAICodexAuthProfileIdMap } : {}),

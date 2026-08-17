@@ -27,6 +27,7 @@ const formatCommit = (value?: string | null) => {
 
 const cachedGitCommitBySearchDir = new Map<string, string | null>();
 const GIT_COMMIT_CACHE_LIMIT = 256;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 type CommitMetadataReaders = {
   readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
@@ -168,6 +169,9 @@ const resolveRefPath = (refsBase: string, ref: string) => {
 };
 
 const readCommitFromPackageJson = () => {
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+    return null;
+  }
   try {
     const require = createRequire(import.meta.url);
     const pkg = require("../../package.json") as {

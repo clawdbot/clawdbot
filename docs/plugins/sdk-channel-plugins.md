@@ -922,6 +922,14 @@ unrelated inbound runtime helpers.
     Diagnostics never invent a peer ID. Keep both callbacks pure and
     import-safe because read-only diagnostics run without channel runtime.
 
+    Channel-specific security diagnostics can use `security.collectWarnings`.
+    Legacy string results are warning severity. Return the structured
+    `SecurityAuditFinding` shape (`checkId`, `severity`, `title`, `detail`, and
+    optional `remediation`) when the producer must declare informational or
+    critical severity; the same finding is used by Doctor and the main security
+    audit. Use `collectAuditFindings` only for diagnostics that should appear in
+    the full security audit but not Doctor.
+
     <Accordion title="What createChatChannelPlugin does for you">
       Instead of implementing low-level adapter interfaces manually, you pass
       declarative options and the builder composes them:

@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import chokidar, { type FSWatcher } from "chokidar";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "../loading/plugin-skills.js";
@@ -364,13 +365,6 @@ function watchDepthForPath(raw: string, depth: number): number {
     candidate = parent;
   }
   return depth + missingSegments;
-}
-
-function isPathInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
 }
 
 function isPathInsideAnyRoot(roots: readonly string[], child: string): boolean {

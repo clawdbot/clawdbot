@@ -21,6 +21,7 @@ function createSubscriptionState(
     connected: true,
     connectionEpoch: 1,
     sessionKey: subscription.key,
+    chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
     chatThinkingLevel: null,

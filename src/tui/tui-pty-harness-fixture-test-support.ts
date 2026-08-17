@@ -107,10 +107,27 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const pickerSessionTitle = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_TITLE;
       const pickerSessionPreview = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_PREVIEW;
       const pickerSessionDisplayName = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_DISPLAY_NAME ?? "Picker target";
+      const initialPluginApprovalSessionKey = process.env.OPENCLAW_TUI_PTY_INITIAL_APPROVAL_SESSION_KEY;
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = footerModel ?? "fixture-provider/fixture-model";
       let currentThinkingLevel = footerThinkingLevel;
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
+      function pluginApproval(sessionKey: string) {
+        return {
+          id: "plugin:skill-pty",
+          request: {
+            title: "Apply workspace skill proposal",
+            description: "Apply a pending workspace skill proposal into live workspace skills.",
+            pluginId: "workspace-skills",
+            severity: "warning" as const,
+            toolName: "skill_workshop",
+            allowedDecisions: ["allow-once", "deny"],
+            sessionKey,
+          },
+          createdAtMs: Date.now(),
+          expiresAtMs: Date.now() + 120_000,
+        };
+      }
       let pendingPluginApproval: {
         id: string;
         request: {
@@ -122,7 +139,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         };
         createdAtMs: number;
         expiresAtMs: number;
-      } | null = null;
+      } | null = initialPluginApprovalSessionKey
+        ? pluginApproval(initialPluginApprovalSessionKey)
+        : null;
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
       let pendingTaskSuggestion: {
         id: string;
@@ -185,6 +204,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         }
 
         start() {
+          if (pendingPluginApproval) {
+            this.onEvent?.({ event: "plugin.approval.requested", payload: pendingPluginApproval });
+          }
           queueMicrotask(() => this.onConnected?.());
         }
 
@@ -320,20 +342,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           }
           if (opts.message === "history gap proof") { return beginGapHistoryRecovery(this, runId, opts.sessionKey); }
           if (opts.message === "skill approval proof" || opts.message === "skill approval gap proof") {
-            pendingPluginApproval = {
-              id: "plugin:skill-pty",
-              request: {
-                title: "Apply workspace skill proposal",
-                description: "Apply a pending workspace skill proposal into live workspace skills.",
-                pluginId: "workspace-skills",
-                severity: "warning",
-                toolName: "skill_workshop",
-                allowedDecisions: ["allow-once", "deny"],
-                sessionKey: opts.sessionKey,
-              },
-              createdAtMs: Date.now(),
-              expiresAtMs: Date.now() + 120_000,
-            };
+            pendingPluginApproval = pluginApproval(opts.sessionKey);
             pendingPluginApprovalRun = { runId, sessionKey: opts.sessionKey };
             queueMicrotask(() => {
               if (opts.message === "skill approval gap proof") {

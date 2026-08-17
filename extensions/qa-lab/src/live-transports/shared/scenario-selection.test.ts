@@ -156,6 +156,23 @@ describe("live transport QA scenario selection", () => {
     },
   );
 
+  it.each([
+    {
+      channelId: "buzz",
+      scenarioIds: ["channel-canary", "channel-mention-gating"],
+    },
+    { channelId: "msteams", scenarioIds: ["channel-canary"] },
+  ])("keeps the $channelId plugin defaults eligible", ({ channelId, scenarioIds }) => {
+    expect(
+      resolveCatalogLiveTransportQaScenarioIds({
+        ...MOCK_LANE,
+        channelId,
+        channelDriver: "live",
+        scenarioIds,
+      }),
+    ).toEqual(scenarioIds);
+  });
+
   it("rejects the shared channel canary on unsupported Discord drivers", () => {
     expect(() =>
       resolveCatalogLiveTransportQaScenarioIds({
@@ -165,7 +182,7 @@ describe("live transport QA scenario selection", () => {
         scenarioIds: ["channel-canary"],
       }),
     ).toThrow(
-      "selected QA scenario(s) do not match the current QA lane: channel-canary (channel=qa-channel|telegram)",
+      "selected QA scenario(s) do not match the current QA lane: channel-canary (channel=qa-channel|telegram|buzz|msteams)",
     );
   });
 });

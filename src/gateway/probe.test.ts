@@ -190,11 +190,11 @@ vi.mock("../infra/device-identity.js", () => ({
 }));
 
 vi.mock("../infra/device-auth-store.js", () => ({
-  loadDeviceAuthToken: (params: unknown) => {
+  loadDeviceAuthTokenReadOnly: (params: unknown) => {
     deviceIdentityState.tokenParams.push(params);
     return deviceIdentityState.cachedToken;
   },
-  loadOriginDeviceToken: (params: unknown) => {
+  loadOriginDeviceTokenReadOnly: (params: unknown) => {
     deviceIdentityState.originTokenParams.push(params);
     return deviceIdentityState.cachedOriginToken;
   },
@@ -861,6 +861,7 @@ describe("probeGateway", () => {
     expect(success.ok).toBe(true);
     expect(lastGatewayClientOptions()?.url).toBe(url);
     expect(lastGatewayClientOptions()?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastGatewayClientOptions()?.sharedStateMode).toBe("read-only");
 
     setDeviceRequiredProbeMode();
     gatewayClientState.options = null;

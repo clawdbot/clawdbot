@@ -85,6 +85,22 @@ export type ControlUiGitHubPreview = {
   updatedAt: string;
 };
 
+/** Bounded session metadata rendered by Control UI session-link hover cards. */
+export type ControlUiSessionPreview =
+  | {
+      status: "ok";
+      sessionKey: string;
+      title?: string;
+      derivedTitle?: string;
+      agentId: string;
+      kind?: string;
+      channel?: string;
+      updatedAt?: number;
+      lastMessagePreview?: string;
+      archived?: boolean;
+    }
+  | { status: "unavailable" };
+
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
 /** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */

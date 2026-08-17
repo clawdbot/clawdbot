@@ -585,6 +585,8 @@ describe("plugin runtime session creation", () => {
             modelSelectionLocked: true,
             pluginExtensions: persistedPluginExtensions,
             spawnedCwd: "/workspace/project",
+            sessionRoot: "/workspace",
+            permissionMode: "guarded",
           },
         });
 
@@ -592,6 +594,8 @@ describe("plugin runtime session creation", () => {
           cfg: {},
           key,
           spawnedCwd: "/workspace/project",
+          sessionRoot: "/workspace",
+          permissionMode: "guarded",
           recoverMatchingInitialEntry: true,
           initialEntry: {
             agentHarnessId: "codex",

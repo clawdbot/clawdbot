@@ -6,9 +6,9 @@ import { describe, expect, it } from "vitest";
 
 describe("OpenAI Code Mode direct tools", () => {
   it("keeps policy-required direct tools model-visible", () => {
-    const visibleToolNames = new Set(["exec", "wait", "computer", "image", "message"]);
+    const visibleToolNames = new Set(["exec", "wait", "computer", "view_image", "message"]);
     const payload = {
-      tools: ["exec", "wait", "computer", "image", "message", "web_fetch"].map((name) => ({
+      tools: ["exec", "wait", "computer", "view_image", "message", "web_fetch"].map((name) => ({
         type: "function",
         name,
       })),
@@ -20,7 +20,7 @@ describe("OpenAI Code Mode direct tools", () => {
       "exec",
       "wait",
       "computer",
-      "image",
+      "view_image",
       "message",
     ]);
     expect(() => assertCodeModeResponsesToolSurface(payload, visibleToolNames)).not.toThrow();
@@ -31,9 +31,15 @@ describe("OpenAI Code Mode direct tools", () => {
     (directToolName) => {
       const visibleToolNames = new Set(["exec", "wait", directToolName]);
       const payload = {
-        tools: ["exec", directToolName, "computer", "image", "message", "web_fetch", "wait"].map(
-          (name) => ({ type: "function", name }),
-        ),
+        tools: [
+          "exec",
+          directToolName,
+          "computer",
+          "view_image",
+          "message",
+          "web_fetch",
+          "wait",
+        ].map((name) => ({ type: "function", name })),
       };
 
       expect(() => assertCodeModeResponsesToolSurface(payload, visibleToolNames)).toThrow(

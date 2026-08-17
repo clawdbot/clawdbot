@@ -3,16 +3,29 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
+  validateSessionsAssignOwnerParams,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
   validateSessionsPluginPatchParams,
   validateSessionsResetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
+import { assignSessionOwner } from "../../config/sessions/session-accessor.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  authorizeIncognitoSessionTarget,
+  createSessionListEntryFilter,
+  resolveSessionSharingTarget,
+  SessionMutationAuthorizationChangedError,
+} from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { projectSessionActor } from "../session-utils-row.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { executeSessionPatch, executeSessionPatchMany } from "./sessions-patch-engine.js";
@@ -33,6 +46,19 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    if (
+      params.patch.permissionMode === "full" &&
+      client !== null &&
+      !scopes.includes(ADMIN_SCOPE)
+    ) {
+      respond(
+        false,
+        undefined,
+        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+      );
+      return;
+    }
     const executed = await executeSessionPatchMany({
       client,
       context,
@@ -50,18 +76,23 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
     }
-    // Beta v4 clients may still send the retired icon field. Drop it at the
-    // Gateway boundary so it cannot re-enter session state or patch hooks.
-    const canonicalParams = { ...params } as typeof params & { icon?: unknown };
-    delete canonicalParams.icon;
-    const key = requireSessionKey(canonicalParams.key, respond);
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    if (params.permissionMode === "full" && client !== null && !scopes.includes(ADMIN_SCOPE)) {
+      respond(
+        false,
+        undefined,
+        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+      );
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
     if (!key) {
       return;
     }
     const executed = await executeSessionPatch({
       client,
       context,
-      patch: { ...canonicalParams, key },
+      patch: { ...params, key },
       sessionMutationAuthorization,
     });
     if (!executed.ok) {
@@ -69,6 +100,137 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, executed.result, undefined);
+  },
+  "sessions.assignOwner": async ({ params, respond, context, client }) => {
+    if (
+      !assertValidParams(params, validateSessionsAssignOwnerParams, "sessions.assignOwner", respond)
+    ) {
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
+    const ownerId = normalizeOptionalString(params.owner.id);
+    if (!key || !ownerId) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const owner =
+      params.owner.type === "agent"
+        ? (() => {
+            const normalizedId = normalizeAgentId(ownerId);
+            return normalizedId && listAgentIds(cfg).includes(normalizedId)
+              ? ({ type: "agent", id: normalizedId } as const)
+              : null;
+          })()
+        : ({ type: "human", id: ownerId } as const);
+    if (!owner) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${ownerId}"`),
+      );
+      return;
+    }
+    const runtimeAgentId = normalizeOptionalString(client?.internal?.agentRuntimeIdentity?.agentId);
+    const agentToolCallerId =
+      client?.internal?.syntheticClient === true
+        ? normalizeOptionalString(client.internal.agentToolCaller?.agentId)
+        : undefined;
+    const trustedAgentId = runtimeAgentId ?? agentToolCallerId;
+    const humanActor = gatewayClientSessionCreator(client);
+    const assignedBy = trustedAgentId
+      ? ({ type: "agent", id: trustedAgentId } as const)
+      : humanActor
+        ? ({ type: "human", id: humanActor.id } as const)
+        : null;
+    if (!assignedBy) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "sessions.assignOwner requires an identified caller"),
+      );
+      return;
+    }
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const target = resolveSessionSharingTarget({
+      cfg,
+      sessionKey: key,
+      agentId: requestedAgent.agentId,
+    });
+    if (!target) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`));
+      return;
+    }
+    const authorizeView = (candidate: NonNullable<typeof target>) =>
+      authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
+      (createSessionListEntryFilter({ client })?.(candidate.storeKey, candidate.entry) === false
+        ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
+        : null);
+    const visibilityError = authorizeView(target);
+    if (visibilityError) {
+      respond(false, undefined, visibilityError);
+      return;
+    }
+    const assignment = assignSessionOwner(
+      {
+        agentId: target.agentId,
+        sessionKey: target.storeKey,
+        storePath: target.storePath,
+      },
+      {
+        owner,
+        assignedBy,
+        assertCurrent: () => {
+          const current = resolveSessionSharingTarget({
+            cfg: context.getRuntimeConfig(),
+            sessionKey: target.canonicalKey,
+            agentId: target.agentId,
+          });
+          const currentError = current ? authorizeView(current) : null;
+          if (
+            !current ||
+            current.entry.sessionId !== target.entry.sessionId ||
+            current.storeKey !== target.storeKey ||
+            currentError
+          ) {
+            throw new SessionMutationAuthorizationChangedError(
+              currentError ??
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  "session changed before sessions.assignOwner; retry the request",
+                ),
+            );
+          }
+        },
+      },
+    );
+    const projectedActor = assignment
+      ? projectSessionActor(assignment.actor, new Map(), cfg)
+      : null;
+    const projectedAssignedBy = assignment?.assignedBy
+      ? projectSessionActor(assignment.assignedBy, new Map(), cfg)
+      : undefined;
+    const projected =
+      assignment && projectedActor
+        ? {
+            actor: projectedActor,
+            ...(projectedAssignedBy ? { assignedBy: projectedAssignedBy } : {}),
+            ...(assignment.assignedAt !== undefined ? { assignedAt: assignment.assignedAt } : {}),
+          }
+        : undefined;
+    if (!projected) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`));
+      return;
+    }
+    respond(true, { ok: true, key: target.canonicalKey, owner: projected }, undefined);
+    emitSessionsChanged(context, {
+      sessionKey: target.canonicalKey,
+      agentId: target.agentId,
+      reason: "owner",
+    });
   },
   "sessions.pluginPatch": async ({
     params,
@@ -184,6 +346,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+      armSessionDiffBaselineCapture: true,
       workerPlacementContext: context,
       assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
     });

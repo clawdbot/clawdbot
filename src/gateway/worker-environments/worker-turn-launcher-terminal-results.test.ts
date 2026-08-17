@@ -52,10 +52,7 @@ describe("worker turn launcher terminal results", () => {
           }),
         );
         createWorkerSessionPlacementGate(placements).updateAckCursors({
-          sessionId: SESSION_ID,
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runId: "run-reconcile-tunnel-loss",
+          claim: request.turnClaim,
           transcriptSeq: 2,
           liveSeq: 1,
         });
@@ -88,7 +85,7 @@ describe("worker turn launcher terminal results", () => {
       startTunnel: vi.fn(async () => tunnel),
       destroy,
     };
-    const recoverPendingWorkspaceResult = vi.fn(async () => {
+    const reconcileActivePlacement = vi.fn(async () => {
       const [pending] = placements.listPendingWorkspaceResults();
       if (!pending) {
         throw new Error("expected pending workspace result");
@@ -98,7 +95,7 @@ describe("worker turn launcher terminal results", () => {
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
       placements,
-      recoverPendingWorkspaceResult,
+      reconcileActivePlacement,
     });
 
     await expect(
@@ -117,7 +114,7 @@ describe("worker turn launcher terminal results", () => {
         "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
     });
 
-    expect(recoverPendingWorkspaceResult).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
     expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
     expect(destroy).not.toHaveBeenCalled();
@@ -187,10 +184,7 @@ describe("worker turn launcher terminal results", () => {
             }),
           );
           createWorkerSessionPlacementGate(placements).updateAckCursors({
-            sessionId: SESSION_ID,
-            environmentId: ENVIRONMENT_ID,
-            ownerEpoch: OWNER_EPOCH,
-            runId: "run-worker-usage",
+            claim: request.turnClaim,
             transcriptSeq: 2,
             liveSeq: 1,
           });

@@ -30,13 +30,17 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
 } from "./openclaw-state-db-maintenance.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawRegisteredAgentDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
 import {
   inspectOpenClawStateOwnershipFromDatabase,
   type OpenClawExternalStateOwnership,
 } from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
+  isOpenClawStateFirstUseSchemaIssue,
   isOpenClawStateStartupRepairableSchemaIssue,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
@@ -152,7 +156,10 @@ function readWriterAppVersion(database: DatabaseSync): string | undefined {
   }
 }
 
-function readRegisteredAgentDatabases(database: DatabaseSync): Array<{
+function readRegisteredAgentDatabases(
+  database: DatabaseSync,
+  registryPath: string,
+): Array<{
   agentId: string;
   path: string;
 }> {
@@ -168,7 +175,12 @@ function readRegisteredAgentDatabases(database: DatabaseSync): Array<{
     db.selectFrom("agent_databases").select(["agent_id", "path"]),
   ).rows.flatMap((row) =>
     typeof row.agent_id === "string" && typeof row.path === "string"
-      ? [{ agentId: row.agent_id, path: row.path }]
+      ? [
+          {
+            agentId: row.agent_id,
+            path: resolveOpenClawRegisteredAgentDatabasePath(registryPath, row.path),
+          },
+        ]
       : [],
   );
 }
@@ -256,7 +268,9 @@ export async function preflightOpenClawStateDatabasePath(
       OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
     );
     const blockingIssues = maintenanceIssues.filter(
-      (issue) => !isOpenClawStateStartupRepairableSchemaIssue(issue),
+      (issue) =>
+        !isOpenClawStateStartupRepairableSchemaIssue(issue) &&
+        !isOpenClawStateFirstUseSchemaIssue(issue),
     );
     if (blockingIssues.length > 0) {
       return result("incompatible", { issues: deduplicateSchemaIssues(blockingIssues) });
@@ -267,7 +281,9 @@ export async function preflightOpenClawStateDatabasePath(
       STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
     );
     const projectedRuntimeBlockingIssues = projectedRuntimeIssues.filter(
-      (issue) => !isOpenClawStateStartupRepairableSchemaIssue(issue),
+      (issue) =>
+        !isOpenClawStateStartupRepairableSchemaIssue(issue) &&
+        !isOpenClawStateFirstUseSchemaIssue(issue),
     );
     if (projectedRuntimeBlockingIssues.length > 0) {
       return result("incompatible", {
@@ -275,8 +291,8 @@ export async function preflightOpenClawStateDatabasePath(
       });
     }
     const startupRepairableIssues = deduplicateSchemaIssues([
-      ...maintenanceIssues,
-      ...projectedRuntimeIssues,
+      ...maintenanceIssues.filter(isOpenClawStateStartupRepairableSchemaIssue),
+      ...projectedRuntimeIssues.filter(isOpenClawStateStartupRepairableSchemaIssue),
     ]);
     return result(startupRepairableIssues.length > 0 ? "startup-repairable" : "exact", {
       issues: startupRepairableIssues,
@@ -335,7 +351,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
 
     let registeredDatabases: ReturnType<typeof readRegisteredAgentDatabases>;
     try {
-      registeredDatabases = readRegisteredAgentDatabases(stateDatabase);
+      registeredDatabases = readRegisteredAgentDatabases(stateDatabase, statePath);
     } catch (error) {
       result.indeterminate.push({
         kind: "state",

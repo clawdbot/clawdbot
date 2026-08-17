@@ -9,6 +9,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -174,7 +175,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
         .poll(() => transcriptTrigger.evaluate((element) => element.matches(":focus")))
         .toBe(true);
 
-      await page.locator(".chat-workspace-toggle").click();
+      await openChatSidePanelType(page, "Files");
       const artifactRow = page.locator(".chat-workspace-rail__file-open", {
         hasText: "openclaw-banner.png",
       });

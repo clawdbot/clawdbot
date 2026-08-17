@@ -76,6 +76,7 @@ MIN_NODE_22_VERSION="22.22.3"
 MIN_NODE_24_VERSION="24.15.0"
 MIN_NODE_25_VERSION="25.9.0"
 SUPPORTED_NODE_VERSION_LABEL="Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+"
+NODE_RELEASE_VERSION_CORE=""
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
@@ -508,10 +509,10 @@ linked_node_is_usable() {
 
   current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
   required_version="$(required_node_version)"
-  if ! node_version_is_supported "$current_version"; then
+  if ! node_release_version_is_supported "$current_version"; then
     return 1
   fi
-  if ! semver_at_least "$current_version" "$required_version"; then
+  if ! semver_at_least "$NODE_RELEASE_VERSION_CORE" "$required_version"; then
     return 1
   fi
   candidate_bin="$(node_dir)/bin"
@@ -590,6 +591,32 @@ semver_at_least() {
   ((version_patch >= required_patch))
 }
 
+node_release_version_is_supported() {
+  local version="$1"
+  local major minor patch
+
+  NODE_RELEASE_VERSION_CORE=""
+  while [[ "$version" == [[:space:]]* ]]; do version="${version#?}"; done
+  while [[ "$version" == *[[:space:]] ]]; do version="${version%?}"; done
+  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+    return 1
+  fi
+  major="${BASH_REMATCH[1]}"
+  minor="${BASH_REMATCH[2]}"
+  patch="${BASH_REMATCH[3]}"
+  for part in "$major" "$minor" "$patch"; do
+    if ((${#part} > 16)) || ((${#part} == 16 && 10#$part > 9007199254740991)); then
+      return 1
+    fi
+  done
+
+  NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
+  node_version_is_supported "$NODE_RELEASE_VERSION_CORE"
+}
+
+# Download labels are plain numeric Node distribution versions. Installed
+# runtimes use node_release_version_is_supported, which accepts canonical
+# release labels with a leading v or build metadata.
 node_version_is_supported() {
   local version="${1#v}"
   local major minor patch
@@ -1283,23 +1310,15 @@ install_openclaw() {
     fix_npm_prefix_if_needed
   fi
 
-  if [[ "${requested}" == "latest" ]]; then
-    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"; then
-      log "npm install openclaw@latest failed; retrying openclaw@next"
-      emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"retry\",\"version\":\"next\"}"
-      resolved_requested="next"
-      if [[ -n "${REQUIRED_COMPATIBLE_VERSION:-}" ]]; then
-        resolved_requested="$(resolve_npm_openclaw_version next)"
-        if [[ -z "$resolved_requested" ]]; then
-          fail "Could not resolve OpenClaw next before compatibility checking."
-        fi
-        require_openclaw_version_compatible "$resolved_requested"
-      fi
-      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"
-      requested="next"
+  local installed_entry
+  installed_entry="$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
+  if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}" || [[ ! -f "$installed_entry" ]]; then
+    log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}" || [[ ! -f "$installed_entry" ]]; then
+      emit_json '{"event":"error","message":"npm install did not produce a usable OpenClaw package"}'
+      log "ERROR: npm install did not produce a usable OpenClaw package"
+      return 1
     fi
-  else
-    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"
   fi
 
   mkdir -p "${PREFIX}/bin"
@@ -1345,6 +1364,85 @@ ensure_pnpm_git_prepare_allowlist() {
   log "Updated pnpm allowlist for git-hosted build dependency: ${dep}"
 }
 
+clone_git_checkout_transactionally() {
+  local repo_url="$1"
+  local repo_dir="$2"
+
+  local parent_dir staging_dir clone_status=0 preserve_repo_dir=0
+  parent_dir="$(dirname "$repo_dir")"
+  mkdir -p "$parent_dir"
+  parent_dir="$(cd "$parent_dir" && pwd -P)"
+  if [[ -d "$repo_dir" && -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
+    preserve_repo_dir=1
+    repo_dir="$(cd "$repo_dir" && pwd -P)"
+    staging_dir="$(mktemp -d "${repo_dir}/.openclaw-clone.XXXXXX")"
+  else
+    repo_dir="${parent_dir}/$(basename "$repo_dir")"
+    staging_dir="$(mktemp -d "${parent_dir}/.openclaw-clone.XXXXXX")"
+  fi
+  TMPFILES+=("$staging_dir")
+
+  git clone "$repo_url" "$staging_dir" || clone_status=$?
+  if [[ "$clone_status" -ne 0 ]]; then
+    return "$clone_status"
+  fi
+
+  if ! node - "$staging_dir" "$repo_dir" "$preserve_repo_dir" <<'NODE'
+const fs = require("node:fs");
+const [source, target, preserveTarget] = process.argv.slice(2);
+if (preserveTarget === "0") {
+  try {
+    fs.lstatSync(target);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    fs.renameSync(source, target);
+    process.exit(0);
+  }
+  throw new Error(`Git install dir appeared while cloning: ${target}`);
+}
+const expected = preserveTarget === "1" ? [source.slice(source.lastIndexOf("/") + 1)] : [];
+if (!fs.statSync(target).isDirectory() || fs.readdirSync(target).sort().join("\0") !== expected.sort().join("\0")) {
+  throw new Error(`Git install dir appeared while cloning: ${target}`);
+}
+const entries = fs.readdirSync(source).sort((a, b) => (a === ".git" ? 1 : b === ".git" ? -1 : 0));
+const moved = [];
+try {
+  for (const entry of entries) {
+    fs.renameSync(`${source}/${entry}`, `${target}/${entry}`);
+    moved.push(entry);
+  }
+  fs.rmdirSync(source);
+} catch (error) {
+  const rollbackErrors = [];
+  for (const entry of moved.reverse()) {
+    try {
+      fs.renameSync(`${target}/${entry}`, `${source}/${entry}`);
+    } catch (rollbackError) {
+      rollbackErrors.push(rollbackError);
+    }
+  }
+  if (rollbackErrors.length > 0) {
+    let recovery = source;
+    try {
+      recovery = `${source}.recovery`;
+      fs.renameSync(source, recovery);
+    } catch (recoveryError) {
+      rollbackErrors.push(recoveryError);
+      recovery = source;
+    }
+    throw new AggregateError(
+      [error, ...rollbackErrors],
+      `Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}`,
+    );
+  }
+  throw error;
+}
+NODE
+  then
+    fail "Could not publish the cloned checkout: ${repo_dir}. Inspect the destination for partial files, move it or choose another --git-dir, then retry."
+  fi
+}
+
 install_openclaw_from_git() {
   local repo_dir="$1"
   local repo_url="https://github.com/openclaw/openclaw.git"
@@ -1354,7 +1452,11 @@ install_openclaw_from_git() {
     fail "Git install dir cannot be empty"
   fi
   mkdir -p "$(dirname "$repo_dir")"
-  repo_dir="$(cd "$(dirname "$repo_dir")" && pwd)/$(basename "$repo_dir")"
+  if [[ -d "$repo_dir" ]]; then
+    repo_dir="$(cd "$repo_dir" && pwd -P)"
+  else
+    repo_dir="$(cd "$(dirname "$repo_dir")" && pwd -P)/$(basename "$repo_dir")"
+  fi
 
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"method\":\"git\",\"repo\":\"${repo_url//\"/\\\"}\"}"
   if [[ -d "$repo_dir/.git" ]]; then
@@ -1379,7 +1481,7 @@ install_openclaw_from_git() {
   elif [[ -d "$repo_dir" ]]; then
     if [[ -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
       emit_json '{"event":"step","name":"git-clone","status":"start"}'
-      git clone "$repo_url" "$repo_dir"
+      clone_git_checkout_transactionally "$repo_url" "$repo_dir"
       emit_json '{"event":"step","name":"git-clone","status":"ok"}'
       fresh_checkout=1
     else
@@ -1387,7 +1489,7 @@ install_openclaw_from_git() {
     fi
   else
     emit_json '{"event":"step","name":"git-clone","status":"start"}'
-    git clone "$repo_url" "$repo_dir"
+    clone_git_checkout_transactionally "$repo_url" "$repo_dir"
     emit_json '{"event":"step","name":"git-clone","status":"ok"}'
     fresh_checkout=1
   fi

@@ -6,6 +6,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
 const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
@@ -33,7 +34,7 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
 
 function exitDoctorError(message: string, json: boolean): void {
   if (json) {
-    defaultRuntime.writeJson({ error: message });
+    defaultRuntime.writeJson(formatCliJsonFailure(message));
   } else {
     defaultRuntime.error(message);
   }

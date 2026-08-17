@@ -1234,7 +1234,7 @@ describe("dreaming controller", () => {
 
     await loadDreamDiary(state);
 
-    expect(state.dreamDiaryError).toBe("Error: dream diary read failed");
+    expect(state.dreamDiaryError).toBe("dream diary read failed");
     expect(state.dreamDiaryLoading).toBe(false);
   });
 

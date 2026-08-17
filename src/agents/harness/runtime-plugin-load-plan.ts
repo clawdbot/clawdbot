@@ -17,8 +17,11 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
-import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
-import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import {
+  isDefaultAgentRuntimeId,
+  OPENCLAW_AGENT_RUNTIME_ID,
+  normalizeOptionalAgentRuntimeId,
+} from "../agent-runtime-id.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
@@ -77,12 +80,41 @@ function resolveSelectedMemoryPluginIds(params: {
     : [];
 }
 
+// Every selected model provider must join the immutable run generation before
+// request-time hooks resolve; late provider loading is intentionally forbidden.
+function resolveSelectedProviderOwnerPluginIds(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir: string;
+}): string[] {
+  const providerOwnerPluginIds = dedupePluginIds(
+    resolveOwningPluginIdsForProviderRef(params) ?? [],
+  );
+  if (providerOwnerPluginIds.length === 0) {
+    return [];
+  }
+  const safeProviderOwnerPluginIds = dedupePluginIds([
+    ...resolveBundledProviderCompatPluginIds({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      onlyPluginIds: providerOwnerPluginIds,
+    }),
+    ...resolveActivatableProviderOwnerPluginIds({
+      pluginIds: providerOwnerPluginIds,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    }),
+  ]);
+  return providerOwnerPluginIds.filter((pluginId) => safeProviderOwnerPluginIds.includes(pluginId));
+}
+
 /** Resolve manifest owners required by one selected non-core harness runtime. */
 export function resolveAgentHarnessOwnerPluginIds(params: {
   runtime: string;
   provider: string;
   config?: OpenClawConfig;
   workspaceDir: string;
+  providerOwnerPluginIds?: readonly string[];
 }): string[] {
   const harnessPluginIds = resolveManifestActivationPlan({
     trigger: { kind: "agentHarness", runtime: params.runtime },
@@ -98,29 +130,14 @@ export function resolveAgentHarnessOwnerPluginIds(params: {
   ) {
     return harnessPluginIds;
   }
-  const providerOwnerPluginIds = dedupePluginIds(
-    resolveOwningPluginIdsForProviderRef(params) ?? [],
-  );
+  const providerOwnerPluginIds =
+    params.providerOwnerPluginIds ?? resolveSelectedProviderOwnerPluginIds(params);
   if (providerOwnerPluginIds.length === 0) {
     return harnessPluginIds;
   }
-  const safeProviderOwnerPluginIds = dedupePluginIds([
-    ...resolveBundledProviderCompatPluginIds({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      onlyPluginIds: providerOwnerPluginIds,
-    }),
-    ...resolveActivatableProviderOwnerPluginIds({
-      pluginIds: providerOwnerPluginIds,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-    }),
-  ]);
   return dedupePluginIds([
     ...harnessPluginIds,
-    ...providerOwnerPluginIds.filter(
-      (pluginId) => pluginId !== "codex" && safeProviderOwnerPluginIds.includes(pluginId),
-    ),
+    ...providerOwnerPluginIds.filter((pluginId) => pluginId !== "codex"),
   ]);
 }
 
@@ -157,8 +174,8 @@ export function resolveSelectedAgentHarnessRuntime(
       }).runtime;
 }
 
-/** Returns whether a selection needs a plugin-owned harness in its prepared generation. */
-export function requiresAgentHarnessPluginSelection(
+// Returns whether a selection needs a plugin-owned harness in its prepared generation.
+function requiresAgentHarnessPluginSelection(
   selection: AgentHarnessPluginSelection,
   config?: OpenClawConfig,
 ): boolean {
@@ -195,6 +212,13 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
   for (const selection of params.selections) {
     const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
+    const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({
+      provider: selection.provider,
+      config,
+      workspaceDir: params.workspaceDir,
+    });
+    pluginIds.push(...providerOwnerPluginIds);
+    forceActivatedPluginIds.push(...providerOwnerPluginIds);
     if (!requiresAgentHarnessPluginSelection(selection, config)) {
       continue;
     }
@@ -203,6 +227,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
       provider: selection.provider,
       config,
       workspaceDir: params.workspaceDir,
+      providerOwnerPluginIds,
     });
     pluginIds.push(...harnessPluginIds);
     const allowedHarnessPluginIds =

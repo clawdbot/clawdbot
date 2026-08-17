@@ -3773,6 +3773,22 @@ describe("runReplyAgent typing (heartbeat)", () => {
     );
   });
 
+  it("surfaces a marked fallback for an empty message-tool-only completion", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    const result = await run();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload).toMatchObject({
+      text: expect.stringContaining("did not produce a visible reply"),
+      isError: true,
+    });
+    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
   it.each([
     { lane: "reasoning", payload: { text: "internal", isReasoning: true } },
     { lane: "commentary", payload: { text: "internal", isCommentary: true } },
@@ -3839,6 +3855,76 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     await expect(run()).resolves.toBeUndefined();
     expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
+  });
+
+  it("delivers an explicit yield acknowledgment after accepting a child spawn", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const onPendingContinuation = vi.fn();
+    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research started; results will follow.",
+      replyToId: "msg",
+    });
+    expect(onPendingContinuation).toHaveBeenCalledOnce();
+  });
+
+  it("delivers an explicit yield acknowledgment in message-tool-only mode", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    const result = await run();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload).toMatchObject({ text: "Research started; results will follow." });
+    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("preserves a visible final reply instead of adding a yield acknowledgment", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Research already finished." }],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research already finished.",
+      replyToId: "msg",
+    });
+  });
+
+  it("delivers a yield acknowledgment when the only payload is filtered", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "internal reasoning", isReasoning: true }],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research started; results will follow.",
+      replyToId: "msg",
+    });
   });
 
   it.each([
@@ -4281,6 +4367,52 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("delivers an explicit yield acknowledgment from a fallback model", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(makeCompletedFallbackRunner());
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+      const result = await run();
+      const payloads = Array.isArray(result) ? result : result ? [result] : [];
+
+      expect(payloads).toContainEqual(
+        expect.objectContaining({
+          text: "Research started; results will follow.",
+          replyToId: "1503645939964055592",
+        }),
+      );
+      expect(payloads).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            isError: true,
+            text: expect.stringContaining("no visible reply"),
+          }),
+        ]),
+      );
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
   it("surfaces a persisted configured backend failure when the active fallback is silent", async () => {
     const sessionEntry = makeSessionEntry({
       providerOverride: "openai",
@@ -4688,84 +4820,106 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces fallback-cleared once when runtime returns to selected model", async () => {
-    const sessionEntry = makeSessionEntry();
-    const sessionStore = { main: sessionEntry };
-    let callCount = 0;
+  it.each([
+    { label: "direct chats", chatType: "direct" as const, noticeVisible: true },
+    { label: "group chats", chatType: "group" as const, noticeVisible: false },
+    { label: "channels", chatType: "channel" as const, noticeVisible: false },
+  ])(
+    "controls fallback notices for $label without changing state or lifecycle",
+    async ({ chatType, noticeVisible }) => {
+      const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+      let callCount = 0;
 
-    state.runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const fallbackSpy = vi
-      .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementation(
-        async ({
-          provider,
-          model,
-          run,
-        }: {
-          provider: string;
-          model: string;
-          run: (provider: string, model: string) => Promise<unknown>;
-        }) => {
-          callCount += 1;
-          if (callCount === 1) {
-            return {
-              outcome: "completed" as const,
-              result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
-              provider: "deepinfra",
-              model: "moonshotai/Kimi-K2.5",
-              attempts: [
-                {
-                  provider: "fireworks",
-                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-                  error: "Provider fireworks is in cooldown (all profiles unavailable)",
-                  reason: "rate_limit",
-                },
-              ],
-            };
-          }
-          return {
-            outcome: "completed" as const,
-            result: await run(provider, model),
+      state.runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [{ text: "final" }],
+        meta: {},
+      });
+      const fallbackSpy = vi
+        .spyOn(modelFallbackModule, "runWithModelFallback")
+        .mockImplementation(
+          async ({
             provider,
             model,
-            attempts: [],
-          };
-        },
-      );
-    try {
-      const { run } = createMinimalRun({
-        resolvedVerboseLevel: "on",
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-      });
-      const phases: string[] = [];
-      const off = onAgentEvent((evt) => {
-        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
-        if (evt.stream === "lifecycle" && phase) {
-          phases.push(phase);
-        }
-      });
-      const first = await run();
-      const second = await run();
-      const third = await run();
-      off();
+            run,
+          }: {
+            provider: string;
+            model: string;
+            run: (provider: string, model: string) => Promise<unknown>;
+          }) => {
+            callCount += 1;
+            if (callCount === 1) {
+              return {
+                outcome: "completed" as const,
+                result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+                provider: "deepinfra",
+                model: "moonshotai/Kimi-K2.5",
+                attempts: [
+                  {
+                    provider: "fireworks",
+                    model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+                    error: "Provider fireworks is in cooldown (all profiles unavailable)",
+                    reason: "rate_limit",
+                  },
+                ],
+              };
+            }
+            return {
+              outcome: "completed" as const,
+              result: await run(provider, model),
+              provider,
+              model,
+              attempts: [],
+            };
+          },
+        );
+      try {
+        const { run } = createMinimalRun({
+          resolvedVerboseLevel: "on",
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+          storePath,
+          sessionCtx: { ChatType: chatType },
+        });
+        const phases: string[] = [];
+        const off = onAgentEvent((evt) => {
+          const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+          if (evt.stream === "lifecycle" && phase) {
+            phases.push(phase);
+          }
+        });
+        const first = await run();
+        const activeFallback = {
+          kind: "active" as const,
+          selectedModel: "anthropic/claude",
+          activeModel: "deepinfra/moonshotai/Kimi-K2.5",
+          reason: "rate limit",
+        };
+        expect(sessionEntry.fallbackNotice).toEqual(activeFallback);
+        expect(requireStoredSessionEntry(storePath).fallbackNotice).toEqual(activeFallback);
+        const second = await run();
+        const third = await run();
+        off();
 
-      const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
-      const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).toContain("Model Fallback cleared:");
-      expect(thirdText).not.toContain("Model Fallback cleared:");
-      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
-    } finally {
-      fallbackSpy.mockRestore();
-    }
-  });
+        const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
+        const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
+        const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
+        expect(firstText?.includes("Model Fallback:")).toBe(noticeVisible);
+        expect(secondText?.includes("Model Fallback cleared:")).toBe(noticeVisible);
+        expect(thirdText).not.toContain("Model Fallback cleared:");
+        if (!noticeVisible) {
+          expect(firstText).toBe("final");
+          expect(secondText).toBe("final");
+        }
+        expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
+        expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+        expect(sessionEntry.fallbackNotice).toBeUndefined();
+        expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
+      } finally {
+        fallbackSpy.mockRestore();
+      }
+    },
+  );
 
   it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
     const sessionEntry = makeSessionEntry();

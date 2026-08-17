@@ -157,6 +157,38 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
   return call;
 }
 
+async function handleClientRequestWhenReady(
+  client: ReturnType<typeof createFakeClient>,
+  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
+  assertHandled: (response: unknown) => void = (response) => expect(response).not.toBeUndefined(),
+): Promise<unknown> {
+  let response: unknown;
+  await vi.waitFor(async () => {
+    response = await client.handleRequest(request);
+    assertHandled(response);
+  });
+  return response;
+}
+
+async function startClientRequestWhenReady(
+  client: ReturnType<typeof createFakeClient>,
+  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
+  started: Promise<void>,
+): Promise<void> {
+  await vi.waitFor(async () => {
+    const requestResult = client.handleRequest(request);
+    void requestResult.catch(() => undefined);
+    const state = await Promise.race([
+      started.then(() => "started" as const),
+      requestResult.then(
+        () => "unhandled" as const,
+        () => "unhandled" as const,
+      ),
+    ]);
+    expect(state).toBe("started");
+  });
+}
+
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
     setImmediate(resolve);
@@ -400,6 +432,14 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
   };
 }
 
+function sideLoopRelayParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionParams {
+  return sideParams({
+    cfg: { tools: { loopDetection: { enabled: true } } } as never,
+    sessionKey: "agent:main:session-1",
+    ...overrides,
+  });
+}
+
 function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
   return {
     plan: {
@@ -431,13 +471,12 @@ async function runSideQuestionWithManagedWebSearchCall(
   options: { preserveToolFactory?: boolean } = {},
 ) {
   const client = createFakeClient();
-  let toolResponse: unknown;
   if (!options.preserveToolFactory) {
     createOpenClawCodingToolsMock.mockReturnValue([
       {
         name: "web_search",
         description: "Search the web",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, additionalProperties: true },
         execute: toolExecuteMock,
       },
     ]);
@@ -450,21 +489,6 @@ async function runSideQuestionWithManagedWebSearchCall(
       return {};
     }
     if (method === "turn/start") {
-      setTimeout(() => {
-        void (async () => {
-          toolResponse = await client.handleRequest({
-            id: 42,
-            method: "item/tool/call",
-            params: {
-              ...codexTestTurnIds("side-thread"),
-              callId: "tool-1",
-              tool: "web_search",
-              arguments: { query: "service providers" },
-            },
-          });
-          client.emit(turnCompleted("side-thread", "turn-1", "Search answer."));
-        })();
-      }, 0);
       return turnStartResult("turn-1");
     }
     if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -474,7 +498,19 @@ async function runSideQuestionWithManagedWebSearchCall(
   });
   getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-  const result = await runCodexAppServerSideQuestion(params);
+  const run = runCodexAppServerSideQuestion(params);
+  const toolResponse = await handleClientRequestWhenReady(client, {
+    id: 42,
+    method: "item/tool/call",
+    params: {
+      ...codexTestTurnIds("side-thread"),
+      callId: "tool-1",
+      tool: "web_search",
+      arguments: { query: "service providers" },
+    },
+  });
+  client.emit(turnCompleted("side-thread", "turn-1", "Search answer."));
+  const result = await run;
   const forkCall = client.request.mock.calls.find(([method]) => method === "thread/fork");
   const forkConfig = (forkCall?.[1] as { config?: Record<string, unknown> } | undefined)?.config;
   return { forkConfig, result, toolResponse };
@@ -508,13 +544,13 @@ describe("runCodexAppServerSideQuestion", () => {
       {
         name: "wiki_status",
         description: "Check wiki status",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, additionalProperties: true },
         execute: toolExecuteMock,
       },
       {
         name: "web_search",
         description: "Search the web",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, additionalProperties: true },
         execute: toolExecuteMock,
       },
     ]);
@@ -1152,7 +1188,7 @@ describe("runCodexAppServerSideQuestion", () => {
             {
               name: "web_search",
               description: "Search the web",
-              parameters: { type: "object", properties: {} },
+              parameters: { type: "object", properties: {}, additionalProperties: true },
               execute: toolExecuteMock,
             },
           ],
@@ -1228,7 +1264,7 @@ describe("runCodexAppServerSideQuestion", () => {
               {
                 name: "web_search",
                 description: "Search the web",
-                parameters: { type: "object", properties: {} },
+                parameters: { type: "object", properties: {}, additionalProperties: true },
                 execute: toolExecuteMock,
               },
             ]
@@ -1381,6 +1417,30 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
   });
 
+  it("uses the retained agent for an unscoped explicit-roster side question", async () => {
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          agentId: "alpha",
+          cfg: {
+            tools: { exec: { host: "gateway" } },
+            agents: {
+              entries: {
+                alpha: { tools: { exec: { host: "node", node: "worker-1" } } },
+                beta: {},
+              },
+            },
+          } as never,
+          sessionKey: "node-session",
+        }),
+      ),
+    ).rejects.toThrow(
+      "Codex-native /btw side-question mode is unavailable because OpenClaw exec host=node is active for this session.",
+    );
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+  });
+
   it("installs native hook relay config for opted-in side threads", async () => {
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
@@ -1419,7 +1479,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     await expect(
       runCodexAppServerSideQuestion(
-        sideParams({
+        sideLoopRelayParams({
           sessionKey: "agent:main:session-1",
           messageChannel: "discord",
           messageProvider: "discord-voice",
@@ -1494,7 +1554,6 @@ describe("runCodexAppServerSideQuestion", () => {
   it("forwards side-thread command approvals through the active native hook relay", async () => {
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
-    let approvalResponse: unknown;
     handleCodexAppServerApprovalRequestMock.mockResolvedValueOnce({ decision: "decline" });
     client.request.mockImplementation(async (method: string, requestParams: unknown) => {
       if (method === "thread/fork") {
@@ -1506,21 +1565,6 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(() => {
-          void (async () => {
-            approvalResponse = await client.handleRequest({
-              id: 42,
-              method: "item/commandExecution/requestApproval",
-              params: {
-                ...codexTestTurnIds("side-thread"),
-                itemId: "cmd-side",
-                command: "/bin/bash -lc 'node -v'",
-                cwd: "/tmp/workspace",
-              },
-            });
-            client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
-          })();
-        }, 0);
         return turnStartResult("turn-1");
       }
       if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -1530,17 +1574,27 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    await expect(
-      runCodexAppServerSideQuestion(
-        sideParams({
-          sessionKey: "agent:main:session-1",
-          messageChannel: "discord",
-          messageProvider: "discord-voice",
-          opts: { runId: "run-side-approval" },
-        }),
-        { nativeHookRelay: { enabled: true } },
-      ),
-    ).resolves.toEqual({ text: "Side answer." });
+    const run = runCodexAppServerSideQuestion(
+      sideLoopRelayParams({
+        sessionKey: "agent:main:session-1",
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+        opts: { runId: "run-side-approval" },
+      }),
+      { nativeHookRelay: { enabled: true } },
+    );
+    const approvalResponse = await handleClientRequestWhenReady(client, {
+      id: 42,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        ...codexTestTurnIds("side-thread"),
+        itemId: "cmd-side",
+        command: "/bin/bash -lc 'node -v'",
+        cwd: "/tmp/workspace",
+      },
+    });
+    client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+    await expect(run).resolves.toEqual({ text: "Side answer." });
 
     expect(approvalResponse).toEqual({ decision: "decline" });
     expect(handleCodexAppServerApprovalRequestMock).toHaveBeenCalledTimes(1);
@@ -2081,7 +2135,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     try {
       await expect(
-        runCodexAppServerSideQuestion(sideParams(), {
+        runCodexAppServerSideQuestion(sideLoopRelayParams(), {
           nativeHookRelay: { enabled: true },
         }),
       ).rejects.toThrow("side turn start exploded");
@@ -2144,7 +2198,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     try {
       await expect(
-        runCodexAppServerSideQuestion(sideParams(), {
+        runCodexAppServerSideQuestion(sideLoopRelayParams(), {
           nativeHookRelay: { enabled: true },
         }),
       ).resolves.toEqual({ text: "Side answer." });
@@ -2222,7 +2276,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     try {
       await expect(
-        runCodexAppServerSideQuestion(sideParams(), {
+        runCodexAppServerSideQuestion(sideLoopRelayParams(), {
           nativeHookRelay: { enabled: true },
         }),
       ).resolves.toEqual({ text: "Side answer." });
@@ -2253,9 +2307,36 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
   });
 
-  it("bridges side-thread dynamic tool requests to OpenClaw tools", async () => {
+  it("bridges prepared restricted-profile tools into side threads", async () => {
+    const preparedModelRuntime = {
+      metadataSnapshot: {
+        plugins: [
+          {
+            id: "profiled-plugin",
+            contracts: { tools: ["wiki_status"] },
+            toolMetadata: { wiki_status: { profiles: ["coding"] } },
+          },
+        ],
+      },
+    };
+    createOpenClawCodingToolsMock.mockImplementation((options) =>
+      (options as { preparedModelRuntime?: unknown }).preparedModelRuntime === preparedModelRuntime
+        ? [
+            {
+              name: "wiki_status",
+              description: "Check wiki status",
+              parameters: {
+                type: "object",
+                properties: { topic: { type: "string" } },
+                required: ["topic"],
+                additionalProperties: false,
+              },
+              execute: toolExecuteMock,
+            },
+          ]
+        : [],
+    );
     const client = createFakeClient();
-    let toolResponse: unknown;
     client.request.mockImplementation(async (method: string) => {
       if (method === "thread/fork") {
         return threadResult("side-thread");
@@ -2264,22 +2345,6 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(() => {
-          void (async () => {
-            toolResponse = await client.handleRequest({
-              id: 42,
-              method: "item/tool/call",
-              params: {
-                ...codexTestTurnIds("side-thread"),
-                callId: "tool-1",
-                tool: "wiki_status",
-                arguments: { topic: "AGENTS.md" },
-              },
-            });
-            client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
-            client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
-          })();
-        }, 0);
         return turnStartResult("turn-1");
       }
       if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -2289,7 +2354,45 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    const result = await runCodexAppServerSideQuestion(sideParams());
+    const run = runCodexAppServerSideQuestion(
+      sideParams({
+        cfg: { tools: { profile: "coding" } } as never,
+        preparedModelRuntime,
+      } as never),
+    );
+    await vi.waitFor(() =>
+      expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ preparedModelRuntime }),
+      ),
+    );
+    const toolFactoryOptions = mockCall(createOpenClawCodingToolsMock)[0] as {
+      preparedModelRuntime?: unknown;
+    };
+    expect(toolFactoryOptions.preparedModelRuntime).toBe(preparedModelRuntime);
+    const toolResponse = await handleClientRequestWhenReady(
+      client,
+      {
+        id: 42,
+        method: "item/tool/call",
+        params: {
+          ...codexTestTurnIds("side-thread"),
+          callId: "tool-1",
+          tool: "wiki_status",
+          arguments: { topic: "AGENTS.md" },
+        },
+      },
+      (response) =>
+        expect({ response, toolCalls: toolExecuteMock.mock.calls.length }).toEqual({
+          response: {
+            success: true,
+            contentItems: [{ type: "inputText", text: "tool output" }],
+          },
+          toolCalls: 1,
+        }),
+    );
+    client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
+    client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+    const result = await run;
 
     expect(result).toEqual({ text: "Tool answer." });
     const [toolCallId, toolArguments, toolSignal, toolOptions] = mockCall(toolExecuteMock);
@@ -2363,12 +2466,11 @@ describe("runCodexAppServerSideQuestion", () => {
   it("omits computer control from side threads without a compaction owner", async () => {
     const client = createFakeClient();
     const computerExecute = vi.fn();
-    let toolResponse: unknown;
     createOpenClawCodingToolsMock.mockReturnValue([
       {
         name: "computer",
         description: "Control a desktop",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "object", properties: {}, additionalProperties: true },
         execute: computerExecute,
       },
     ]);
@@ -2380,22 +2482,6 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(() => {
-          void (async () => {
-            toolResponse = await client.handleRequest({
-              id: 43,
-              method: "item/tool/call",
-              params: {
-                ...codexTestTurnIds("side-thread"),
-                callId: "computer-1",
-                tool: "computer",
-                arguments: { action: "screenshot" },
-              },
-            });
-            client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
-            client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
-          })();
-        }, 0);
         return turnStartResult("turn-1");
       }
       if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -2405,9 +2491,20 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    await expect(runCodexAppServerSideQuestion(sideParams())).resolves.toEqual({
-      text: "Side answer.",
+    const run = runCodexAppServerSideQuestion(sideParams());
+    const toolResponse = await handleClientRequestWhenReady(client, {
+      id: 43,
+      method: "item/tool/call",
+      params: {
+        ...codexTestTurnIds("side-thread"),
+        callId: "computer-1",
+        tool: "computer",
+        arguments: { action: "screenshot" },
+      },
     });
+    client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+    client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+    await expect(run).resolves.toEqual({ text: "Side answer." });
     expect(computerExecute).not.toHaveBeenCalled();
     expect(toolResponse).toEqual({
       success: false,
@@ -2448,22 +2545,6 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(() => {
-          void (async () => {
-            void client.handleRequest({
-              id: 42,
-              method: "item/tool/call",
-              params: {
-                ...codexTestTurnIds("side-thread"),
-                callId: "tool-1",
-                tool: "wiki_status",
-                arguments: {},
-              },
-            });
-            await toolStarted;
-            client.emit(turnCompleted("side-thread", "turn-1", "Finished answer."));
-          })();
-        }, 0);
         return turnStartResult("turn-1");
       }
       if (method === "thread/unsubscribe") {
@@ -2475,6 +2556,21 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(sideParams());
+    await startClientRequestWhenReady(
+      client,
+      {
+        id: 42,
+        method: "item/tool/call",
+        params: {
+          ...codexTestTurnIds("side-thread"),
+          callId: "tool-1",
+          tool: "wiki_status",
+          arguments: {},
+        },
+      },
+      toolStarted,
+    );
+    client.emit(turnCompleted("side-thread", "turn-1", "Finished answer."));
     await vi.waitFor(() =>
       expect(client.request.mock.calls.some(([method]) => method === "thread/unsubscribe")).toBe(
         true,
@@ -2499,22 +2595,6 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(() => {
-          void (async () => {
-            await client.handleRequest({
-              id: 42,
-              method: "item/tool/call",
-              params: {
-                ...codexTestTurnIds("side-thread"),
-                callId: "tool-1",
-                tool: "wiki_status",
-                arguments: { topic: "AGENTS.md" },
-              },
-            });
-            client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
-            client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
-          })();
-        }, 0);
         return turnStartResult("turn-1");
       }
       if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -2524,11 +2604,28 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    await runCodexAppServerSideQuestion(
+    const run = runCodexAppServerSideQuestion(
       sideParams({
         opts: { runId: "run-side-diagnostics" },
       }),
     );
+    await handleClientRequestWhenReady(
+      client,
+      {
+        id: 42,
+        method: "item/tool/call",
+        params: {
+          ...codexTestTurnIds("side-thread"),
+          callId: "tool-1",
+          tool: "wiki_status",
+          arguments: { topic: "AGENTS.md" },
+        },
+      },
+      () => expect(toolExecuteMock).toHaveBeenCalledTimes(1),
+    );
+    client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
+    client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+    await run;
     await flushDiagnosticEvents();
     unsubscribeDiagnostics();
 
@@ -2978,22 +3075,6 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(() => {
-          void (async () => {
-            await client.handleRequest({
-              id: 42,
-              method: "item/tool/call",
-              params: {
-                ...codexTestTurnIds("side-thread"),
-                callId: "tool-1",
-                tool: "wiki_status",
-                arguments: { topic: "AGENTS.md" },
-              },
-            });
-            client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
-            client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
-          })();
-        }, 0);
         return turnStartResult("turn-1");
       }
       if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -3003,15 +3084,30 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    await expect(
-      runCodexAppServerSideQuestion(
-        sideParams({
-          messageChannel: "discord",
-          messageProvider: "discord-voice",
-          currentChannelId: "discord:voice-room",
-        }),
-      ),
-    ).resolves.toEqual({ text: "Tool answer." });
+    const run = runCodexAppServerSideQuestion(
+      sideParams({
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+        currentChannelId: "discord:voice-room",
+      }),
+    );
+    await handleClientRequestWhenReady(
+      client,
+      {
+        id: 42,
+        method: "item/tool/call",
+        params: {
+          ...codexTestTurnIds("side-thread"),
+          callId: "tool-1",
+          tool: "wiki_status",
+          arguments: { topic: "AGENTS.md" },
+        },
+      },
+      () => expect(toolExecuteMock).toHaveBeenCalledTimes(1),
+    );
+    client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
+    client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+    await expect(run).resolves.toEqual({ text: "Tool answer." });
 
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
     expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
@@ -3022,8 +3118,6 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("returns an empty response for side-thread user input requests", async () => {
     const client = createFakeClient();
-    let unrelatedUserInputResponse: unknown;
-    let userInputResponse: unknown;
     client.request.mockImplementation(async (method: string) => {
       if (method === "thread/fork") {
         return threadResult("side-thread");
@@ -3032,37 +3126,6 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(() => {
-          void (async () => {
-            unrelatedUserInputResponse = await client.handleRequest({
-              id: 42,
-              method: "item/tool/requestUserInput",
-              params: {
-                threadId: "parent-thread",
-                turnId: "parent-turn",
-                itemId: "input-parent",
-                questions: [],
-              },
-            });
-            userInputResponse = await client.handleRequest({
-              id: 43,
-              method: "item/tool/requestUserInput",
-              params: {
-                ...codexTestTurnIds("side-thread"),
-                itemId: "input-1",
-                questions: [
-                  {
-                    id: "choice",
-                    header: "Choice",
-                    question: "Pick one",
-                    options: [{ label: "A", description: "" }],
-                  },
-                ],
-              },
-            });
-            client.emit(turnCompleted("side-thread", "turn-1", "No input needed."));
-          })();
-        }, 0);
         return turnStartResult("turn-1");
       }
       if (method === "thread/unsubscribe" || method === "turn/interrupt") {
@@ -3072,7 +3135,35 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    const result = await runCodexAppServerSideQuestion(sideParams());
+    const run = runCodexAppServerSideQuestion(sideParams());
+    const userInputResponse = await handleClientRequestWhenReady(client, {
+      id: 43,
+      method: "item/tool/requestUserInput",
+      params: {
+        ...codexTestTurnIds("side-thread"),
+        itemId: "input-1",
+        questions: [
+          {
+            id: "choice",
+            header: "Choice",
+            question: "Pick one",
+            options: [{ label: "A", description: "" }],
+          },
+        ],
+      },
+    });
+    const unrelatedUserInputResponse = await client.handleRequest({
+      id: 42,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "parent-thread",
+        turnId: "parent-turn",
+        itemId: "input-parent",
+        questions: [],
+      },
+    });
+    client.emit(turnCompleted("side-thread", "turn-1", "No input needed."));
+    const result = await run;
 
     expect(result).toEqual({ text: "No input needed." });
     expect(unrelatedUserInputResponse).toBeUndefined();

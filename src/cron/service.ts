@@ -12,6 +12,7 @@ import * as runOps from "./service/ops-run.js";
 import {
   type CronAddOptions,
   type CronServiceDeps,
+  type CronRunMode,
   type CronUpdatePrecondition,
   type CronUpdateOptions,
   type CronWakeMode,
@@ -140,7 +141,7 @@ export class CronService implements CronServiceContract {
 
   async run(
     id: string,
-    mode?: "due" | "force",
+    mode?: CronRunMode,
     opts?: CronServiceRunOptions,
   ): Promise<CronServiceRunResult> {
     return await runOps.run(this.state, id, mode, opts);
@@ -148,7 +149,7 @@ export class CronService implements CronServiceContract {
 
   async enqueueRun(
     id: string,
-    mode?: "due" | "force",
+    mode?: CronRunMode,
     opts?: { commitGuard?: () => void },
   ): Promise<CronServiceRunResult> {
     const result = await runOps.enqueueRun(this.state, id, mode, opts);

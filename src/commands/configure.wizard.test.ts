@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => {
     note: vi.fn(),
     printWizardHeader: vi.fn(),
     probeGatewayReachable: vi.fn(),
-    waitForGatewayReachable: vi.fn(),
+    waitForGatewayReachable: vi.fn(async () => ({ ok: true })),
     resolveAdvertisedControlUiLinks: vi.fn(),
     resolveControlUiLinks: vi.fn(),
     resolveLocalControlUiProbeLinks: vi.fn(),
@@ -284,6 +284,7 @@ async function runWebConfigureWizard() {
 describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.healthCommand.mockReset();
     mocks.assertConfigPathForWrite.mockImplementation(() => {});
     mocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
     mocks.resolveSearchProviderOptions.mockReturnValue([
@@ -427,6 +428,17 @@ describe("runConfigureWizard", () => {
       }),
       expect.anything(),
     );
+  });
+
+  it.each([false, true])("reports failed remote health checks (reachable: %s)", async (probeOk) => {
+    setupBaseWizardState();
+    queueWizardPrompts({ select: ["remote"], confirm: [] });
+    mocks.waitForGatewayReachable.mockResolvedValueOnce({ ok: probeOk });
+    mocks.healthCommand.mockRejectedValueOnce(new Error("health request failed"));
+
+    await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
+
+    expect(mocks.clackOutro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
   });
 
   it("skips remote health when a configured SecretRef is unresolved", async () => {
@@ -998,9 +1010,7 @@ describe("runConfigureWizard", () => {
         if (callCount === 1) {
           // First call: simulate plugin mutating config during promptAuthConfig
           expect(params.baseHash).toBe(originalHash);
-          throw new ConfigMutationConflictError("config changed since last load", {
-            currentHash: newHashAfterMutation,
-          });
+          throw new ConfigMutationConflictError("config changed since last load");
         }
         // Second call: succeeds with refreshed hash
         expect(params.baseHash).toBe(newHashAfterMutation);
@@ -1084,7 +1094,6 @@ describe("runConfigureWizard", () => {
     });
     mocks.assertConfigPathForWrite.mockImplementation(() => {
       throw new ConfigMutationConflictError("config path changed since last load", {
-        currentHash: null,
         retryable: false,
       });
     });

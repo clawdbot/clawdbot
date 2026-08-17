@@ -19,6 +19,7 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
+import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
   inheritLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
@@ -50,7 +51,7 @@ type ValidateConfigWithPluginsResult =
 
 type ValidateConfigWithPluginsParams = {
   env?: NodeJS.ProcessEnv;
-  pluginValidation?: "full" | "skip";
+  pluginValidation?: "full" | "skip" | "core-only";
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadPluginMetadataSnapshot?: (
     config: OpenClawConfig,
@@ -87,7 +88,8 @@ function validateConfigObjectWithPluginMode(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config as OpenClawConfig;
+  const contextBudgetConfig = migrateLegacyContextBudgetConfig(raw).config;
+  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig).config as OpenClawConfig;
   let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
   const result = validateConfigObjectWithPluginsBase(migrated, {
     applyDefaults,
@@ -165,7 +167,7 @@ function validateConfigObjectWithPluginsBase(
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
     : null;
-  if (opts.applyDefaults && !registryInfo) {
+  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
     if (pluginMetadataSnapshot) {
       registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
@@ -173,10 +175,12 @@ function validateConfigObjectWithPluginsBase(
   }
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, "snapshot", {
-        manifestRegistry: registryInfo?.registry,
+        manifestRegistry:
+          registryInfo?.registry ??
+          (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),
       })
     : parsedConfig;
-  if (opts.pluginValidation === "skip") {
+  if (opts.pluginValidation === "skip" || opts.pluginValidation === "core-only") {
     return { ok: true, config, warnings: [] };
   }
 

@@ -13,6 +13,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
+  listSessionParticipantsReadOnly,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -507,7 +508,7 @@ describe("initSessionState guarded initialization", () => {
         updatedAt: 100,
       },
     });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg: OpenClawConfig = { session: { store: storePath } };
     let releaseWriter = () => {};
     const writerReleased = new Promise<void>((resolve) => {
       releaseWriter = resolve;
@@ -810,7 +811,7 @@ describe("initSessionState RawBody", () => {
   it("uses RawBody for command extraction and reset triggers when Body contains wrapped context", async () => {
     const root = await makeCaseDir("openclaw-rawbody-");
     const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg: OpenClawConfig = { session: { store: storePath } };
 
     const statusResult = await initSessionState({
       ctx: {
@@ -1458,6 +1459,18 @@ describe("initSessionState RawBody", () => {
             actorId: "profile-ada",
           }),
         );
+        await vi.waitFor(() =>
+          expect(
+            listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
+          ).toEqual([
+            {
+              actor: { type: "human", id: "profile-ada" },
+              firstPromptedAt: expect.any(Number),
+              lastPromptedAt: expect.any(Number),
+              source: "profile",
+            },
+          ]),
+        );
         return initialized;
       },
     );
@@ -1465,6 +1478,53 @@ describe("initSessionState RawBody", () => {
       createdVia: "operator",
       createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
+    });
+  });
+
+  it("records channel senders but skips unknown and own-agent prompt identities", async () => {
+    const root = await makeCaseDir("openclaw-session-participant-admission-");
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: {
+        RawBody: "channel prompt",
+        ChatType: "direct",
+        SessionKey: "agent:main:channel-participant",
+        SenderId: "channel-sender",
+      },
+      cfg,
+    });
+    await initSessionState({
+      ctx: {
+        RawBody: "unknown prompt",
+        ChatType: "direct",
+        SessionKey: "agent:main:unknown-participant",
+      },
+      cfg,
+    });
+    await initSessionState({
+      ctx: {
+        RawBody: "own agent prompt",
+        ChatType: "direct",
+        SessionKey: "agent:main:own-agent-participant",
+        SessionCreation: { via: "spawn", actor: { type: "agent", id: "main" } },
+      },
+      cfg,
+    });
+
+    await vi.waitFor(() => {
+      const participants = listSessionParticipantsReadOnly({ agentId: "main", storePath });
+      expect(participants.get("agent:main:channel-participant")).toEqual([
+        {
+          actor: { type: "human", id: "channel-sender" },
+          firstPromptedAt: expect.any(Number),
+          lastPromptedAt: expect.any(Number),
+          source: "channel",
+        },
+      ]);
+      expect(participants.get("agent:main:unknown-participant")).toBeUndefined();
+      expect(participants.get("agent:main:own-agent-participant")).toBeUndefined();
     });
   });
 
@@ -4851,13 +4911,14 @@ describe("persistSessionUsageUpdate", () => {
       expected: {
         totalTokens: 12_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         inputTokens: 180_000,
         outputTokens: 10_000,
       },
     },
     {
-      name: "clears the prior total when last-call context is unavailable",
-      seed: { totalTokens: 148_874, totalTokensFresh: true },
+      name: "marks the prior total stale when last-call context is unavailable",
+      seed: { totalTokens: 148_874, totalTokensFresh: true, totalTokensVersion: 1 },
       update: {
         usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
         lastCallUsage: {
@@ -4870,8 +4931,9 @@ describe("persistSessionUsageUpdate", () => {
         },
       },
       expected: {
-        totalTokens: undefined,
+        totalTokens: 148_874,
         totalTokensFresh: false,
+        totalTokensVersion: undefined,
         inputTokens: 12,
         cacheRead: 819_661,
       },
@@ -4919,10 +4981,14 @@ describe("persistSessionUsageUpdate", () => {
       expected: { totalTokens: 42_000, totalTokensFresh: true },
     },
     {
-      name: "clears older totalTokens when no compaction preservation is requested",
-      seed: { totalTokens: 42_000, totalTokensFresh: true },
+      name: "marks older totalTokens stale when no context snapshot is available",
+      seed: { totalTokens: 42_000, totalTokensFresh: true, totalTokensVersion: 1 },
       update: { usage: { input: 50_000, output: 5_000, total: 55_000 } },
-      expected: { totalTokens: undefined, totalTokensFresh: false },
+      expected: {
+        totalTokens: 42_000,
+        totalTokensFresh: false,
+        totalTokensVersion: undefined,
+      },
     },
     {
       name: "uses promptTokens when available without lastCallUsage",

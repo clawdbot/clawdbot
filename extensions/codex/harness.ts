@@ -3,23 +3,22 @@
  */
 import type {
   AgentHarnessV2,
-  AgentHarnessCompactParams,
-  AgentHarnessCompactResult,
+  AgentHarnessNativeCompaction,
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
-import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js";
+import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 // Audited against @openai/codex 0.147.0 (rust-v0.147.0). These exact denies
-// target OpenClaw-owned capabilities with no Codex-native equivalent. Keep the
-// list positive and conservative: an omitted tool isolates the native surface.
+// either have no Codex-native equivalent or are enforced by the harness. Keep
+// the list positive and conservative: an omitted tool isolates the native surface.
 const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "web_fetch",
   "x_search",
@@ -33,6 +32,7 @@ const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "automations",
   "gateway",
   "skill_workshop",
+  "image_generate",
   "music_generate",
   "video_generate",
   "tts",
@@ -49,9 +49,18 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
 
 type CodexAppServerAgentHarness = AgentHarnessV2 & {
   cloudPlacement?: { mode: "remote-exec" };
-  compactAfterContextEngine?(
-    params: AgentHarnessCompactParams,
-  ): Promise<AgentHarnessCompactResult | undefined>;
+};
+
+type CodexAppServerAgentHarnessOptions = {
+  id?: string;
+  label?: string;
+  providerIds?: Iterable<string>;
+  pluginConfig?: unknown;
+  resolvePluginConfig?: () => unknown;
+  resolveConfig?: () => OpenClawConfig | undefined;
+  runtime?: PluginRuntime;
+  bindingStore: CodexAppServerBindingStore;
+  sessionCatalogControlFactory?: CodexSessionCatalogControlFactory;
 };
 
 type CodexHostPreparedIsolatedCompletionParams = Parameters<
@@ -97,17 +106,9 @@ async function disposeSharedCodexAppServerClients(): Promise<void> {
  * Creates the Codex app-server harness used for attempts, side questions,
  * compaction, reset, and disposal.
  */
-export function createCodexAppServerAgentHarness(options: {
-  id?: string;
-  label?: string;
-  providerIds?: Iterable<string>;
-  pluginConfig?: unknown;
-  resolvePluginConfig?: () => unknown;
-  resolveConfig?: () => OpenClawConfig | undefined;
-  runtime?: PluginRuntime;
-  bindingStore: CodexAppServerBindingStore;
-  sessionCatalogControl?: CodexSessionCatalogControl;
-}): AgentHarnessV2 {
+export function createCodexAppServerAgentHarness(
+  options: CodexAppServerAgentHarnessOptions,
+): AgentHarnessV2 {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
   const providerIds = new Set(
@@ -115,7 +116,7 @@ export function createCodexAppServerAgentHarness(options: {
       id.trim().toLowerCase(),
     ),
   );
-  const sessionCatalogControl = options.sessionCatalogControl;
+  const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
@@ -130,7 +131,7 @@ export function createCodexAppServerAgentHarness(options: {
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
-    ...(sessionCatalogControl && sessionRuntime
+    ...(sessionCatalogControlFactory && sessionRuntime
       ? {
           sessionFork: {
             upstreamKinds: ["codex-app-server"] as const,
@@ -139,7 +140,7 @@ export function createCodexAppServerAgentHarness(options: {
                 await import("./src/app-server/upstream-session-fork.js");
               return await forkCodexUpstreamSession(params, {
                 bindingStore: options.bindingStore,
-                control: sessionCatalogControl,
+                controlFactory: sessionCatalogControlFactory,
                 harnessRuntimeId,
                 resolveConfig: options.resolveConfig,
                 runtime: sessionRuntime,
@@ -285,14 +286,6 @@ export function createCodexAppServerAgentHarness(options: {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
-    compactAfterContextEngine: async (params) => {
-      const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
-      return maybeCompactCodexAppServerSession(params, {
-        bindingStore: options.bindingStore,
-        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        allowNonManualNativeRequest: true,
-      });
-    },
     reset: async (params) => {
       if (params.sessionId) {
         const [
@@ -334,4 +327,22 @@ export function createCodexAppServerAgentHarness(options: {
     dispose: disposeSharedCodexAppServerClients,
   };
   return harness;
+}
+
+/** Creates the private native-compaction bridge registered in host-owned capability state. */
+export function createCodexAppServerNativeCompaction(
+  options: Pick<
+    CodexAppServerAgentHarnessOptions,
+    "bindingStore" | "pluginConfig" | "resolvePluginConfig"
+  >,
+): AgentHarnessNativeCompaction {
+  return async (params) => {
+    const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
+    return maybeCompactCodexAppServerSession(params, {
+      bindingStore: options.bindingStore,
+      pluginConfig: options.resolvePluginConfig?.() ?? options.pluginConfig,
+      allowNonManualNativeRequest: true,
+      nativeCompactionRequest: params.nativeCompactionRequest,
+    });
+  };
 }
