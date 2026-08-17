@@ -1403,6 +1403,32 @@ NODE
     }
   });
 
+  it("rejects an installed package whose launcher fails version validation", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-invalid-bin-"));
+    const bin = join(tmp, "bin");
+    const packageDir = join(tmp, "lib", "node_modules", "openclaw");
+    mkdirSync(packageDir, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(packageDir, "openclaw.mjs"), "#!/bin/sh\nexit 7\n");
+    chmodSync(join(packageDir, "openclaw.mjs"), 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `npm() { [[ "$1" == "root" ]] && printf '%s\\n' ${JSON.stringify(join(tmp, "lib", "node_modules"))}; }`,
+          `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
+          "ensure_openclaw_bin_link",
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(7);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it.each([
     { requested: "latest", outcome: "success", error: "", calls: 1, status: 0 },
     {

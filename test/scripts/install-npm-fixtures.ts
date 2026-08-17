@@ -19,7 +19,7 @@ export function writeNpmInstallRetryFixture(path: string) {
       'if [[ "$NPM_FAKE_OUTCOME" == "success" || "$NPM_FAKE_OUTCOME" == "transient" && "$attempt" -eq 2 ]]; then',
       '  if [[ -n "${NPM_FAKE_PACKAGE_DIR:-}" ]]; then',
       '    mkdir -p "$NPM_FAKE_PACKAGE_DIR/dist"',
-      '    printf "#!/usr/bin/env node\\n" > "$NPM_FAKE_PACKAGE_DIR/openclaw.mjs"',
+      '    printf "#!/bin/sh\\nprintf \'2026.8.1\\\\n\'\\n" > "$NPM_FAKE_PACKAGE_DIR/openclaw.mjs"',
       '    printf "#!/usr/bin/env node\\n" > "$NPM_FAKE_PACKAGE_DIR/dist/entry.js"',
       '    chmod +x "$NPM_FAKE_PACKAGE_DIR/openclaw.mjs" "$NPM_FAKE_PACKAGE_DIR/dist/entry.js"',
       "  fi",
