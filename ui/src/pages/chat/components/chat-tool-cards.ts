@@ -6,6 +6,7 @@ import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
@@ -210,12 +211,15 @@ export function renderRawOutputToggle(text: string) {
 function renderToolDataBlock(params: { label: string; text: string }) {
   const { label, text } = params;
   const codeClass = isMarkdownBlockArtText(text) ? "markdown-block-art" : "";
+  const showLabel = label !== t("chat.toolCards.toolOutput");
   return html`
     <div class="chat-tool-card__block">
-      <div class="chat-tool-card__block-header">
-        <span class="chat-tool-card__block-icon">${icons.zap}</span>
-        <span class="chat-tool-card__block-label">${label}</span>
-      </div>
+      ${showLabel
+        ? html`<div class="chat-tool-card__block-header">
+            <span class="chat-tool-card__block-icon">${icons.zap}</span>
+            <span class="chat-tool-card__block-label">${label}</span>
+          </div>`
+        : nothing}
       <pre class="chat-tool-card__block-content"><code class=${codeClass}>${text}</code></pre>
     </div>
   `;
@@ -294,20 +298,31 @@ const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
 };
 
 function firstCommandLine(command: string): string {
-  const line = command.split("\n")[0]?.trim() ?? "";
-  return truncateUtf16Safe(line, 120);
+  return command.split("\n")[0]?.trim() ?? "";
+}
+
+function compactToolTarget(target: string, kind: ToolCallView["kind"]): string {
+  if (kind !== "edit" && kind !== "write") {
+    return target;
+  }
+  return target.split(/[\\/]/u).filter(Boolean).at(-1) ?? target;
+}
+
+export function syncToolDisclosureOverflow(event: Event): void {
+  const disclosure = event.currentTarget;
+  if (!(disclosure instanceof HTMLElement)) {
+    return;
+  }
+  const content = disclosure.querySelector<HTMLElement>(".chat-tool-disclosure__content");
+  disclosure.classList.toggle(
+    "chat-tool-disclosure--overflowing",
+    Boolean(content && content.scrollWidth > content.clientWidth),
+  );
 }
 
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
   if (view.kind === "command" && view.command) {
     const commandPreview = firstCommandLine(view.command);
-    const aiTitle = getToolCallTitle(card.name, card.args);
-    if (aiTitle) {
-      return html`
-        <span class="chat-tool-row__title">${aiTitle}</span>
-        <code class="chat-tool-row__cmd chat-tool-row__cmd--secondary">${commandPreview}</code>
-      `;
-    }
     return html`
       <span class="chat-tool-row__prompt" aria-hidden="true">$</span>
       <code class="chat-tool-row__cmd">${renderHighlightedCommand(commandPreview)}</code>
@@ -324,9 +339,9 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
           : undefined;
     return html`
       <span class="chat-tool-row__verb">${verb}</span>
-      <span class="chat-tool-row__target">${view.target}</span>
+      <span class="chat-tool-row__target">${compactToolTarget(view.target, view.kind)}</span>
       ${stat ? renderDiffStatChips(stat) : nothing}
-      ${view.targetDetail
+      ${view.targetDetail && view.kind !== "edit" && view.kind !== "write"
         ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
         : nothing}
     `;
@@ -611,8 +626,17 @@ function renderTerminalBlock(command: string, output: string | undefined, isErro
       ${output?.trim()
         ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
         : nothing}
+      ${isError
+        ? html`<div class="chat-tool-card__outcome">${t("chat.toolCards.failed")}</div>`
+        : nothing}
     </div>
   `;
+}
+
+function serializeDiff(lines: readonly { kind: string; text: string }[]): string {
+  return lines
+    .map((line) => `${line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}${line.text}`)
+    .join("\n");
 }
 
 export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | undefined) {
@@ -703,6 +727,8 @@ export function renderToolCard(
           : ""}"
         type="button"
         aria-expanded=${String(opts.expanded)}
+        @pointerenter=${syncToolDisclosureOverflow}
+        @focus=${syncToolDisclosureOverflow}
         @click=${(event: MouseEvent) => {
           if (shouldToggleSelectableDisclosure(event)) {
             opts.onToggleExpanded(card.id);
@@ -710,17 +736,10 @@ export function renderToolCard(
         }}
       >
         <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
-        ${renderToolRowContent(card, view, outcome)}
-        <span class="chat-inline-disclosure__chevron" aria-hidden="true">${icons.chevronDown}</span>
-        ${isError
-          ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
-          : nothing}
-        ${isRunning
-          ? html`<span
-              class="chat-tool-row__spinner"
-              aria-label=${t("chat.toolCards.running")}
-            ></span>`
-          : nothing}
+        <span class="chat-tool-disclosure__content"
+          >${renderToolRowContent(card, view, outcome)}</span
+        >
+        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       ${opts.expanded
         ? html`
@@ -792,20 +811,33 @@ export function renderExpandedToolCardContent(
     : nothing;
   const sidebarAction = canOpenSidebar
     ? html`
-        <div class="chat-tool-card__actions">
-          <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
+        <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
+          <button
+            class="chat-tool-card__action-btn"
+            type="button"
+            @click=${() => onOpenSidebar?.(sidebarActionContent)}
+            aria-label=${t("chat.toolCards.openDetails")}
+          >
+            <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const diffCopyAction =
+    view.diff && view.diff.length > 0
+      ? html`
+          <openclaw-tooltip content=${t("common.copy")}>
             <button
               class="chat-tool-card__action-btn"
               type="button"
-              @click=${() => onOpenSidebar?.(sidebarActionContent)}
-              aria-label=${t("chat.toolCards.openDetails")}
+              @click=${() => void copyToClipboard(serializeDiff(view.diff ?? []))}
+              aria-label=${t("common.copy")}
             >
-              <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
+              <span class="chat-tool-card__action-icon">${icons.copy}</span>
             </button>
           </openclaw-tooltip>
-        </div>
-      `
-    : nothing;
+        `
+      : nothing;
 
   // Command calls render terminal-style: `$ command` + raw output. Remaining
   // args (workdir, timeout, env…) stay visible as key-value rows so identical
@@ -817,10 +849,10 @@ export function renderExpandedToolCardContent(
     );
     return html`
       <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
-        ${sidebarAction}
+        <div class="chat-tool-card__actions">${sidebarAction}</div>
         ${renderTerminalBlock(
           view.command,
-          card.outputText ?? (isError ? t("chat.toolCards.noOutputFailed") : undefined),
+          card.outputText,
           isError,
         )}
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
@@ -835,11 +867,11 @@ export function renderExpandedToolCardContent(
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__header">
           ${renderToolWorkspaceFilePath(
-            `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`,
+            workspaceFilePath ?? view.target ?? "",
             workspaceFilePath,
             onOpenWorkspaceFile,
           )}
-          ${sidebarAction}
+          <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
         ${renderDiffBlock(view.diff, outcome)}
         ${isError && hasOutput

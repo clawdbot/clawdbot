@@ -27,7 +27,6 @@ import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
-  isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
@@ -66,6 +65,7 @@ import {
   renderToolPreview,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
+  syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 
 function renderChatIcon(name: string) {
@@ -328,7 +328,6 @@ export function renderGroupedMessage(
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
-  const toolMessageHasError = toolCards.some(isToolCardError);
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
         name: singleToolCard.name,
@@ -467,6 +466,8 @@ export function renderGroupedMessage(
                 class="chat-inline-disclosure chat-tool-msg-summary"
                 type="button"
                 aria-expanded=${String(toolMessageExpanded)}
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focus=${syncToolDisclosureOverflow}
                 @click=${(event: MouseEvent) => {
                   if (shouldToggleSelectableDisclosure(event)) {
                     opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId);
@@ -474,18 +475,15 @@ export function renderGroupedMessage(
                 }}
               >
                 <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
-                <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
-                ${toolSummaryLabel
-                  ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
-                  : toolPreview
-                    ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                    : nothing}
-                <span class="chat-inline-disclosure__chevron" aria-hidden="true"
-                  >${icons.chevronDown}</span
-                >
-                ${toolMessageHasError
-                  ? html`<span class="chat-tool-row__badge">${t("chat.toolCards.failed")}</span>`
-                  : nothing}
+                <span class="chat-tool-disclosure__content">
+                  <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
+                  ${toolSummaryLabel
+                    ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
+                    : toolPreview
+                      ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
+                      : nothing}
+                </span>
+                <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
               </button>
               ${toolMessageExpanded
                 ? html`

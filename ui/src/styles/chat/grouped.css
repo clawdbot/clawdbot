@@ -108,7 +108,18 @@
 }
 
 .chat-group.tool {
-  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
+  display: block;
+  margin-inline: 0;
+  padding-inline-start: 46px;
+}
+
+.chat-group.tool.chat-group--with-footer {
+  display: block;
+}
+
+.chat-group.tool.chat-group--with-footer > .chat-group-messages {
+  max-width: var(--chat-message-column-max);
 }
 
 .chat-group.user .chat-group-footer {
