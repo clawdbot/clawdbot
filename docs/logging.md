@@ -240,13 +240,12 @@ Available flags:
   payloads, capped per event.
 - `OPENCLAW_DEBUG_CODE_MODE=1`: emit code-mode model-surface diagnostics,
   including bounded activation facts, the final visible surface, and names of
-  provider-native tools filtered because code mode owns the tool surface. This
-  flag does not enable general model transport logging.
+  provider-native tools filtered because code mode owns the tool surface.
 
 These flags log through normal OpenClaw logging, so `openclaw logs --follow`
 and the Control UI Logs tab show them. General transport diagnostics remain
-available at `debug` level without their flags; dedicated code-mode diagnostics
-are emitted only when `OPENCLAW_DEBUG_CODE_MODE` is enabled.
+available at `debug` level; dedicated code-mode diagnostics are emitted only
+when `OPENCLAW_DEBUG_CODE_MODE` is enabled.
 
 `[model-fetch]` start and response metadata (provider, API, model, status,
 latency, and request fields such as method, URL, timeout, proxy, and policy)
