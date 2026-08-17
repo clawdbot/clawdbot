@@ -44,12 +44,9 @@ import {
   resolveMSTeamsAutoThreadId,
 } from "./action-threading.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
-import {
-  collectMSTeamsSecurityWarnings,
-  msteamsConfigAdapter,
-  msteamsMeta,
-} from "./channel-config.js";
+import { msteamsConfigAdapter, msteamsMeta } from "./channel-config.js";
 import { describeMSTeamsMessageTool } from "./channel-message-tool.js";
+import { createMSTeamsSecurityWarningCollector } from "./channel-security.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
@@ -89,21 +86,6 @@ const MSTEAMS_GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
   "removeParticipant",
   "renameGroup",
 ]);
-
-export function createMSTeamsSecurityWarningCollector(
-  findingsFactory: typeof createConditionalWarningCollector.findings | undefined,
-) {
-  // Official beta hosts expose the legacy string collector without `.findings`.
-  // Preserve their audit path while current hosts receive structured critical findings.
-  return typeof findingsFactory === "function"
-    ? findingsFactory({
-        collectWarnings: collectMSTeamsSecurityWarnings,
-        checkId: "channels.msteams.groups.open",
-        severity: "critical",
-        title: "MS Teams security warning",
-      })
-    : collectMSTeamsSecurityWarnings;
-}
 
 const collectMSTeamsSecurityFindings = createMSTeamsSecurityWarningCollector(
   createConditionalWarningCollector.findings,

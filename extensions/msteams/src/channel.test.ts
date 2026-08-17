@@ -8,7 +8,8 @@ import {
   resolveMSTeamsAccountConfig,
 } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
-import { createMSTeamsSecurityWarningCollector, msteamsPlugin } from "./channel.js";
+import { createMSTeamsSecurityWarningCollector } from "./channel-security.js";
+import { msteamsPlugin } from "./channel.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
 
 const probeMSTeamsMock = vi.hoisted(() => vi.fn());
