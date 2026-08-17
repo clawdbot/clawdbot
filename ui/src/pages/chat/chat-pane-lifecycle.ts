@@ -595,7 +595,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
             this.handleSessionTypingEvent(event.payload as SessionTypingEvent);
           }
           if (event.event === "session.message") {
-            this.clearTypingActorsForSessionTurn(event.payload);
+            this.clearTypingActorForSessionMessage(event.payload);
           }
           handlePageGatewayEvent(state, event);
         }

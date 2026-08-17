@@ -14,6 +14,7 @@ import type {
 } from "../../api/types.ts";
 import { hasMultiplePresenceIdentities } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -686,11 +687,11 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     this.requestUpdate();
   }
 
-  protected clearTypingActorsForSessionTurn(payload: unknown): void {
+  protected clearTypingActorForSessionMessage(payload: unknown): void {
     const event = readSessionChangedEvent(payload);
     const state = this.state;
     if (
-      !event?.isChatTurn ||
+      !event ||
       !state ||
       !uiSessionEventMatches(
         {
@@ -704,7 +705,19 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     ) {
       return;
     }
-    this.clearTypingActors();
+    const message = normalizeMessage(
+      payload && typeof payload === "object" && "message" in payload ? payload.message : undefined,
+    );
+    const actorId = message.role === "user" ? message.sender?.id : undefined;
+    if (!actorId || !this.typingActors.delete(actorId)) {
+      return;
+    }
+    const timer = this.typingTimers.get(actorId);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      this.typingTimers.delete(actorId);
+    }
+    this.requestUpdate();
   }
 
   protected typingActorViews(): { id: string; label: string }[] {

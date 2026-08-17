@@ -285,7 +285,9 @@ export function projectChatTranscript(
     );
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
-  const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
+  const isEmpty =
+    chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
   transcript.setContentReady(!props.loading);
   // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
   // as the always-visible identity marker. The canonical session kind decides;
@@ -308,7 +310,7 @@ export function projectChatTranscript(
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
     !props.userId;
-  const showLoadingSkeleton = props.loading && chatItems.length === 0;
+  const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
   const activeContinuationByGroupKey = new Map<
