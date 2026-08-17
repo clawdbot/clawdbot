@@ -477,9 +477,9 @@ export const streamOpenAICompletions: StreamFunction<
             const hasSameChunkVisibleText = contentDeltas.some((delta) => delta.kind === "text");
             if (foundReasoningField) {
               reasoningTagTextPartitioner.markStrict();
-              // Same-chunk text can complete buffered Markdown or tag syntax;
-              // only a standalone reasoning delta confirms a lane resumption.
-              if (!hasSameChunkVisibleText) {
+              // Let same-chunk text finish syntax already owned by the Markdown
+              // parser; otherwise packet batching cannot erase a lane boundary.
+              if (!hasSameChunkVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
                 sealTextBeforeReasoning();
               }
             }

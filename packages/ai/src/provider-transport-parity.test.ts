@@ -185,6 +185,13 @@ const openAiInterleavedReasoningChunks = [
   makeOpenAiChunk({}, "stop"),
 ] satisfies OpenAIChunk[];
 
+const openAiCoalescedReasoningChunks = [
+  makeOpenAiChunk({ reasoning_content: "First thought." }),
+  makeOpenAiChunk({ content: "Interim." }),
+  makeOpenAiChunk({ content: "Final.", reasoning_content: "Second thought." }),
+  makeOpenAiChunk({}, "stop"),
+] satisfies OpenAIChunk[];
+
 const openAiTrailingReasoningChunks = [
   makeOpenAiChunk({ reasoning_content: "First thought." }),
   makeOpenAiChunk({ content: "Answer." }),
@@ -435,30 +442,32 @@ describe("provider and transport observable parity fixtures", () => {
 
   it("marks content interrupted by native reasoning as commentary", async () => {
     for (const implementation of ["provider", "transport"] as const) {
-      const result = await runOpenAi(implementation, "success", openAiInterleavedReasoningChunks);
+      for (const chunks of [openAiInterleavedReasoningChunks, openAiCoalescedReasoningChunks]) {
+        const result = await runOpenAi(implementation, "success", chunks);
 
-      expect(result.terminal.content).toEqual([
-        {
-          type: "thinking",
-          thinking: "First thought.",
-          thinkingSignature: "reasoning_content",
-        },
-        {
-          type: "text",
-          text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
-        },
-        {
-          type: "thinking",
-          thinking: "Second thought.",
-          thinkingSignature: "reasoning_content",
-        },
-        {
-          type: "text",
-          text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
-        },
-      ]);
+        expect(result.terminal.content).toEqual([
+          {
+            type: "thinking",
+            thinking: "First thought.",
+            thinkingSignature: "reasoning_content",
+          },
+          {
+            type: "text",
+            text: "Interim.",
+            textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          },
+          {
+            type: "thinking",
+            thinking: "Second thought.",
+            thinkingSignature: "reasoning_content",
+          },
+          {
+            type: "text",
+            text: "Final.",
+            textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          },
+        ]);
+      }
 
       const hiddenReasoningResult = await runOpenAi(
         implementation,

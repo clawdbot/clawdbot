@@ -414,9 +414,12 @@ export async function processCompletionsStream(
       const hasSameChunkVisibleText = contentDeltas.some((delta) => delta.kind === "text");
       if (hasMirroredReasoning) {
         reasoningTagTextPartitioner.markStrict();
-        // Same-chunk text can complete buffered Markdown or tag syntax;
-        // only a standalone reasoning delta confirms a lane resumption.
-        if (hasDedicatedReasoning && !hasSameChunkVisibleText) {
+        // Let same-chunk text finish syntax already owned by the Markdown
+        // parser; otherwise packet batching cannot erase a lane boundary.
+        if (
+          hasDedicatedReasoning &&
+          (!hasSameChunkVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax())
+        ) {
           sealTextBeforeReasoning();
         }
       }
