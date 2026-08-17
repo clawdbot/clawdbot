@@ -1431,6 +1431,71 @@ describe("parseNdjsonStream", () => {
     }
   });
 
+  it("yields the terminal record when the byte cap cuts off an incomplete UTF-8 tail", async () => {
+    const encoder = new TextEncoder();
+    const terminal = encoder.encode(
+      '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+    );
+    const tail = new Uint8Array(256 * 1024 + 1).fill(0x20);
+    tail[tail.length - 1] = 0xc3;
+    const value = new Uint8Array(terminal.byteLength + tail.byteLength);
+    value.set(terminal);
+    value.set(tail, terminal.byteLength);
+    const reader = mockChunkSequenceReader([value]);
+
+    const chunks = [];
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+    expect(reader.read).toHaveBeenCalledTimes(1);
+  });
+
+  it("yields the terminal record when the deadline cuts off an incomplete UTF-8 tail", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const terminal = encoder.encode(
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+      );
+      const value = new Uint8Array(terminal.byteLength + 1);
+      value.set(terminal);
+      value[value.length - 1] = 0xc3;
+      let readCount = 0;
+      const read = vi.fn(async () => {
+        readCount += 1;
+        if (readCount === 1) {
+          return { done: false as const, value };
+        }
+        return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+      });
+      const reader = {
+        read,
+        releaseLock: () => {},
+        cancel: async () => {},
+        closed: Promise.resolve(undefined),
+      } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+
+      const chunksPromise = (async () => {
+        const chunks = [];
+        for await (const chunk of parseNdjsonStream(reader)) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      })();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const chunks = await chunksPromise;
+
+      expect(chunks).toHaveLength(1);
+      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("accepts a split three-byte UTF-8 suffix at the terminal-tail cap", async () => {
     vi.useFakeTimers();
     try {

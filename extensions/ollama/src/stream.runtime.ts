@@ -899,12 +899,17 @@ export async function* parseNdjsonStream(
   let terminalRecord: OllamaChatResponse | undefined;
   let terminalTailBytes = 0;
   let terminalTailDeadline: number | undefined;
+  let terminalTailCutoff = false;
   try {
     while (true) {
-      const { done, value } = terminalRecord
+      const readResult = terminalRecord
         ? await readWithTerminalTailDeadline(reader, terminalTailDeadline)
-        : await reader.read();
+        : { result: await reader.read(), timedOut: false };
+      const { done, value } = readResult.result;
       if (done) {
+        if (readResult.timedOut) {
+          terminalTailCutoff = true;
+        }
         break;
       }
       let nextPendingRecordBytes = pendingRecordBytes;
@@ -927,6 +932,7 @@ export async function* parseNdjsonStream(
         if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
           // Bound the post-terminal validation drain: a peer that keeps
           // sending valid trailing bytes must not withhold completion forever.
+          terminalTailCutoff = true;
           break;
         }
         continue;
@@ -970,6 +976,7 @@ export async function* parseNdjsonStream(
           if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
             // The terminal-containing read can already carry enough valid tail
             // bytes to satisfy the bounded validation window.
+            terminalTailCutoff = true;
             break;
           }
           break;
@@ -982,6 +989,7 @@ export async function* parseNdjsonStream(
           yield parsed;
         }
         if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
+          terminalTailCutoff = true;
           break;
         }
         continue;
@@ -995,10 +1003,13 @@ export async function* parseNdjsonStream(
       }
     }
 
-    // Finalize the fatal decoder so a terminal partial UTF-8 sequence
-    // (buffered by the continuing stream decode) rejects the stream at EOF
-    // when the generator is drained without a terminal record.
-    buffer += decoder.decode();
+    if (!terminalTailCutoff) {
+      // Finalize the fatal decoder so a terminal partial UTF-8 sequence
+      // (buffered by the continuing stream decode) rejects the stream at EOF
+      // when the generator is drained without a terminal record. A bounded
+      // terminal-tail cutoff is a policy boundary, not an EOF signal.
+      buffer += decoder.decode();
+    }
 
     if (terminalRecord) {
       yield terminalRecord;
@@ -1020,18 +1031,33 @@ export async function* parseNdjsonStream(
 async function readWithTerminalTailDeadline(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   deadline: number | undefined,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
+): Promise<{
+  result: ReadableStreamReadResult<Uint8Array>;
+  timedOut: boolean;
+}> {
   const remainingMs = deadline === undefined ? 0 : deadline - Date.now();
   if (remainingMs <= 0) {
-    return { done: true as const, value: undefined };
+    return {
+      result: { done: true as const, value: undefined },
+      timedOut: true,
+    };
   }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      reader.read(),
-      new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
-        timeout = setTimeout(() => resolve({ done: true as const, value: undefined }), remainingMs);
-      }),
+      reader.read().then((result) => ({ result, timedOut: false })),
+      new Promise<{ result: ReadableStreamReadResult<Uint8Array>; timedOut: boolean }>(
+        (resolve) => {
+          timeout = setTimeout(
+            () =>
+              resolve({
+                result: { done: true as const, value: undefined },
+                timedOut: true,
+              }),
+            remainingMs,
+          );
+        },
+      ),
     ]);
   } finally {
     if (timeout !== undefined) {

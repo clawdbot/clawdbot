@@ -177,6 +177,22 @@ describe("ollama production stream UTF-8 rejection over real HTTP", () => {
     });
   });
 
+  it("completes when the terminal-tail byte cap cuts off an incomplete UTF-8 suffix", async () => {
+    const terminalChunk = new TextEncoder().encode(`${TERMINAL_NDJSON}\n`);
+    const tail = new Uint8Array(256 * 1024 + 1).fill(0x20);
+    tail[tail.length - 1] = 0xc3;
+    const initialBody = new Uint8Array(terminalChunk.byteLength + tail.byteLength);
+    initialBody.set(terminalChunk);
+    initialBody.set(tail, terminalChunk.byteLength);
+
+    await withOpenBodyServer(initialBody, async (baseUrl) => {
+      const stream = createOllamaStreamFn(baseUrl)(model, context, {});
+      const events = await collectStreamEvents(await Promise.resolve(stream));
+      expect(events.some((event) => typeOf(event) === "done")).toBe(true);
+      expect(events.some((event) => typeOf(event) === "error")).toBe(false);
+    });
+  });
+
   it("completes within the terminal-tail deadline for a slow periodic tail", async () => {
     await withTricklingWhitespaceServer(new TextEncoder().encode("\n"), 150, async (baseUrl) => {
       const started = Date.now();
