@@ -25,6 +25,12 @@ export default definePluginEntry({
     const store = WorkboardStore.openSqlite();
     api.session.controls.registerControlUiDescriptor({
       surface: "widget",
+      id: "board",
+      label: "Workboard board",
+      requiredScopes: ["operator.read"],
+    });
+    api.session.controls.registerControlUiDescriptor({
+      surface: "widget",
       id: "card",
       label: "Workboard card",
       requiredScopes: ["operator.write"],

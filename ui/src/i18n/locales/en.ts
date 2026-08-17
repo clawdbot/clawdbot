@@ -3600,6 +3600,7 @@ export const en: TranslationMap = {
   },
   workboard: {
     widget: {
+      boardLabel: "Workboard board",
       cardLabel: "Workboard card",
       summaryLabel: "Workboard summary",
       loading: "Loading Workboard…",
@@ -3608,6 +3609,7 @@ export const en: TranslationMap = {
       unassigned: "Unassigned",
       openBoard: "Open board",
       statusCounts: "Cards by status",
+      cardCount: "{count} cards",
       noActiveCards: "No ready or running cards.",
     },
     disabledHelpStart: "Workboard is disabled. Enable",

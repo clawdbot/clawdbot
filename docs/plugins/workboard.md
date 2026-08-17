@@ -363,13 +363,16 @@ the template id is stored as card metadata.
 
 ### Session-board widgets
 
-Workboard ships two native widgets for session dashboards (see
+Workboard ships three native widgets for session dashboards (see
 [Dashboards](/web/dashboards)). The agent pins them with its `dashboard` tool
 using `content: { kind: "plugin", pluginKind, props }`, and they render as
 first-party UI with live data — no sandbox frame or capability grant:
 
 - `workboard:card` with `props: { cardId }` shows one card with its status
   control, priority, and assigned agent.
+- `workboard:board` with optional `props: { boardId }` shows the full Kanban
+  board with draggable cards and status controls. Without `boardId` it shows
+  every board; with `boardId` it shows only that board.
 - `workboard:mini` with optional `props: { boardId, limit }` shows per-status
   counts plus the top ready/running cards, and links to the full board page.
   Without `boardId` it aggregates every board; with `boardId` it scopes to that
