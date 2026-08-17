@@ -121,7 +121,10 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
     loadExecApprovals: execApprovalsRuntimeMocks.loadExecApprovals,
   };
 });
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
+  ...agentRuntimeMocks,
+}));
 
 import {
   consumeCodexAppServerLiveThread,
@@ -1935,12 +1938,9 @@ describe("codex conversation binding", () => {
         config: {
           tools: { exec: { host: "gateway" } },
           agents: {
-            list: [
-              {
-                id: "bot-a",
-                tools: { exec: { host: "node", node: "worker-1" } },
-              },
-            ],
+            entries: {
+              "bot-a": { tools: { exec: { host: "node", node: "worker-1" } } },
+            },
           },
         } as never,
       },
