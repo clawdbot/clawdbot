@@ -55,7 +55,9 @@ describe("session transcript reader marker projection", () => {
       sessionId: "reader-compaction-boundary",
       markerId: "compaction-boundary",
       markerKind: "compaction",
+      markerSummary: "compaction",
       markerText: "Compaction",
+      hiddenMarkerId: undefined,
       events: (sessionId: string) => [
         { type: "session", version: 3, id: sessionId },
         {
@@ -87,7 +89,9 @@ describe("session transcript reader marker projection", () => {
       sessionId: "reader-reset-boundary",
       markerId: "reset-boundary",
       markerKind: "reset",
+      markerSummary: "reset",
       markerText: "Reset",
+      hiddenMarkerId: undefined,
       events: (sessionId: string) => [
         { type: "session", version: 3, id: sessionId },
         {
@@ -125,7 +129,58 @@ describe("session transcript reader marker projection", () => {
       ],
       expected: ["kept question", "kept answer", "reset", "new answer"],
     },
-  ])("projects $name boundaries through every SQLite history read", async (fixture) => {
+    {
+      name: "displayable custom message",
+      sessionId: "reader-custom-message",
+      markerId: "visible-custom",
+      markerKind: undefined,
+      markerSummary: "visible custom",
+      markerText: undefined,
+      hiddenMarkerId: "hidden-custom",
+      events: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "reset",
+          id: "custom-reset-boundary",
+          parentId: null,
+          timestamp: "2026-08-11T17:59:59.000Z",
+          reason: "reset",
+        },
+        {
+          type: "message",
+          id: "before-custom",
+          parentId: "custom-reset-boundary",
+          message: { role: "user", content: "before custom" },
+        },
+        {
+          type: "custom_message",
+          id: "visible-custom",
+          parentId: "before-custom",
+          timestamp: "2026-08-11T18:00:00.000Z",
+          customType: "visible-note",
+          content: "visible custom",
+          display: true,
+          details: { source: "reader-test" },
+        },
+        {
+          type: "custom_message",
+          id: "hidden-custom",
+          parentId: "visible-custom",
+          timestamp: "2026-08-11T18:00:01.000Z",
+          customType: "hidden-note",
+          content: "hidden custom",
+          display: false,
+        },
+        {
+          type: "message",
+          id: "after-custom",
+          parentId: "hidden-custom",
+          message: { role: "assistant", content: "after custom" },
+        },
+      ],
+      expected: ["reset", "before custom", "visible custom", "after custom"],
+    },
+  ])("projects $name through every SQLite history read", async (fixture) => {
     const scope = await writeTranscript(fixture.sessionId, fixture.events(fixture.sessionId));
     const summarize = (messages: unknown[]) =>
       messages.map((message) => {
@@ -142,12 +197,15 @@ describe("session transcript reader marker projection", () => {
       maxLines: 10,
       maxMessages: 10,
     });
-    const markerIndex = fixture.expected.indexOf(fixture.markerKind);
+    const markerIndex = fixture.expected.indexOf(fixture.markerSummary);
     const page = await readSessionMessagesPageWithStatsAsync(scope, {
       maxMessages: 1,
       offset: fixture.expected.length - markerIndex - 1,
     });
     const byId = await readSessionMessageByIdAsync(scope, fixture.markerId);
+    const hiddenById = fixture.hiddenMarkerId
+      ? await readSessionMessageByIdAsync(scope, fixture.hiddenMarkerId)
+      : undefined;
     const anchored = await readSessionMessagesAroundIdWithStatsAsync(scope, {
       messageId: fixture.markerId,
       maxMessages: 10,
@@ -156,23 +214,36 @@ describe("session transcript reader marker projection", () => {
     expect(summarize(full)).toEqual(fixture.expected);
     expect(summarize(recent.messages)).toEqual(fixture.expected);
     expect(recent.totalMessages).toBe(fixture.expected.length);
-    expect(summarize(page.messages)).toEqual([fixture.markerKind]);
+    expect(summarize(page.messages)).toEqual([fixture.markerSummary]);
     expect(page.totalMessages).toBe(fixture.expected.length);
     expect(await readSessionMessageCountAsync(scope)).toBe(fixture.expected.length);
-    expect(byId).toMatchObject({
-      found: true,
-      message: {
-        role: "system",
-        content: [{ type: "text", text: fixture.markerText }],
-        timestamp: Date.parse("2026-08-11T18:00:00.000Z"),
-        __openclaw: {
-          kind: fixture.markerKind,
-          id: fixture.markerId,
-          seq: markerIndex + 1,
-        },
-      },
-      seq: markerIndex + 1,
-    });
+    const expectedMessage = fixture.markerKind
+      ? {
+          role: "system",
+          content: [{ type: "text", text: fixture.markerText }],
+          timestamp: Date.parse("2026-08-11T18:00:00.000Z"),
+          __openclaw: {
+            kind: fixture.markerKind,
+            id: fixture.markerId,
+            seq: markerIndex + 1,
+          },
+        }
+      : {
+          role: "custom",
+          customType: "visible-note",
+          content: "visible custom",
+          display: true,
+          details: { source: "reader-test" },
+          timestamp: Date.parse("2026-08-11T18:00:00.000Z"),
+          __openclaw: {
+            id: fixture.markerId,
+            seq: markerIndex + 1,
+          },
+        };
+    expect(byId).toMatchObject({ found: true, message: expectedMessage, seq: markerIndex + 1 });
+    if (fixture.hiddenMarkerId) {
+      expect(hiddenById).toMatchObject({ found: false });
+    }
     expect(anchored.found).toBe(true);
     expect(summarize(anchored.messages)).toEqual(fixture.expected);
     expect(anchored.totalMessages).toBe(fixture.expected.length);

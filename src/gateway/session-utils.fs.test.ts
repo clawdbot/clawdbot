@@ -302,6 +302,86 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
+  test("projects only displayable custom messages through filesystem history reads", async () => {
+    const sessionId = "test-session-custom-message";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "reset",
+        id: "custom-reset-boundary",
+        parentId: null,
+        timestamp: "2026-08-17T11:59:59.000Z",
+        reason: "reset",
+      },
+      createTranscriptMessage("before-custom", "custom-reset-boundary", "user", "before custom"),
+      {
+        type: "custom_message",
+        id: "visible-custom",
+        parentId: "before-custom",
+        timestamp: "2026-08-17T12:00:00.000Z",
+        customType: "visible-note",
+        content: "visible custom",
+        display: true,
+      },
+      {
+        type: "custom_message",
+        id: "hidden-custom",
+        parentId: "visible-custom",
+        timestamp: "2026-08-17T12:00:01.000Z",
+        customType: "hidden-note",
+        content: "hidden custom",
+        display: false,
+      },
+      createTranscriptMessage("after-custom", "hidden-custom", "assistant", "after custom"),
+    ]);
+    const reader = filesystemReader(sessionId, storePath);
+    const summarize = (messages: unknown[]) =>
+      messages.map((message) => (message as { content?: unknown }).content);
+
+    const full = await reader.read({ mode: "full", reason: "custom message projection test" });
+    const recent = await reader.readRecentWithStats({ maxMessages: 10 });
+    const page = await reader.readPage({ maxMessages: 1, offset: 1 });
+    const byId = await reader.readById("visible-custom", {});
+    const hiddenById = await reader.readById("hidden-custom", {});
+    const anchored = await reader.readAroundId({ messageId: "visible-custom", maxMessages: 10 });
+
+    expect(summarize(full.messages)).toEqual([
+      [{ type: "text", text: "Reset" }],
+      "before custom",
+      "visible custom",
+      "after custom",
+    ]);
+    expect(summarize(recent.messages)).toEqual([
+      [{ type: "text", text: "Reset" }],
+      "before custom",
+      "visible custom",
+      "after custom",
+    ]);
+    expect(recent.totalMessages).toBe(4);
+    expect(summarize(page.messages)).toEqual(["visible custom"]);
+    expect(page.totalMessages).toBe(4);
+    expect(byId).toMatchObject({
+      found: true,
+      message: {
+        role: "custom",
+        customType: "visible-note",
+        content: "visible custom",
+        display: true,
+        __openclaw: { id: "visible-custom", seq: 3 },
+      },
+      seq: 3,
+    });
+    expect(hiddenById.found).toBe(false);
+    expect(anchored.found).toBe(true);
+    expect(summarize(anchored.messages)).toEqual([
+      [{ type: "text", text: "Reset" }],
+      "before custom",
+      "visible custom",
+      "after custom",
+    ]);
+    expect(anchored.totalMessages).toBe(4);
+  });
+
   test("preserves real sequence metadata for async bounded recent-message reads", async () => {
     const sessionId = "test-session-recent-seq-async";
     writeTranscript(tmpDir, sessionId, [

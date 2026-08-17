@@ -1,3 +1,5 @@
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
+
 /** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
 export function attachOpenClawTranscriptMeta(
   message: unknown,
@@ -36,18 +38,30 @@ export function projectTranscriptEntryMessage(entry: unknown, seq: number): unkn
     return null;
   }
   const record = entry as Record<string, unknown>;
+  if (record.type === "custom_message") {
+    if (record.display !== true) {
+      return null;
+    }
+    return {
+      role: "custom",
+      customType: record.customType,
+      content: record.content,
+      display: true,
+      details: record.details,
+      timestamp: parseDateFirstTimestampMs(record.timestamp) ?? Date.now(),
+      __openclaw: {
+        id: typeof record.id === "string" ? record.id : undefined,
+        seq,
+      },
+    };
+  }
   if (record.message) {
-    const recordTimestampMs =
-      typeof record.timestamp === "string"
-        ? Date.parse(record.timestamp)
-        : typeof record.timestamp === "number"
-          ? record.timestamp
-          : Number.NaN;
+    const recordTimestampMs = parseDateFirstTimestampMs(record.timestamp);
     const idempotencyKey = readTranscriptMessageIdempotencyKey(record.message);
     return attachOpenClawTranscriptMeta(record.message, {
       ...(typeof record.id === "string" ? { id: record.id } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
-      ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
+      ...(recordTimestampMs !== undefined ? { recordTimestampMs } : {}),
       seq,
     });
   }
@@ -55,12 +69,10 @@ export function projectTranscriptEntryMessage(entry: unknown, seq: number): unkn
     return null;
   }
   const kind = record.type;
-  const parsedTimestamp =
-    typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
   return {
     role: "system",
     content: [{ type: "text", text: kind === "compaction" ? "Compaction" : "Reset" }],
-    timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now(),
+    timestamp: parseDateFirstTimestampMs(record.timestamp) ?? Date.now(),
     __openclaw: {
       kind,
       id: typeof record.id === "string" ? record.id : undefined,

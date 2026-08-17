@@ -1040,45 +1040,115 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("supports cursor pagination over direct REST while preserving the messages field", async () => {
-    const { storePath } = await seedSession({ text: "first message" });
-    await appendVisibleAssistantMessage({
-      sessionKey: "agent:main:main",
-      text: "second message",
+  test("paginates displayable custom messages across direct REST and WebSocket history", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-main";
+    const sessionKey = "agent:main:main";
+    await writeSessionStore({
+      entries: { main: { sessionId, updatedAt: Date.now() } },
       storePath,
     });
-    await appendVisibleAssistantMessage({
-      sessionKey: "agent:main:main",
-      text: "third message",
-      storePath,
-    });
+    await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "oldest-message",
+        parentId: null,
+        message: { role: "assistant", content: [{ type: "text", text: "oldest message" }] },
+      },
+      {
+        type: "custom_message",
+        id: "visible-custom",
+        parentId: "oldest-message",
+        timestamp: "2026-08-17T12:00:00.000Z",
+        customType: "visible-note",
+        content: "visible custom message",
+        display: true,
+      },
+      {
+        type: "custom_message",
+        id: "hidden-custom",
+        parentId: "visible-custom",
+        timestamp: "2026-08-17T12:00:01.000Z",
+        customType: "hidden-note",
+        content: "hidden custom message",
+        display: false,
+      },
+      {
+        type: "message",
+        id: "newest-message",
+        parentId: "hidden-custom",
+        message: { role: "assistant", content: [{ type: "text", text: "newest message" }] },
+      },
+    ]);
 
     await withGatewayHarness(async (harness) => {
-      const firstPage = await fetchSessionHistory(harness.port, "agent:main:main", {
+      const firstPage = await fetchSessionHistory(harness.port, sessionKey, {
         query: "?limit=2",
       });
       expect(firstPage.status).toBe(200);
       const firstBody = (await firstPage.json()) as SessionHistoryBody;
-      expect(firstBody.sessionKey).toBe("agent:main:main");
-      expect(firstBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
-        "second message",
-        "third message",
+      expect(firstBody.sessionKey).toBe(sessionKey);
+      expect(firstBody.messages as unknown).toMatchObject([
+        {
+          role: "custom",
+          customType: "visible-note",
+          content: "visible custom message",
+          display: true,
+          __openclaw: { seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "newest message" }],
+          __openclaw: { seq: 3 },
+        },
       ]);
-      expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2, 3]);
+      expect(firstBody.items).toEqual(firstBody.messages);
       expect(firstBody.hasMore).toBe(true);
       expect(firstBody.nextCursor).toBe("2");
 
-      const secondPage = await fetchSessionHistory(harness.port, "agent:main:main", {
+      const secondPage = await fetchSessionHistory(harness.port, sessionKey, {
         query: `?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
       });
       expect(secondPage.status).toBe(200);
       const secondBody = (await secondPage.json()) as SessionHistoryBody;
       expect(secondBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
-        "first message",
+        "oldest message",
       ]);
       expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([1]);
       expect(secondBody.hasMore).toBe(false);
       expect(secondBody.nextCursor).toBeUndefined();
+
+      const ws = await harness.openWs();
+      try {
+        const connected = await connectReq(ws, { scopes: ["operator.read"] });
+        expect(connected.ok).toBe(true);
+        const firstRpc = await rpcReq<{
+          messages: unknown[];
+          nextOffset?: number;
+          hasMore?: boolean;
+          totalMessages?: number;
+        }>(ws, "chat.history", { sessionKey, limit: 2, offset: 0 });
+        expect(firstRpc.ok).toBe(true);
+        expect(firstRpc.payload?.messages).toMatchObject(firstBody.messages as unknown[]);
+        expect(firstRpc.payload?.hasMore).toBe(true);
+        expect(firstRpc.payload?.nextOffset).toBe(2);
+        expect(firstRpc.payload?.totalMessages).toBe(3);
+
+        const secondRpc = await rpcReq<{
+          messages: unknown[];
+          nextOffset?: number;
+          hasMore?: boolean;
+          totalMessages?: number;
+        }>(ws, "chat.history", { sessionKey, limit: 2, offset: firstRpc.payload?.nextOffset });
+        expect(secondRpc.ok).toBe(true);
+        expect(secondRpc.payload?.messages).toMatchObject(secondBody.messages as unknown[]);
+        expect(secondRpc.payload?.hasMore).toBe(false);
+        expect(secondRpc.payload?.nextOffset).toBeUndefined();
+        expect(secondRpc.payload?.totalMessages).toBe(3);
+      } finally {
+        ws.close();
+      }
     });
   });
 

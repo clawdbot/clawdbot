@@ -461,7 +461,12 @@ function parseRecentTranscriptTailSnapshot(
 }
 
 function isVisibleTranscriptRecord(record: Record<string, unknown>): boolean {
-  return Boolean(record.message) || record.type === "compaction" || record.type === "reset";
+  return (
+    Boolean(record.message) ||
+    record.type === "compaction" ||
+    record.type === "reset" ||
+    (record.type === "custom_message" && record.display === true)
+  );
 }
 
 function projectResetBoundary(entries: TranscriptRecord[]): TranscriptRecord[] {

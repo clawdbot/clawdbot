@@ -37,6 +37,15 @@ type VisibleHistoryProjection = {
   total: number;
 };
 
+function visibleHistoryEventFilter() {
+  return /* kysely-allow-raw: custom-message display state lives inside canonical transcript JSON. */ sql<boolean>`
+    CASE
+      WHEN identity.event_type <> 'custom_message' THEN TRUE
+      WHEN NOT json_valid(event.event_json) THEN FALSE
+      ELSE json_type(event.event_json, '$.display') = 'true'
+    END`;
+}
+
 function resolveVisibleHistoryProjection(
   projection: CurrentTranscriptProjection,
 ): VisibleHistoryProjection {
@@ -75,19 +84,24 @@ function resolveVisibleHistoryProjection(
           .as("next_message_position"),
       )
       .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("identity.event_type", "in", ["compaction", "reset"])
+      .where("identity.event_type", "in", ["compaction", "custom_message", "reset"])
+      .where(visibleHistoryEventFilter())
       .orderBy("active.active_position", "asc"),
   ).rows;
-  const latestBoundaryIsReset = rows.at(-1)?.event_type === "reset";
-  const visibleRows = latestBoundaryIsReset ? rows.slice(-1) : rows;
+  const latestContextBoundaryIndex = rows.findLastIndex(
+    (row) => row.event_type !== "custom_message",
+  );
+  const latestBoundaryIsReset = rows[latestContextBoundaryIndex]?.event_type === "reset";
+  const visibleRows = latestBoundaryIsReset ? rows.slice(latestContextBoundaryIndex) : rows;
   let priorBoundaries = 0;
   const boundaries = visibleRows.map((row): VisibleHistoryBoundary => {
-    const messagePosition = latestBoundaryIsReset
-      ? visibleMessages.kept.length
-      : Math.min(
-          row.next_message_position ?? projection.state.activeMessageCount,
-          visibleMessages.total,
-        );
+    const nextMessagePosition = row.next_message_position ?? projection.state.activeMessageCount;
+    const messagePosition =
+      row.event_type === "reset"
+        ? visibleMessages.kept.length
+        : latestBoundaryIsReset
+          ? visibleMessages.kept.length + nextMessagePosition - visibleMessages.postStart
+          : Math.min(nextMessagePosition, visibleMessages.total);
     return {
       displayPosition: messagePosition + priorBoundaries++,
       eventId: row.event_id,
@@ -151,7 +165,8 @@ function readBoundaryEvents(
         )
         .select(["event.seq", "event.event_json"])
         .where("active.session_id", "=", projection.resolved.sessionId)
-        .where("identity.event_type", "in", ["compaction", "reset"])
+        .where("identity.event_type", "in", ["compaction", "custom_message", "reset"])
+        .where(visibleHistoryEventFilter())
         .where("identity.seq", ">=", firstSeq)
         .where("identity.seq", "<=", lastSeq),
     ).rows.map((row) => [row.seq, JSON.parse(row.event_json) as TranscriptEvent]),
