@@ -5708,7 +5708,7 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.session-row-badge--failed {
+.session-row-badge--attention {
   gap: 2px;
   color: var(--warn);
   font-size: 10px;

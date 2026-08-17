@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/app-sidebar.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 
-describe("AppSidebar outbox badges", () => {
+describe("AppSidebar outbox attention badges", () => {
   it("shows draft pencils only for inactive sessions with stored composer text", async () => {
     const draftKey = "agent:main:draft-thread";
     const activeDraftKey = "agent:main:active-draft-thread";
@@ -31,30 +31,31 @@ describe("AppSidebar outbox badges", () => {
     ).toBeNull();
   });
 
-  it("shows failed delivery attention and removes the badge when empty", async () => {
-    const sessionKey = "agent:main:failed-thread";
+  it("shows delivery attention and removes the badge when empty", async () => {
+    const sessionKey = "agent:main:attention-thread";
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", [sessionKey]));
     sidebar.connected = true;
-    sidebar.failedOutboxCountForSession = (rowSessionKey) => (rowSessionKey === sessionKey ? 3 : 0);
+    sidebar.outboxAttentionCountForSession = (rowSessionKey) =>
+      rowSessionKey === sessionKey ? 3 : 0;
     sidebar.requestUpdate();
     await sidebar.updateComplete;
 
     const badge = sidebar.querySelector<HTMLElement>(
-      `[data-session-key="${sessionKey}"] .session-row-badge--failed`,
+      `[data-session-key="${sessionKey}"] .session-row-badge--attention`,
     );
     expect(badge?.textContent).toContain("3");
     expect(badge?.getAttribute("aria-label")).toBe("3 messages need attention");
 
-    sidebar.failedOutboxCountForSession = () => 0;
+    sidebar.outboxAttentionCountForSession = () => 0;
     sidebar.requestUpdate();
     await sidebar.updateComplete;
     expect(
-      sidebar.querySelector(`[data-session-key="${sessionKey}"] .session-row-badge--failed`),
+      sidebar.querySelector(`[data-session-key="${sessionKey}"] .session-row-badge--attention`),
     ).toBeNull();
   });
 
-  it("resolves agent-main aliases to one failed delivery badge count", async () => {
+  it("resolves agent-main aliases to one attention badge count", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -67,12 +68,12 @@ describe("AppSidebar outbox badges", () => {
         agents: [{ id: "main" }],
       },
     );
-    sidebar.failedOutboxCountForSession = () => 3;
+    sidebar.outboxAttentionCountForSession = () => 3;
     sidebar.hasSessionDraft = () => true;
     sidebar.requestUpdate();
     await sidebar.updateComplete;
 
-    const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--failed");
+    const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--attention");
     expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent).toContain("3");
     expect(

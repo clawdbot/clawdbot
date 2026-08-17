@@ -56,30 +56,30 @@ describe("session row placement badges", () => {
     expectTooltipText(badge, "Incognito session");
   });
 
-  it("renders failed delivery attention and stays quiet when empty", () => {
+  it("renders outbox attention and stays quiet when empty", () => {
     render(
       renderSessionRowBadges({
         hasAutomation: false,
         hasApproval: true,
-        failedOutboxCount: 3,
+        outboxAttentionCount: 3,
       }),
       container,
     );
 
-    const badge = container.querySelector<HTMLElement>(".session-row-badge--failed");
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--attention");
     expect(badge?.getAttribute("aria-label")).toBe("3 messages need attention");
     expectTooltipText(badge, "3 messages need attention");
     expect(badge?.textContent).toContain("3");
-    const failedIcon = badge?.querySelector("svg");
+    const attentionIcon = badge?.querySelector("svg");
     const approvalIcon = container.querySelector(".session-row-badge--approval svg");
-    expect(failedIcon?.isEqualNode(approvalIcon ?? null)).toBe(true);
+    expect(attentionIcon?.isEqualNode(approvalIcon ?? null)).toBe(true);
 
-    render(renderSessionRowBadges({ hasAutomation: false, failedOutboxCount: 1 }), container);
-    expect(container.querySelector(".session-row-badge--failed")?.getAttribute("aria-label")).toBe(
-      "1 message needs attention",
-    );
+    render(renderSessionRowBadges({ hasAutomation: false, outboxAttentionCount: 1 }), container);
+    expect(
+      container.querySelector(".session-row-badge--attention")?.getAttribute("aria-label"),
+    ).toBe("1 message needs attention");
 
-    render(renderSessionRowBadges({ hasAutomation: false, failedOutboxCount: 0 }), container);
+    render(renderSessionRowBadges({ hasAutomation: false, outboxAttentionCount: 0 }), container);
     expect(container.querySelector(".session-row-badges")).toBeNull();
   });
 

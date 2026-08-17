@@ -275,16 +275,15 @@ describe("stored outbox summaries", () => {
     expect(summary.countsByScope.get(storedChatOutboxScopeKey({ sessionKey: "thread-b" }))).toBe(1);
   });
 
-  it("counts only explicit retryable failures for session-row attention", () => {
+  it("counts only durable operator-review states for session-row attention", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const nonfailedSendStates = [
+    const quietSendStates = [
       undefined,
       "waiting-idle",
       "executing-command",
       "steering",
       "sending",
       "waiting-reconnect",
-      "unconfirmed",
     ] as const;
     sessionStorage.setItem(
       `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
@@ -294,7 +293,7 @@ describe("stored outbox summaries", () => {
         sessions: {
           "thread-a\u0000agent:main": {
             queue: [
-              ...nonfailedSendStates.map((sendState, index) => ({
+              ...quietSendStates.map((sendState, index) => ({
                 id: `healthy-${index}`,
                 text: `healthy ${index}`,
                 createdAt: index,
@@ -302,12 +301,31 @@ describe("stored outbox summaries", () => {
               })),
               { id: "failed", text: "failed", createdAt: 10, sendState: "failed" },
               { id: "failed", text: "duplicate", createdAt: 11, sendState: "failed" },
+              {
+                id: "unconfirmed",
+                text: "unconfirmed",
+                createdAt: 12,
+                sendState: "unconfirmed",
+              },
+              {
+                id: "unconfirmed",
+                text: "duplicate uncertainty",
+                createdAt: 13,
+                sendState: "unconfirmed",
+              },
             ],
-            updatedAt: 11,
+            updatedAt: 13,
           },
           "thread-b\u0000agent:main": {
-            queue: [{ id: "failed", text: "other scope", createdAt: 13, sendState: "failed" }],
-            updatedAt: 13,
+            queue: [
+              {
+                id: "unconfirmed",
+                text: "other scope",
+                createdAt: 14,
+                sendState: "unconfirmed",
+              },
+            ],
+            updatedAt: 14,
           },
         },
       }),
@@ -320,8 +338,8 @@ describe("stored outbox summaries", () => {
     expect(summary.total).toBe(9);
     expect(summary.countsByScope.get(threadA)).toBe(8);
     expect(summary.countsByScope.get(threadB)).toBe(1);
-    expect(summary.failedCountsByScope.get(threadA)).toBe(1);
-    expect(summary.failedCountsByScope.get(threadB)).toBe(1);
+    expect(summary.attentionCountsByScope.get(threadA)).toBe(2);
+    expect(summary.attentionCountsByScope.get(threadB)).toBe(1);
   });
 
   it("derives badges and replay from the same migrated durable queue", () => {

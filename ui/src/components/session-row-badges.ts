@@ -62,7 +62,7 @@ export function renderSessionRowBadges(params: {
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
-  failedOutboxCount?: number;
+  outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   placementState?: SessionPlacementState;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
@@ -89,19 +89,24 @@ export function renderSessionRowBadges(params: {
       : diskSpaceStatus === "warning"
         ? t("sessionsView.cloudWorkerDiskWarning")
         : "";
-  const failedCount = Math.max(0, Math.floor(params.failedOutboxCount ?? 0));
-  const failedLabel =
-    failedCount > 0
-      ? t(failedCount === 1 ? "sessionsView.failedMessage" : "sessionsView.failedMessages", {
-          count: String(failedCount),
-        })
+  const attentionCount = Math.max(0, Math.floor(params.outboxAttentionCount ?? 0));
+  const attentionLabel =
+    attentionCount > 0
+      ? t(
+          attentionCount === 1
+            ? "sessionsView.messageNeedsAttention"
+            : "sessionsView.messagesNeedAttention",
+          {
+            count: String(attentionCount),
+          },
+        )
       : "";
   if (
     !params.incognito &&
     !hasAutomation &&
     !pullRequestLabel &&
     !params.hasApproval &&
-    failedCount === 0 &&
+    attentionCount === 0 &&
     !params.hasComposerDraft &&
     !displayedPlacementState &&
     !hasWorkspaceConflict
@@ -156,12 +161,12 @@ export function renderSessionRowBadges(params: {
           "session-row-badge--approval",
         )
       : nothing}
-    ${failedCount > 0
+    ${attentionCount > 0
       ? renderSessionRowBadge(
-          failedLabel,
+          attentionLabel,
           icons.alertTriangle,
-          "session-row-badge--failed",
-          failedCount,
+          "session-row-badge--attention",
+          attentionCount,
         )
       : nothing}
     ${params.hasComposerDraft

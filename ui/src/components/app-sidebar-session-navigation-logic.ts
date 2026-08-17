@@ -162,7 +162,7 @@ export function buildSidebarSessionNavigationState(input: {
   highlightCurrentSession: boolean;
   runtimeSampledAtByRow: WeakMap<GatewaySessionRow, number>;
   loadingChildSessionKeys: ReadonlySet<string>;
-  failedOutboxCountForSessionKey: (sessionKey: string) => number;
+  outboxAttentionCountForSessionKey: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;
   resolveAttention: (row: GatewaySessionRow) => SidebarRecentSession["attention"];
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
@@ -253,7 +253,7 @@ export function buildSidebarSessionNavigationState(input: {
       cloudWorkerStopAction: resolveCloudWorkerStopAction(row.placement),
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
-      failedOutboxCount: input.failedOutboxCountForSessionKey(row.key),
+      outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
       hasComposerDraft: input.hasSessionDraft(row.key),
       unread: row.archived !== true && row.unread === true,
       lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
