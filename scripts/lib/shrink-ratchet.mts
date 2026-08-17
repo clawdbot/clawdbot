@@ -177,7 +177,7 @@ export function parseRatchetScalar(source: string, baselinePath: string) {
 export function compareRatchetSets(
   current: Iterable<string>,
   allowed: ReadonlySet<string>,
-  compare = compareEntries,
+  compare: (left: string, right: string) => number = compareEntries,
 ) {
   const currentSet = new Set(current);
   return {
