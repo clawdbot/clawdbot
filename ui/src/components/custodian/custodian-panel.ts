@@ -1,7 +1,8 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
-import { t } from "../../i18n/index.ts";
 import "../openclaw-mascot.ts";
+import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import {
   custodianSessionStore,
@@ -10,10 +11,7 @@ import {
 import { DockLayoutController } from "../dock-layout-controller.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
 import { icons } from "../icons.ts";
-import {
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
-  type CustodianPanelToggleDetail,
-} from "../panel-toggle-contract.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import "../../pages/custodian/custodian-surface.ts";
 import "../../styles/custodian-panel.css";
 
@@ -127,12 +125,11 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
   }
 
   handleToggleRequest(event: Event): void {
-    const detail =
-      event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
-        ? (event.detail as CustodianPanelToggleDetail)
-        : null;
-    if (detail?.dock === "right" || detail?.dock === "bottom") {
-      this.dockLayout.setDock(detail.dock, false);
+    const raw: unknown = event instanceof CustomEvent ? event.detail : null;
+    const detail = asNullableRecord(raw);
+    const dock = detail?.dock;
+    if (dock === "right" || dock === "bottom") {
+      this.dockLayout.setDock(dock, false);
     }
     if (detail?.open === false) {
       this.setOpen(false);
