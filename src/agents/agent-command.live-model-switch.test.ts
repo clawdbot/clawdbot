@@ -195,6 +195,13 @@ vi.mock("./command/cli-compaction.js", () => ({
     state.runCliTurnCompactionLifecycleMock(...args),
 }));
 
+vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
+  runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: SessionEntry }) => ({
+    sessionEntry,
+    outcome: "skipped" as const,
+  }),
+}));
+
 vi.mock("./command/run-context.js", () => ({
   resolveAgentRunContext: (opts: {
     accountId?: string;
