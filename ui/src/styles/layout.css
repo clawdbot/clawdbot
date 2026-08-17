@@ -1285,6 +1285,23 @@ body.update-dialog-open .sidebar-update-card__status {
   margin-top: 6px;
 }
 
+.sidebar-update-card__review {
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.sidebar-update-card__review:hover {
+  background: var(--bg-hover);
+}
+
 .sidebar-update-card__status--danger {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
   background: color-mix(in srgb, var(--danger) 10%, transparent);

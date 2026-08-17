@@ -10,6 +10,18 @@ export type ApplicationStatusBanner = {
   text: string;
 };
 
+export type RecordedUpdateAttempt = {
+  timestampMs: number;
+  status: string;
+  reason: string;
+  installKind: string | null;
+  installedVersion: string | null;
+  installedSha: string | null;
+  targetVersion: string | null;
+  targetSha: string | null;
+  failure: UpdateFailureCause | null;
+};
+
 const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
 const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
@@ -63,8 +75,11 @@ export type UpdateRestartStatusResponse = {
   sentinel?: {
     kind?: string;
     status?: string;
+    ts?: number;
     stats?: {
+      mode?: string | null;
       reason?: string | null;
+      before?: { sha?: string | null; version?: string | null } | null;
       after?: { sha?: string | null; version?: string | null } | null;
       steps?: UpdateSentinelStep[] | null;
     } | null;
@@ -73,7 +88,33 @@ export type UpdateRestartStatusResponse = {
   schedule?: UpdateScheduleState;
 };
 
-type UpdateFailureCause = { step: string; detail: string };
+export type UpdateFailureCause = { step: string; detail: string };
+
+function readRecordedUpdateAttempt(
+  sentinel: UpdateRestartStatusResponse["sentinel"],
+): RecordedUpdateAttempt | null {
+  if (
+    sentinel?.kind !== "update" ||
+    !sentinel.status ||
+    sentinel.status === "ok" ||
+    isPendingUpdateHandoffSentinel(sentinel) ||
+    typeof sentinel.ts !== "number"
+  ) {
+    return null;
+  }
+  const stats = sentinel.stats;
+  return {
+    timestampMs: sentinel.ts,
+    status: sentinel.status,
+    reason: stats?.reason?.trim() || "unexpected-error",
+    installKind: stats?.mode?.trim() || null,
+    installedVersion: stats?.before?.version?.trim() || null,
+    installedSha: stats?.before?.sha?.trim() || null,
+    targetVersion: stats?.after?.version?.trim() || null,
+    targetSha: stats?.after?.sha?.trim() || null,
+    failure: readUpdateFailureCause(sentinel),
+  };
+}
 
 function lastLogLine(tail: string | null | undefined): string | null {
   const lines = (tail ?? "")
@@ -225,6 +266,7 @@ export function createUpdateVerificationController(params: {
   getHello: () => GatewayHelloOk | null;
   publish: () => void;
   publishBanner: (banner: ApplicationStatusBanner | null) => void;
+  publishRecordedAttempt?: (attempt: RecordedUpdateAttempt | null) => void;
   onVerifiedInstall?: (identity: { version: string | null; sha: string | null }) => void;
 }) {
   let generation = 0;
@@ -289,6 +331,7 @@ export function createUpdateVerificationController(params: {
       }
       if (sentinel?.kind === "update" && sentinel.status && sentinel.status !== "ok") {
         params.clearPending();
+        params.publishRecordedAttempt?.(readRecordedUpdateAttempt(sentinel));
         params.publishBanner(
           resolveUpdateStatusBanner({
             status: "error",
@@ -308,6 +351,7 @@ export function createUpdateVerificationController(params: {
         const hasActualIdentity = actualVersion !== null || actualSha !== null;
         if (versionMatches && shaMatches && (hasActualIdentity || !hasExpectedIdentity)) {
           params.clearPending();
+          params.publishRecordedAttempt?.(null);
           params.onVerifiedInstall?.({ version: actualVersion, sha: actualSha });
           params.publishBanner(null);
           return;
@@ -420,10 +464,12 @@ export function projectUpdateStatusResponse(
   response: UpdateRestartStatusResponse,
   current: {
     updateStatusBanner: ApplicationStatusBanner | null;
+    recordedUpdateAttempt: RecordedUpdateAttempt | null;
     heldUpdateCampaignId: string | null;
   },
 ): {
   updateStatusBanner: ApplicationStatusBanner | null;
+  recordedUpdateAttempt: RecordedUpdateAttempt | null;
   updateAvailable?: UpdateAvailable | null;
   updateSchedule?: UpdateScheduleState | null;
   heldUpdateCampaignId?: string | null;
@@ -443,6 +489,10 @@ export function projectUpdateStatusResponse(
               cause: readUpdateFailureCause(sentinel),
             })
         : current.updateStatusBanner,
+    recordedUpdateAttempt:
+      sentinel?.kind === "update" && sentinel.status
+        ? readRecordedUpdateAttempt(sentinel)
+        : current.recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")
       ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
       : {}),

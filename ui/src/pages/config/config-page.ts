@@ -1108,9 +1108,11 @@ export class ConfigPage extends OpenClawLightDomElement {
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateAvailable: overlaySnapshot.updateAvailable,
         statusBanner: overlaySnapshot.updateStatusBanner,
+        recordedAttempt: overlaySnapshot.recordedUpdateAttempt,
         configBusy: this.isCuratedConfigMutationDisabled(),
         canAdmin,
         canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
+        canCheckStatus: canCallGatewayMethod(gatewaySnapshot, "update.status", "operator.admin"),
         canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
         updateBusy: this.isUpdateBusy(),
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
@@ -1127,6 +1129,7 @@ export class ConfigPage extends OpenClawLightDomElement {
             viaNativeApp: false,
           }),
         onHoldUpdate: () => this.context.overlays.holdUpdate(),
+        onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
       });
     }
     const includeSections = this.includeSections();

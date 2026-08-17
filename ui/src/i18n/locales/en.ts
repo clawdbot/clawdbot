@@ -415,6 +415,7 @@ export const en: TranslationMap = {
       applying: "Applying update…",
     },
     holdOneHour: "Hold 1 h",
+    reviewUpdate: "Review update",
     confirm: {
       message: "Installs the available update on the connected Gateway and restarts it.",
       macMessage:
@@ -486,6 +487,20 @@ export const en: TranslationMap = {
       gitComparisonFailed: "Could not compare this checkout with its tracked upstream",
       updateNow: "Update now",
       updateNowDescription: "Install the available update and restart the Gateway.",
+      latestAttempt: "Latest update attempt",
+      attemptedAt: "Attempted",
+      attemptTarget: "Target",
+      installedIdentity: "Installed",
+      attemptInstallKind: "Attempt install type",
+      attemptReason: "Reason code",
+      failedStep: "Failure details",
+      viewDetails: "View details",
+      recoveryActions: "Recovery",
+      checkStatus: "Check status",
+      retryUpdate: "Retry update",
+      troubleshoot: "Troubleshoot updates",
+      cliFallback: "CLI fallback",
+      showCliFallback: "Show terminal commands",
     },
     coalescedRestart:
       "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",

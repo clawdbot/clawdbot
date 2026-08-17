@@ -83,6 +83,7 @@ export function createApplicationOverlays(
     updateRunning: false,
     updateReconciliationPending: false,
     updateStatusBanner: null,
+    recordedUpdateAttempt: null,
     controlUiRefreshRequired: false,
     approvalQueue: [],
     approvalBusy: false,
@@ -177,6 +178,12 @@ export function createApplicationOverlays(
     snapshot = { ...snapshot, updateStatusBanner };
     publish();
   };
+  const publishRecordedUpdateAttempt = (
+    recordedUpdateAttempt: ApplicationOverlaySnapshot["recordedUpdateAttempt"],
+  ) => {
+    snapshot = { ...snapshot, recordedUpdateAttempt };
+    publish();
+  };
   const heldCampaignId = (schedule: UpdateScheduleState | null) =>
     schedule?.campaign?.holdUntilMs !== undefined
       ? schedule.campaign.id
@@ -190,6 +197,7 @@ export function createApplicationOverlays(
     getHello: () => gateway.snapshot.hello,
     publish,
     publishBanner: publishUpdateBanner,
+    publishRecordedAttempt: publishRecordedUpdateAttempt,
     onVerifiedInstall: announceVerifiedUpdateInstall,
   });
   const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
@@ -197,6 +205,7 @@ export function createApplicationOverlays(
       ...snapshot,
       ...projectUpdateStatusResponse(response, {
         updateStatusBanner: snapshot.updateStatusBanner,
+        recordedUpdateAttempt: snapshot.recordedUpdateAttempt,
         heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
       }),
     };
@@ -438,7 +447,12 @@ export function createApplicationOverlays(
         return;
       }
       const generation = ++updateRunGeneration;
-      snapshot = { ...snapshot, updateRunning: true, updateStatusBanner: null };
+      snapshot = {
+        ...snapshot,
+        updateRunning: true,
+        updateStatusBanner: null,
+        recordedUpdateAttempt: null,
+      };
       publish();
       try {
         // updateRunning above suspends NEW config writes (bootstrap syncs it
