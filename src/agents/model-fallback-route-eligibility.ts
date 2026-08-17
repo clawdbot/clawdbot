@@ -8,9 +8,9 @@ import type { FailoverReason } from "./failover/signal.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
 import { sameModelCandidate } from "./model-fallback-attempt.js";
 import {
-  candidateNeedsUnverifiedHarness,
   isCandidateSessionSkipped,
   resolveCandidateAuthFacts,
+  resolveCandidateTransportReadiness,
 } from "./model-fallback-candidate-facts.js";
 import {
   acquireModelCircuit,
@@ -122,29 +122,29 @@ function candidateCanReachTransport(params: LaterCandidateParams): boolean {
   if (params.tlsFailedProviders.has(later.provider)) {
     return false;
   }
-  // The harness preflight is async and mutates runtime state, so it cannot be
-  // run speculatively here. An unverified harness route may fail before
-  // transport, which would leave the turn with zero attempts.
-  if (
-    candidateNeedsUnverifiedHarness({
-      cfg: params.cfg,
-      candidate: later,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
-    })
-  ) {
+  // The harness preflight is async and mutates runtime state, so only its
+  // decidable prefix runs here. A route that still needs the harness prepared
+  // may fail before transport, which would leave the turn with zero attempts.
+  const readiness = resolveCandidateTransportReadiness({
+    cfg: params.cfg,
+    candidate: later,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
+  });
+  if (!readiness.reachesTransportWithoutPreflight) {
     return false;
   }
   // Same facts the runner derives for the candidate it attempts, so the two
-  // paths cannot disagree about auth scope or profile order.
+  // paths cannot disagree about auth scope, profile order, or whether this
+  // route owns its auth and therefore ignores provider cooldown.
   const authFacts = resolveCandidateAuthFacts({
     cfg: params.cfg,
     authRuntime: params.authRuntime,
     authStore: params.authStore,
     candidate: later,
     userLockedAuthProfileId: params.userLockedAuthProfileId,
-    skipsProviderAuthCooldown: false,
+    skipsProviderAuthCooldown: readiness.skipsProviderAuthCooldown,
     reprobeBlockedProfiles: false,
     agentDir: params.agentDir,
   });

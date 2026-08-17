@@ -204,7 +204,11 @@ export function acquireModelCircuitLastRouteProbe(params: {
   const now = params.now ?? Date.now();
   const key = circuitKey(params.provider, params.model, params.agentDir);
   const state = modelCircuitStates.get(key);
-  if (!state || state.openUntil <= now) {
+  // A concurrent turn may already hold the recovery lease for an expired open
+  // window. Ignoring that lease would hand this probe back as a plain attempt,
+  // so its success could not close the circuit and its failure could not
+  // reopen it with backoff.
+  if (!state || (state.openUntil <= now && !state.halfOpenInFlight)) {
     return { key, wasHalfOpen: false, generation: currentGeneration(key) };
   }
   state.halfOpenInFlight = true;

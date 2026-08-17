@@ -1,12 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+
+const CLI_BACKEND_PROVIDER = "proof-cli";
+
+// isCliProvider resolves CLI backends from the plugin runtime registry, which
+// is empty in a unit test, so the direct-CLI route case needs one registered.
+vi.mock("../plugins/cli-backends.runtime.js", () => ({
+  resolveRuntimeCliBackends: () => [{ id: CLI_BACKEND_PROVIDER, pluginId: "proof-plugin" }],
+}));
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
 import {
-  candidateNeedsUnverifiedHarness,
   isCandidateSessionSkipped,
   resolveCandidateAuthFacts,
+  resolveCandidateTransportReadiness,
 } from "./model-fallback-candidate-facts.js";
 import type { ModelFallbackCandidate } from "./model-fallback.types.js";
 
@@ -133,32 +141,45 @@ describe("model fallback candidate facts", () => {
     });
   });
 
-  describe("harness preflight", () => {
+  describe("pre-transport readiness", () => {
     const cfg = {} as OpenClawConfig;
 
-    it("treats a route needing an unverified harness as not runnable", () => {
+    it("treats a route still needing a harness preflight as not runnable", () => {
       // The gate cannot run the async harness preflight, so a route that
       // depends on one must not justify skipping an open primary: if that
       // preflight fails the turn reaches no provider transport at all.
       expect(
-        candidateNeedsUnverifiedHarness({
+        resolveCandidateTransportReadiness({
           cfg,
           candidate: FALLBACK,
           resolveAgentHarnessRuntimeOverride: () => "claude-code",
-        }),
-      ).toBe(true);
+        }).reachesTransportWithoutPreflight,
+      ).toBe(false);
     });
 
-    it("does not flag routes that reach transport on the normal provider path", () => {
+    it("treats routes that reach transport on the normal provider path as runnable", () => {
       for (const runtime of ["openclaw", "auto"]) {
-        expect(
-          candidateNeedsUnverifiedHarness({
-            cfg,
-            candidate: FALLBACK,
-            resolveAgentHarnessRuntimeOverride: () => runtime,
-          }),
-        ).toBe(false);
+        const readiness = resolveCandidateTransportReadiness({
+          cfg,
+          candidate: FALLBACK,
+          resolveAgentHarnessRuntimeOverride: () => runtime,
+        });
+        expect(readiness.reachesTransportWithoutPreflight).toBe(true);
+        expect(readiness.skipsProviderAuthCooldown).toBe(false);
       }
+    });
+
+    it("keeps a direct CLI route runnable and exempt from provider cooldown", () => {
+      // The runner deliberately lets CLI routes bypass stale provider auth
+      // cooldowns because they own their own auth. If the gate disagreed, an
+      // open primary would be probed again instead of skipped for a CLI
+      // fallback that would actually run.
+      const readiness = resolveCandidateTransportReadiness({
+        cfg,
+        candidate: { ...FALLBACK, provider: CLI_BACKEND_PROVIDER },
+      });
+      expect(readiness.reachesTransportWithoutPreflight).toBe(true);
+      expect(readiness.skipsProviderAuthCooldown).toBe(true);
     });
   });
 });

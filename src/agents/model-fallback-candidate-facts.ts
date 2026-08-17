@@ -11,8 +11,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isFallbackCandidateSkipped } from "./fallback-skip-cache.js";
-import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
-import { resolveModelFallbackCandidateAgentRuntime } from "./model-fallback-attempt.js";
+import type {
+  CandidatePreTransportReadiness,
+  ModelFallbackAuthRuntime,
+} from "./model-fallback-attempt.js";
+import { resolveCandidatePreTransportReadiness } from "./model-fallback-attempt.js";
 import type { ModelFallbackCandidate } from "./model-fallback.types.js";
 
 type CandidateAuthFacts = {
@@ -129,26 +132,29 @@ export function isCandidateSessionSkipped(params: {
 }
 
 /**
- * True when a candidate routes through an agent harness whose preflight has
- * not been verified in this run.
+ * Pre-transport readiness for a candidate the caller is only inspecting.
  *
- * The runner awaits the harness auth precheck before attempting a candidate,
- * but that precheck is async and mutates runtime state, so the circuit gate
- * cannot run it for candidates it is merely inspecting. Treating an
- * unverified harness route as viable is unsafe: the gate would skip an open
- * primary, the harness preflight would then fail, and the turn would reach no
- * provider transport at all — exactly the zero-attempt outcome the circuit
- * exists to prevent. Treating it as blocked only costs one extra probe of the
- * open route.
+ * The runner awaits the full harness auth precheck before attempting a
+ * candidate, but that precheck can prepare a harness runtime, which mutates
+ * state and can throw. The circuit gate inspects later candidates
+ * speculatively, so it uses the shared non-mutating prefix instead.
+ *
+ * Two failure modes matter here and they pull in opposite directions. Calling
+ * an unverified harness route runnable lets the gate skip an open primary for
+ * a route that dies before transport, which is the zero-attempt outcome the
+ * circuit exists to prevent. Calling a direct CLI route unavailable is the
+ * mirror image: the runner deliberately lets CLI routes bypass stale provider
+ * auth cooldowns, so treating them as blocked sends the turn back to the
+ * degraded primary instead of a fallback that would have worked.
  */
-export function candidateNeedsUnverifiedHarness(params: {
+export function resolveCandidateTransportReadiness(params: {
   cfg: OpenClawConfig | undefined;
   candidate: ModelFallbackCandidate;
   agentId?: string;
   sessionKey?: string;
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
-}): boolean {
-  const { runtime, runtimeSource } = resolveModelFallbackCandidateAgentRuntime({
+}): CandidatePreTransportReadiness {
+  return resolveCandidatePreTransportReadiness({
     cfg: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -156,13 +162,4 @@ export function candidateNeedsUnverifiedHarness(params: {
     provider: params.candidate.provider,
     model: params.candidate.model,
   });
-  if (!runtime) {
-    return false;
-  }
-  // These resolve without a harness preflight, so they reach transport on the
-  // normal provider path. Mirrors resolveModelFallbackCandidateHarnessAuthPrecheck.
-  if (runtime === "openclaw" || runtime === "auto") {
-    return false;
-  }
-  return !(runtime === "codex" && runtimeSource === "implicit");
 }

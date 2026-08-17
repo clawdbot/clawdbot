@@ -393,30 +393,67 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
   return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
 }
 
-export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
+export type CandidatePreTransportReadiness = {
+  /** The route reaches provider transport without preparing an agent harness. */
+  reachesTransportWithoutPreflight: boolean;
+  /** The route owns its transport/auth, so provider auth cooldown does not apply. */
+  skipsProviderAuthCooldown: boolean;
+};
+
+/**
+ * Non-mutating prefix of the harness auth precheck below.
+ *
+ * The precheck is the authority on whether a candidate can reach transport,
+ * but it may call `prepareAgentHarnessRuntime`, which mutates runtime state
+ * and can throw. Callers that only inspect a candidate (the route circuit gate
+ * deciding whether a later fallback is usable) must not run that half. This
+ * function shares the decidable prefix with the precheck so the two cannot
+ * drift: notably, a direct CLI provider owns its own auth and stays eligible
+ * even when OpenClaw provider profiles are in cooldown.
+ */
+export function resolveCandidatePreTransportReadiness(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
-  const { agentHarnessRuntimeOverride, explicitAgentRuntime, runtime, runtimeSource } =
+): CandidatePreTransportReadiness {
+  const { explicitAgentRuntime, runtime, runtimeSource } =
     resolveModelFallbackCandidateAgentRuntime(params);
-  const result = (skipsProviderAuthCooldown: boolean) => ({
+  const reaches = (skipsProviderAuthCooldown: boolean): CandidatePreTransportReadiness => ({
+    reachesTransportWithoutPreflight: true,
     skipsProviderAuthCooldown,
-    agentHarnessRuntimeOverride,
   });
   if (!params.cfg) {
-    return result(false);
+    return reaches(false);
   }
   if (!explicitAgentRuntime && isCliProvider(params.provider, params.cfg)) {
-    return result(true);
+    return reaches(true);
   }
   if (!runtime) {
-    return result(false);
+    return reaches(false);
   }
   if (
     runtime === "openclaw" ||
     runtime === "auto" ||
     (runtime === "codex" && runtimeSource === "implicit")
   ) {
-    return result(false);
+    return reaches(false);
+  }
+  // Anything past here needs the harness prepared before its readiness is known.
+  return { reachesTransportWithoutPreflight: false, skipsProviderAuthCooldown: false };
+}
+
+export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
+  params: ModelFallbackRuntimeContext & ModelCandidate,
+): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
+  const { agentHarnessRuntimeOverride, runtime } =
+    resolveModelFallbackCandidateAgentRuntime(params);
+  const result = (skipsProviderAuthCooldown: boolean) => ({
+    skipsProviderAuthCooldown,
+    agentHarnessRuntimeOverride,
+  });
+  const readiness = resolveCandidatePreTransportReadiness(params);
+  if (readiness.reachesTransportWithoutPreflight || !runtime) {
+    // Every path that leaves `runtime` unset is already decided by the shared
+    // prefix; the check keeps that guarantee visible to the type system.
+    return result(readiness.skipsProviderAuthCooldown);
   }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,

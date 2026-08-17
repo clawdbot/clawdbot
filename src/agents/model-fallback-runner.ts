@@ -430,7 +430,13 @@ async function runWithModelFallbackInternal<T>(
     }
 
     let modelCircuitAttempt: ModelCircuitAttempt | undefined;
-    if (modelCircuitEnabled && hasRemainingCandidate) {
+    // Track any route in a chain that has fallbacks, even when this occurrence
+    // is last. A configured primary appended after a requested fallback would
+    // otherwise never accumulate failures, and would be retried as the first
+    // route on later default-primary turns. The gate still cannot strand the
+    // turn: with no runnable later candidate it returns a last-route probe
+    // rather than a skip.
+    if (modelCircuitEnabled && (hasRemainingCandidate || hasFallbackCandidates)) {
       const circuitGate = gateModelCircuitForCandidate({ ...circuitGateContext, currentIndex: i });
       if (circuitGate.type === "skip") {
         pushAttempt(circuitGate.error, circuitGate.reason, circuitSkipMeta);

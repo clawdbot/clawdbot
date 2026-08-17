@@ -969,7 +969,9 @@ describe("runWithModelFallback", () => {
   it("releases a half-open recovery probe when the attempt throws", async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]);
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"], {
+      circuitBreaker: true,
+    });
     const overloaded = new FailoverError("provider overloaded", {
       provider: "openai",
       model: "gpt-5.5",
@@ -986,6 +988,13 @@ describe("runWithModelFallback", () => {
       for (let index = 0; index < modelCircuitInternals.FAILURE_THRESHOLD; index += 1) {
         await runWithModelFallback({ cfg, provider: "openai", model: "gpt-5.5", run: degradedRun });
       }
+      // Without an open circuit the terminal attempt below is not a half-open
+      // probe and this regression would silently test nothing.
+      expect(
+        modelCircuitInternals.modelCircuitStates.get(
+          modelCircuitInternals.circuitKey("openai", "gpt-5.5"),
+        )?.openUntil,
+      ).toBeGreaterThan(now);
       now += modelCircuitInternals.INITIAL_OPEN_MS + 1;
       const terminalError = makeCommandLaneTaskTimeoutError("main", 1_000);
       const terminalRun = vi.fn(async () => {
