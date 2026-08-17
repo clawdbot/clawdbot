@@ -2292,6 +2292,115 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("fails a catalog load after a second consecutive generation invalidation", async () => {
+    const tempDir = makeTempDir(tempDirs, "bundle-mcp-repeated-invalidation-");
+    const serverPath = path.join(tempDir, "repeated-invalidation.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeExecutable(
+      serverPath,
+      `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(logPath)};
+let buffer = "";
+let listCount = 0;
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: { listChanged: true } },
+        serverInfo: { name: "repeated-invalidation", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/list") {
+    listCount += 1;
+    log("tools/list " + listCount);
+    const messages = [
+      {
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          tools: [
+            {
+              name: "tool_" + listCount,
+              inputSchema: { type: "object", properties: {} },
+            },
+          ],
+        },
+      },
+    ];
+    if (listCount <= 2) {
+      messages.push({
+        jsonrpc: "2.0",
+        method: "notifications/tools/list_changed",
+      });
+    }
+    process.stdout.write(messages.map((entry) => JSON.stringify(entry)).join("\\n") + "\\n");
+  }
+}
+process.stdin.setEncoding("utf8");
+function shutdown() {
+  process.exit(0);
+}
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);`,
+    );
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-repeated-invalidation",
+      sessionKey: "agent:test:session-repeated-invalidation",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            changing: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      await expect(runtime.getCatalog()).rejects.toThrow(
+        "bundle-mcp catalog changed repeatedly while refreshing",
+      );
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["tool_3"]);
+      const logText = await fs.readFile(logPath, "utf8");
+      expect(logText.match(/tools\/list/g)).toHaveLength(3);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("recycles an MCP server after repeated request timeouts", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-timeout-recycle-");
     const serverPath = path.join(tempDir, "timeout-recycle.mjs");
