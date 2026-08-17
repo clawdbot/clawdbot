@@ -5,7 +5,6 @@ import {
   placementWorkspaceResultClaim,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   cleanupWorkerWorkspaceResultRef,
@@ -65,11 +64,6 @@ export async function forceAbandonWorkerEnvironment(params: {
   }) => Promise<string>;
   onCleanupError?: (error: unknown) => void;
   authorizeAbandonment?: () => boolean;
-  resolveWorkspaceResultConflict: (placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<WorkerWorkspaceResultConflict | undefined>;
   reportWorkspaceResultConflict: (placement: {
     sessionId: string;
     sessionKey: string;
@@ -142,12 +136,7 @@ export async function forceAbandonWorkerEnvironment(params: {
     }
   }
   const stagedResultCleanups: Array<{
-    placement: {
-      sessionId: string;
-      sessionKey: string;
-      agentId: string;
-      workspaceResultConflict?: WorkerWorkspaceResultConflict;
-    };
+    placement: { sessionId: string; sessionKey: string; agentId: string };
     finalRef: string;
     refs: string[];
   }> = [];
@@ -279,9 +268,6 @@ export async function forceAbandonWorkerEnvironment(params: {
   }
   for (const cleanup of stagedResultCleanups) {
     try {
-      const conflict =
-        cleanup.placement.workspaceResultConflict ??
-        (await params.resolveWorkspaceResultConflict(cleanup.placement));
       const root = await tryResolveWorkspacePath(
         params.resolveWorkspacePath,
         cleanup.placement,
@@ -295,21 +281,24 @@ export async function forceAbandonWorkerEnvironment(params: {
           await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
         }
       }
-      if (conflict?.stagedResultRef === cleanup.finalRef) {
-        await params.reportWorkspaceResultConflict({
-          sessionId: cleanup.placement.sessionId,
-          sessionKey: cleanup.placement.sessionKey,
-          agentId: cleanup.placement.agentId,
-          cleared: true,
-          stagedResultRef: cleanup.finalRef,
-        });
-        placements.retireWorkspaceResultConflict({
-          sessionId: cleanup.placement.sessionId,
-          stagedResultRef: cleanup.finalRef,
-        });
-      }
+    } catch (error) {
+      reportCleanupError(params.onCleanupError, error);
+      continue;
+    }
+    try {
+      await params.reportWorkspaceResultConflict({
+        sessionId: cleanup.placement.sessionId,
+        sessionKey: cleanup.placement.sessionKey,
+        agentId: cleanup.placement.agentId,
+        cleared: true,
+        stagedResultRef: cleanup.finalRef,
+      });
     } catch (error) {
       reportCleanupError(params.onCleanupError, error);
     }
+    placements.retireWorkspaceResultConflict({
+      sessionId: cleanup.placement.sessionId,
+      stagedResultRef: cleanup.finalRef,
+    });
   }
 }

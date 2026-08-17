@@ -599,7 +599,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           placements,
           environmentId,
           resolveWorkspacePath: options.resolveWorkspacePath,
-          resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
           reportWorkspaceResultConflict: options.reportWorkspaceResultConflict,
           onCleanupError,
           authorizeAbandonment,

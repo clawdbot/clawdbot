@@ -58,17 +58,11 @@ async function createWorkspaceResultRefs(workspacePath: string, refs: readonly s
 type ForceAbandonParams = Parameters<typeof forceAbandonWorkerEnvironmentOwner>[0];
 
 async function forceAbandonWorkerEnvironment(
-  params: Omit<
-    ForceAbandonParams,
-    "reportWorkspaceResultConflict" | "resolveWorkspaceResultConflict"
-  > &
-    Partial<
-      Pick<ForceAbandonParams, "reportWorkspaceResultConflict" | "resolveWorkspaceResultConflict">
-    >,
+  params: Omit<ForceAbandonParams, "reportWorkspaceResultConflict"> &
+    Partial<Pick<ForceAbandonParams, "reportWorkspaceResultConflict">>,
 ) {
   return await forceAbandonWorkerEnvironmentOwner({
     reportWorkspaceResultConflict: async () => {},
-    resolveWorkspaceResultConflict: async () => undefined,
     ...params,
   });
 }
@@ -487,13 +481,18 @@ describe("forced worker environment abandonment", () => {
     });
     const workspacePath = path.join(root, "forced-conflict-workspace");
     await createWorkspaceResultRefs(workspacePath, [finalRef, preparedRef, cleanupRef]);
-    const reportWorkspaceResultConflict = vi.fn(async () => {});
+    const transcriptError = new Error("transcript unavailable");
+    const reportWorkspaceResultConflict = vi.fn(async () => {
+      throw transcriptError;
+    });
+    const onCleanupError = vi.fn();
 
     await forceAbandonWorkerEnvironment({
       placements: store,
       environmentId,
       resolveWorkspacePath: async () => workspacePath,
       reportWorkspaceResultConflict,
+      onCleanupError,
     });
 
     for (const ref of [finalRef, preparedRef, cleanupRef]) {
@@ -510,6 +509,7 @@ describe("forced worker environment abandonment", () => {
       cleared: true,
       stagedResultRef: finalRef,
     });
+    expect(onCleanupError).toHaveBeenCalledWith(transcriptError);
   });
 
   it("cleans a retained terminal result and journal after restart", async () => {
