@@ -132,6 +132,7 @@ internal class ScriptedGateway(
     respondWith("health", "{}")
     respondWith("chat.metadata", """{"commands":[],"models":[]}""")
     respondWith("sessions.list", """{"sessions":[]}""")
+    respondWith("progressCard.get", """{"card":null}""")
   }
 
   fun respond(
@@ -202,7 +203,6 @@ internal fun historyResponse(
   sessionId: String,
   messages: List<ReplayHistoryMessage>,
   inFlightRun: Pair<String, String>? = null,
-  inFlightPlan: ChatPlanSnapshot? = null,
   hasActiveRun: Boolean? = inFlightRun?.let { true },
   activeRunIds: List<String>? = inFlightRun?.let { listOf(it.first) },
 ): String =
@@ -214,34 +214,6 @@ internal fun historyResponse(
         buildJsonObject {
           put("runId", JsonPrimitive(inFlightRun.first))
           put("text", JsonPrimitive(inFlightRun.second))
-          if (inFlightPlan != null) {
-            put(
-              "plan",
-              buildJsonObject {
-                put(
-                  "steps",
-                  JsonArray(
-                    inFlightPlan.steps.map { step ->
-                      buildJsonObject {
-                        put("step", JsonPrimitive(step.step))
-                        put(
-                          "status",
-                          JsonPrimitive(
-                            when (step.status) {
-                              ChatPlanStepStatus.Pending -> "pending"
-                              ChatPlanStepStatus.InProgress -> "in_progress"
-                              ChatPlanStepStatus.Completed -> "completed"
-                            },
-                          ),
-                        )
-                      }
-                    },
-                  ),
-                )
-                inFlightPlan.explanation?.let { put("explanation", JsonPrimitive(it)) }
-              },
-            )
-          }
         },
       )
     }

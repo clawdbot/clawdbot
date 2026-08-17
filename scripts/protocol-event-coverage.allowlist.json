@@ -54,7 +54,6 @@
     "plugin.approval.resolved": "Plugin approval prompts are not implemented on Android.",
     "portal.changed": "Control-UI-only surface; native apps have no portal viewer yet.",
     "presence": "Presence roster is a control-UI (web/desktop) surface; Android does not render it.",
-    "progressCard.changed": "Native progress-card rendering is a tracked follow-up; Android consumes the legacy plan agent-event stream until the store-backed card migration lands.",
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
     "session.sharing": "Session visibility/membership management is a Control UI operator surface; Android reads visibility/sharingRole from session rows and has no sharing editor.",
