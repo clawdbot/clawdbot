@@ -36,16 +36,19 @@ function isNativeListedTool(value: unknown): value is NativeListedTool {
 }
 
 function statusTools(status: CodexMcpServerStatus): NativeListedTool[] {
-  return Object.entries(status.tools)
-    .map(([name, value]) => {
-      const tool = asOptionalRecord(value) ?? {};
-      return {
-        ...tool,
-        name,
-        inputSchema: asOptionalRecord(tool.inputSchema) ?? { type: "object" },
-      };
-    })
-    .filter(isNativeListedTool);
+  const tools: NativeListedTool[] = [];
+  for (const [name, value] of Object.entries(status.tools)) {
+    const tool = asOptionalRecord(value) ?? {};
+    const normalized = {
+      ...tool,
+      name,
+      inputSchema: asOptionalRecord(tool.inputSchema) ?? { type: "object" },
+    };
+    if (isNativeListedTool(normalized)) {
+      tools.push(normalized);
+    }
+  }
+  return tools;
 }
 
 function isNativeMcpContentBlock(value: unknown): boolean {
