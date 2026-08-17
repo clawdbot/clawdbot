@@ -182,6 +182,9 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                     ])
                     for control in self.takePendingInvokeControlsLocked(invokeId: request.id) {
                         try self.enqueueInvokeControlLocked(control, invokeId: request.id)
+                        if case .cancel = control {
+                            self.finishCancelledInvokeLocked(invokeId: request.id)
+                        }
                     }
                 } catch {
                     self.invokeContinuations.removeValue(forKey: request.id)?.resume(returning:
@@ -211,6 +214,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 let control = PendingInvokeControl.cancel
                 if self.invokeContinuations[invokeId] != nil {
                     try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
+                    self.finishCancelledInvokeLocked(invokeId: invokeId)
                 } else if self.process?.isRunning == true, self.manifest != nil {
                     self.bufferInvokeControlLocked(control, invokeId: invokeId)
                 }
@@ -266,6 +270,11 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 "invokeId": invokeId,
             ])
         }
+    }
+
+    private func finishCancelledInvokeLocked(invokeId: String) {
+        self.invokeContinuations.removeValue(forKey: invokeId)?.resume(returning:
+            Self.unavailableResponse(invokeId, "UNAVAILABLE: node-host worker invocation cancelled"))
     }
 
     func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {

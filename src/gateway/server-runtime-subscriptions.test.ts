@@ -33,7 +33,6 @@ import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
-  createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
@@ -163,8 +162,10 @@ function createParams(): SubscriptionParams {
     broadcastToConnIds: vi.fn(),
     nodeSendToSession: vi.fn(),
     agentRunSeq: new Map(),
-    chatRunState: createChatRunState(),
-    toolEventRecipients: createToolEventRecipientRegistry(),
+    ...(() => {
+      const chatRunState = createChatRunState();
+      return { chatRunState, toolEventRecipients: chatRunState.toolEventRecipients };
+    })(),
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     chatAbortControllers: new Map(),

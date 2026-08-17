@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
 import { createCuaComputerProvider } from "./commands.js";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
@@ -86,6 +87,7 @@ export function driver(
   const typeText = vi.fn(async () => result({}));
   const pressKey = vi.fn(async () => result({}));
   const callTool = vi.fn<CuaDriverSession["callTool"]>(async () => result({}));
+  const callDesktopTool = vi.fn<CuaDriverSession["callDesktopTool"]>(async () => result({}));
   const escalateScope = vi.fn(async () => ({
     session: "openclaw-test",
     captureScope: 2,
@@ -100,6 +102,7 @@ export function driver(
     isAvailable: () => true,
     resetAvailabilityCache: () => {},
     callTool,
+    callDesktopTool,
     escalateScope,
     getDesktopState,
     getScreenSize,
@@ -120,6 +123,7 @@ export function driver(
     moveCursor,
     scroll,
     callTool,
+    callDesktopTool,
     escalateScope,
     dispose,
     typeText,
@@ -137,5 +141,5 @@ export async function execution(session: CuaDriverSession) {
     imageProcessor: {
       encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
     },
-  }).openExecution({});
+  }).openExecution({ executionId: randomUUID() });
 }

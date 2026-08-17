@@ -448,6 +448,56 @@ function createAccounting(
 }
 
 describe("resolveFollowupDeliveryDecision", () => {
+  it("delivers a yield acknowledgment after accepting a child spawn", () => {
+    const execution = createSettledExecution();
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.meta = {
+        durationMs: 0,
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      };
+      execution.outcome.result.acceptedSessionSpawns = [
+        { runId: "child", childSessionKey: "agent:main:child" },
+      ];
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn: createTurn(),
+        execution,
+        accounting: createAccounting(),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "Research started; results will follow." }],
+    });
+  });
+
+  it("delivers a yield acknowledgment in configured group message-tool-only mode", () => {
+    const turn = createTurn();
+    turn.queued.originatingChatType = "group";
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    const execution = createSettledExecution();
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.meta = {
+        durationMs: 0,
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      };
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution,
+        accounting: createAccounting(),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "Research started; results will follow." }],
+    });
+  });
+
   it("keeps ambient room-event finals silent", () => {
     const turn = createTurn({
       queued: {
@@ -713,6 +763,32 @@ describe("resolveFollowupDeliveryDecision", () => {
       kind: "deliver",
       payloads: [{ text: "terminal failure", isError: true }],
     });
+  });
+
+  it("delivers a sanitized fallback for an empty message-tool-only completion", () => {
+    const turn = createTurn();
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+
+    const decision = resolveFollowupDeliveryDecision({
+      turn,
+      execution: createSettledExecution(),
+      accounting: createAccounting(),
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [
+        {
+          text: expect.stringContaining("did not produce a visible reply"),
+          isError: true,
+        },
+      ],
+    });
+    if (decision.kind === "deliver") {
+      expect(
+        getReplyPayloadMetadata(decision.payloads[0] ?? {})?.deliverDespiteSourceReplySuppression,
+      ).toBe(true);
+    }
   });
 
   it("keeps a terminal failure when suppressed partial output is present", () => {

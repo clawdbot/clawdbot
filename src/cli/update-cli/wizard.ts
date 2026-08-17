@@ -48,7 +48,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       fetchGit: false,
       includeRegistry: false,
     }),
-    readConfigFileSnapshot(),
+    readConfigFileSnapshot({ observe: false }),
   ]);
 
   const configChannel = configSnapshot.valid

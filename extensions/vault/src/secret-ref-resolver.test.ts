@@ -15,10 +15,11 @@ const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 function runResolver(params: {
   request: unknown;
   env?: Record<string, string>;
+  resolverExecutablePath?: string;
   timeoutMs?: number;
 }): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [resolverPath], {
+    const child = spawn(process.execPath, [params.resolverExecutablePath ?? resolverPath], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -66,6 +67,19 @@ function runResolver(params: {
 
 const servers: Array<{ close: () => Promise<void> }> = [];
 const tempDirs: string[] = [];
+
+async function writeTimeoutResolver(): Promise<string> {
+  const staged = path.join(path.dirname(resolverPath), `.vault-timeout-${process.pid}.js`);
+  tempDirs.push(staged);
+  const source = readFileSync(resolverPath, "utf8");
+  const stagedSource = source.replace(
+    "const VAULT_FETCH_TIMEOUT_MS = 5000;",
+    "const VAULT_FETCH_TIMEOUT_MS = 500;",
+  );
+  expect(stagedSource).not.toBe(source);
+  await writeFile(staged, stagedSource, "utf8");
+  return staged;
+}
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -996,7 +1010,8 @@ describe("vault SecretRef resolver", () => {
         VAULT_ADDR: fixture.vaultAddr,
         VAULT_TOKEN: "not-a-real-auth-header",
       },
-      timeoutMs: 6_500,
+      resolverExecutablePath: await writeTimeoutResolver(),
+      timeoutMs: 2_500,
     });
 
     expect(result).toMatchObject({ code: 1, stderr: "", timedOut: false });

@@ -4,8 +4,10 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -842,6 +844,13 @@ describe("skill collection reconciliation", () => {
       { env: testState.env },
     );
     await acquired;
+    const startedAt = performance.now();
+    const clockSpy = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(startedAt)
+      .mockReturnValueOnce(startedAt + 5_001)
+      .mockReturnValueOnce(startedAt)
+      .mockReturnValue(startedAt + 5_001);
 
     try {
       await Promise.all([
@@ -858,6 +867,7 @@ describe("skill collection reconciliation", () => {
         }),
       ]);
     } finally {
+      clockSpy.mockRestore();
       releaseLock?.();
       await heldLock;
     }

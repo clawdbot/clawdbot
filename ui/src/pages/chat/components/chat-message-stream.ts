@@ -169,7 +169,7 @@ export function renderWorkGroupSummary(
       <div class="chat-group-messages">
         <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
           <button
-            class="chat-activity-group__summary"
+            class="chat-inline-disclosure chat-activity-group__summary"
             type="button"
             aria-expanded=${String(opts.expanded)}
             @click=${(event: MouseEvent) => {
@@ -180,9 +180,7 @@ export function renderWorkGroupSummary(
           >
             <span class="chat-activity-group__icon">${icons.check}</span>
             <span class="chat-activity-group__label" title=${label}>${label}</span>
-            <span
-              class="collapse-chevron ${opts.expanded ? "" : "collapse-chevron--collapsed"}"
-              aria-hidden="true"
+            <span class="chat-inline-disclosure__chevron" aria-hidden="true"
               >${icons.chevronDown}</span
             >
           </button>

@@ -80,9 +80,11 @@ const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProv
 
     return {
       FakeWebSocket: MockWebSocket,
-      isProviderAuthProfileConfiguredMock: vi.fn(() => false),
+      isProviderAuthProfileConfiguredMock: vi.fn((_params: { agentDir?: string }) => false),
       resolveApiKeyForProviderMock: vi.fn(
-        async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
+        async (_params: { agentDir?: string }): Promise<{ apiKey: string | undefined }> => ({
+          apiKey: undefined,
+        }),
       ),
     };
   });
@@ -236,6 +238,60 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     await expect(bridge.connect()).rejects.toThrow("xAI credentials missing for realtime voice");
     expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("checks realtime readiness in the selected agent directory", () => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ agentDir }) => agentDir === "/tmp/openclaw-molty-agent",
+    );
+    const provider = buildXaiRealtimeVoiceProvider();
+    const cfg = {
+      agents: {
+        list: [
+          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
+          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
+        ],
+      },
+    } as never;
+
+    expect(provider.isConfigured({ cfg, providerConfig: {}, agentId: "molty" })).toBe(true);
+    expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
+      provider: "xai",
+      cfg,
+      agentDir: "/tmp/openclaw-molty-agent",
+    });
+  });
+
+  it("resolves realtime auth from the selected agent directory", async () => {
+    resolveApiKeyForProviderMock.mockImplementation(async ({ agentDir }) => ({
+      apiKey: agentDir === "/tmp/openclaw-molty-agent" ? "xai-molty" : undefined,
+    }));
+    const cfg = {
+      agents: {
+        list: [
+          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
+          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
+        ],
+      },
+    } as never;
+    const bridge = createTestBridge({
+      cfg,
+      agentId: "molty",
+      providerConfig: {},
+    });
+
+    const { connecting, socket } = await startRealtimeBridge(bridge);
+    await connecting;
+    bridge.close();
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
+      provider: "xai",
+      cfg,
+      agentDir: "/tmp/openclaw-molty-agent",
+    });
+    expect((socket.args[1] as { headers?: Record<string, string> }).headers?.Authorization).toBe(
+      "Bearer xai-molty",
+    );
   });
 
   it("coalesces concurrent connects and ignores connects after readiness", async () => {

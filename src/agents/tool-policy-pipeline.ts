@@ -7,7 +7,7 @@ import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
-import { auditToolPolicyFilter, type ToolPolicyAuditLogLevel } from "./tool-policy-audit.js";
+import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
@@ -138,7 +138,6 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
   toolMeta: (tool: TTool) => { pluginId: string } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
-  auditLogLevel?: ToolPolicyAuditLogLevel;
   declaredToolAllowlist?: DeclaredToolAllowlistContext;
   onFilter?: (event: ToolPolicyFilterEvent<TTool>) => void;
 }): TTool[] {
@@ -226,7 +225,6 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       policy: expanded,
       before,
       after: filtered,
-      logLevel: params.auditLogLevel,
     });
   }
   return filtered;

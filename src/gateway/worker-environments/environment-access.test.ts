@@ -3,7 +3,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { VERSION } from "../../version.js";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -99,13 +99,13 @@ describe("worker environment service", () => {
         code: "invalid_state",
         message: prepareError
           ? "Current worker build identity is unavailable"
-          : "Worker must bootstrap the current build before continuing",
+          : STALE_WORKER_BUILD_REASON,
       } satisfies Partial<WorkerEnvironmentServiceError>,
     );
     expect(tunnelManager.start).not.toHaveBeenCalled();
   });
 
-  it("starts a local-install node tunnel without entering SSH", async () => {
+  it("starts a Gateway-bundle node tunnel without entering SSH", async () => {
     const tunnelManager = {
       status: () => "stopped" as const,
       start: vi.fn(),
@@ -148,11 +148,7 @@ describe("worker environment service", () => {
       {
         tunnelManager,
         nodeTunnelManager,
-        resolveNodeWorkerBuild: async () => ({
-          bundleHash: "c".repeat(64),
-          openclawVersion: VERSION,
-          protocolFeatures: ["worker-heartbeat-v1"],
-        }),
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       },
     );
     const environment = await workerService.create("development", "device-tunnel-gate");
@@ -171,12 +167,12 @@ describe("worker environment service", () => {
       }),
     ).resolves.toMatchObject({ environmentId: environment.environmentId });
     expect(tunnelManager.start).not.toHaveBeenCalled();
-    expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeTunnel);
+    expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeTunnel + 1);
     expect(nodeTunnelManager.start).toHaveBeenCalledWith(
       expect.objectContaining({
         deviceId: "device-1",
         sessionId: "session-device",
-        expectedBuild: expect.objectContaining({ bundleHash: "c".repeat(64) }),
+        expectedBuild: expect.objectContaining({ bundleHash: support.BUNDLE_HASH }),
       }),
     );
   });
@@ -219,11 +215,7 @@ describe("worker environment service", () => {
       {
         tunnelManager,
         nodeTunnelManager,
-        resolveNodeWorkerBuild: async () => ({
-          bundleHash: "c".repeat(64),
-          openclawVersion: VERSION,
-          protocolFeatures: ["worker-heartbeat-v1"],
-        }),
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       },
     );
     const environment = await workerService.create("development", "device-tunnel-timeout");

@@ -199,8 +199,11 @@ describe("dispatchInboundDirectDm", () => {
       onDispatchError: vi.fn(),
     });
 
-    expect(vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0].channelIngress).toBe(
-      "unsupported",
-    );
+    const contextParams = vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0];
+    expect(contextParams?.channelIngress).toBe("unsupported");
+    expect(contextParams?.reply).toEqual({
+      to: "reef:bot-1",
+      originatingTo: "reef:peer-1",
+    });
   });
 });

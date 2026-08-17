@@ -699,6 +699,53 @@ describe("createExecApprovalChannelRuntime", () => {
     });
   });
 
+  it("round-trips old-shape replay requests without mutating their serialized form", async () => {
+    const oldShapeRequest = createPluginReplayRequest("plugin:old-shape");
+    const oldShapeJson = JSON.stringify(oldShapeRequest);
+    mockReplayLists({ plugin: [oldShapeRequest] });
+    const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
+    const finalizeResolved = vi.fn(async () => undefined);
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      PluginApprovalRequest,
+      PluginApprovalResolved
+    >({
+      label: "test/plugin-old-shape-replay",
+      clientDisplayName: "Test Plugin Old Shape Replay",
+      cfg: {} as never,
+      eventKinds: ["plugin"],
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested,
+      finalizeResolved,
+    });
+
+    await runtime.start();
+    await vi.waitFor(() => {
+      expect(deliverRequested).toHaveBeenCalledWith({
+        ...oldShapeRequest,
+        approvalKind: "plugin",
+      });
+    });
+
+    await runtime.handleResolved({
+      id: oldShapeRequest.id,
+      decision: "allow-once",
+      ts: 1500,
+    });
+
+    expect(finalizeResolved).toHaveBeenCalledWith({
+      request: { ...oldShapeRequest, approvalKind: "plugin" },
+      resolved: {
+        id: oldShapeRequest.id,
+        decision: "allow-once",
+        ts: 1500,
+      },
+      entries: [{ id: oldShapeRequest.id }],
+    });
+    expect(JSON.stringify(oldShapeRequest)).toBe(oldShapeJson);
+  });
+
   it("does not block start on pending approval replay delivery", async () => {
     mockReplayLists({ exec: [createExecReplayRequest()] });
     const pendingDelivery = createDeferred<Array<{ id: string }>>();

@@ -2,7 +2,7 @@
 // On these machines the local gateway daemon is absent by design, but the node service may point at a remote gateway.
 
 import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
-import { loadNodeHostConfig } from "../node-host/config.js";
+import { loadNodeHostConfigReadOnly } from "../node-host/config.js";
 
 type NodeOnlyServiceLike = {
   installed: boolean | null;
@@ -14,7 +14,6 @@ type NodeOnlyServiceLike = {
         pid?: number;
       }
     | undefined;
-  runtimeShort?: string | null;
 };
 
 export type NodeOnlyGatewayInfo = {
@@ -51,10 +50,7 @@ function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
   if (node.loaded === true) {
     return true;
   }
-  if (hasRunningRuntime(node.runtime)) {
-    return true;
-  }
-  return typeof node.runtimeShort === "string" && node.runtimeShort.startsWith("running");
+  return hasRunningRuntime(node.runtime);
 }
 
 /** Returns node-only gateway context when node is active and the local gateway is intentionally absent. */
@@ -66,7 +62,7 @@ export async function resolveNodeOnlyGatewayInfo(params: {
     return null;
   }
 
-  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfig())?.gateway);
+  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfigReadOnly())?.gateway);
   return {
     gatewayTarget,
     gatewayValue: `node → ${gatewayTarget} · no local gateway`,

@@ -5,8 +5,8 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type {
+  ExecApprovalDecision,
   ExecAsk,
   ExecHost,
   ExecMode,

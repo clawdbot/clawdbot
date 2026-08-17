@@ -281,6 +281,12 @@ export async function runNonInteractiveLocalSetup(params: {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
 
+  const finalTarget = resolveOnboardingAgentTarget(nextConfig, selectedAgentId);
+  await ensureOnboardingAgentWorkspace(finalTarget, runtime, {
+    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+  });
+
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await commitNonInteractiveOnboardConfig({
     nextConfig,
@@ -288,12 +294,6 @@ export async function runNonInteractiveLocalSetup(params: {
     reset: opts.reset,
   });
   logConfigUpdated(runtime);
-
-  const finalTarget = resolveOnboardingAgentTarget(nextConfig, selectedAgentId);
-  await ensureOnboardingAgentWorkspace(finalTarget, runtime, {
-    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
-    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-  });
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   let daemonInstallStatus:

@@ -32,9 +32,19 @@ import {
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import { loadDeviceAuthToken, loadOriginDeviceToken } from "../infra/device-auth-store.js";
-import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
+import {
+  loadDeviceAuthToken,
+  loadDeviceAuthTokenReadOnly,
+  loadOriginDeviceToken,
+  loadOriginDeviceTokenReadOnly,
+} from "../infra/device-auth-store.js";
+import {
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+  type DeviceIdentity,
+} from "../infra/device-identity.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
+import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -57,6 +67,7 @@ import {
 import {
   buildGatewayConnectionDetailsWithResolvers,
   projectGatewayConnectionDetailsForDiagnostics,
+  projectGatewayUrlForDiagnostics,
   type GatewayConnectionDetails,
 } from "./connection-details.js";
 import {
@@ -107,6 +118,7 @@ type CallGatewayBaseOptions = {
   useStoredDeviceAuth?: boolean;
   requiredStoredDeviceAuthScopes?: OperatorScope[];
   requireLocalBackendSharedAuth?: boolean;
+  sharedStateMode?: "read-only";
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
@@ -247,6 +259,21 @@ export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
 
 function firstGatewayErrorLine(message: string): string {
   return message.split("\n", 1)[0]?.trim() || message;
+}
+
+// Connection-establishment failures where "start the gateway" is the actionable
+// next step; protocol/auth failures keep their own richer messages.
+const GATEWAY_UNREACHABLE_SOCKET_CODES = new Set([
+  "ECONNREFUSED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+]);
+
+function isGatewayUnreachableSocketError(error: Error): boolean {
+  const code = extractErrorCodeOrErrno(error);
+  return code !== undefined && GATEWAY_UNREACHABLE_SOCKET_CODES.has(code);
 }
 
 export function formatGatewayTransportErrorJson(value: unknown): GatewayTransportErrorJson | null {
@@ -471,9 +498,11 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   return isLocalBackendSharedAuth || isLocalCliSharedAuth;
 }
 
-function resolveDeviceIdentityForGatewayCall(): DeviceIdentity | null {
+function resolveDeviceIdentityForGatewayCall(sharedStateMode?: "read-only"): DeviceIdentity | null {
   try {
-    return loadOrCreateDeviceIdentity();
+    return sharedStateMode === "read-only"
+      ? loadDeviceIdentityIfPresent()
+      : loadOrCreateDeviceIdentity();
   } catch {
     // Read-only or restricted environments should still be able to call the
     // gateway with token/password auth without crashing before the RPC.
@@ -484,20 +513,25 @@ function resolveDeviceIdentityForGatewayCall(): DeviceIdentity | null {
 function loadStoredOperatorDeviceAuthToken(
   deviceIdentity: DeviceIdentity | null,
   deviceAuthScope?: string,
+  sharedStateMode?: "read-only",
 ): DeviceAuthEntry | null {
   if (!deviceIdentity) {
     return null;
   }
   try {
     if (deviceAuthScope) {
-      return loadOriginDeviceToken({
+      const loadToken =
+        sharedStateMode === "read-only" ? loadOriginDeviceTokenReadOnly : loadOriginDeviceToken;
+      return loadToken({
         gatewayScope: deviceAuthScope,
         deviceId: deviceIdentity.deviceId,
         role: "operator",
         env: process.env,
       });
     }
-    return loadDeviceAuthToken({
+    const loadToken =
+      sharedStateMode === "read-only" ? loadDeviceAuthTokenReadOnly : loadDeviceAuthToken;
+    return loadToken({
       deviceId: deviceIdentity.deviceId,
       role: "operator",
       env: process.env,
@@ -505,13 +539,6 @@ function loadStoredOperatorDeviceAuthToken(
   } catch {
     return null;
   }
-}
-
-function hasStoredOperatorDeviceAuthToken(
-  deviceIdentity: DeviceIdentity | null,
-  deviceAuthScope?: string,
-): boolean {
-  return Boolean(loadStoredOperatorDeviceAuthToken(deviceIdentity, deviceAuthScope)?.token);
 }
 
 function resolveGatewayCallAuth(config: OpenClawConfig) {
@@ -545,7 +572,13 @@ function ensureGatewayCallCanAuthenticate(params: {
   const hasStoredAuth =
     params.storedAuth !== undefined
       ? Boolean(params.storedAuth?.token)
-      : hasStoredOperatorDeviceAuthToken(params.deviceIdentity, params.deviceAuthScope);
+      : Boolean(
+          loadStoredOperatorDeviceAuthToken(
+            params.deviceIdentity,
+            params.deviceAuthScope,
+            params.opts.sharedStateMode,
+          )?.token,
+        );
   if (hasStoredAuth) {
     return;
   }
@@ -690,6 +723,24 @@ function formatGatewayTimeoutError(
   return `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
 }
 
+/** Wrap raw socket-level connect failures (ECONNREFUSED etc.) into one actionable message. */
+function createGatewayUnreachableTransportError(params: {
+  cause: Error;
+  connectionDetails: GatewayConnectionDetails;
+}): GatewayTransportError {
+  const code = extractErrorCodeOrErrno(params.cause);
+  return new GatewayTransportError({
+    kind: "closed",
+    reason: firstGatewayErrorLine(params.cause.message),
+    connectionDetails: params.connectionDetails,
+    message: [
+      `Gateway not reachable at ${projectGatewayUrlForDiagnostics(params.connectionDetails.url)}${code ? ` (${code})` : ""}.`,
+      "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      params.connectionDetails.message,
+    ].join("\n"),
+  });
+}
+
 function createGatewayCloseTransportError(params: {
   code: number;
   reason: string;
@@ -801,6 +852,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   connectionDetails: GatewayConnectionDetails;
   deviceIdentity: DeviceIdentity | null;
   deviceAuthScope?: string;
+  storedAuth?: DeviceAuthEntry;
   surfaceGatewayClientRequestErrors: boolean;
 }): Promise<T> {
   const {
@@ -816,6 +868,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     safeTimerTimeoutMs,
     deviceIdentity,
     deviceAuthScope,
+    storedAuth,
     surfaceGatewayClientRequestErrors,
   } = params;
   return await new Promise<T>((resolve, reject) => {
@@ -906,6 +959,8 @@ async function executeGatewayRequestWithScopes<T>(params: {
       ...(Array.isArray(scopes) ? { scopes } : {}),
       deviceIdentity,
       ...(deviceAuthScope ? { deviceAuthScope } : {}),
+      ...(storedAuth ? { preparedDeviceAuth: storedAuth } : {}),
+      ...(opts.sharedStateMode ? { sharedStateMode: opts.sharedStateMode } : {}),
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: (hello) => {
@@ -950,7 +1005,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         if (info?.connectError) {
           ignoreClose = true;
-          stop(info.connectError);
+          // Raw socket failures (ECONNREFUSED and friends) otherwise reach the
+          // operator as a bare Node error with no next step.
+          stop(
+            isGatewayUnreachableSocketError(info.connectError)
+              ? createGatewayUnreachableTransportError({
+                  cause: info.connectError,
+                  connectionDetails: params.connectionDetails,
+                })
+              : info.connectError,
+          );
           return;
         }
         if (
@@ -1099,11 +1163,15 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts.deviceIdentity === undefined
       ? omitDeviceIdentity
         ? null
-        : resolveDeviceIdentityForGatewayCall()
+        : resolveDeviceIdentityForGatewayCall(opts.sharedStateMode)
       : opts.deviceIdentity;
   let storedAuth: DeviceAuthEntry | null | undefined;
   if (useStoredDeviceAuth) {
-    storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity, deviceAuthScope);
+    storedAuth = loadStoredOperatorDeviceAuthToken(
+      deviceIdentity,
+      deviceAuthScope,
+      opts.sharedStateMode,
+    );
     if (!storedAuth?.token && deviceAuthScope) {
       throw new GatewayStoredDeviceAuthUnavailableError(
         [
@@ -1162,6 +1230,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     connectionDetails,
     deviceIdentity,
     deviceAuthScope,
+    ...(storedAuth ? { storedAuth } : {}),
     surfaceGatewayClientRequestErrors:
       useStoredDeviceAuth ||
       opts.requireLocalBackendSharedAuth === true ||

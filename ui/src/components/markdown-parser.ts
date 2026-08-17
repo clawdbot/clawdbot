@@ -3,7 +3,11 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import { formatGitHubItemReference, parseGitHubItemPath } from "./github-link-target.ts";
+import {
+  formatGitHubItemReference,
+  isGitHubItemRootPath,
+  parseGitHubItemPath,
+} from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -17,6 +21,7 @@ import {
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
+import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
@@ -469,6 +474,8 @@ export function createMarkdownParser(): MarkdownIt {
     }
   });
 
+  installMarkdownSessionLinks(markdownParser, SESSION_LINK_SCAN_RE);
+
   // Classify web anchors for presentation; runs after linkify so bare URLs are
   // already anchors. The GitHub mark skips links whose only content is an image
   // (badges/shields), where a mark beside a mark reads as noise. Code spans and
@@ -514,7 +521,7 @@ export function createMarkdownParser(): MarkdownIt {
             break;
           }
         }
-        if (generatedUrlLabel && itemTarget && labelToken) {
+        if (generatedUrlLabel && itemTarget && labelToken && isGitHubItemRootPath(url)) {
           labelToken.content = formatGitHubItemReference(itemTarget);
         }
       }
@@ -561,14 +568,17 @@ export function createMarkdownParser(): MarkdownIt {
   markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {
     const rendered = defaultCodeInlineRenderer(tokens, index, options, env, self);
     const target = tokens[index]?.meta?.fileLink as MarkdownFileLinkMeta | undefined;
-    if (!target) {
-      return rendered;
+    if (target) {
+      const lineAttribute =
+        target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
+      const titleAttribute =
+        target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
+      return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
     }
-    const lineAttribute =
-      target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
-    const titleAttribute =
-      target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
-    return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
+    const sessionKey: unknown = tokens[index]?.meta?.sessionLink?.sessionKey;
+    return typeof sessionKey === "string"
+      ? `<a class="markdown-session-link" role="link" tabindex="0" data-session-key="${escapeMarkdownHtml(sessionKey)}">${rendered}</a>`
+      : rendered;
   };
 
   // Message rendering allows inline data images and explicit open-only placeholders

@@ -4,7 +4,11 @@ import path from "node:path";
 import { openRootFileSync } from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
+import {
+  createSyntheticSourceInfo,
+  resolveSkillDisplayName,
+  type Skill,
+} from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
 type LoadedLocalSkill = {
@@ -82,6 +86,7 @@ function loadSingleSkillDirectory(params: {
   return {
     skill: {
       name,
+      displayName: resolveSkillDisplayName(raw, name),
       description,
       filePath,
       baseDir,

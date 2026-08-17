@@ -11,6 +11,7 @@ import type {
   MessagePresentation,
   ReplyPayloadDelivery,
 } from "../interactive/payload.js";
+import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 
 export type ReplyMediaAttachment = {
   type?: "image" | "audio" | "video" | "file";
@@ -152,7 +153,8 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+const REPLY_MEDIA_FAILURE_WARNING =
+  "⚠️ Media failed. Try sending a smaller supported file or a different format.";
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {
@@ -237,6 +239,10 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** Persisted assistant speech facts; never serialized into channel payloads. */
+  tts?: AssistantDeliveryTtsFacts;
+  /** Structured message-tool speech is an explicit request, independent of auto-TTS mode. */
+  ttsExplicit?: true;
   /** Original runtime MEDIA references used to identify the persisted assistant row. */
   assistantTranscriptMediaUrls?: string[];
   /** The runtime owns the transcript decision for this assistant payload. */
@@ -247,10 +253,6 @@ export type ReplyPayloadMetadata = {
   replyDispatcherNormalizationOwner?: object;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
-  /** Foreground freshness prevented a visible final after transcript persistence. */
-  foregroundDeliverySuppression?: {
-    reason: "stale-foreground";
-  };
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */

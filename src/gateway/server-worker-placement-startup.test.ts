@@ -4,6 +4,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 const runtimeFactoryMocks = vi.hoisted(() => ({
   createDispatch: vi.fn(),
   createDiskSpace: vi.fn(),
+  createSessionEvidenceResolver: vi.fn(),
   resolveSessionEvidence: vi.fn(),
 }));
 
@@ -17,7 +18,7 @@ vi.mock("./worker-environments/placement-dispatch.js", async (importOriginal) =>
 });
 
 vi.mock("./server-worker-placement-session-evidence.js", () => ({
-  resolveWorkerPlacementSessionEvidence: runtimeFactoryMocks.resolveSessionEvidence,
+  createWorkerPlacementSessionEvidenceResolver: runtimeFactoryMocks.createSessionEvidenceResolver,
 }));
 
 vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) => {
@@ -70,6 +71,7 @@ describe("worker placement startup health lifetime", () => {
         retireSessionPlacement: vi.fn(),
         pruneOrphanedWorkspaceReconciliations: () => [],
         listWorkspaceReconciliationOwners: () => [],
+        listPendingWorkspaceResults: () => [],
       } as never,
       environments: environments as never,
       gatewayNamespace: "gateway-test",
@@ -81,6 +83,7 @@ describe("worker placement startup health lifetime", () => {
       const sidecar = await runtime.startRuntime({
         isClosePreludeStarted: () => false,
         registerSidecar: vi.fn(),
+        unregisterSidecar: vi.fn(),
       });
 
       expect(sidecar).not.toBeNull();
@@ -111,6 +114,9 @@ describe("worker placement startup health lifetime", () => {
   it("drains deferred startup session evidence before stopping environments", async () => {
     const evidence = createDeferredCore<"current">();
     runtimeFactoryMocks.resolveSessionEvidence.mockImplementation(async () => evidence.promise);
+    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(
+      runtimeFactoryMocks.resolveSessionEvidence,
+    );
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: vi.fn(() => 0),
@@ -155,6 +161,7 @@ describe("worker placement startup health lifetime", () => {
         retireSessionPlacement: vi.fn(),
         pruneOrphanedWorkspaceReconciliations: () => [],
         listWorkspaceReconciliationOwners: () => [],
+        listPendingWorkspaceResults: () => [],
       } as never,
       environments: environments as never,
       gatewayNamespace: "gateway-test",
@@ -163,11 +170,13 @@ describe("worker placement startup health lifetime", () => {
     });
     let closeStarted = false;
     let sidecar: { stop: () => Promise<void> } | undefined;
+    const unregisterSidecar = vi.fn();
     const starting = runtime.startRuntime({
       isClosePreludeStarted: () => closeStarted,
       registerSidecar: (registered) => {
         sidecar = registered;
       },
+      unregisterSidecar,
     });
     await vi.waitFor(() => expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalled());
     closeStarted = true;
@@ -189,5 +198,56 @@ describe("worker placement startup health lifetime", () => {
     await expect(starting).resolves.toBeNull();
     await Promise.all([stopping, repeatedStop]);
     expect(environments.stop).toHaveBeenCalledOnce();
+    expect(unregisterSidecar).toHaveBeenCalledOnce();
+    expect(unregisterSidecar).toHaveBeenCalledWith(sidecar);
+  });
+
+  it("retries worker environment cleanup after a failed stop attempt", async () => {
+    const stopError = new Error("tunnel cleanup failed");
+    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+      read: vi.fn(),
+      version: vi.fn(() => 0),
+      sweep: vi.fn().mockResolvedValue(undefined),
+    });
+    runtimeFactoryMocks.createDispatch.mockReturnValue({
+      dispatch: vi.fn(),
+      forceDestroyEnvironment: vi.fn(),
+      reclaim: vi.fn(),
+      reconcile: vi.fn().mockResolvedValue(undefined),
+      reconcileActive: vi.fn().mockResolvedValue(undefined),
+    });
+    const environments = {
+      start: vi.fn(),
+      stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
+    };
+    const runtime = createGatewayWorkerPlacementRuntime({
+      placements: {
+        get: () => undefined,
+        list: () => [],
+        retireSessionPlacement: vi.fn(),
+        pruneOrphanedWorkspaceReconciliations: () => [],
+        listWorkspaceReconciliationOwners: () => [],
+        listPendingWorkspaceResults: () => [],
+      } as never,
+      environments: environments as never,
+      gatewayNamespace: "gateway-test",
+      revokeSessionAuthority: vi.fn(),
+      warn: vi.fn(),
+    });
+    const sidecar = await runtime.startRuntime({
+      isClosePreludeStarted: () => false,
+      registerSidecar: vi.fn(),
+      unregisterSidecar: vi.fn(),
+    });
+    if (!sidecar) {
+      throw new Error("worker placement runtime did not start");
+    }
+
+    const firstStop = sidecar.stop();
+    expect(sidecar.stop()).toBe(firstStop);
+    await expect(firstStop).rejects.toBe(stopError);
+    await expect(sidecar.stop()).resolves.toBeUndefined();
+
+    expect(environments.stop).toHaveBeenCalledTimes(2);
   });
 });

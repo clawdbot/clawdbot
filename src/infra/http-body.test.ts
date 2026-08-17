@@ -177,6 +177,11 @@ describe("http body limits", () => {
       headers: { "content-length": "9999" },
       maxBytes: 128,
     },
+    {
+      name: "declared unsafe-integer content-length remains oversized",
+      headers: { "content-length": "999999999999999999999999" },
+      maxBytes: 128,
+    },
   ])("$name", async ({ chunks, headers, maxBytes }) => {
     await expectReadPayloadTooLarge({ chunks, headers, maxBytes });
   });
@@ -289,5 +294,40 @@ describe("http body limits", () => {
       message: "RequestBodyConnectionClosed",
       statusCode: 400,
     });
+    for (const event of ["data", "end", "error", "close"] as const) {
+      expect(req.listenerCount(event), event).toBe(0);
+    }
+  });
+
+  it("classifies request stream errors as a closed connection", async () => {
+    const req = createMockRequest({ emitEnd: false });
+    const promise = readJsonBodyWithLimit(req, { maxBytes: 128 });
+    queueMicrotask(() => req.emit("error", new Error("socket reset")));
+    await expect(promise).resolves.toEqual({
+      ok: false,
+      code: "CONNECTION_CLOSED",
+      error: "Connection closed",
+    });
+  });
+
+  it("can defer destructive limit cleanup until a response flushes", async () => {
+    const req = createMockRequest({
+      headers: { "content-length": "129" },
+      emitEnd: false,
+    });
+    const pause = vi.fn();
+    req.pause = pause;
+
+    await expectRequestBodyLimitError(
+      readRequestBodyWithLimit(req, { maxBytes: 128, destroyOnLimit: false }),
+      {
+        code: "PAYLOAD_TOO_LARGE",
+        message: "PayloadTooLarge",
+        statusCode: 413,
+      },
+    );
+
+    expect(req.destroyed).toBe(false);
+    expect(pause).toHaveBeenCalledOnce();
   });
 });

@@ -21,10 +21,7 @@ import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 import {
-  killQaScenarioWindowsProcessTree,
-  resetQaScenarioCommandCleanupTimings,
   runQaScenarioCommandLifecycle,
-  setQaScenarioCommandCleanupTimings,
   type QaScenarioCommandExecution,
   type QaScenarioCommandResult,
 } from "./test-file-scenario-command-lifecycle.js";
@@ -651,13 +648,3 @@ export async function runQaTestFileScenarios(
     results,
   };
 }
-
-export const qaTestFileScenarioRunnerTesting = {
-  killQaScenarioWindowsProcessTree,
-  resetTimeoutCleanupTimings() {
-    resetQaScenarioCommandCleanupTimings();
-  },
-  setTimeoutCleanupTimings(params: { forceSettleMs: number; killGraceMs: number }) {
-    setQaScenarioCommandCleanupTimings(params);
-  },
-};

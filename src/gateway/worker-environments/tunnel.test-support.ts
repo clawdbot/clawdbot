@@ -97,9 +97,7 @@ export async function prepareLocalWorkspaceRsyncBoundary(
     throw new Error("test rsync transfer is missing its bundled receiver invocation");
   }
   const receiverEntry = path.join(remoteHome, invocation.receiverEntryPath);
-  const installRoot = path.join(remoteHome, ".openclaw-worker", BUNDLE_HASH);
   await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
-  await fs.writeFile(path.join(installRoot, "package.json"), '{"type":"module"}\n');
   const tsxApi = import.meta.resolve("tsx/esm/api");
   const sourceEntry = pathToFileURL(path.resolve("src/worker/workspace-rsync-receiver.ts")).href;
   await fs.writeFile(
@@ -213,8 +211,8 @@ class FakeProcess implements WorkerSshProcess {
     this.exitDeferred.resolve({ code, signal: null });
   }
 
-  exit(code = 1) {
-    this.exitDeferred.resolve({ code, signal: null });
+  exit(code = 1, stderrTail?: string) {
+    this.exitDeferred.resolve({ code, signal: null, ...(stderrTail ? { stderrTail } : {}) });
   }
 
   blockStopUntil(barrier: Promise<void>) {
@@ -230,7 +228,10 @@ class FakeProcess implements WorkerSshProcess {
 }
 
 export function fakeRunner(
-  onRun?: (argv: string[], options: CommandOptions) => SpawnResult | undefined,
+  onRun?: (
+    argv: string[],
+    options: CommandOptions,
+  ) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
 ) {
   const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
   const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
@@ -242,7 +243,7 @@ export function fakeRunner(
     },
     async run(argv, options) {
       runs.push({ argv, options });
-      return onRun?.(argv, options) ?? success();
+      return (await onRun?.(argv, options)) ?? success();
     },
   };
   return { runner, runs, starts };

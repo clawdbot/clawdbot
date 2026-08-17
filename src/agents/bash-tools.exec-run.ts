@@ -70,6 +70,8 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 
+type GatewayApprovalRevalidator = () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
@@ -205,6 +207,7 @@ export function createExecTool(
       }
       const startedAt = Date.now();
       let execCommandOverride: string | undefined;
+      let revalidateGatewayApproval: GatewayApprovalRevalidator | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       const foregroundFallbackWarning =
@@ -535,10 +538,10 @@ export function createExecTool(
             return gatewayResult.deniedResult;
           }
           signal?.throwIfAborted();
-          execCommandOverride = gatewayResult.execCommandOverride;
-          if (gatewayResult.allowWithoutEnforcedCommand) {
-            execCommandOverride = undefined;
-          }
+          revalidateGatewayApproval = gatewayResult.revalidateBeforeExecution;
+          execCommandOverride = gatewayResult.allowWithoutEnforcedCommand
+            ? undefined
+            : gatewayResult.execCommandOverride;
         }
 
         // Pending approvals have not started the command. Add fallback warnings only
@@ -560,6 +563,10 @@ export function createExecTool(
           });
         }
 
+        const gatewayApprovalDenied = await revalidateGatewayApproval?.();
+        if (gatewayApprovalDenied) {
+          return gatewayApprovalDenied;
+        }
         signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,

@@ -39,7 +39,7 @@ import type {
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import type { GroupKeyResolution, SessionEntry } from "./types.js";
+import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 
 function projectSessionEntryForPersistenceRevision(params: {
   storePath: string;
@@ -328,13 +328,13 @@ export async function markSessionAbortTarget(params: {
   scope: SessionAccessScope;
   now?: () => number;
 }): Promise<SessionAbortTargetResult | null> {
-  let resolvedTarget: SessionAbortTargetResult | null = null;
+  const resolution: { target: SessionAbortTargetResult | null } = { target: null };
   try {
     const sessionKey = normalizeStoreSessionKey(params.scope.sessionKey);
     const updated = await patchSessionEntryCore(
       params.scope,
       (currentEntry) => {
-        resolvedTarget = {
+        resolution.target = {
           entry: { ...currentEntry },
           persisted: false,
           sessionId: currentEntry.sessionId,
@@ -368,7 +368,7 @@ export async function markSessionAbortTarget(params: {
         }
       : null;
   } catch (error) {
-    const fallbackTarget = resolvedTarget as unknown as SessionAbortTargetResult | null;
+    const fallbackTarget = resolution.target;
     if (fallbackTarget) {
       return {
         entry: fallbackTarget.entry,

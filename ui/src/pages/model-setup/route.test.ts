@@ -86,4 +86,26 @@ describe("model setup route", () => {
     });
     expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it("redacts secrets in initial detection failures", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const hello = {
+      type: "hello-ok" as const,
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: ["openclaw.setup.detect"] },
+    };
+    const context = {
+      gateway: { snapshot: { client, phase: "connected", hello } },
+      agentSelection: { state: { selectedId: "main" } },
+    } as unknown as ApplicationContext;
+
+    await expect(page.loader?.(context, loaderOptions())).resolves.toMatchObject({
+      state: {
+        phase: "detect-error",
+        message: "OPENAI_API_KEY=sk-123...cdef",
+      },
+    });
+  });
 });

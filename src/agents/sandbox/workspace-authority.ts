@@ -28,7 +28,7 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "apply_patch",
   "edit",
   "exec",
-  "image",
+  "view_image",
   "process",
   "read",
   "session_status",

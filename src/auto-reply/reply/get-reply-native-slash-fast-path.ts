@@ -36,6 +36,7 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripStructuralPrefixes } from "./mentions.js";
+import { resolveContextTokens } from "./model-selection-context.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 import type { createTypingController } from "./typing.js";
 
@@ -351,7 +352,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         resolveDefaultThinkingLevel: async () => undefined,
         provider: params.provider,
         model: params.model,
-        contextTokens: params.agentCfg?.contextTokens ?? 0,
+        contextTokens: resolveContextTokens({
+          cfg: params.cfg,
+          provider: params.provider,
+          model: params.model,
+        }),
         isGroup: sessionState.isGroup,
         loadSkillCommands: loadNativeSkillCommands,
         typing: params.typing,

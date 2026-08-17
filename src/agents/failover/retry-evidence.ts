@@ -1,5 +1,6 @@
 import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
 import milliseconds from "ms";
+import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
@@ -48,12 +49,13 @@ function resolveRetrySignalStatus(signal: Pick<FailoverSignal, "message" | "stat
 
 /** Narrow evidence that replaying the same assistant request may succeed within this session. */
 export function hasTransientRetryEvidence(
-  signal: Pick<FailoverSignal, "message" | "status">,
+  signal: Pick<FailoverSignal, "code" | "message" | "status">,
 ): boolean {
   const status = resolveRetrySignalStatus(signal);
   return (
     (status !== undefined && RETRYABLE_HTTP_STATUS_CODES.has(status)) ||
-    TRANSIENT_RETRY_EVIDENCE_RE.test(signal.message ?? "")
+    TRANSIENT_RETRY_EVIDENCE_RE.test(signal.message ?? "") ||
+    isTransientNetworkError({ code: signal.code })
   );
 }
 

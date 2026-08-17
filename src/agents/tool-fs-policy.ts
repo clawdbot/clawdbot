@@ -10,11 +10,16 @@ import type { ToolFsPolicy } from "./tool-fs-policy.types.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
-export type { ToolFsPolicy } from "./tool-fs-policy.types.js";
+export type { PreparedSessionPermissionPolicy, ToolFsPolicy } from "./tool-fs-policy.types.js";
+export { resolveSessionPermissionExecMode } from "./session-permission-exec-mode.js";
 
-export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
+export function createToolFsPolicy(params: {
+  workspaceOnly?: boolean;
+  root?: string;
+}): ToolFsPolicy {
   return {
     workspaceOnly: params.workspaceOnly === true,
+    ...(params.root ? { root: params.root } : {}),
   };
 }
 

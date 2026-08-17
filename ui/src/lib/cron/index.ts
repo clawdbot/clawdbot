@@ -21,6 +21,7 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../cron-status.ts";
+import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -33,6 +34,7 @@ export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
 
 const CRON_CHANNEL_LAST = "last";
 type CronDelivery = NonNullable<CronJob["delivery"]>;
+type CronFormAnnounceDelivery = Extract<CronDelivery, { mode: "announce" }>;
 
 export type CronFormState = {
   name: string;
@@ -69,7 +71,7 @@ export type CronFormState = {
   deliveryAccountId: string;
   deliveryBestEffort: boolean;
   deliveryThreadId: CronDelivery["threadId"] | undefined;
-  deliveryCompletionDestination: CronDelivery["completionDestination"] | undefined;
+  deliveryCompletionDestination: CronFormAnnounceDelivery["completionDestination"] | undefined;
   deliveryFailureDestination: CronDelivery["failureDestination"] | undefined;
   failureAlertMode: "inherit" | "disabled" | "custom";
   failureAlertAfter: string;
@@ -101,6 +103,15 @@ function isCronPayload(value: unknown): value is CronPayload {
     return true;
   }
   return false;
+}
+
+function isCronFormSessionTarget(value: string): value is CronFormState["sessionTarget"] {
+  return (
+    value === "main" ||
+    value === "isolated" ||
+    value === "current" ||
+    (value.startsWith("session:") && value.length > "session:".length)
+  );
 }
 
 export function getCronJobPayload(job: CronJob): CronPayload | null {
@@ -384,7 +395,7 @@ export async function loadCronStatus(state: CronState) {
       state.cronStatus = null;
       state.cronError = formatMissingOperatorReadScopeMessage("cron status");
     } else {
-      state.cronError = String(err);
+      state.cronError = formatUiError(err);
     }
   }
 }
@@ -504,7 +515,7 @@ async function withCronBusy(
   try {
     await run(client);
   } catch (err) {
-    state.cronError = String(err);
+    state.cronError = formatUiError(err);
   } finally {
     state.cronBusy = false;
   }
@@ -677,7 +688,7 @@ export async function loadCronJobsPage(
       clearCronEditState(state);
     }
   } catch (err) {
-    state.cronError = String(err);
+    state.cronError = formatUiError(err);
   } finally {
     if (append) {
       state.cronJobsLoadingMore = false;
@@ -842,6 +853,9 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = job.failureAlert;
   const payload = getCronJobPayload(job);
   const payloadLocked = isReadOnlyCronPayload(payload);
+  if (!isCronFormSessionTarget(job.sessionTarget)) {
+    throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
+  }
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -1401,7 +1415,7 @@ export async function loadCronRuns(
     if (!ownsCronRunsRequest(state, request)) {
       return "skipped";
     }
-    state.cronError = String(err);
+    state.cronError = formatUiError(err);
     return "error";
   } finally {
     if (append && activeCronRunsRequests.get(state) === request) {

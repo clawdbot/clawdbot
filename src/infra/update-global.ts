@@ -54,6 +54,11 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   globalRoot: string | null;
   packageRoot: string | null;
   directNodeModulesRoot?: boolean;
+  npmOwner?: {
+    version: string | null;
+    lifecyclePolicy: NpmLifecyclePolicy | null;
+    probeError?: string;
+  };
 };
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
@@ -77,6 +82,73 @@ export type NpmGlobalPrefixLayout = {
   globalRoot: string;
   binDir: string;
 };
+
+type NpmLifecyclePolicy = "unsupported-transition" | "unflagged" | "allow-scripts";
+
+type SupportedNpmLifecyclePolicy = Exclude<NpmLifecyclePolicy, "unsupported-transition">;
+
+type NpmLifecyclePolicyGate =
+  | { policy: SupportedNpmLifecyclePolicy | null; error: null }
+  | { policy: null; error: string };
+
+/** Selects npm's lifecycle policy from the version of the owning executable. */
+function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy | null {
+  const parsed = parseSemver(version);
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.major !== 11) {
+    return parsed.major >= 12 ? "allow-scripts" : "unflagged";
+  }
+  if (parsed.minor <= 12) {
+    return "unflagged";
+  }
+  return parsed.minor >= 16 ? "allow-scripts" : "unsupported-transition";
+}
+
+/** Resolves the owning npm policy once, before any update mutation. */
+export function resolveNpmLifecyclePolicyGate(
+  installTarget: ResolvedGlobalInstallTarget,
+): NpmLifecyclePolicyGate {
+  if (installTarget.manager !== "npm") {
+    return { policy: null, error: null };
+  }
+  const version = installTarget.npmOwner?.version ?? "";
+  const policy = installTarget.npmOwner?.lifecyclePolicy ?? null;
+  if (policy === "unflagged" || policy === "allow-scripts") {
+    return { policy, error: null };
+  }
+  if (policy === "unsupported-transition") {
+    return {
+      policy: null,
+      error: `npm ${version} cannot safely approve OpenClaw lifecycle scripts. Upgrade the owning npm to 11.16 or newer before updating; no package changes were made.`,
+    };
+  }
+  return {
+    policy: null,
+    error: `Unable to determine the owning npm version before updating; no package changes were made.${installTarget.npmOwner?.probeError ? ` ${installTarget.npmOwner.probeError}` : ""}`,
+  };
+}
+
+async function resolveNpmOwner(params: {
+  command: string;
+  runCommand: CommandRunner;
+  timeoutMs: number;
+}): Promise<NonNullable<ResolvedGlobalInstallTarget["npmOwner"]>> {
+  const result = await params
+    .runCommand([params.command, "--version"], { timeoutMs: params.timeoutMs })
+    .catch((error: unknown) => ({
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+      code: 1,
+    }));
+  const version = result.code === 0 ? readPackageManagerProbeValue(result.stdout) : "";
+  return {
+    version: version || null,
+    lifecyclePolicy: version ? resolveNpmLifecyclePolicy(version) : null,
+    ...(result.code === 0 || !result.stderr ? {} : { probeError: result.stderr }),
+  };
+}
 
 function normalizePackageTarget(value: string): string {
   return value.trim();
@@ -1089,6 +1161,14 @@ export async function resolveGlobalInstallTarget(params: {
       ? (pnpmIsolatedPackage?.packageRoot ??
         (verifiedPnpmIsolatedGlobalRoot && params.pkgRoot ? params.pkgRoot : fallbackPackageRoot))
       : fallbackPackageRoot;
+  const npmOwner =
+    command.manager === "npm"
+      ? await resolveNpmOwner({
+          command: command.command,
+          runCommand: params.runCommand,
+          timeoutMs: params.timeoutMs,
+        })
+      : null;
   // Preserve metadata-backed pnpm ownership when the invoking project link is gone.
   // The update preflight must reject that orphan instead of falling through to npm.
   return {
@@ -1102,6 +1182,7 @@ export async function resolveGlobalInstallTarget(params: {
       : {}),
     globalRoot: targetGlobalRoot,
     packageRoot,
+    ...(npmOwner ? { npmOwner } : {}),
     ...(honoredPackageRootGlobalRoot &&
     targetGlobalRoot === honoredPackageRootGlobalRoot &&
     honoredDirectNpmRoot
@@ -1215,6 +1296,7 @@ export function globalInstallArgs(
   pkgRoot?: string | null,
   installPrefix?: string | null,
   installCwd?: string | null,
+  npmLifecyclePolicy: SupportedNpmLifecyclePolicy = "allow-scripts",
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
@@ -1243,7 +1325,9 @@ export function globalInstallArgs(
     resolved.command,
     "i",
     "-g",
-    resolveNpmInstallScriptsAllowFlag(spec, installCwd),
+    ...(npmLifecyclePolicy === "allow-scripts"
+      ? [resolveNpmInstallScriptsAllowFlag(spec, installCwd)]
+      : []),
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
@@ -1263,6 +1347,7 @@ export function globalInstallFallbackArgs(
   pkgRoot?: string | null,
   installPrefix?: string | null,
   installCwd?: string | null,
+  npmLifecyclePolicy: SupportedNpmLifecyclePolicy = "allow-scripts",
 ): string[] | null {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager !== "npm") {
@@ -1272,7 +1357,9 @@ export function globalInstallFallbackArgs(
     resolved.command,
     "i",
     "-g",
-    resolveNpmInstallScriptsAllowFlag(spec, installCwd),
+    ...(npmLifecyclePolicy === "allow-scripts"
+      ? [resolveNpmInstallScriptsAllowFlag(spec, installCwd)]
+      : []),
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
     "--omit=optional",

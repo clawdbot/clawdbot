@@ -123,6 +123,7 @@ export async function probeGatewayStatus(opts: {
             ...(allowRpcConfigCredentials && opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
+            sharedStateMode: "read-only",
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
           statusRuntimeVersion = readRuntimeVersionFromStatusPayload(statusPayload);

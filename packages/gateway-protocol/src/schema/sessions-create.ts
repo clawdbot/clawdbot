@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionPermissionModeSchema } from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 /** Creates or adopts a session with optional model, thinking, label, and parent linkage. */
@@ -9,8 +10,10 @@ export const SessionsCreateParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
+  category: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
+  permissionMode: Type.Optional(SessionPermissionModeSchema),
   incognito: Type.Optional(Type.Boolean()),
   visibility: Type.Optional(SessionVisibilitySchema),
   catalogId: Type.Optional(NonEmptyString),

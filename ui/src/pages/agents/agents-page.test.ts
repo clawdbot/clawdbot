@@ -12,6 +12,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import { loadCronJobsPage, type CronState } from "../../lib/cron/index.ts";
 import type { AgentsRouteData } from "./route.ts";
 import "./agents-page.ts";
@@ -53,6 +54,7 @@ type TestAgentsPage = HTMLElement & {
   };
   ensureAgentIdentities: () => void;
   loadActivePanelData: () => void;
+  ensureModelCatalog: (options?: { refresh?: boolean }) => void;
   refreshCron: () => Promise<void>;
   requestUpdate: () => void;
   runCronTask: <T>(task: (cronState: CronState) => Promise<T>) => Promise<T>;
@@ -393,6 +395,31 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "worker" });
   });
 
+  it("re-reads a cached model catalog when the picker asks for a refresh", async () => {
+    const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
+    const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: oldModels })
+      .mockResolvedValueOnce({ models: nextModels });
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.routeData = { panel: "overview" } as AgentsRouteData;
+    setPageGateway(page, { request } as unknown as GatewayBrowserClient);
+    page.agentsSelectedId = "main";
+
+    page.loadActivePanelData();
+    await vi.waitFor(() => expect(page.chatModelCatalog).toEqual(oldModels));
+
+    // Without refresh the per-agent cache answers; provider-key changes would
+    // stay invisible for the connection lifetime.
+    page.ensureModelCatalog();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    page.ensureModelCatalog({ refresh: true });
+    await vi.waitFor(() => expect(page.chatModelCatalog).toEqual(nextModels));
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects an old-client model catalog after the Gateway client changes", async () => {
     const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
     const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
@@ -435,6 +462,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     page.loadActivePanelData();
     page.gateway.invalidate();
+    invalidateChatMetadataStore(page.client as GatewayBrowserClient);
     page.loadActivePanelData();
 
     await vi.waitFor(() => expect(page.chatModelCatalog).toEqual(nextModels));
@@ -465,6 +493,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     setPageGateway(page, client, false);
     expect(page.chatModelCatalog).toEqual([]);
+    invalidateChatMetadataStore(client);
     setPageGateway(page, client);
     page.loadActivePanelData();
 

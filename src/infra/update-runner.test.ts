@@ -772,6 +772,9 @@ describe("runGatewayUpdate", () => {
       if (key === "pnpm root -g") {
         return { stdout: "", stderr: "", code: 1 };
       }
+      if (key === "npm --version") {
+        return { stdout: "12.0.0", stderr: "", code: 0 };
+      }
       if (key === baseInstallKey) {
         return (await params.onBaseInstall?.()) ?? { stdout: "ok", stderr: "", code: 0 };
       }
@@ -2732,6 +2735,7 @@ describe("runGatewayUpdate", () => {
   const createGlobalInstallHarness = (params: {
     pkgRoot: string;
     npmRootOutput?: string;
+    npmVersion?: string;
     pnpmRootOutput?: string;
     installCommand: InstallCommandExpectation;
     gitRootMode?: "not-git" | "missing";
@@ -2756,6 +2760,9 @@ describe("runGatewayUpdate", () => {
           return { stdout: params.npmRootOutput, stderr: "", code: 0 };
         }
         return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "npm --version") {
+        return { stdout: params.npmVersion ?? "12.0.0", stderr: "", code: 0 };
       }
       if (key === "pnpm root -g") {
         if (params.pnpmRootOutput) {
@@ -3004,6 +3011,27 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("ok");
     expect(stalePresentAtInstall).toBe(false);
     expect(await pathExists(staleDir)).toBe(false);
+  });
+
+  it("refuses unsupported npm before global update cleanup mutates backups", async () => {
+    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
+    const backupDir = path.join(nodeModules, ".openclaw-interrupted");
+    await fs.mkdir(backupDir, { recursive: true });
+    const { runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      npmVersion: "11.15.9",
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
+    });
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "unexpected-error",
+    });
+    expect(result.steps.at(-1)?.name).toBe("npm lifecycle policy preflight");
+    await expect(fs.access(backupDir)).resolves.toBeUndefined();
   });
 
   it("retries global npm update with --omit=optional when initial install fails", async () => {

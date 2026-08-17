@@ -42,6 +42,15 @@ export function environmentMenuFacts(
   environment: DraftEnvironment | undefined,
   options: { connected?: boolean; nowMs?: number } = {},
 ): string[] {
+  const updateIssue = environment?.issues?.find((issue) => issue.code === "update-required");
+  if (updateIssue) {
+    return [
+      t("newSession.nodeUpdateRequired", {
+        updateCommand: updateIssue.updateCommand,
+        restartCommand: updateIssue.headlessReconnectCommand,
+      }),
+    ];
+  }
   const lifecycle = environmentLifecycleFact({
     environment,
     connected: options.connected ?? true,

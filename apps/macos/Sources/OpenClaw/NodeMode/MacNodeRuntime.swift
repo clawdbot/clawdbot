@@ -632,7 +632,7 @@ extension MacNodeRuntime {
             case .noDisplays, .invalidScreenIndex, .missingDisplayFrameId, .displayFrameChanged,
                  .missingCoordinate, .coordinateOutOfBounds, .invalidReferenceWidth, .missingKeys,
                  .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld,
-                 .invalidV2Request, .staleObservation, .unsupportedAction:
+                 .invalidRequest, .staleObservation, .unsupportedAction:
                 return Self.errorResponse(
                     req,
                     code: .invalidRequest,
