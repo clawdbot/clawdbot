@@ -1073,6 +1073,18 @@
         "model"
       ]
     },
+    "view_image": {
+      "emoji": "🖼️",
+      "title": "View Image",
+      "detailKeys": [
+        "path",
+        "paths",
+        "url",
+        "urls",
+        "prompt",
+        "model"
+      ]
+    },
     "image_generate": {
       "emoji": "🎨",
       "title": "Image Generation",

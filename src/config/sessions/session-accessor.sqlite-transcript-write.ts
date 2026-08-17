@@ -6,7 +6,6 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { clearAllCliSessions } from "./cli-session-binding.js";
-import { writeTranscriptArchive } from "./session-accessor.sqlite-archive.js";
 import type {
   SessionTranscriptAccessScope,
   SessionTranscriptTurnMessageAppend,
@@ -36,7 +35,6 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
-  resolveSqliteTranscriptArchiveDirectory,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -64,7 +62,6 @@ import {
   sessionMatchesExpectedTranscriptTurn,
 } from "./session-transcript-turn-state.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
-import { serializeJsonlLines } from "./transcript-jsonl.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
@@ -190,7 +187,7 @@ export async function trimTranscriptForManualCompact(
   scope: SessionTranscriptAccessScope,
   selectRetainedLines: (lines: readonly string[]) => readonly string[] | null,
   options: { nowMs?: number } = {},
-): Promise<{ trimmed: false } | { archivedPath: string; kept: number; trimmed: true }> {
+): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
   const resolved = resolveSqliteTranscriptScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
@@ -207,14 +204,6 @@ export async function trimTranscriptForManualCompact(
       );
     }
     const retainedEvents = retainedLines.map((line) => JSON.parse(line) as TranscriptEvent);
-    const archivedPath = writeTranscriptArchive({
-      archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-      content: serializeJsonlLines(lines),
-      reason: "bak",
-      sessionId: resolved.sessionId,
-    });
-    // Published archives can be reused by another process before this commit.
-    // Retain them on failure so a sibling operation never loses its durable proof.
     let previousIdentity = new Map<string, SessionEntry>();
     let currentIdentity = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction((writeDatabase) => {
@@ -253,7 +242,7 @@ export async function trimTranscriptForManualCompact(
       currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-    return { archivedPath, kept: retainedLines.length, trimmed: true };
+    return { kept: retainedLines.length, trimmed: true };
   });
 }
 

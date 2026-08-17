@@ -447,8 +447,8 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "image",
-    label: "image",
+    id: "view_image",
+    label: "view_image",
     description: "Image understanding",
     sectionId: "media",
     profiles: ["coding"],

@@ -23,7 +23,7 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "update_plan",
   "tool_search",
   "tool_describe",
-  "image",
+  "view_image",
 ]);
 
 type NamedTool = { name?: string };

@@ -2570,6 +2570,88 @@ validate_git_checkout_head() {
     return 1
 }
 
+clone_git_checkout_transactionally() {
+    local repo_url="$1"
+    local repo_dir="$2"
+    shift 2
+
+    local parent_dir staging_dir clone_status=0 preserve_repo_dir=0
+    parent_dir="$(dirname "$repo_dir")"
+    mkdir -p "$parent_dir"
+    parent_dir="$(cd "$parent_dir" && pwd -P)"
+    if [[ -d "$repo_dir" && -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
+        preserve_repo_dir=1
+        repo_dir="$(cd "$repo_dir" && pwd -P)"
+        staging_dir="$(mktemp -d "${repo_dir}/.openclaw-clone.XXXXXX")"
+    else
+        repo_dir="${parent_dir}/$(basename "$repo_dir")"
+        staging_dir="$(mktemp -d "${parent_dir}/.openclaw-clone.XXXXXX")"
+    fi
+    TMPFILES+=("$staging_dir")
+
+    run_quiet_step "Cloning OpenClaw" git clone "$@" "$repo_url" "$staging_dir" || clone_status=$?
+    if (( clone_status != 0 )); then
+        return "$clone_status"
+    fi
+
+    if ! node - "$staging_dir" "$repo_dir" "$preserve_repo_dir" <<'NODE'
+const fs = require("node:fs");
+const [source, target, preserveTarget] = process.argv.slice(2);
+if (preserveTarget === "0") {
+  try {
+    fs.lstatSync(target);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    fs.renameSync(source, target);
+    process.exit(0);
+  }
+  throw new Error(`Git install dir appeared while cloning: ${target}`);
+}
+const expected = preserveTarget === "1" ? [source.slice(source.lastIndexOf("/") + 1)] : [];
+if (!fs.statSync(target).isDirectory() || fs.readdirSync(target).sort().join("\0") !== expected.sort().join("\0")) {
+  throw new Error(`Git install dir appeared while cloning: ${target}`);
+}
+const entries = fs.readdirSync(source).sort((a, b) => (a === ".git" ? 1 : b === ".git" ? -1 : 0));
+const moved = [];
+try {
+  for (const entry of entries) {
+    fs.renameSync(`${source}/${entry}`, `${target}/${entry}`);
+    moved.push(entry);
+  }
+  fs.rmdirSync(source);
+} catch (error) {
+  const rollbackErrors = [];
+  for (const entry of moved.reverse()) {
+    try {
+      fs.renameSync(`${target}/${entry}`, `${source}/${entry}`);
+    } catch (rollbackError) {
+      rollbackErrors.push(rollbackError);
+    }
+  }
+  if (rollbackErrors.length > 0) {
+    let recovery = source;
+    try {
+      recovery = `${source}.recovery`;
+      fs.renameSync(source, recovery);
+    } catch (recoveryError) {
+      rollbackErrors.push(recoveryError);
+      recovery = source;
+    }
+    throw new AggregateError(
+      [error, ...rollbackErrors],
+      `Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}`,
+    );
+  }
+  throw error;
+}
+NODE
+    then
+        ui_error "Could not publish the cloned checkout: ${repo_dir}"
+        ui_info "Inspect the destination for partial files, move it or choose another --git-dir, then retry."
+        return 1
+    fi
+}
+
 git_install_lockfile_flag() {
     local repo_dir="$1"
     local ref="$2"
@@ -3015,6 +3097,13 @@ install_openclaw_from_git() {
     local repo_dir="$1"
     local repo_url="https://github.com/openclaw/openclaw.git"
 
+    mkdir -p "$(dirname "$repo_dir")"
+    if [[ -d "$repo_dir" ]]; then
+        repo_dir="$(cd "$repo_dir" && pwd -P)"
+    else
+        repo_dir="$(cd "$(dirname "$repo_dir")" && pwd -P)/$(basename "$repo_dir")"
+    fi
+
     if [[ -d "$repo_dir/.git" ]]; then
         ui_info "Installing OpenClaw from git checkout: ${repo_dir}"
     else
@@ -3029,13 +3118,12 @@ install_openclaw_from_git() {
     ensure_pnpm_binary_for_scripts
 
     validate_git_checkout_head "$repo_dir" || return 1
-    if [[ ! -d "$repo_dir" ]]; then
-        mkdir -p "$(dirname "$repo_dir")"
+    if [[ ! -d "$repo_dir" || -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
         # Blobless clone: the installer checks out one release tag, so full blob
         # history is downloaded and then discarded. blob:none keeps ref metadata
         # (unlike --depth 1) so ref switching and later updates still work, and
         # git warns and falls back to a full clone if the server cannot filter.
-        run_quiet_step "Cloning OpenClaw" git clone --filter=blob:none "$repo_url" "$repo_dir"
+        clone_git_checkout_transactionally "$repo_url" "$repo_dir" --filter=blob:none
     fi
 
     local git_ref
