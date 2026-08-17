@@ -16,6 +16,7 @@ import {
   peekSessionMcpRuntime,
 } from "../agents/agent-bundle-mcp-runtime.js";
 import type { McpCatalogTool, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import {
   acquireMcpAppViewRequest,
   getMcpAppViewLease,
@@ -23,7 +24,6 @@ import {
   MCP_APP_VIEW_OPERATION_MIN_TIMEOUT_MS,
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
-import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
