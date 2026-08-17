@@ -78,6 +78,7 @@ const allowedAttrs = [
   "data-session-key",
   "type",
   "aria-label",
+  "aria-selected",
   "role",
 ];
 const sanitizeOptions = {

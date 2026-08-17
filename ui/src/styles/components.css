@@ -2430,9 +2430,9 @@ openclaw-chat-session-rail {
   position: relative;
   box-sizing: border-box;
   width: 100%;
-  margin-top: 0.75em;
+  margin-block: 1em;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
   border-radius: var(--radius-md);
   background: transparent;
 }
@@ -2481,6 +2481,109 @@ openclaw-chat-session-rail {
   min-height: 32px;
 }
 
+.code-block-json-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.code-block-json-tab {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.code-block-json-tab[aria-selected="true"] {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+.code-block-json-tree {
+  padding: 6px 14px 16px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.code-block-json-tree ul {
+  margin: 0;
+  padding-inline-start: 20px;
+  list-style: none;
+}
+
+.code-block-json-tree li {
+  white-space: nowrap;
+}
+
+.code-block-json-node {
+  display: inline;
+}
+
+.code-block-json-node.is-expanded {
+  display: block;
+}
+
+.code-block-json-node-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-style: italic;
+}
+
+.code-block-json-node-toggle::before {
+  content: "▸";
+  display: inline-block;
+  margin-inline-end: 6px;
+}
+
+.code-block-json-node.is-expanded > .code-block-json-node-toggle::before {
+  transform: rotate(90deg);
+}
+
+.code-block-json-node-content {
+  display: none;
+}
+
+.code-block-json-node.is-expanded > .code-block-json-node-content {
+  display: block;
+}
+
+.code-block-json-key,
+.code-block-json-value--string {
+  color: var(--hljs-string);
+}
+
+.code-block-json-value--literal {
+  color: var(--hljs-number);
+}
+
+.code-block-json-value--null,
+.code-block-json-index,
+.code-block-json-colon,
+.code-block-json-bracket {
+  color: var(--muted);
+}
+
+.code-block-json-raw {
+  display: none;
+}
+
+.code-block-wrapper--json.is-json-raw .code-block-json-tree {
+  display: none;
+}
+
+.code-block-wrapper--json.is-json-raw .code-block-json-raw {
+  display: block;
+}
+
 .code-block-lang {
   color: var(--muted);
   font-family: var(--mono);
@@ -2505,11 +2608,17 @@ openclaw-chat-session-rail {
 
 .code-block-copy__idle {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   background: currentColor;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E") center / contain no-repeat;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.code-block-copy__done {
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .code-block-copy:hover {
@@ -2534,13 +2643,13 @@ openclaw-chat-session-rail {
 .code-block-copy.copy-failed .code-block-copy__failed {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
-  font-size: 14px;
+  width: 16px;
+  height: 16px;
+  font-size: 13px;
 }
 
 .code-block-copy.copied .code-block-copy__done {
-  color: var(--ok);
+  color: inherit;
 }
 
 .code-block-copy.copy-failed .code-block-copy__failed {

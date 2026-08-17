@@ -381,6 +381,7 @@ PY
       const fragment = htmlFragment(html);
 
       expect(fragment.querySelector(".code-block-copy")).toBeNull();
+      expect(fragment.querySelector(".code-block-wrapper")).toBeNull();
       expect(fragment.querySelector("pre code")?.textContent).toBe(source);
     });
 

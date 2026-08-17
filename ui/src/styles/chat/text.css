@@ -642,14 +642,25 @@
   background: transparent;
 }
 
-.chat-group.user .chat-text :where(.code-block-wrapper) {
-  border: 0;
-  background: color-mix(in srgb, var(--text) 7%, transparent);
+.chat-group.assistant .chat-bubble:has(.code-block-wrapper),
+.chat-group.assistant .chat-text:has(.code-block-wrapper) {
+  width: 100%;
 }
 
-.chat-group.user .chat-text :where(.code-block-wrapper pre) {
+.chat-group.user .chat-text :where(pre) {
+  margin-block: 1em;
+  padding: 0;
   border: 0;
+  border-radius: 0;
   background: transparent;
+  overflow: visible;
+  white-space: pre-wrap;
+}
+
+.chat-group.user .chat-text :where(pre code) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-text :where(pre code) {

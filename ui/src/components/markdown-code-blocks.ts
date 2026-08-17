@@ -20,8 +20,6 @@ import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
 
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
-// Keep typical replies visible; disclosure is reserved for JSON that dominates the transcript.
-const JSON_COLLAPSE_LINE_THRESHOLD = 40;
 const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
 const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
@@ -71,6 +69,29 @@ function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
 export function handleMarkdownCodeBlockCopy(event: Event): void {
   const target = event.target;
   if (!(target instanceof Element)) {
+    return;
+  }
+  const jsonNodeToggle = target.closest<HTMLButtonElement>(".code-block-json-node-toggle");
+  if (jsonNodeToggle) {
+    const node = jsonNodeToggle.closest<HTMLElement>(".code-block-json-node");
+    if (!node) {
+      return;
+    }
+    const expanded = node.classList.toggle("is-expanded");
+    jsonNodeToggle.setAttribute("aria-expanded", String(expanded));
+    return;
+  }
+  const jsonTab = target.closest<HTMLButtonElement>(".code-block-json-tab");
+  if (jsonTab) {
+    const wrapper = jsonTab.closest<HTMLElement>(".code-block-wrapper");
+    const mode = jsonTab.dataset.jsonMode;
+    if (!wrapper || (mode !== "tree" && mode !== "raw")) {
+      return;
+    }
+    wrapper.classList.toggle("is-json-raw", mode === "raw");
+    for (const tab of wrapper.querySelectorAll<HTMLButtonElement>(".code-block-json-tab")) {
+      tab.setAttribute("aria-selected", String(tab === jsonTab));
+    }
     return;
   }
   const button = target.closest<HTMLElement>(".code-block-copy");
@@ -152,6 +173,43 @@ function renderCodeBlockHeader(lang: string, copyButton: string): string {
   return `<div class="code-block-header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${copyButton}</div></div>`;
 }
 
+function renderJsonTree(value: unknown, depth = 0): string {
+  if (value === null) {
+    return '<span class="code-block-json-value code-block-json-value--null">null</span>';
+  }
+  if (typeof value === "string") {
+    return `<span class="code-block-json-value code-block-json-value--string">${escapeMarkdownHtml(JSON.stringify(value))}</span>`;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return `<span class="code-block-json-value code-block-json-value--literal">${String(value)}</span>`;
+  }
+  if (typeof value !== "object" || depth >= 20) {
+    return `<span class="code-block-json-value">${escapeMarkdownHtml(String(value))}</span>`;
+  }
+
+  const entries = Array.isArray(value)
+    ? value.map((item, index) => [String(index), item] as const)
+    : Object.entries(value as Record<string, unknown>);
+  const opening = Array.isArray(value) ? "[" : "{";
+  const closing = Array.isArray(value) ? "]" : "}";
+  const rows = entries
+    .map(([key, item], index) => {
+      const comma = index < entries.length - 1 ? "," : "";
+      const label = Array.isArray(value)
+        ? `<span class="code-block-json-index">${key}</span>`
+        : `<span class="code-block-json-key">${escapeMarkdownHtml(JSON.stringify(key))}</span>`;
+      if (item !== null && typeof item === "object") {
+        const count = Array.isArray(item) ? item.length : Object.keys(item).length;
+        const summary = Array.isArray(item) ? `[ ${count} items ]` : `{ ${count} keys }`;
+        const expanded = depth === 0;
+        return `<li>${label}<span class="code-block-json-colon">: </span><span class="code-block-json-node${expanded ? " is-expanded" : ""}"><button type="button" class="code-block-json-node-toggle" aria-expanded="${String(expanded)}">${escapeMarkdownHtml(summary)}</button><span class="code-block-json-node-content">${renderJsonTree(item, depth + 1)}</span></span>${comma}</li>`;
+      }
+      return `<li>${label}<span class="code-block-json-colon">: </span>${renderJsonTree(item, depth + 1)}${comma}</li>`;
+    })
+    .join("");
+  return `<span class="code-block-json-bracket">${opening}</span><ul>${rows}</ul><span class="code-block-json-bracket">${closing}</span>`;
+}
+
 export function renderMarkdownCodeBlock(
   text: string,
   lang: string,
@@ -161,7 +219,7 @@ export function renderMarkdownCodeBlock(
   const blockArt = options.blockArt || isMarkdownBlockArtText(text);
   const codeBlock = renderCodeElement(text, lang, { blockArt });
   if (!shouldRenderCodeBlockCopy(env)) {
-    return `<div class="code-block-wrapper code-block-wrapper--plain">${renderCodeBlockHeader(lang, "")}${codeBlock}</div>`;
+    return codeBlock;
   }
   const copyText = options.copyText ?? text;
   const copyPayload = blockArt ? encodeBlockArtCodeBlockCopyPayload(copyText) : copyText;
@@ -169,7 +227,7 @@ export function renderMarkdownCodeBlock(
   const encodingAttr = blockArt
     ? ` data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}"`
     : "";
-  const copyButton = `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true">✓</span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
+  const copyButton = `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
   const header = renderCodeBlockHeader(lang, copyButton);
 
   const trimmed = text.trim();
@@ -180,10 +238,12 @@ export function renderMarkdownCodeBlock(
         (trimmed.startsWith("[") && trimmed.endsWith("]"))));
 
   if (isJson) {
-    const lineCount = markdownCodeBlockCopyText(text).split("\n").length;
-    if (lineCount > JSON_COLLAPSE_LINE_THRESHOLD) {
-      const label = escapeMarkdownHtml(t("chat.codeBlock.jsonLines", { count: String(lineCount) }));
-      return `<details class="json-collapse code-block-wrapper"><summary class="code-block-header"><span class="code-block-lang">${label}</span><div class="code-block-actions">${copyButton}</div></summary>${codeBlock}</details>`;
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      const jsonHeader = `<div class="code-block-header"><span class="code-block-lang">json</span><div class="code-block-actions"><div class="code-block-json-tabs" role="tablist"><button type="button" class="code-block-json-tab" data-json-mode="tree" role="tab" aria-selected="true">Tree</button><button type="button" class="code-block-json-tab" data-json-mode="raw" role="tab" aria-selected="false">Raw</button></div>${copyButton}</div></div>`;
+      return `<div class="code-block-wrapper code-block-wrapper--json">${jsonHeader}<div class="code-block-json-tree">${renderJsonTree(parsed)}</div><div class="code-block-json-raw">${codeBlock}</div></div>`;
+    } catch {
+      // Invalid JSON remains a highlighted code fence.
     }
   }
 
