@@ -1,6 +1,3 @@
-import { promises as fs } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -11,6 +8,7 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { VoiceCallStateRuntime } from "./runtime-state.js";
@@ -70,6 +68,8 @@ function createRealtimeProvider(params: {
   };
 }
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 afterEach(() => {
   mocks.resolveConfiguredRealtimeVoiceProvider.mockReset();
   resetPluginStateStoreForTests();
@@ -77,7 +77,7 @@ afterEach(() => {
 
 describe("voice-call realtime route ownership", () => {
   it("selects provider readiness and bridge auth from each inbound number owner", async () => {
-    const storePath = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-routing-"));
+    const storePath = tempDirs.make("openclaw-voice-routing-");
     const sockets: WebSocket[] = [];
     const servers: Array<Awaited<ReturnType<typeof startUpgradeWsServer>>> = [];
     let runtime: VoiceCallRuntime | undefined;
@@ -210,7 +210,6 @@ describe("voice-call realtime route ownership", () => {
       }
       await Promise.all(servers.map((server) => server.close()));
       resetPluginStateStoreForTests();
-      await fs.rm(storePath, { recursive: true, force: true });
     }
   });
 });
