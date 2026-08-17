@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { collectChangedPaths } from "./config-change-paths.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
 import { restoreEnvRefsFromMap, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
-import { formatConfigValidationFailure } from "./io.write-errors.js";
+import { createConfigValidationFailedError } from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import { tryResolveLegacyCompatibilityAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
@@ -1089,10 +1089,13 @@ describe("config io write prepare", () => {
   });
 
   it('formats actionable guidance for dmPolicy="open" without wildcard allowFrom', () => {
-    const message = formatConfigValidationFailure(
-      "channels.telegram.allowFrom",
-      'channels.telegram.dmPolicy = "open" requires channels.telegram.allowFrom to include "*"',
-    );
+    const message = createConfigValidationFailedError([
+      {
+        path: "channels.telegram.allowFrom",
+        message:
+          'channels.telegram.dmPolicy = "open" requires channels.telegram.allowFrom to include "*"',
+      },
+    ]).message;
     expect(message).toContain("openclaw config set channels.telegram.allowFrom '[\"*\"]'");
     expect(message).toContain('openclaw config set channels.telegram.dmPolicy "pairing"');
   });

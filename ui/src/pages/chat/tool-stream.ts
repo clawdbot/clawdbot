@@ -1,15 +1,23 @@
 // Control UI module implements app tool stream behavior.
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString as toTrimmedString,
+  normalizeLowercaseStringOrEmpty,
+} from "@openclaw/normalization-core/string-coerce";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatGuardianNotice,
+  ChatQueueItem,
+  ChatStreamSegment,
+} from "../../lib/chat/chat-types.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 const TOOL_STREAM_LIMIT = 50;
@@ -56,7 +64,7 @@ export type ToolStreamEntry = {
   message: Record<string, unknown>;
 };
 
-type ToolStreamHost = {
+export type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
@@ -71,6 +79,7 @@ type ToolStreamHost = {
   toolStreamOrder: string[];
   activityEventSeqById?: Map<string, number>;
   chatToolMessages: Record<string, unknown>[];
+  guardianNotices?: ChatGuardianNotice[];
   toolStreamSyncTimer: number | null;
   planStatus?: PlanStatus | null;
   knownAgentRunIds?: Set<string>;
@@ -123,7 +132,8 @@ function parseFallbackAttemptSummaries(value: unknown): string[] {
   }
   return value
     .map((entry) => toTrimmedString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+    .filter((entry): entry is string => Boolean(entry))
+    .map((entry) => formatUiError(entry));
 }
 
 function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
@@ -141,12 +151,13 @@ function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
     if (!provider || !model) {
       continue;
     }
-    const reason =
+    const reason = formatUiError(
       toTrimmedString(item.reason)?.replace(/_/g, " ") ??
-      toTrimmedString(item.code) ??
-      (typeof item.status === "number" ? `HTTP ${item.status}` : null) ??
-      toTrimmedString(item.error) ??
-      "error";
+        toTrimmedString(item.code) ??
+        (typeof item.status === "number" ? `HTTP ${item.status}` : null) ??
+        toTrimmedString(item.error) ??
+        "error",
+    );
     out.push({ provider, model, reason });
   }
   return out;
@@ -751,7 +762,8 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
     return;
   }
 
-  const reason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
+  const rawReason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
+  const reason = rawReason ? formatUiError(rawReason) : null;
   const attempts = (() => {
     const summaries = parseFallbackAttemptSummaries(data.attemptSummaries);
     if (summaries.length > 0) {
@@ -759,7 +771,7 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
     }
     return parseFallbackAttempts(data.attempts).map((attempt) => {
       const modelRef = resolveModelLabel(attempt.provider, attempt.model);
-      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${attempt.reason}`;
+      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${formatUiExternalText(attempt.reason)}`;
     });
   })();
 
@@ -954,6 +966,46 @@ function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload): bool
   return false;
 }
 
+function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream !== "codex_app_server.guardian") {
+    return false;
+  }
+  const data = payload.data ?? {};
+  const phase = toTrimmedString(data.phase);
+  const status = toTrimmedString(data.status);
+  const kind =
+    phase === "warning"
+      ? "warning"
+      : phase === "completed" && (status === "approved" || status === "denied")
+        ? status
+        : null;
+  if (!kind) {
+    return true;
+  }
+  const reviewId = toTrimmedString(data.reviewId) ?? String(payload.seq);
+  const command = toTrimmedString(data.command);
+  const riskLevel = toTrimmedString(data.riskLevel);
+  const rationale = toTrimmedString(data.rationale);
+  const message = toTrimmedString(data.message);
+  const notice: ChatGuardianNotice = {
+    key: `guardian:${payload.runId}:${reviewId}:${kind}`,
+    runId: payload.runId,
+    timestamp: typeof payload.ts === "number" ? payload.ts : Date.now(),
+    kind,
+    ...(command ? { command } : {}),
+    ...(riskLevel ? { riskLevel } : {}),
+    ...(rationale ? { rationale } : {}),
+    ...(message ? { message } : {}),
+  };
+  const current = host.guardianNotices ?? [];
+  const existingIndex = current.findIndex((candidate) => candidate.key === notice.key);
+  host.guardianNotices =
+    existingIndex === -1
+      ? [...current.slice(-49), notice]
+      : current.map((candidate, index) => (index === existingIndex ? notice : candidate));
+  return true;
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
   if (!payload) {
     return false;
@@ -980,6 +1032,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handleUsageEvent(host, payload)) {
+    return true;
+  }
+
+  if (handleGuardianEvent(host, payload)) {
     return true;
   }
 
@@ -1058,24 +1114,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   const now = Date.now();
   if (!entry) {
-    // Commit any in-progress streaming text as a segment so it renders
-    // above the tool card instead of below it.
-    if (
-      host.chatRunId &&
-      payload.runId === host.chatRunId &&
-      host.chatStream &&
-      host.chatStream.trim().length > 0
-    ) {
-      const segmentStartedAt = host.chatStreamStartedAt ?? now;
-      host.chatStreamSegments = [
-        ...host.chatStreamSegments,
-        { text: host.chatStream, ts: segmentStartedAt, runId: payload.runId, toolCallId },
-      ];
-      host.chatStream = null;
-      // The segment becomes the elapsed-time owner after the live tail is flushed.
-      // Preserve the run start or replaying a tool event resets the working timer.
-      host.chatStreamStartedAt = null;
-    }
+    // Commit in-progress text so it remains causally above the tool card.
+    rolloverChatStream(host, { runId: payload.runId, toolCallId, timestamp: now });
     entry = {
       toolCallId,
       runId: payload.runId,

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
-import { withSkillCollectionLock } from "../../skills/workshop/target-lock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -10,10 +9,36 @@ import {
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
+const commitLockState = vi.hoisted(() => ({ active: false, calls: 0 }));
+
+vi.mock("../../skills/workshop/target-lock.js", () => ({
+  withSkillCollectionLock: async (_workspaceDir: string, fn: () => Promise<unknown>) => await fn(),
+  withSkillProposalTargetLock: async (_record: unknown, fn: () => Promise<unknown>) => await fn(),
+  withSkillProposalCommitLock: async (
+    _workspaceDir: string,
+    _record: unknown,
+    fn: () => Promise<unknown>,
+  ) => {
+    if (commitLockState.active) {
+      throw new Error("skill proposal reconciliations overlapped");
+    }
+    commitLockState.active = true;
+    commitLockState.calls += 1;
+    await Promise.resolve();
+    try {
+      return await fn();
+    } finally {
+      commitLockState.active = false;
+    }
+  },
+}));
+
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 
 beforeEach(async () => {
+  commitLockState.active = false;
+  commitLockState.calls = 0;
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-skill-workshop-list-state-",
@@ -69,51 +94,26 @@ describe("skill_workshop list", () => {
       })),
     );
 
-    let releaseLock: (() => void) | undefined;
-    let markAcquired: (() => void) | undefined;
-    const acquired = new Promise<void>((resolve) => {
-      markAcquired = resolve;
-    });
-    const heldLock = withSkillCollectionLock(
-      workspaceDir,
-      async () => {
-        markAcquired?.();
-        await new Promise<void>((resolve) => {
-          releaseLock = resolve;
-        });
-      },
-      { env: testState.env },
-    );
-    await acquired;
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
-    const releaseTimer = setTimeout(() => releaseLock?.(), 4_600);
-
-    try {
-      for (const [limit, expectedCount] of [
-        [49, 49],
-        [50, 50],
-        [51, 50],
-      ] as const) {
-        const result = await tool.execute(`call-list-${limit}`, { action: "list", limit });
-        const proposals = (result.details as { proposals: Array<{ status: string }> }).proposals;
-        expect(proposals).toHaveLength(expectedCount);
-        expect(proposals.every((proposal) => proposal.status === "stale")).toBe(true);
-      }
-
-      await expect(
-        tool.execute("call-list-last", {
-          action: "list",
-          query: "Limit Proposal 50",
-          limit: 1,
-        }),
-      ).resolves.toMatchObject({
-        details: { proposals: [expect.objectContaining({ status: "stale" })] },
-      });
-    } finally {
-      clearTimeout(releaseTimer);
-      releaseLock?.();
-      await heldLock;
-      randomSpy.mockRestore();
+    for (const [limit, expectedCount] of [
+      [49, 49],
+      [50, 50],
+      [51, 50],
+    ] as const) {
+      const result = await tool.execute(`call-list-${limit}`, { action: "list", limit });
+      const proposals = (result.details as { proposals: Array<{ status: string }> }).proposals;
+      expect(proposals).toHaveLength(expectedCount);
+      expect(proposals.every((proposal) => proposal.status === "stale")).toBe(true);
     }
-  }, 15_000);
+
+    await expect(
+      tool.execute("call-list-last", {
+        action: "list",
+        query: "Limit Proposal 50",
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({
+      details: { proposals: [expect.objectContaining({ status: "stale" })] },
+    });
+    expect(commitLockState.calls).toBe(51);
+  });
 });

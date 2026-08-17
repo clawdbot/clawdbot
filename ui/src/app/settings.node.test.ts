@@ -881,7 +881,9 @@ describe("loadSettings default gateway URL derivation", () => {
 
     saveSettings({ ...settings, sidebarSessionLayouts });
 
-    expect(loadSettings().sidebarSessionLayouts).toEqual(sidebarSessionLayouts);
+    // Deep-partial match: loading also fills dock/expanded defaults, which the
+    // corrupt-layout test below pins down.
+    expect(loadSettings().sidebarSessionLayouts).toMatchObject(sidebarSessionLayouts);
   });
 
   it("normalizes corrupt stored sidebar layouts to empty columns", () => {
@@ -896,7 +898,7 @@ describe("loadSettings default gateway URL derivation", () => {
     );
 
     expect(loadSettings().sidebarSessionLayouts).toEqual({
-      "agent:main:main": { columns: [] },
+      "agent:main:main": { columns: [], open: false, expanded: false },
     });
   });
 

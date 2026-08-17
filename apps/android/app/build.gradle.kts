@@ -2,6 +2,7 @@ import com.android.build.api.variant.impl.VariantOutputImpl
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.OutputDirectory
@@ -16,6 +17,7 @@ import java.util.Properties
 import javax.inject.Inject
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
+val openClawAndroidApplicationId = "ai.openclaw.app"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
 val openClawRepositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
@@ -214,7 +216,8 @@ android {
   }
 
   defaultConfig {
-    applicationId = "ai.openclaw.app"
+    applicationId = openClawAndroidApplicationId
+    resValue("string", "application_id", openClawAndroidApplicationId)
     minSdk = 31
     targetSdk = 36
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -254,6 +257,9 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
     }
     debug {
+      applicationIdSuffix = ".debug"
+      versionNameSuffix = "-debug"
+      resValue("string", "application_id", "$openClawAndroidApplicationId.debug")
       isMinifyEnabled = false
     }
   }
@@ -269,6 +275,7 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+    resValues = true
   }
 
   androidResources {
@@ -333,6 +340,7 @@ android {
 }
 
 androidComponents {
+  val adbExecutable = sdkComponents.adb
   onVariants { variant ->
     variant.sources.assets?.addGeneratedSourceDirectory(
       stageCanvasA2ui,
@@ -352,6 +360,24 @@ androidComponents {
           }
         output.outputFileName = outputFileName
       }
+
+    if (variant.buildType == "debug") {
+      val variantNameCapitalized = variant.name.replaceFirstChar(Char::titlecase)
+      tasks.register<Exec>("run$variantNameCapitalized") {
+        group = "install"
+        description = "Installs and launches the ${variant.name} app."
+        dependsOn("install$variantNameCapitalized")
+        commandLine(
+          adbExecutable.get().asFile.absolutePath,
+          "shell",
+          "am",
+          "start",
+          "-W",
+          "-n",
+          "${variant.applicationId.get()}/$openClawAndroidApplicationId.MainActivity",
+        )
+      }
+    }
   }
 }
 kotlin {

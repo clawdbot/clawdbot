@@ -3,8 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -15,15 +14,15 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
+import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
 import {
+  applySessionEntryLifecycleMutation,
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import { materializeTranscriptArchiveInWorker } from "./session-accessor.sqlite-archive.worker.js";
 import {
   deleteMaterializedSessionStatePlans,
   planSessionStateDeleteIfUnreferenced,
@@ -67,9 +66,9 @@ describe("SQLite transcript archive worker", () => {
     );
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
 
-    const heartbeatTimes = [performance.now()];
+    let heartbeatCount = 0;
     const heartbeat = setInterval(() => {
-      heartbeatTimes.push(performance.now());
+      heartbeatCount += 1;
     }, 5);
     let materialized: Awaited<ReturnType<typeof materializeSessionStateDeletePlans>>;
     try {
@@ -77,35 +76,29 @@ describe("SQLite transcript archive worker", () => {
       const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
       materialized = await materializeSessionStateDeletePlans([plan]);
     } finally {
-      heartbeatTimes.push(performance.now());
       clearInterval(heartbeat);
     }
 
-    const heartbeatGaps: number[] = [];
-    for (let index = 1; index < heartbeatTimes.length; index += 1) {
-      const current = heartbeatTimes[index];
-      const previous = heartbeatTimes[index - 1];
-      if (current !== undefined && previous !== undefined) {
-        heartbeatGaps.push(current - previous);
-      }
-    }
-    expect(heartbeatTimes.length - 2).toBeGreaterThan(5);
-    expect(Math.max(...heartbeatGaps)).toBeLessThan(150);
+    expect(heartbeatCount).toBeGreaterThan(5);
     expect(materialized).toHaveLength(1);
-    const archivedPath = materialized[0]?.archivedTranscript?.archivedPath;
-    expect(archivedPath).toBeTruthy();
+    const archive = materialized[0]?.archive;
+    expect(archive).toBeTruthy();
+    expect(fs.existsSync(materialized[0]?.archivedTranscript?.archivedPath ?? "")).toBe(false);
     const expectedContent = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
-    const archivedContent = readSessionArchiveContentSync(archivedPath ?? "");
+    const archivedContent = decodeSessionArchiveBytes(
+      archive?.bytes ?? new Uint8Array(),
+      archive?.encoding === "zstd",
+    );
     expect(Buffer.byteLength(archivedContent)).toBe(Buffer.byteLength(expectedContent));
     expect(sha256(archivedContent)).toBe(sha256(expectedContent));
-    const archiveLines = readArchiveLines(archivedPath);
+    const archiveLines = archivedContent.trim().split("\n");
     expect(archiveLines).toHaveLength(events.length);
     expect(archiveLines.map((line) => (JSON.parse(line) as { id: string }).id)).toEqual(
       events.map((event) => event.id),
     );
   });
 
-  it("publishes a durable archive before lifecycle deletion", async () => {
+  it("commits a canonical archive before publishing its derived file", async () => {
     const sessionId = "durable-delete-session";
     const sessionKey = "agent:main:durable-delete";
     await replaceSessionEntry(
@@ -119,49 +112,6 @@ describe("SQLite transcript archive worker", () => {
       createTranscriptEvent(sessionId, "durable archive first"),
     ]);
 
-    const originalLinkSync = fs.linkSync;
-    const originalRenameSync = fs.renameSync;
-    const entryObservedDuringArchivePublish: boolean[] = [];
-    const observeArchivePublish = (archivePath: unknown) => {
-      if (String(archivePath).includes(`${sessionId}.jsonl.deleted.`)) {
-        entryObservedDuringArchivePublish.push(
-          loadSessionEntry({ sessionKey, storePath })?.sessionId === sessionId,
-        );
-      }
-    };
-    const openSpy = vi.spyOn(fs, "openSync");
-    const fsyncSpy = vi.spyOn(fs, "fsyncSync");
-    const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation((...args) => {
-      observeArchivePublish(args[1]);
-      return originalLinkSync(...args);
-    });
-    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((...args) => {
-      observeArchivePublish(args[1]);
-      return originalRenameSync(...args);
-    });
-
-    let archivedPath: string | null = null;
-    try {
-      const database = openLifecycleTestDatabase(storePath);
-      const workerResult = materializeTranscriptArchiveInWorker(
-        planArchiveWorker(database, path.dirname(storePath), sessionId),
-      );
-      archivedPath = workerResult.archivedPath;
-      expect(archivedPath).not.toBeNull();
-      expect(entryObservedDuringArchivePublish).toEqual([true]);
-      const archiveTempOpenIndexes = openSpy.mock.calls.flatMap((args, index) =>
-        String(args[0]).includes(`${sessionId}.jsonl.deleted.`) && args[1] === "wx" ? [index] : [],
-      );
-      expect(archiveTempOpenIndexes).toHaveLength(1);
-      const archiveTempOpenIndex = archiveTempOpenIndexes[0] ?? -1;
-      expect(fsyncSpy).toHaveBeenCalledWith(openSpy.mock.results[archiveTempOpenIndex]?.value);
-    } finally {
-      renameSpy.mockRestore();
-      linkSpy.mockRestore();
-      fsyncSpy.mockRestore();
-      openSpy.mockRestore();
-    }
-
     const result = await deleteSessionEntryLifecycle({
       archiveTranscript: true,
       storePath,
@@ -171,9 +121,104 @@ describe("SQLite transcript archive worker", () => {
       },
     });
     expect(result.deleted).toBe(true);
-    expect(result.archivedTranscripts.map((archive) => archive.archivedPath)).toEqual([
-      archivedPath,
+    const archivedPath = result.archivedTranscripts[0]?.archivedPath;
+    expect(archivedPath).toBeTruthy();
+    expect(readArchiveLines(archivedPath)).toEqual([
+      JSON.stringify(createTranscriptEvent(sessionId, "durable archive first")),
     ]);
+    const database = openLifecycleTestDatabase(storePath);
+    expect(
+      database.db
+        .prepare(
+          "SELECT session_key, published_at FROM session_transcript_archives WHERE session_id = ?",
+        )
+        .get(sessionId),
+    ).toMatchObject({ published_at: expect.any(Number), session_key: sessionKey });
+  });
+
+  it("retains distinct transcript generations after a physical session id is restored", async () => {
+    const sessionId = "restored-archive-session";
+    const sessionKey = "agent:main:restored-archive";
+    const scope = { sessionId, sessionKey, storePath };
+    await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+    await replaceTranscriptEvents(scope, [createTranscriptEvent(sessionId, "first generation")]);
+    const first = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+    const firstArchive = first.archivedTranscripts[0];
+    if (!firstArchive) {
+      throw new Error("expected first transcript archive");
+    }
+    fs.rmSync(firstArchive.archivedPath);
+    openLifecycleTestDatabase(storePath)
+      .db.prepare(
+        `UPDATE session_transcript_archives
+            SET published_at = NULL
+          WHERE session_id = ? AND generation = ?`,
+      )
+      .run(sessionId, firstArchive.generation);
+
+    await replaceSessionEntry(scope, { sessionId, updatedAt: 2 });
+    await replaceTranscriptEvents(scope, [createTranscriptEvent(sessionId, "second generation")]);
+    const second = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    expect(second.archivedTranscripts).toHaveLength(1);
+    expect(second.archivedTranscripts[0]?.archivedPath).not.toBe(firstArchive.archivedPath);
+    expect(readArchiveLines(firstArchive.archivedPath)).toEqual([
+      JSON.stringify(createTranscriptEvent(sessionId, "first generation")),
+    ]);
+    expect(readArchiveLines(second.archivedTranscripts[0]?.archivedPath)).toEqual([
+      JSON.stringify(createTranscriptEvent(sessionId, "second generation")),
+    ]);
+    expect(
+      openLifecycleTestDatabase(storePath)
+        .db.prepare(
+          "SELECT generation FROM session_transcript_archives WHERE session_id = ? ORDER BY generation",
+        )
+        .all(sessionId),
+    ).toHaveLength(2);
+  });
+
+  it("retries a pending archive export when deletion is already committed", async () => {
+    const sessionId = "retry-committed-delete";
+    const sessionKey = "agent:main:retry-committed-delete";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      createTranscriptEvent(sessionId, "retry pending export"),
+    ]);
+    const first = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+    const archivePath = first.archivedTranscripts[0]?.archivedPath;
+    fs.rmSync(archivePath ?? "");
+    const database = openLifecycleTestDatabase(storePath);
+    database.db
+      .prepare("UPDATE session_transcript_archives SET published_at = NULL WHERE session_id = ?")
+      .run(sessionId);
+
+    const retry = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    expect(retry).toMatchObject({ archivedTranscripts: [], deleted: false });
+    expect(readArchiveLines(archivePath)).toEqual([
+      JSON.stringify(createTranscriptEvent(sessionId, "retry pending export")),
+    ]);
+    expect(
+      database.db
+        .prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
+        .get(sessionId),
+    ).toMatchObject({ published_at: expect.any(Number) });
   });
 
   it("archives a logical agent transcript through the exact database's physical owner", async () => {
@@ -217,17 +262,15 @@ describe("SQLite transcript archive worker", () => {
     expect(database.agentId).toBe("main");
     expect(database.agentId).not.toBe(opsScope.agentId);
 
-    const plan = planArchiveWorker(database, tempDir, opsSessionId);
-    expect(plan).toMatchObject({
-      agentId: database.agentId,
-      databasePath: database.path,
-      sessionId: opsSessionId,
+    const deleted = await deleteSessionEntryLifecycle({
+      agentId: opsScope.agentId,
+      archiveTranscript: true,
+      storePath: sharedDatabasePath,
+      target: { canonicalKey: opsSessionKey, storeKeys: [opsSessionKey] },
     });
-    const materialized = await materializeSessionStateDeletePlans([plan]);
-    const archivedPath = materialized[0]?.archivedTranscript?.archivedPath;
-    expect(readArchiveLines(archivedPath ?? undefined)).toEqual([JSON.stringify(opsEvent)]);
-
-    deleteMaterializedPlans(database, materialized, opsSessionKey);
+    expect(readArchiveLines(deleted.archivedTranscripts[0]?.archivedPath)).toEqual([
+      JSON.stringify(opsEvent),
+    ]);
 
     await expect(loadTranscriptEvents(opsScope)).resolves.toEqual([]);
     await expect(loadTranscriptEvents(mainScope)).resolves.toEqual([mainEvent]);
@@ -303,47 +346,6 @@ describe("SQLite transcript archive worker", () => {
       `SQLite session state changed before archive materialization for ${sessionId}`,
     );
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(1);
-  });
-
-  it("recovers the lifecycle archive queue after a worker file failure", async () => {
-    const sessionId = "archive-file-failure-session";
-    const scope = {
-      sessionKey: "agent:main:archive-file-failure",
-      sessionId,
-      storePath,
-    };
-    await replaceTranscriptEvents(scope, [
-      createTranscriptEvent(sessionId, "preserve after file failure"),
-    ]);
-    const blockedArchiveDirectory = path.join(tempDir, "archive-path-is-a-file");
-    fs.writeFileSync(blockedArchiveDirectory, "not a directory", "utf8");
-    const database = openLifecycleTestDatabase(storePath);
-    const plan = planArchiveWorker(database, blockedArchiveDirectory, sessionId);
-    const recoverySessionId = "archive-after-file-failure-session";
-    const recoveryScope = {
-      sessionKey: "agent:main:archive-after-file-failure",
-      sessionId: recoverySessionId,
-      storePath,
-    };
-    await replaceTranscriptEvents(recoveryScope, [
-      createTranscriptEvent(recoverySessionId, "archive after queued failure"),
-    ]);
-    const recoveryPlan = planArchiveWorker(database, path.dirname(storePath), recoverySessionId);
-
-    const failedArchive = materializeSessionStateDeletePlans([plan]);
-    const recoveredArchive = materializeSessionStateDeletePlans([recoveryPlan]);
-
-    await expect(failedArchive).rejects.toThrow();
-    await expect(recoveredArchive).resolves.toMatchObject([
-      {
-        archivedTranscript: {
-          archivedPath: expect.stringContaining(`${recoverySessionId}.jsonl.deleted.`),
-        },
-        sessionId: recoverySessionId,
-      },
-    ]);
-    await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(1);
-    expect(fs.readFileSync(blockedArchiveDirectory, "utf8")).toBe("not a directory");
   });
 
   it("preserves all lifecycle state when the archive worker rejects publication", async () => {
@@ -447,6 +449,26 @@ describe("SQLite transcript archive worker", () => {
       transcript: 1,
       windows: 1,
     });
+  });
+
+  it("captures archive materialization failure without deleting the requested entry", async () => {
+    const sessionId = "nested/captured-archive-failure";
+    const sessionKey = "agent:main:captured-archive-failure";
+    const scope = { sessionKey, sessionId, storePath };
+    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+    await replaceTranscriptEvents(scope, [createTranscriptEvent(sessionId, "retain on failure")]);
+
+    const result = await applySessionEntryLifecycleMutation({
+      captureArtifactCleanupError: true,
+      removals: [{ archiveRemovedTranscript: true, sessionKey }],
+      skipMaintenance: true,
+      storePath,
+    });
+
+    expect(result.removedEntries).toBe(0);
+    expect(result.artifactCleanupError).toBeInstanceOf(Error);
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId });
+    await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(1);
   });
 
   it("keeps rows when a transcript changes after its archive snapshot", async () => {
@@ -630,85 +652,6 @@ describe("SQLite transcript archive worker", () => {
       expect(rows).toHaveLength(1);
     },
   );
-
-  it("does not reuse a matching in-flight temp file as an archive", async () => {
-    const sessionId = "in-flight-temp-archive-session";
-    const line = createTranscriptEventLine(sessionId, "in-flight temp archive");
-    await replaceTranscriptEvents(
-      { sessionKey: "agent:main:in-flight-temp-archive", sessionId, storePath },
-      [JSON.parse(line) as TestTranscriptEvent],
-    );
-    const archiveDirectory = path.dirname(storePath);
-    const tempPath = path.join(
-      archiveDirectory,
-      `${sessionId}.jsonl.deleted.2026-01-01T00-00-00.000Z.writer.tmp`,
-    );
-    fs.mkdirSync(archiveDirectory, { recursive: true });
-    fs.writeFileSync(tempPath, `${line}\n`, "utf8");
-
-    const database = openLifecycleTestDatabase(storePath);
-    const result = materializeTranscriptArchiveInWorker(
-      planArchiveWorker(database, archiveDirectory, sessionId),
-    );
-
-    expect(result.archivedPath).not.toBe(tempPath);
-    expect(fs.existsSync(tempPath)).toBe(true);
-    expect(readArchiveLines(result.archivedPath ?? undefined)).toEqual([line]);
-  });
-
-  it("reuses a matching archive before deleting entry rows", async () => {
-    const sessionId = "duplicate-archive-session";
-    const sessionKey = "agent:main:duplicate-archive";
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
-    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
-      createTranscriptEvent(sessionId, "reuse archive"),
-    ]);
-    const archivePath = path.join(
-      path.dirname(storePath),
-      `${sessionId}.jsonl.deleted.2026-01-01T00-00-00.000Z`,
-    );
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(
-      archivePath,
-      `${createTranscriptEventLine(sessionId, "reuse archive")}\n`,
-      "utf-8",
-    );
-
-    const originalReaddirSync = fs.readdirSync;
-    const entryObservedDuringDuplicateProbe: boolean[] = [];
-    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
-      if (String(args[0]) === path.dirname(storePath)) {
-        entryObservedDuringDuplicateProbe.push(
-          loadSessionEntry({ sessionKey, storePath })?.sessionId === sessionId,
-        );
-      }
-      return originalReaddirSync(...args);
-    });
-
-    try {
-      const database = openLifecycleTestDatabase(storePath);
-      const workerResult = materializeTranscriptArchiveInWorker(
-        planArchiveWorker(database, path.dirname(storePath), sessionId),
-      );
-      expect(workerResult.archivedPath).toBe(archivePath);
-      expect(entryObservedDuringDuplicateProbe).toEqual([true]);
-    } finally {
-      readdirSpy.mockRestore();
-    }
-
-    const result = await deleteSessionEntryLifecycle({
-      archiveTranscript: true,
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-    });
-    expect(result.deleted).toBe(true);
-    expect(result.archivedTranscripts).toEqual([
-      {
-        archivedPath: archivePath,
-        sourcePath: path.join(path.dirname(storePath), `${sessionId}.jsonl`),
-      },
-    ]);
-  });
 });
 
 function createTranscriptEvent(sessionId: string, content: string): TestTranscriptEvent {

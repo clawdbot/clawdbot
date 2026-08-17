@@ -416,6 +416,45 @@ describe("switchChatHistoryBranch", () => {
     expect(state.chatBranchesConnectionEpoch).toBe(state.connectionEpoch);
   });
 
+  it("retries the branch list on the next history load after a transient failure", async () => {
+    const state = createState({ messages: [] }) as TestState & {
+      sessions: { listBranches: ReturnType<typeof vi.fn> };
+    };
+    state.sessions = {
+      listBranches: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("gateway hiccup"))
+        .mockResolvedValue([
+          { leafEntryId: "tip", headline: "tip", messageCount: 1, active: true },
+        ]),
+      setModelOverride: vi.fn(),
+    };
+
+    await loadChatHistory(state);
+    // The transient failure must not latch success state; the next load retries.
+    expect(state.chatBranchesSessionKey ?? null).toBeNull();
+
+    await loadChatHistory(state);
+    expect(state.sessions.listBranches).toHaveBeenCalledTimes(2);
+    expect(state.chatBranchesSessionKey).toBe(state.sessionKey);
+    expect(state.chatBranches).toHaveLength(1);
+  });
+
+  it("treats the legacy main alias and canonical key as the same branch owner", async () => {
+    const state = createState({ messages: [] }) as TestState & {
+      sessions: { listBranches: ReturnType<typeof vi.fn> };
+    };
+    state.sessionKey = "main";
+    state.chatBranchesSessionKey = "agent:main:main";
+    state.chatBranchesConnectionEpoch = state.connectionEpoch;
+    state.sessions = { listBranches: vi.fn().mockResolvedValue([]), setModelOverride: vi.fn() };
+
+    await loadChatHistory(state);
+
+    // Equivalent spellings must not force a redundant branch reload.
+    expect(state.sessions.listBranches).not.toHaveBeenCalled();
+  });
+
   it("starts a fresh snapshot and rejects in-flight history after a same-key branch switch", async () => {
     let resolvePreviousHistory!: (result: ChatHistoryResult) => void;
     const previousHistory = new Promise<ChatHistoryResult>((resolve) => {

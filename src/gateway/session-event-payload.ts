@@ -43,6 +43,9 @@ export function buildGatewaySessionEventFields(params: {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
     createdActor: sessionRow.createdActor ?? null,
+    owner: sessionRow.owner ?? null,
+    participants: sessionRow.participants ?? [],
+    participantCount: sessionRow.participantCount ?? 0,
     kind: sessionRow.kind,
     visibility: sessionRow.visibility,
     channel: sessionRow.channel,
@@ -66,6 +69,10 @@ export function buildGatewaySessionEventFields(params: {
     swarmGroupId: sessionRow.swarmGroupId,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
+    permissionMode: sessionRow.permissionMode ?? null,
+    ...(sessionRow.permissionMode !== undefined && sessionRow.sessionRoot !== undefined
+      ? { sessionRoot: sessionRow.sessionRoot }
+      : {}),
     forkedFromParent: sessionEntryForkedFromParent(sessionRow) ? true : undefined,
     spawnDepth: sessionRow.spawnDepth,
     subagentRole: sessionRow.subagentRole,
@@ -75,6 +82,7 @@ export function buildGatewaySessionEventFields(params: {
     forkSource: sessionRow.forkSource,
     previousSessionId: sessionRow.previousSessionId,
     label: params.label ?? sessionRow.label ?? null,
+    icon: sessionRow.icon ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,

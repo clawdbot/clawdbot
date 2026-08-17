@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
-import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { tagUnresolvedTextAsCommentary } from "../utils/assistant-text-phase.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -32,6 +32,7 @@ import {
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 import {
+  createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
   withProviderResponseHook,
@@ -172,8 +173,7 @@ function buildOpenAICompletionsClientConfig(
 
 export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   return (model, context, options) => {
-    const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
+    const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant" as const,
@@ -267,7 +267,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           signal: firstEventAbort.signal,
           abort: firstEventAbort.abort,
           hook: createOpenAIResponseHook(options?.onResponse, response, model),
-          onReady: () => stream.push({ type: "start", partial: output as never }),
+          onReady: () => stream.push({ type: "start", partial: output }),
         });
         await processCompletionsStream(hookedResponseStream, output, model, stream, {
           signal: options?.signal,
@@ -287,12 +287,13 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           cleanup: () => {
             output.stopReason = options?.signal?.aborted ? "aborted" : "error";
             finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
+            tagUnresolvedTextAsCommentary(output);
           },
         });
       } finally {
         firstEventAbort?.dispose();
       }
     })();
-    return eventStream as unknown as ReturnType<StreamFn>;
+    return eventStream;
   };
 }

@@ -84,6 +84,13 @@ export interface AgentModelCatalogs {
   updated_at: number;
 }
 
+export interface AgentProvenance {
+  agent_id: string;
+  created_at_ms: number;
+  created_via: string;
+  creator_agent_id: string | null;
+}
+
 export interface AndroidNotificationRecentPackages {
   package_name: string;
   sort_order: number;
@@ -961,6 +968,7 @@ export interface NativeHookRelayBridges {
 export interface NodeHostConfig {
   config_key: string;
   display_name: string | null;
+  gateway_cloudflare_access_json: string | null;
   gateway_context_path: string | null;
   gateway_host: string | null;
   gateway_port: number | null;
@@ -1064,6 +1072,36 @@ export interface OutboundMediaProvenance {
   version: number;
 }
 
+export interface OutboundMessageExecutionBindings {
+  context_id: string;
+  event_id: string;
+  execution_id: string;
+  run_id: string;
+}
+
+export interface OutboundMessageProgress {
+  account_ref: string | null;
+  action: string;
+  actor_id: string;
+  actor_type: string;
+  agent_id: string | null;
+  channel: string;
+  context_id: string | null;
+  conversation_kind: string;
+  conversation_ref: string | null;
+  duration_ms: number | null;
+  execution_id: string | null;
+  occurred_at: number;
+  outcome: string;
+  progress_id: string;
+  run_id: string | null;
+  schema_version: number;
+  sequence: Generated<number>;
+  source_id: string;
+  source_sequence: number;
+  target_ref: string | null;
+}
+
 export interface PluginBindingApprovals {
   account_id: string;
   approved_at: number;
@@ -1144,8 +1182,10 @@ export interface SecretStoreEntries {
 
 export interface SessionGroups {
   created_at: number;
+  cwd: string | null;
   name: string;
   position: number;
+  worktree: number | null;
 }
 
 export interface SessionStateEvents {
@@ -1552,6 +1592,19 @@ export interface WorkerInferenceTurns {
   updated_at_ms: number;
 }
 
+export interface WorkerSessionPlacementMoves {
+  created_at_ms: number;
+  last_error: string | null;
+  operation_id: string;
+  session_id: string;
+  source_environment_id: string;
+  source_generation: number;
+  source_owner_epoch: number;
+  target_id: string | null;
+  target_kind: string;
+  updated_at_ms: number;
+}
+
 export interface WorkerSessionPlacements {
   active_owner_epoch: number | null;
   agent_id: string;
@@ -1711,6 +1764,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
   agent_model_catalogs: AgentModelCatalogs;
+  agent_provenance: AgentProvenance;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
@@ -1782,6 +1836,8 @@ export interface DB {
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
+  outbound_message_execution_bindings: OutboundMessageExecutionBindings;
+  outbound_message_progress: OutboundMessageProgress;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
@@ -1820,6 +1876,7 @@ export interface DB {
   worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
+  worker_session_placement_moves: WorkerSessionPlacementMoves;
   worker_session_placements: WorkerSessionPlacements;
   worker_session_tool_operations: WorkerSessionToolOperations;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;

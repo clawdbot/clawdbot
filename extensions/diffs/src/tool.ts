@@ -11,13 +11,11 @@ import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.j
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { DiffRenderInputError, renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
-import type {
-  DiffArtifactContext,
-  DiffRenderOptions,
-  DiffRenderTarget,
-  DiffToolDefaults,
-} from "./types.js";
 import {
+  type DiffArtifactContext,
+  type DiffRenderOptions,
+  type DiffRenderTarget,
+  type DiffToolDefaults,
   DIFF_IMAGE_QUALITY_PRESETS,
   DIFF_LAYOUTS,
   DIFF_MODES,

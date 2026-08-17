@@ -248,7 +248,7 @@ type VisibleSessionRowOptions = {
 export function isSystemCreatedSessionRow(row: GatewaySessionRow): boolean {
   // Cron rows are owned by the automation toggle; cron creation stamps a
   // system actor, so classifying them here would demand both toggles at once.
-  if ((row.kind as string) === "cron" || isCronSessionKey(row.key)) {
+  if (isCronSessionKey(row.key)) {
     return false;
   }
   if (row.createdActor?.type === "system") {
@@ -289,8 +289,7 @@ export function filterVisibleSessionRows(
       sessionMatchesArchivedFilter(row, options.archivedFilter) &&
       row.kind !== "global" &&
       row.kind !== "unknown" &&
-      (options.showCron === true ||
-        ((row.kind as string) !== "cron" && !isCronSessionKey(row.key))) &&
+      (options.showCron === true || !isCronSessionKey(row.key)) &&
       (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
       !isSubagentSessionKey(row.key) &&
       !row.spawnedBy &&
@@ -313,7 +312,13 @@ export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySe
     return pinnedStateDiff;
   }
   const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
-  return pinnedDiff !== 0 ? pinnedDiff : (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  if (pinnedDiff !== 0) {
+    return pinnedDiff;
+  }
+  const updatedDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  // Stable key tie-break mirrors the gateway comparator (session-list-order.ts)
+  // so tied rows don't swap when the canonical refresh replaces an event merge.
+  return updatedDiff !== 0 ? updatedDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
 export function resolveSessionNavigation(input: SessionNavigationInput): SessionNavigation {

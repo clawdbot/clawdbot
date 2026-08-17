@@ -56,170 +56,80 @@ export type AgentToolSection = {
   tools: AgentToolEntry[];
 };
 
-type FallbackToolEntry = Omit<AgentToolEntry, "description"> & {
-  descriptionKey: string;
-};
-
 type FallbackToolSection = Omit<AgentToolSection, "label" | "tools"> & {
-  labelKey: string;
-  tools: FallbackToolEntry[];
+  labelId: string;
+  tools: string[];
 };
 
 const FALLBACK_TOOL_SECTIONS: FallbackToolSection[] = [
   {
     id: "fs",
-    labelKey: "agents.toolCatalog.groups.files",
-    tools: [
-      { id: "read", label: "read", descriptionKey: "agents.toolCatalog.descriptions.read" },
-      { id: "write", label: "write", descriptionKey: "agents.toolCatalog.descriptions.write" },
-      { id: "edit", label: "edit", descriptionKey: "agents.toolCatalog.descriptions.edit" },
-      {
-        id: "apply_patch",
-        label: "apply_patch",
-        descriptionKey: "agents.toolCatalog.descriptions.applyPatch",
-      },
-    ],
+    labelId: "files",
+    tools: ["read", "write", "edit", "apply_patch"],
   },
   {
     id: "runtime",
-    labelKey: "agents.toolCatalog.groups.runtime",
-    tools: [
-      { id: "exec", label: "exec", descriptionKey: "agents.toolCatalog.descriptions.exec" },
-      {
-        id: "process",
-        label: "process",
-        descriptionKey: "agents.toolCatalog.descriptions.process",
-      },
-    ],
+    labelId: "runtime",
+    tools: ["exec", "process"],
   },
   {
     id: "web",
-    labelKey: "agents.toolCatalog.groups.web",
-    tools: [
-      {
-        id: "web_search",
-        label: "web_search",
-        descriptionKey: "agents.toolCatalog.descriptions.webSearch",
-      },
-      {
-        id: "web_fetch",
-        label: "web_fetch",
-        descriptionKey: "agents.toolCatalog.descriptions.webFetch",
-      },
-    ],
+    labelId: "web",
+    tools: ["web_search", "web_fetch"],
   },
   {
     id: "memory",
-    labelKey: "agents.toolCatalog.groups.memory",
-    tools: [
-      {
-        id: "memory_search",
-        label: "memory_search",
-        descriptionKey: "agents.toolCatalog.descriptions.memorySearch",
-      },
-      {
-        id: "memory_get",
-        label: "memory_get",
-        descriptionKey: "agents.toolCatalog.descriptions.memoryGet",
-      },
-    ],
+    labelId: "memory",
+    tools: ["memory_search", "memory_get"],
   },
   {
     id: "sessions",
-    labelKey: "agents.toolCatalog.groups.sessions",
+    labelId: "sessions",
     tools: [
-      {
-        id: "sessions_list",
-        label: "sessions_list",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionsList",
-      },
-      {
-        id: "sessions_history",
-        label: "sessions_history",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionsHistory",
-      },
-      {
-        id: "sessions_send",
-        label: "sessions_send",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionsSend",
-      },
-      {
-        id: "sessions_spawn",
-        label: "sessions_spawn",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionsSpawn",
-      },
-      {
-        id: "session_status",
-        label: "session_status",
-        descriptionKey: "agents.toolCatalog.descriptions.sessionStatus",
-      },
+      "sessions_list",
+      "sessions_history",
+      "sessions_send",
+      "sessions_spawn",
+      "session_status",
     ],
   },
   {
     id: "ui",
-    labelKey: "agents.toolCatalog.groups.ui",
-    tools: [
-      {
-        id: "browser",
-        label: "browser",
-        descriptionKey: "agents.toolCatalog.descriptions.browser",
-      },
-      {
-        id: "canvas",
-        label: "canvas",
-        descriptionKey: "agents.toolCatalog.descriptions.canvas",
-      },
-    ],
+    labelId: "ui",
+    tools: ["browser", "canvas"],
   },
   {
     id: "messaging",
-    labelKey: "agents.toolCatalog.groups.messaging",
-    tools: [
-      {
-        id: "message",
-        label: "message",
-        descriptionKey: "agents.toolCatalog.descriptions.message",
-      },
-    ],
+    labelId: "messaging",
+    tools: ["message"],
   },
   {
     id: "automation",
-    labelKey: "agents.toolCatalog.groups.automation",
-    tools: [
-      { id: "cron", label: "cron", descriptionKey: "agents.toolCatalog.descriptions.cron" },
-      {
-        id: "gateway",
-        label: "gateway",
-        descriptionKey: "agents.toolCatalog.descriptions.gateway",
-      },
-    ],
+    labelId: "automation",
+    tools: ["cron", "gateway"],
   },
   {
     id: "nodes",
-    labelKey: "agents.toolCatalog.groups.nodes",
-    tools: [
-      { id: "nodes", label: "nodes", descriptionKey: "agents.toolCatalog.descriptions.nodes" },
-    ],
+    labelId: "nodes",
+    tools: ["nodes"],
   },
   {
     id: "agents",
-    labelKey: "agents.toolCatalog.groups.agents",
-    tools: [
-      {
-        id: "agents_list",
-        label: "agents_list",
-        descriptionKey: "agents.toolCatalog.descriptions.agentsList",
-      },
-    ],
+    labelId: "agents",
+    tools: ["agents_list"],
   },
   {
     id: "media",
-    labelKey: "agents.toolCatalog.groups.media",
-    tools: [
-      { id: "image", label: "image", descriptionKey: "agents.toolCatalog.descriptions.image" },
-    ],
+    labelId: "media",
+    tools: ["view_image"],
   },
 ];
+
+function fallbackToolDescriptionId(toolId: string): string {
+  return toolId === "view_image"
+    ? "image"
+    : toolId.replace(/_([a-z])/gu, (_, letter: string) => letter.toUpperCase());
+}
 
 // Canonical UI tool-profile list; Security and Agents surfaces share it so
 // labels stay translated and consistent.
@@ -234,8 +144,8 @@ export const PROFILE_OPTIONS = [
 // group/profile enum labels locally so localized UIs don't render English
 // section names; plugin groups (`plugin:<id>` ids) never match and keep the
 // catalog-provided label.
-const CORE_GROUP_LABEL_KEYS = new Map<string, string>(
-  FALLBACK_TOOL_SECTIONS.map((section) => [section.id, section.labelKey]),
+const CORE_GROUP_LABEL_IDS = new Map<string, string>(
+  FALLBACK_TOOL_SECTIONS.map((section) => [section.id, section.labelId]),
 );
 const PROFILE_LABEL_KEYS = new Map<string, string>(
   PROFILE_OPTIONS.map((profile) => [profile.id, profile.labelKey]),
@@ -246,10 +156,10 @@ export function resolveToolSections(
 ): AgentToolSection[] {
   if (toolsCatalogResult?.groups?.length) {
     return toolsCatalogResult.groups.map((group) => {
-      const labelKey = CORE_GROUP_LABEL_KEYS.get(group.id);
+      const labelId = CORE_GROUP_LABEL_IDS.get(group.id);
       return {
         id: group.id,
-        label: labelKey ? t(labelKey) : group.label,
+        label: labelId ? t(`agents.toolCatalog.groups.${labelId}`) : group.label,
         source: group.source,
         pluginId: group.pluginId,
         tools: group.tools.map((tool) => ({
@@ -266,11 +176,11 @@ export function resolveToolSections(
   }
   return FALLBACK_TOOL_SECTIONS.map((section) => ({
     id: section.id,
-    label: t(section.labelKey),
-    tools: section.tools.map((tool) => ({
-      id: tool.id,
-      label: tool.label,
-      description: t(tool.descriptionKey),
+    label: t(`agents.toolCatalog.groups.${section.labelId}`),
+    tools: section.tools.map((toolId) => ({
+      id: toolId,
+      label: toolId,
+      description: t(`agents.toolCatalog.descriptions.${fallbackToolDescriptionId(toolId)}`),
     })),
   }));
 }

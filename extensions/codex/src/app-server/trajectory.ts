@@ -121,6 +121,13 @@ function createCodexHostTrajectorySink(params: {
   };
 }
 
+// The host recorder can be absent per session (target-mapping conflicts), not
+// only per process, so dedupe the warn by session: repeated attempts for one
+// session stay quiet while a later distinct session still records its loss.
+// Bounded: cleared past the cap so a pathological session churn cannot grow it.
+const warnedRecorderUnavailableSessions = new Set<string>();
+const WARNED_RECORDER_SESSIONS_CAP = 64;
+
 /** Creates a trajectory recorder when trajectory capture is enabled for the environment. */
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
@@ -136,10 +143,18 @@ export function createCodexTrajectoryRecorder(
   // from a session-file string silently drops every capture once the host
   // stops emitting the legacy `sqlite:` marker.
   if (!params.trajectoryRecorder) {
-    params.warn?.("codex trajectory capture requires the SQLite host recorder", {
-      sessionId: params.attempt.sessionId,
-      reason: "sqlite-recorder-unavailable",
-    });
+    // Per-attempt repeats for one session bury real diagnostics; warn once per
+    // session so retries stay quiet but each newly affected session is visible.
+    if (!warnedRecorderUnavailableSessions.has(params.attempt.sessionId)) {
+      if (warnedRecorderUnavailableSessions.size >= WARNED_RECORDER_SESSIONS_CAP) {
+        warnedRecorderUnavailableSessions.clear();
+      }
+      warnedRecorderUnavailableSessions.add(params.attempt.sessionId);
+      params.warn?.("codex trajectory capture requires the SQLite host recorder", {
+        sessionId: params.attempt.sessionId,
+        reason: "sqlite-recorder-unavailable",
+      });
+    }
     return null;
   }
   const sink = createCodexHostTrajectorySink({ recorder: params.trajectoryRecorder });

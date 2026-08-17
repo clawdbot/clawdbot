@@ -70,6 +70,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: HANDSHAKE.bundleHash,
   sessionId: null,
   runId: null,
+  turnClaim: null,
   ownerEpoch: 1,
   rpcSetVersion: 1,
   protocolFeatures: [...HANDSHAKE.protocolFeatures],
@@ -98,6 +99,13 @@ const ATTACHED_IDENTITY: WorkerConnectionIdentity = {
   ...IDENTITY,
   sessionId: "session-1",
   runId: "run-1",
+  turnClaim: {
+    sessionId: "session-1",
+    claimId: "claim-1",
+    runId: "run-1",
+    placementGeneration: 1,
+    owner: { kind: "worker", environmentId: "worker-1", ownerEpoch: 1 },
+  },
 };
 const INFERENCE_IDS = {
   runEpoch: 1,

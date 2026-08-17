@@ -175,15 +175,7 @@ export function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPa
 }
 
 export function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
-  return Boolean(
-    result.messageId ||
-    result.chatId ||
-    result.channelId ||
-    result.roomId ||
-    result.conversationId ||
-    result.toJid ||
-    result.pollId,
-  );
+  return Boolean(result.messageId || result.target?.id || result.toJid || result.pollId);
 }
 
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {

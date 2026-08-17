@@ -19,6 +19,7 @@ export type SessionCreateParams = {
   forkFrom?: "last-completed";
   succeedsParent?: boolean;
   label?: string;
+  category?: string;
   model?: string;
   thinkingLevel?: string;
   incognito?: boolean;

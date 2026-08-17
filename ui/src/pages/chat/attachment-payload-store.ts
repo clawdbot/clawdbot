@@ -87,6 +87,20 @@ export function releaseChatAttachmentPayloads(attachments: readonly ChatAttachme
   }
 }
 
+/**
+ * Releases displaced attachments except ids still referenced by a retained
+ * owner (live composer, surviving fallbacks). Attachments are backups of
+ * composer state, so shared ids across owners are the norm — dropping one
+ * owner must never revoke another owner's payload.
+ */
+export function releaseDisplacedChatAttachmentPayloads(
+  displaced: readonly ChatAttachment[],
+  retained: ReadonlyArray<readonly ChatAttachment[]>,
+): void {
+  const retainedIds = new Set(retained.flat().map((attachment) => attachment.id));
+  releaseChatAttachmentPayloads(displaced.filter((attachment) => !retainedIds.has(attachment.id)));
+}
+
 export function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }

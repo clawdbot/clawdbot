@@ -12,7 +12,7 @@ import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -107,22 +107,6 @@ type ResolvedCustomProviderApiKey = {
   apiKey: string;
   source: string;
 };
-
-function canResolveEnvSecretRefInReadOnlyPath(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  id: string;
-}): boolean {
-  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
-  if (!providerConfig) {
-    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.id);
-}
 
 /** Resolves custom provider API keys that are usable without mutating secret stores. */
 export function resolveUsableCustomProviderApiKey(params: {

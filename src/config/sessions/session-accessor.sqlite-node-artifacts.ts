@@ -4,7 +4,9 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { mergeSessionParticipantSource } from "./session-entry-provenance.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 export function clearSessionCollaborationForKey(
@@ -36,6 +38,9 @@ export function rehomeLegacySessionNodeArtifacts(
 ): void {
   const db = getSessionKysely(database.db);
   const presentTables = readSessionNodeArtifactTables(database);
+  if (presentTables.has("session_participants")) {
+    ensureSessionParticipantsSchema(database.db);
+  }
   if (presentTables.has("board_tabs") && presentTables.has("board_widgets")) {
     const tabs = executeSqliteQuerySync(
       database.db,
@@ -172,6 +177,49 @@ export function rehomeLegacySessionNodeArtifacts(
         .where("session_key", "=", legacyKey),
     );
   }
+  if (presentTables.has("session_participants")) {
+    const participants = executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("session_participants").selectAll().where("session_key", "=", legacyKey),
+    ).rows;
+    for (const participant of participants) {
+      const existing = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_participants")
+          .select(["actor_source", "first_prompted_at", "last_prompted_at"])
+          .where("session_key", "=", canonicalKey)
+          .where("actor_type", "=", participant.actor_type)
+          .where("actor_id", "=", participant.actor_id),
+      );
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .insertInto("session_participants")
+          .values({ ...participant, session_key: canonicalKey })
+          .onConflict((conflict) =>
+            conflict.columns(["session_key", "actor_type", "actor_id"]).doUpdateSet({
+              actor_source: mergeSessionParticipantSource(
+                existing?.actor_source,
+                participant.actor_source,
+              ),
+              first_prompted_at: Math.min(
+                existing?.first_prompted_at ?? participant.first_prompted_at,
+                participant.first_prompted_at,
+              ),
+              last_prompted_at: Math.max(
+                existing?.last_prompted_at ?? participant.last_prompted_at,
+                participant.last_prompted_at,
+              ),
+            }),
+          ),
+      );
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_participants").where("session_key", "=", legacyKey),
+    );
+  }
 }
 
 /** Copy logical-session artifacts while doctor moves a node between agent databases. */
@@ -190,7 +238,14 @@ export function copySessionNodeArtifactsForRepair(
   const destinationDb = getSessionKysely(destination.db);
   const sourceKeyReferences = new Set(keys.flatMap((key) => [key, key.trim()]));
   const sourceTables = readSessionNodeArtifactTables(source);
-  const destinationTables = readSessionNodeArtifactTables(destination);
+  let destinationTables = readSessionNodeArtifactTables(destination);
+  if (sourceTables.has("session_participants") && !destinationTables.has("session_participants")) {
+    ensureSessionParticipantsSchema(destination.db);
+    destinationTables = readSessionNodeArtifactTables(destination);
+  }
+  if (destinationTables.has("session_participants")) {
+    ensureSessionParticipantsSchema(destination.db);
+  }
   if (
     sourceTables.has("board_tabs") &&
     sourceTables.has("board_widgets") &&
@@ -327,6 +382,44 @@ export function copySessionNodeArtifactsForRepair(
       );
     }
   }
+  if (sourceTables.has("session_participants") && destinationTables.has("session_participants")) {
+    for (const participant of executeSqliteQuerySync(
+      source.db,
+      sourceDb.selectFrom("session_participants").selectAll().where("session_key", "in", keys),
+    ).rows) {
+      const existing = executeSqliteQueryTakeFirstSync(
+        destination.db,
+        destinationDb
+          .selectFrom("session_participants")
+          .select(["actor_source", "first_prompted_at", "last_prompted_at"])
+          .where("session_key", "=", canonicalKey)
+          .where("actor_type", "=", participant.actor_type)
+          .where("actor_id", "=", participant.actor_id),
+      );
+      executeSqliteQuerySync(
+        destination.db,
+        destinationDb
+          .insertInto("session_participants")
+          .values({ ...participant, session_key: canonicalKey })
+          .onConflict((conflict) =>
+            conflict.columns(["session_key", "actor_type", "actor_id"]).doUpdateSet({
+              actor_source: mergeSessionParticipantSource(
+                existing?.actor_source,
+                participant.actor_source,
+              ),
+              first_prompted_at: Math.min(
+                existing?.first_prompted_at ?? participant.first_prompted_at,
+                participant.first_prompted_at,
+              ),
+              last_prompted_at: Math.max(
+                existing?.last_prompted_at ?? participant.last_prompted_at,
+                participant.last_prompted_at,
+              ),
+            }),
+          ),
+      );
+    }
+  }
 }
 
 /** Membership is authorization state; canonical repair replaces it from the selected winner. */
@@ -396,6 +489,12 @@ export function deleteSessionNodeArtifacts(
       db.deleteFrom("heartbeat_outcomes").where("session_key", "=", sessionKey),
     );
   }
+  if (presentTables.has("session_participants")) {
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_participants").where("session_key", "=", sessionKey),
+    );
+  }
   clearSessionCollaborationForKey(database, sessionKey);
 }
 
@@ -413,6 +512,7 @@ function readSessionNodeArtifactTables(database: OpenClawAgentDatabase): Set<str
           "board_widgets",
           "heartbeat_outcomes",
           "session_members",
+          "session_participants",
           "session_suggestions",
         ]),
     ).rows.flatMap((row) => (row.name ? [row.name] : [])),

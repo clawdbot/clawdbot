@@ -57,6 +57,7 @@ export async function isSessionCatalogThreadVisible(params: {
   hostId: string;
   list: SessionCatalogProvider["list"];
   listNodes: NonNullable<SessionCatalogListProviderParams["listNodes"]>;
+  sourceHomeId?: string;
   threadId: string;
   visibility: SessionCatalogVisibility;
 }): Promise<boolean> {
@@ -74,6 +75,7 @@ export async function isSessionCatalogThreadVisible(params: {
   let cursor: string | undefined;
   while (true) {
     const hosts = await params.list({
+      agentId: params.fallbackAgentId,
       allowProcessHomeFallback: params.allowProcessHomeFallback,
       hostIds: [params.hostId],
       ...(cursor ? { cursors: { [params.hostId]: cursor } } : {}),
@@ -85,7 +87,11 @@ export async function isSessionCatalogThreadVisible(params: {
       return false;
     }
     const projected = requestEntries.projectHostCreatedActors(host);
-    const session = projected.sessions.find((candidate) => candidate.threadId === params.threadId);
+    const session = projected.sessions.find(
+      (candidate) =>
+        candidate.threadId === params.threadId &&
+        (!params.sourceHomeId || candidate.sourceHomeId === params.sourceHomeId),
+    );
     if (session) {
       return session.createdActor?.id === params.visibility.ownerProfileId;
     }

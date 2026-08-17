@@ -25,7 +25,7 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
-import { applySystemAgentModelSelection, createQuickstartNotePrompter } from "./setup-apply.js";
+import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
   persistActivatedSetupInference,
   type SetupInferenceActivationPersistenceState,
@@ -56,6 +56,7 @@ import {
   resolveSetupAgentRuntimeId,
 } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
+import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   type SystemAgentOwnerPluginArtifactSnapshot,

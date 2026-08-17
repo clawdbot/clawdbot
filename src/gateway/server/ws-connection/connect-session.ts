@@ -94,6 +94,7 @@ export async function attachAuthenticatedGatewayConnect(
     pluginSurfaceBaseUrl,
     pluginNodeCapabilities = [],
     buildRequestContext,
+    getRequiredSharedGatewaySessionGeneration,
     close,
     isClosed,
     clearHandshakeTimer,
@@ -332,7 +333,11 @@ export async function attachAuthenticatedGatewayConnect(
     });
     sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message, {
       retryable: false,
-      details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
+        reloadRequired: true,
+      },
     });
     logWsControl.warn(
       `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
@@ -373,17 +378,10 @@ export async function attachAuthenticatedGatewayConnect(
   clearHandshakeTimer();
   const nextClient: GatewayWsClient = {
     socket,
-    connect: state.controlUiDeviceAuthMigrationPending
-      ? { ...connectParams, scopes }
-      : connectParams,
+    connect: connectParams,
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
-    isControlUiDeviceAuthMigrationSession: state.controlUiDeviceAuthMigrationPending,
-    // Only identity-bearing migration sessions may use bounded self-pairing.
-    // Device-less sessions remain pairing-scoped until reopened securely.
-    isControlUiDeviceAuthMigration:
-      state.controlUiDeviceAuthMigrationPending && Boolean(connectParams.device),
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id
       : undefined,
@@ -467,31 +465,18 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
+  // Authentication may finish before pairing/profile work does. Revalidate at
+  // the registration boundary so a credential rotation cannot miss this client.
   if (
-    state.controlUiDeviceAuthMigrationPending &&
-    context.handler.isControlUiDeviceAuthMigrationPending?.() !== true
+    sessionUsesSharedGatewayAuth &&
+    getRequiredSharedGatewaySessionGeneration &&
+    sessionSharedGatewaySessionGeneration !== getRequiredSharedGatewaySessionGeneration()
   ) {
-    const hasDeviceIdentity = Boolean(device);
-    const message = "device auth migration completed during connect; reconnect";
-    markHandshakeFailure("control-ui-device-auth-migration-completed", {
-      device: hasDeviceIdentity ? "yes" : "no",
-    });
-    sendHandshakeErrorResponse(
-      hasDeviceIdentity ? ErrorCodes.NOT_PAIRED : ErrorCodes.INVALID_REQUEST,
-      message,
-      {
-        details: {
-          code: hasDeviceIdentity
-            ? ConnectErrorDetailCodes.PAIRING_REQUIRED
-            : ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-        },
-      },
-    );
+    setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
     await releasePendingNodePairingCleanup();
-    close(1008, truncateCloseReason(message));
+    close(4001, "gateway auth changed");
     return;
   }
-
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {

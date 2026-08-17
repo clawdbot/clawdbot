@@ -814,6 +814,16 @@ struct OnboardingAISetupTests {
         #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
     }
 
+    @Test func `reconciliation deadline recomputes each RPC budget`() async throws {
+        let deadline = OnboardingAISetupModel.ReconciliationDeadline(timeout: .seconds(2))
+        let detectionBudget = deadline.remainingMilliseconds(cappedAt: 10000)
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let verificationBudget = deadline.remainingMilliseconds(cappedAt: 10000)
+        #expect(verificationBudget < detectionBudget)
+    }
+
     @Test func `prepare choices use wire presentation and hide usable local models`() {
         let candidates = [
             OnboardingAISetupModel.Candidate(

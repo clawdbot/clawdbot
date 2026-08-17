@@ -348,20 +348,31 @@ describe("Microsoft Teams durable ingress", () => {
           active -= 1;
         }
       });
+      const listPending = vi.spyOn(queue, "listPending");
       const ingress = makeIngress(queue, dispatch);
       ingress.start();
       try {
-        for (let index = 0; index < 9; index += 1) {
+        for (let index = 0; index < 8; index += 1) {
           await ingress.accept(
             activity({ id: `activity-concurrency-${index}`, conversationId: `lane-${index}` }),
           );
         }
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(8));
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+          setImmediate(resolve);
         });
+
+        const drainScansBeforeNinth = listPending.mock.calls.length;
+        await ingress.accept(activity({ id: "activity-concurrency-8", conversationId: "lane-8" }));
+        await vi.waitFor(() =>
+          expect(listPending.mock.calls.length).toBeGreaterThan(drainScansBeforeNinth),
+        );
+
         expect(dispatch).toHaveBeenCalledTimes(8);
         expect(maxActive).toBe(8);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({ id: "activity-concurrency-8", laneKey: "lane-8" }),
+        ]);
 
         releaseDeliveries?.();
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(9));

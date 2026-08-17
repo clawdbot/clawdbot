@@ -2006,6 +2006,13 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
+    await runGatewayCli(["gateway", "run", "--tailscale-reset-on-exit", "--allow-unconfigured"]);
+
+    expect(runtimeErrors).toEqual([]);
+    expect(startGatewayServer).toHaveBeenCalledOnce();
+  });
+
   it("allows password mode preflight when password is configured via SecretRef", async () => {
     configState.cfg = {
       gateway: {

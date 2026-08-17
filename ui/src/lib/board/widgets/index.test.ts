@@ -8,7 +8,15 @@ import {
 
 describe("plugin board widget registry", () => {
   it("resolves only advertised first-party kinds", () => {
-    const active = [{ pluginId: "workboard", kind: "workboard:card", label: "Workboard card" }];
+    const active = [
+      { pluginId: "workboard", kind: "workboard:board", label: "Workboard board" },
+      { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+    ];
+    expect(getPluginWidgetKindContribution("workboard:board", active)).toMatchObject({
+      kind: "workboard:board",
+      label: "Workboard board",
+      loader: expect.any(Function),
+    });
     expect(getPluginWidgetKindContribution("workboard:card", active)).toMatchObject({
       kind: "workboard:card",
       label: "Workboard card",

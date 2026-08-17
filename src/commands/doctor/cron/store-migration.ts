@@ -16,7 +16,11 @@ import {
   isBlockedLegacyCodexModelRef,
   type LegacyCodexModelIdentity,
 } from "../shared/codex-route-model-ref.js";
-import { hasLegacyTaskSuggestionToolList } from "../shared/legacy-tool-name-migration.js";
+import {
+  hasLegacyToolNameList,
+  IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+  TASK_SUGGESTION_TOOL_NAME_MIGRATION,
+} from "../shared/legacy-tool-name-migration.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 import {
@@ -40,6 +44,7 @@ type CronStoreIssueKey =
   | "legacyScheduleCron"
   | "legacyPayloadKind"
   | "legacyPayloadCodexModel"
+  | "legacyImageInspectionToolName"
   | "legacyTaskSuggestionToolName"
   | "legacyAgentTurnCommandPayload"
   | "unresolvedAgentTurnShellToolPrompt"
@@ -326,8 +331,13 @@ export function normalizeStoredCronJobs(
     if (payloadRecord) {
       const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
       const hadLegacyPayloadCodexModel = hasLegacyOpenAICodexCronModelRef(payloadRecord);
-      const hadLegacyTaskSuggestionToolName = hasLegacyTaskSuggestionToolList(
+      const hadLegacyTaskSuggestionToolName = hasLegacyToolNameList(
         payloadRecord.toolsAllow,
+        TASK_SUGGESTION_TOOL_NAME_MIGRATION,
+      );
+      const hadLegacyImageInspectionToolName = hasLegacyToolNameList(
+        payloadRecord.toolsAllow,
+        IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
       );
       const legacyCodexModelRoutes = collectLegacyOpenAICodexCronModelRoutes(payloadRecord);
       const agentId = normalizeOptionalString(raw.agentId);
@@ -342,6 +352,9 @@ export function normalizeStoredCronJobs(
       }
       if (hadLegacyTaskSuggestionToolName) {
         trackIssue("legacyTaskSuggestionToolName");
+      }
+      if (hadLegacyImageInspectionToolName) {
+        trackIssue("legacyImageInspectionToolName");
       }
       if (
         migrateLegacyCronPayload(payloadRecord, {

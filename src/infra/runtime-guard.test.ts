@@ -61,6 +61,12 @@ describe("runtime-guard", () => {
     ["25.8.1", false],
     ["25.9.0", true],
     ["26.0.0", true],
+    ["24.15.0+local.1", true],
+    ["24.15.0-rc.1", false],
+    ["25.9.1-nightly.20260714", false],
+    ["24.15", false],
+    ["garbage24.15.0suffix", false],
+    ["24.15.0suffix", false],
     [null, false],
   ] as const)("classifies supported Node version %s", (version, expected) => {
     expect(isSupportedNodeVersion(version)).toBe(expected);

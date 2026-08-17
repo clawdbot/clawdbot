@@ -3,6 +3,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -17,7 +18,6 @@ import {
   updatePairedNodeBins,
 } from "./device-pairing-node.js";
 import {
-  approveDevicePairing,
   getPairedDevice,
   requestDevicePairing,
   resolveNodePairingGeneration,

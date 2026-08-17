@@ -213,7 +213,6 @@ vi.mock("../gateway/server-constants.js", () => ({
 vi.mock("../gateway/server-methods/chat.js", () => ({
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
   augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
-  enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
 }));
 
@@ -432,6 +431,7 @@ describe("EmbeddedTuiBackend", () => {
         key: "tui-created",
         agentId: "main",
         parentSessionKey: "agent:main:main",
+        armSessionDiffBaselineCapture: true,
         emitCommandHooks: true,
         commandSource: "tui:embedded",
         loadGatewayModelCatalog: expect.any(Function),

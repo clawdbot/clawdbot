@@ -1351,8 +1351,7 @@ describe("cron service ops seam coverage", () => {
           action: "finished",
           job,
           status: "error",
-          error:
-            'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+          error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
         },
@@ -1704,8 +1703,7 @@ describe("cron service ops seam coverage", () => {
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({
           status: "error" as const,
-          error:
-            'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+          error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
           executionStarted: true,
         })),
       });

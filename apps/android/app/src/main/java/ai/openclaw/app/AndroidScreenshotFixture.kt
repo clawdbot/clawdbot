@@ -289,8 +289,8 @@ internal object AndroidScreenshotFixture {
           add(
             chatMessage(
               "assistant",
-              "The main thread asks for a regression test around session restore, and the second one wants the new " +
-                "config key documented before merge. Both are small; I can draft patches for each if you want.",
+              "The release check is ready:\n\n```kotlin\nval ready = lint && tests\n```\n\n" +
+                "Review https://openclaw.ai before tagging.",
               1_783_555_200_000,
             ),
           )
@@ -341,6 +341,13 @@ internal object AndroidScreenshotFixture {
           put("modelProvider", JsonPrimitive("openai"))
           put("model", JsonPrimitive("gpt-5.2"))
           put("contextTokens", JsonPrimitive(200_000))
+        },
+      )
+      put(
+        "inFlightRun",
+        buildJsonObject {
+          put("runId", JsonPrimitive("android-screenshot-active-run"))
+          put("text", JsonPrimitive(""))
         },
       )
     }.toString()

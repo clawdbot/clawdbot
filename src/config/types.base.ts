@@ -9,6 +9,7 @@ export type TypingMode = "never" | "instant" | "thinking" | "message";
 export type SessionScope = "per-sender" | "global";
 /** DM session-key granularity across peers, channels, and accounts. */
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+export type GroupScope = "main" | "per-group";
 /** Which source messages outbound replies should thread or quote against. */
 export type ReplyToMode = "off" | "first" | "all" | "batched";
 /** Group-chat admission policy for channels with allowlists. */
@@ -223,6 +224,8 @@ export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
   dmScope?: DmScope;
+  /** Group/channel session scoping (default: "per-group"). */
+  groupScope?: GroupScope;
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
@@ -251,6 +254,8 @@ export type SessionMaintenanceConfig = {
   pruneAfter?: string | number;
   /** Maximum total session entries to keep when protection permits. Default: 500. */
   maxEntries?: number;
+  /** Protect interactive sessions active within this duration. Default and false: disabled. */
+  preserveRecent?: string | number | false;
   /**
    * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
    * `*.deleted.<timestamp>`). Default and `false`: keep archives until the

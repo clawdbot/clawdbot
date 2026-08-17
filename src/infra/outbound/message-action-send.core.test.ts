@@ -1,6 +1,7 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -412,7 +413,7 @@ describe("runMessageAction core send routing", () => {
     expect(firstMockArg(sendText, "send text").text).toBe("hello world");
   });
 
-  it("applies TTS to message-tool sends before core outbound delivery", async () => {
+  it("preserves structured speech through response prefixes when automatic TTS is off", async () => {
     const sendMedia = vi.fn().mockResolvedValue({
       channel: "testchat",
       messageId: "voice-1",
@@ -445,17 +446,22 @@ describe("runMessageAction core send routing", () => {
         channels: {
           testchat: {
             enabled: true,
+            responsePrefix: "[Nexus]",
           },
         },
         tts: {
-          auto: "tagged",
+          auto: "off",
         },
       } as OpenClawConfig,
       action: "send",
       params: {
         channel: "testchat",
         target: "channel:abc",
-        message: "[[tts:text]]hello there[[/tts:text]]",
+        message: "Visible greeting",
+        voiceText: "hello there",
+        voiceProvider: "mock",
+        voiceId: "voice-7",
+        asVoice: true,
       },
       sessionKey: "agent:main:testchat:channel:abc",
       dryRun: false,
@@ -466,10 +472,24 @@ describe("runMessageAction core send routing", () => {
         kind: "final",
         channel: "testchat",
         payload: expect.objectContaining({
-          text: "[[tts:text]]hello there[[/tts:text]]",
+          text: "[Nexus] Visible greeting",
+          audioAsVoice: true,
         }),
       }),
     );
+    const ttsCall = firstMockArg(ttsMocks.maybeApplyTtsToPayload, "TTS payload");
+    const ttsPayload = ttsCall.payload;
+    expect(typeof ttsPayload === "object" && ttsPayload !== null).toBe(true);
+    expect(getReplyPayloadMetadata(ttsPayload as object)?.tts).toEqual({
+      tagged: true,
+      text: "hello there",
+      directives: [
+        {
+          provider: "mock",
+          values: { voiceid: "voice-7" },
+        },
+      ],
+    });
     expect(sendMedia).toHaveBeenCalledOnce();
     const mediaInput = firstMockArg(sendMedia, "send media");
     expect(mediaInput.text).toBe("");

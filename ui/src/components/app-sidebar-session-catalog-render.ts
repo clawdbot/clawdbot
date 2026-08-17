@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -66,7 +67,7 @@ type SessionCatalogGroupsParams = {
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   catalogOpenTarget: "viewer" | "terminal";
   terminalAvailable: boolean;
-  onOpenTerminal: (key: CatalogSessionKey) => void;
+  onOpenTerminal: (key: CatalogSessionKey, agentId: string) => void;
   onOpenMenu: (
     request: CatalogSessionMenuRequest,
     x: number,
@@ -101,7 +102,7 @@ function catalogErrorMessages(catalog: SessionCatalog): string[] {
   const messages = new Set<string>();
   const add = (error: SessionCatalog["error"]) => {
     if (error) {
-      messages.add(`[${error.code}] ${error.message}`);
+      messages.add(formatUiError(`[${error.code}] ${error.message}`));
     }
   };
   add(catalog.error);
@@ -296,7 +297,9 @@ function renderCatalogHostGroup(
   liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
   params: SessionCatalogGroupsParams,
 ) {
-  const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
+  const errorHelp = host.error
+    ? formatUiError(`[${host.error.code}] ${host.error.message}`)
+    : undefined;
   const projectGroups =
     params.projectGrouping === "project"
       ? groupCatalogSessionsByProject(host.sessions)
@@ -426,11 +429,12 @@ function renderCatalogSessionRow(
   const stateDescription = running ? t("sessionsView.activeRun") : "";
   const stateId = running ? sidebarSessionStateId(key) : undefined;
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
-  const openTerminal = () => params.onOpenTerminal(catalogKey);
+  const openTerminal = () => params.onOpenTerminal(catalogKey, params.newSessionAgentId);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(
       {
         key: catalogKey,
+        agentId: params.newSessionAgentId,
         routeId,
         navigation,
         canOpenTerminal: session.canOpenTerminal === true,
@@ -481,22 +485,28 @@ function renderCatalogSessionRow(
         <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+          <span class="sidebar-recent-session__details">
+            <span class="sidebar-recent-session__details-endcap">
+              ${renderSessionRowBadges({
+                hasAutomation: false,
+                pullRequest: session.pullRequest,
+              })}
+              ${running
+                ? html`<span class="session-row-aside">
+                    <span
+                      class="session-row-state"
+                      id=${stateId}
+                      role="img"
+                      aria-label=${stateDescription}
+                      >${renderSessionRunSpinner(false)}</span
+                    >
+                  </span>`
+                : nothing}
+            </span>
+          </span>
         </span>
-        ${renderSessionRowBadges({
-          hasAutomation: false,
-          pullRequest: session.pullRequest,
-        })}
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
-        ${running
-          ? html`<span
-              class="session-row-state"
-              id=${stateId}
-              role="img"
-              aria-label=${stateDescription}
-              >${renderSessionRunSpinner(false)}</span
-            >`
-          : nothing}
         <span class="session-row-actions">
           <button
             class="session-action"

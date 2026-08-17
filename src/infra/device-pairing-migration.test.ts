@@ -4,9 +4,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { approveDevicePairing } from "./device-pairing-approval.js";
 import { migrateLegacyDevicePairingStore } from "./device-pairing-migration.js";
 import {
-  approveDevicePairing,
   getPairedDevice,
   listDevicePairing,
   requestDevicePairing,

@@ -18,8 +18,9 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
+  enqueueDelivery,
+  failDelivery,
 } from "./delivery-queue-storage.js";
-import { enqueueDelivery, failDelivery } from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
