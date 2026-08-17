@@ -274,6 +274,41 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("rejects explicit permission modes before cloud worker placement", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        permissionMode: "workspace",
+        sessionRoot: "/repo/worktree",
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringMatching(
+          /permissionMode.*run this session locally.*operator\.admin/su,
+        ),
+      }),
+    );
+  });
+
   it("moves an active session back to the Gateway with exact-source CAS", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
