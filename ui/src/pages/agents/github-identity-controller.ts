@@ -56,6 +56,8 @@ export class GitHubIdentityController {
   private effectiveFingerprint = "";
   private identityInitialized = false;
   private verificationQueued = false;
+  private mutationOwner: RequestOwner | null = null;
+  private mutationIdentityChanged = false;
   private drafts: Record<GitHubIdentityScope, GitHubIdentityDraft> = {
     system: readDraft(undefined),
     agent: readDraft(undefined),
@@ -113,8 +115,19 @@ export class GitHubIdentityController {
       this.identityInitialized && this.effectiveFingerprint !== effectiveFingerprint;
     this.effectiveFingerprint = effectiveFingerprint;
     this.identityInitialized = true;
-    if (identityChanged) {
+    const mutationOwner = this.mutationOwner;
+    const mutationOwnsIdentityChange =
+      identityChanged && mutationOwner !== null && this.busy && this.isCurrent(mutationOwner);
+    // The config coordinator publishes its authoritative refresh before resolving.
+    // Keep that exact mutation current so it can adopt the RPC result and unlock the UI.
+    if (mutationOwnsIdentityChange) {
+      this.mutationIdentityChanged = true;
+    } else if (identityChanged) {
       this.requestRevision += 1;
+    }
+    if (clientChanged || agentChanged || capabilityChanged) {
+      this.mutationOwner = null;
+      this.mutationIdentityChanged = false;
     }
     if (clientChanged || agentChanged) {
       this.status = null;
@@ -142,7 +155,7 @@ export class GitHubIdentityController {
         this.configFingerprints = { ...this.configFingerprints, [scope]: fingerprint };
       }
     }
-    if (identityChanged) {
+    if (identityChanged && !mutationOwnsIdentityChange) {
       this.status = null;
       this.error = null;
       this.loading = false;
@@ -217,6 +230,23 @@ export class GitHubIdentityController {
     );
   }
 
+  private finishMutation(owner: RequestOwner, succeeded: boolean) {
+    if (this.mutationOwner !== owner) {
+      return;
+    }
+    const verifyAfterSettle = this.mutationIdentityChanged && !succeeded;
+    this.mutationOwner = null;
+    this.mutationIdentityChanged = false;
+    if (!this.isCurrent(owner)) {
+      return;
+    }
+    this.busy = false;
+    this.host.requestUpdate();
+    if (verifyAfterSettle) {
+      this.queueVerification();
+    }
+  }
+
   private applyMutationStatus(
     owner: RequestOwner,
     scope: GitHubIdentityScope,
@@ -289,12 +319,15 @@ export class GitHubIdentityController {
     if (!owner) {
       return;
     }
+    this.mutationOwner = owner;
+    this.mutationIdentityChanged = false;
     this.loading = false;
     this.busy = true;
     this.error = null;
     this.host.requestUpdate();
     let stored = false;
     let secretName = "";
+    let succeeded = false;
     try {
       secretName = `github-setup-${generateUUID().replaceAll("-", "").toLowerCase()}`;
       await owner.client.request("secrets.store.set", {
@@ -333,6 +366,7 @@ export class GitHubIdentityController {
         { ...draft, token: "" },
         mutation.refresh.ok ? null : mutation.refresh.error,
       );
+      succeeded = true;
     } catch (error) {
       if (stored) {
         await this.deleteSetupHandoff(owner.client, secretName);
@@ -341,10 +375,7 @@ export class GitHubIdentityController {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.isCurrent(owner)) {
-        this.busy = false;
-        this.host.requestUpdate();
-      }
+      this.finishMutation(owner, succeeded);
     }
   }
 
@@ -357,10 +388,13 @@ export class GitHubIdentityController {
     if (!owner) {
       return;
     }
+    this.mutationOwner = owner;
+    this.mutationIdentityChanged = false;
     this.loading = false;
     this.busy = true;
     this.error = null;
     this.host.requestUpdate();
+    let succeeded = false;
     try {
       const mutation = await this.runConfigureMutation(owner, {
         scope,
@@ -381,16 +415,14 @@ export class GitHubIdentityController {
         if (scope === "agent") {
           this.scope = "system";
         }
+        succeeded = true;
       }
     } catch (error) {
       if (this.isCurrent(owner)) {
         this.error = formatUiError(error);
       }
     } finally {
-      if (this.isCurrent(owner)) {
-        this.busy = false;
-        this.host.requestUpdate();
-      }
+      this.finishMutation(owner, succeeded);
     }
   }
 }

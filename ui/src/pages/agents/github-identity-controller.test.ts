@@ -251,28 +251,46 @@ describe("GitHubIdentityController", () => {
     };
     const controller = new GitHubIdentityController(host);
     sync(controller, client, runtimeConfig.state.configForm ?? {});
-    if (action.mode === "managed") {
-      controller.setDraft("token", "one-use-token");
-      await controller.configure();
-    } else {
-      await controller.inherit();
-    }
+    const unsubscribe = runtimeConfig.subscribe(() => {
+      sync(controller, client, runtimeConfig.state.configForm ?? {});
+    });
+    try {
+      if (action.mode === "managed") {
+        controller.setDraft("token", "one-use-token");
+        controller.setDraft("name", "Managed Author");
+        await controller.configure();
+      } else {
+        await controller.inherit();
+      }
 
-    expect(order).toEqual([
-      ...(action.mode === "managed" ? ["secrets.store.set"] : []),
-      "config.set",
-      "tools.github.configure",
-      "config.get",
-    ]);
-    expect(runtimeConfig.state.configForm).toMatchObject({ pendingEdit: action.mode });
-    expect(
-      (
-        runtimeConfig.state.configForm as {
-          tools?: { github?: { profileId?: string } };
-        }
-      ).tools?.github?.profileId,
-    ).toBe(action.expectedProfileId);
-    runtimeConfig.dispose();
+      expect(order).toEqual([
+        ...(action.mode === "managed" ? ["secrets.store.set"] : []),
+        "config.set",
+        "tools.github.configure",
+        "config.get",
+      ]);
+      expect(controller.busy).toBe(false);
+      expect(controller.status).toEqual(availableStatus);
+      expect(controller.scope).toBe("system");
+      expect(controller.draft).toEqual({
+        token: "",
+        name: action.mode === "managed" ? "Managed Author" : "",
+        email: "",
+      });
+      expect(runtimeConfig.state.configForm).toMatchObject({ pendingEdit: action.mode });
+      expect(
+        (
+          runtimeConfig.state.configForm as {
+            tools?: { github?: { profileId?: string } };
+          }
+        ).tools?.github?.profileId,
+      ).toBe(action.expectedProfileId);
+    } finally {
+      unsubscribe();
+      runtimeConfig.dispose();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("configures in an insecure context with getRandomValues but no randomUUID", async () => {
