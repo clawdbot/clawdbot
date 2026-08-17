@@ -351,12 +351,14 @@ export async function runReplyAgent(
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Surface ?? sessionCtx.Provider,
   }) as OriginatingChannelType | undefined;
-  const replyToMode = resolveReplyToMode(
-    followupRun.run.config,
-    replyToChannel,
-    sessionCtx.AccountId,
-    sessionCtx.ChatType,
-  );
+  const replyToMode =
+    followupRun.originatingReplyToMode ??
+    resolveReplyToMode(
+      followupRun.run.config,
+      replyToChannel,
+      sessionCtx.AccountId,
+      sessionCtx.ChatType,
+    );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
   const replyMediaContext = createReplyMediaContext({

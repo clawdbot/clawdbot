@@ -283,11 +283,17 @@ export type OpenClawGatewayDiscoveryService = {
 };
 
 /** Context passed to long-lived plugin services. */
+export type OpenClawPluginServiceHealth = {
+  reportFailure: (error: unknown) => void;
+  clearFailure: () => void;
+};
+
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  serviceHealth?: OpenClawPluginServiceHealth;
   gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;

@@ -19,6 +19,8 @@ import {
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
 } from "./gateway-connection.test-mocks.js";
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+
 const gatewayConfigMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
   loadGatewayTlsRuntime: vi.fn(),
@@ -819,7 +821,7 @@ describe("callGateway url resolution", () => {
       mode: "remote",
       remote: {
         url: "wss://remote.example:9443/ws",
-        tlsFingerprint: "remote-fingerprint",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
       },
     });
     setGatewayNetworkDefaults(18789);
@@ -831,7 +833,7 @@ describe("callGateway url resolution", () => {
       method: "health",
     });
 
-    expect(lastClientOptions?.tlsFingerprint).toBe("remote-fingerprint");
+    expect(lastClientOptions?.tlsFingerprint).toBe(TLS_FINGERPRINT);
   });
 
   it("does not apply remote tlsFingerprint for CLI url override", async () => {
@@ -839,7 +841,7 @@ describe("callGateway url resolution", () => {
       mode: "remote",
       remote: {
         url: "wss://remote.example:9443/ws",
-        tlsFingerprint: "remote-fingerprint",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT}`,
       },
     });
     setGatewayNetworkDefaults(18789);
@@ -1387,14 +1389,14 @@ describe("buildGatewayConnectionDetails", () => {
     resolveGatewayPort.mockReturnValue(18800);
     gatewayConfigMocks.loadGatewayTlsRuntime.mockResolvedValue({
       enabled: true,
-      fingerprintSha256: "sha256:test-local-gateway-fingerprint",
+      fingerprintSha256: TLS_FINGERPRINT,
       required: true,
     });
 
     const details = await buildGatewayProbeConnectionDetails({ config });
 
     expect(details.url).toBe("wss://127.0.0.1:18800");
-    expect(details.tlsFingerprint).toBe("sha256:test-local-gateway-fingerprint");
+    expect(details.tlsFingerprint).toBe(TLS_FINGERPRINT);
     expect(details.preauthHandshakeTimeoutMs).toBeUndefined();
   });
 

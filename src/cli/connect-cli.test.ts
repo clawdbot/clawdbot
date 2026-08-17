@@ -1,4 +1,7 @@
 // Connect CLI tests cover accepted targets and handoff to the canonical node runtime.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NodeHostConfig } from "../node-host/config.js";
@@ -105,6 +108,47 @@ describe("connect cli", () => {
     if (fetched) {
       expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("init");
     }
+    expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+  });
+
+  it("runs environment-managed nodes as process-scoped session hosts", async () => {
+    await runConnect([setupCode(), "--ephemeral", "--display-name", "Cloud Node"]);
+
+    expect(mocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayBootstrapToken: "bootstrap-token",
+        preferGatewayBootstrapToken: false,
+        forceWorkerRuns: true,
+        displayName: "Cloud Node",
+      }),
+    );
+    expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+  });
+
+  it("consumes an environment-managed target file before connecting", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-connect-target-"));
+    const targetFile = path.join(root, "setup-code");
+    await fs.writeFile(targetFile, setupCode(), { mode: 0o600 });
+    try {
+      await runConnect(["--target-file", targetFile, "--ephemeral"]);
+
+      expect(mocks.runNodeHost).toHaveBeenCalledWith(
+        expect.objectContaining({ forceWorkerRuns: true }),
+      );
+      await expect(fs.stat(targetFile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects service installation for environment-managed nodes", async () => {
+    await runConnect([setupCode(), "--ephemeral", "--service"]);
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "--ephemeral cannot be combined with --service.",
+    );
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNodeHost).not.toHaveBeenCalled();
     expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
 

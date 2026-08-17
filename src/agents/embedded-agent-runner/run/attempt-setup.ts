@@ -51,6 +51,7 @@ import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import {
+  createSandboxPromptEntryLoader,
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
@@ -510,14 +511,16 @@ export function prepareEmbeddedAttemptSkills(params: {
     effectiveWorkspace: params.effectiveWorkspace,
     skillsSnapshot: params.attempt.skillsSnapshot,
   });
-  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-    workspaceDir: skillsWorkspaceDir,
-    config: params.attempt.config,
-    agentId: params.sessionAgentId,
-    eligibility: skillsEligibility,
-    skillsSnapshot,
-    workspaceOnly,
-  });
+  const { shouldLoadSkillEntries, skillEntries, loadSkillEntries } = resolveEmbeddedRunSkillEntries(
+    {
+      workspaceDir: skillsWorkspaceDir,
+      config: params.attempt.config,
+      agentId: params.sessionAgentId,
+      eligibility: skillsEligibility,
+      skillsSnapshot,
+      workspaceOnly,
+    },
+  );
   const restoreSkillEnv = skillsSnapshot
     ? applySkillEnvOverridesFromSnapshot({
         snapshot: skillsSnapshot,
@@ -541,6 +544,11 @@ export function prepareEmbeddedAttemptSkills(params: {
     const skillsPrompt = resolveSkillsPrompt({
       skillsSnapshot,
       entries: promptSkillEntries,
+      loadEntries: createSandboxPromptEntryLoader({
+        loadEntries: loadSkillEntries,
+        skillsWorkspaceDir,
+        skillsPromptWorkspaceDir,
+      }),
       config: params.attempt.config,
       workspaceDir: skillsPromptWorkspaceDir,
       agentId: params.sessionAgentId,

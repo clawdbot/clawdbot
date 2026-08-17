@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ClientOptions, WebSocket } from "ws";
+import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
@@ -52,15 +53,16 @@ function parseUnixEndpoint(value: Record<string, unknown>): WorkerConnectionEndp
 function parseWebSocketEndpoint(
   value: Record<string, unknown>,
 ): WorkerConnectionEndpoint | undefined {
+  const tlsFingerprint =
+    typeof value.tlsFingerprint === "string"
+      ? normalizeTlsFingerprint(value.tlsFingerprint)
+      : undefined;
   if (
     !hasExactKeys(value, ["kind", "url"], ["tlsFingerprint", "cloudflareAccess"]) ||
     value.kind !== "websocket" ||
     typeof value.url !== "string" ||
     value.url.length > 4_096 ||
-    (value.tlsFingerprint !== undefined &&
-      (typeof value.tlsFingerprint !== "string" ||
-        value.tlsFingerprint.trim().length === 0 ||
-        value.tlsFingerprint.length > 256))
+    (value.tlsFingerprint !== undefined && !tlsFingerprint)
   ) {
     return undefined;
   }
@@ -89,7 +91,7 @@ function parseWebSocketEndpoint(
   return {
     kind: "websocket",
     url: value.url,
-    ...(value.tlsFingerprint === undefined ? {} : { tlsFingerprint: value.tlsFingerprint }),
+    ...(tlsFingerprint ? { tlsFingerprint } : {}),
     ...(cloudflareAccess ? { cloudflareAccess } : {}),
   };
 }

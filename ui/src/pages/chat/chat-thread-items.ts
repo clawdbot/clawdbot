@@ -592,7 +592,6 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "question":
       return item.startedAt;
     case "reading-indicator":
-    case "plan":
       return null;
   }
   return null;

@@ -164,7 +164,7 @@ export class NewSessionModelControl {
   loadCatalogTargets(context: ApplicationContext | undefined, agentId: string, enabled: boolean) {
     const snapshot = context?.gateway.snapshot;
     const client = snapshot?.client;
-    const normalizedAgentId = normalizeAgentId(agentId);
+    const normalizedAgentId = agentId.trim() ? normalizeAgentId(agentId) : "";
     if (
       !enabled ||
       snapshot?.phase !== "connected" ||
@@ -339,7 +339,7 @@ export class NewSessionModelControl {
   ) {
     const snapshot = context?.gateway.snapshot;
     const client = snapshot?.client;
-    const normalizedAgentId = normalizeAgentId(agentId);
+    const normalizedAgentId = agentId.trim() ? normalizeAgentId(agentId) : "";
     if (this.agentId !== normalizedAgentId) {
       // Catalog availability belongs to an agent. A real owner change clears
       // the snapshot; same-agent refreshes retain it until replacement.

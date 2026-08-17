@@ -649,6 +649,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.cwd).toBe("/tmp/workspace");
     expect(forkParams?.config).toEqual({
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,

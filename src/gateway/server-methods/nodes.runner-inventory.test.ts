@@ -5,6 +5,7 @@ import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
@@ -290,7 +291,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-1");
   });
 
-  it("keeps exact v1 inventory diagnostic-only until disconnect and v3 reconnect", async () => {
+  it("keeps exact v1 inventory diagnostic-only until disconnect and v4 reconnect", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
@@ -370,7 +371,22 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-v2");
   });
 
-  it("routes the shipped v2 build-shaped inventory to update recovery", async () => {
+  it.each([
+    [
+      "v2 build-shaped",
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE],
+        workerRuns: { ...LEGACY_WORKER_RUNS, bundlePrewarm: 1 },
+      },
+    ],
+    [
+      "v3 execution-context",
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+      },
+    ],
+  ] as const)("routes the shipped %s inventory to update recovery", async (_name, declaration) => {
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     const client = createWorkerSupervisorNodeClient();
     runtime.nodeRegistry.register(client, {
@@ -380,10 +396,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     const opts = runnerInventoryOptions({
       nodeRegistry: runtime.nodeRegistry,
       client,
-      declaration: {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE],
-        workerRuns: { ...LEGACY_WORKER_RUNS, bundlePrewarm: 1 },
-      },
+      declaration,
     });
 
     await runnerInventoryHandler(opts);

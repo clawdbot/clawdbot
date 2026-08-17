@@ -236,26 +236,26 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
-describe("update_plan progress events", () => {
-  it("emits the typed full plan snapshot after a successful result", async () => {
+describe("progress_card compatibility plan events", () => {
+  it("emits the typed full plan snapshot after a successful write", async () => {
     const { ctx, onAgentEvent } = createTestContext();
     const emitted: CapturedAgentEvent[] = [];
     const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
     try {
-      await endTool(ctx, {
-        toolName: "update_plan",
+      await executeTool(ctx, {
+        toolName: "progress_card",
         toolCallId: "plan-1",
+        args: {
+          markdown: "Implementation underway",
+          plan: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        },
         isError: false,
         result: {
-          content: [],
-          details: {
-            status: "updated",
-            explanation: "Implementation underway",
-            plan: [
-              { step: "Inspect", status: "completed" },
-              { step: "Patch", status: "in_progress" },
-            ],
-          },
+          content: [{ type: "text", text: "Progress card updated (rev 2, 1/2 done)" }],
+          details: { revision: 2, steps: { completed: 1, total: 2 } },
         },
       });
       await Promise.resolve();
@@ -266,7 +266,6 @@ describe("update_plan progress events", () => {
           phase: "update",
           title: "Plan updated",
           source: "openclaw",
-          explanation: "Implementation underway",
           steps: [
             { step: "Inspect", status: "completed" },
             { step: "Patch", status: "in_progress" },
@@ -278,6 +277,31 @@ describe("update_plan progress events", () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  it("emits an empty snapshot when a successful write clears the plan", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "progress_card",
+      toolCallId: "plan-clear",
+      args: { markdown: "Narrative only" },
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Progress card updated (rev 3)" }],
+        details: { revision: 3, steps: null },
+      },
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        steps: [],
+      },
+    });
   });
 });
 

@@ -222,7 +222,6 @@ async function handleChatSendWithOptions(
       return;
     }
     messageInjectionAttempt = preAckInjection.attempt;
-
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
           receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),

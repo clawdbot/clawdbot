@@ -111,6 +111,10 @@ export function makeDispatchTestContext(
       },
     }),
     ...overrides,
+    workerEnvironmentService: {
+      supportsExecutionMode: () => true,
+      ...overrides.workerEnvironmentService,
+    } as never,
   } as unknown as GatewayRequestContext;
 }
 

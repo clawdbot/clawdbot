@@ -313,6 +313,16 @@ CREATE TABLE IF NOT EXISTS board_widgets (
 CREATE INDEX IF NOT EXISTS idx_agent_board_widgets_tab_position
   ON board_widgets(session_key, tab_id, position);
 
+CREATE TABLE IF NOT EXISTS session_progress_cards (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  markdown TEXT,
+  steps_json TEXT,
+  revision INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS heartbeat_outcomes (
   session_key TEXT NOT NULL PRIMARY KEY,
   run_session_key TEXT NOT NULL,

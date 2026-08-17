@@ -37,7 +37,6 @@ import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import {
   captureDeliveredTranscriptMirror,
-  getDispatcherFinalOutcomeCounts,
   mirrorDeliveredReplyToTranscript,
   mirrorTranscriptAfterDispatcherSettled,
   transcriptMirrorForDeliveredPayload,
@@ -492,9 +491,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           )
         : undefined);
     markInboundDedupeReplayUnsafe();
-    const finalOutcomeBefore = transcriptMirror
-      ? getDispatcherFinalOutcomeCounts(dispatcher)
-      : undefined;
     const finalDeliveryCapture = transcriptMirror ? {} : undefined;
     const deliveredTranscriptMirror = transcriptMirror
       ? captureDeliveredTranscriptMirror({
@@ -516,14 +512,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       "final",
       normalizedPayload,
     );
-    if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
+    if (queuedFinal && deliveredTranscriptMirror && dispatcherOutcome) {
       // The common settle owner runs this after successful delivery or
       // cancellation. Keeping reconciliation out of the reply operation avoids
       // creating another operation/idle cycle during delivery settlement.
       registerReplyDispatcherSettledTask(dispatcher, () =>
         mirrorTranscriptAfterDispatcherSettled({
-          dispatcher,
-          before: finalOutcomeBefore,
+          outcome: dispatcherOutcome,
           metadata: deliveredTranscriptMirror,
           cfg,
         }),

@@ -37,6 +37,7 @@ import {
   type SplitDropRect,
   type SplitDropZone,
 } from "./split-drop-zone.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
 import {
   applyUiCommandToSplitLayout,
   closePane,
@@ -50,7 +51,6 @@ import {
   singlePaneLayout,
   splitRatio,
   splitWeight,
-  type ChatSplitLayout,
 } from "./split-layout.ts";
 
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };

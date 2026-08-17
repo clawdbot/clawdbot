@@ -250,7 +250,7 @@ describe("Codex app-server dynamic tool build", () => {
       "apply_patch",
       "exec",
       "process",
-      "update_plan",
+      "progress_card",
       "get_goal",
       "create_goal",
       "update_goal",
@@ -268,7 +268,7 @@ describe("Codex app-server dynamic tool build", () => {
       "apply_patch",
       "exec",
       "process",
-      "update_plan",
+      "progress_card",
       "get_goal",
       "create_goal",
       "update_goal",
@@ -280,7 +280,15 @@ describe("Codex app-server dynamic tool build", () => {
         { codexDynamicToolsExclude: ["write", "apply_patch"] },
         { preserveShell: false },
       ).map((tool) => tool.name),
-    ).toEqual(["read", "edit", "update_plan", "get_goal", "create_goal", "update_goal", "message"]);
+    ).toEqual([
+      "read",
+      "edit",
+      "progress_card",
+      "get_goal",
+      "create_goal",
+      "update_goal",
+      "message",
+    ]);
   });
 
   it("filters disabled-native replacements with the canonical conversation profile", async () => {
@@ -425,6 +433,7 @@ describe("Codex app-server dynamic tool build", () => {
       "exec",
       "process",
       "update_plan",
+      "progress_card",
       "get_goal",
       "create_goal",
       "update_goal",
@@ -439,6 +448,7 @@ describe("Codex app-server dynamic tool build", () => {
     ].map((name) => ({ name }));
 
     expect(filterCodexDynamicTools(tools, {}).map((tool) => tool.name)).toEqual([
+      "progress_card",
       "web_search",
       "message",
       "heartbeat_respond",

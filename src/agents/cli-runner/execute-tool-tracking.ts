@@ -335,6 +335,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           currentChannelId: context.params.currentChannelId,
           currentThreadTs: context.params.currentThreadTs,
           currentMessageId: context.params.currentMessageId,
+          replyToMode: context.params.replyToMode,
         },
       },
       call.args,

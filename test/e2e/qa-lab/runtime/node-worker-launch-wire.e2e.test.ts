@@ -16,6 +16,8 @@ import {
   BASELINE_PROMPT,
   BASELINE_REPLY,
   PROOF_TIMEOUT_MS,
+  WORKER_PERMISSION_PROMPT,
+  WORKER_PERMISSION_REPLY,
   startMidturnProvider,
 } from "./cloud-worker-midturn-loss-fixture.js";
 import {
@@ -214,6 +216,60 @@ describe("node worker launch wire", () => {
         expect(await fs.readFile(path.join(remoteWorkspaceDir, "node-result.txt"), "utf8")).toBe(
           "device result\n",
         );
+
+        const permissionRunId = `node-worker-permission-${Date.now()}`;
+        await expect(
+          operator.request<{ runId?: string; status?: string }>("chat.send", {
+            sessionKey: SESSION_KEY,
+            message: WORKER_PERMISSION_PROMPT,
+            deliver: false,
+            idempotencyKey: permissionRunId,
+          }),
+        ).resolves.toMatchObject({ runId: permissionRunId, status: "started" });
+        await expect(
+          operator.request<{ status?: string }>(
+            "agent.wait",
+            { runId: permissionRunId, timeoutMs: PROOF_TIMEOUT_MS },
+            { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
+          ),
+        ).resolves.toMatchObject({ status: "ok" });
+        await workerNode.waitForInvokes();
+        expect(workerNode.invokeErrors).toEqual([]);
+
+        await expect(
+          fs.readFile(path.join(remoteWorkspaceDir, "worker-permission-in-root.txt"), "utf8"),
+        ).resolves.toBe("worker permission proof\n");
+        await expect(
+          fs.access(path.resolve(remoteWorkspaceDir, "..", "worker-permission-outside.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(
+          fs.access(path.join(remoteWorkspaceDir, "worker-exec-escaped.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(provider.outsideWriteOutput).toMatch(/escape|outside|containment|workspace/iu);
+        expect(provider.execOutput).toMatch(
+          /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+        );
+
+        const permissionHistory = await operator.request<{ messages?: unknown[] }>("chat.history", {
+          sessionKey: SESSION_KEY,
+          limit: 30,
+        });
+        const permissionReplies = permissionHistory.messages?.filter(
+          (message) =>
+            (message as { role?: unknown }).role === "assistant" &&
+            wireMessageText(message).includes(WORKER_PERMISSION_REPLY),
+        );
+        expect(permissionReplies).toHaveLength(1);
+        expect(wireMessageText(permissionReplies?.[0])).toContain(provider.execOutput);
+        const permissionDescribed = (await gateway.call("sessions.describe", {
+          key: SESSION_KEY,
+        })) as { session?: { execCwd?: string; spawnedCwd?: string } };
+        const permissionLocalDir =
+          permissionDescribed.session?.execCwd ?? permissionDescribed.session?.spawnedCwd;
+        expect(permissionLocalDir).toBeTruthy();
+        await expect(
+          fs.readFile(path.join(permissionLocalDir!, "worker-permission-in-root.txt"), "utf8"),
+        ).resolves.toBe("worker permission proof\n");
 
         legacyWorkerNode = await createPairedNodeWorkerHost({
           gateway,

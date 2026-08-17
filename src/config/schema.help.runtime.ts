@@ -104,7 +104,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
   "tools.updatePlan":
-    "Structured `update_plan` checklist tool for non-trivial multi-step work. Enabled by default; set false to opt out.",
+    "Unified `progress_card` status tool for durable plans and narrative notes. Enabled by default; set false to opt out.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
   "tools.toolSearch.enabled":

@@ -41,7 +41,7 @@ export const WORKER_PROTOCOL_METHODS = [
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
 export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
-export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v1";
+export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v2";
 export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   "worker-heartbeat-v1",

@@ -118,13 +118,18 @@ export type ChatItem =
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
   | { kind: "reading-indicator"; key: string; startedAt: number }
-  | { kind: "question"; key: string; questionId: string; startedAt: number }
-  | { kind: "plan"; key: string };
+  | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
   text: string;
   ts: number;
   runId?: string;
+  /** Persisted user send that causally precedes this transient output. */
+  afterBoundaryRunId?: string;
+  /** Persisted user send that causally follows this transient output. */
+  boundaryRunId?: string;
+  /** Ordering-only boundary with no renderable assistant text. */
+  boundaryMarker?: true;
   toolCallId?: string;
   itemId?: string;
 };
@@ -133,8 +138,11 @@ export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
   return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
 }
 
-export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
-  return !streamSegmentHasItemId(segment);
+export function streamSegmentUsesAccumulatedText(segment: {
+  itemId?: unknown;
+  boundaryMarker?: unknown;
+}): boolean {
+  return segment.boundaryMarker !== true && !streamSegmentHasItemId(segment);
 }
 
 /** Advance the accumulated-text tracker only when the segment genuinely

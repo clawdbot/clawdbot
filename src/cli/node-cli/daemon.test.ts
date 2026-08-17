@@ -11,6 +11,8 @@ import {
   runNodeDaemonUninstall,
 } from "./daemon.js";
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+
 const mocks = vi.hoisted(() => {
   const service = {
     label: "Node service",
@@ -147,7 +149,7 @@ describe("runNodeDaemonInstall", () => {
         port: 18789,
         contextPath: "/saved",
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: TLS_FINGERPRINT,
       },
     });
     mocks.isSystemdUserServiceAvailable.mockReset().mockResolvedValue(true);
@@ -182,7 +184,7 @@ describe("runNodeDaemonInstall", () => {
         port: 18789,
         contextPath: "/saved",
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: TLS_FINGERPRINT,
       }),
     );
   });
@@ -197,7 +199,7 @@ describe("runNodeDaemonInstall", () => {
       expect.objectContaining({
         contextPath: "/saved",
         tls: true,
-        tlsFingerprint: "saved-fingerprint",
+        tlsFingerprint: TLS_FINGERPRINT,
       }),
     );
   });
@@ -217,11 +219,20 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("rejects a TLS fingerprint when installing an explicitly plaintext node", async () => {
-    await runNodeDaemonInstall({ force: true, tls: false, tlsFingerprint: "new-fingerprint" });
+    await runNodeDaemonInstall({ force: true, tls: false, tlsFingerprint: TLS_FINGERPRINT });
 
     expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("--no-tls cannot be combined with --tls-fingerprint"),
+    );
+  });
+
+  it("rejects an invalid TLS fingerprint before building an install plan", async () => {
+    await runNodeDaemonInstall({ force: true, tlsFingerprint: "sha256:abc123" });
+
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid TLS fingerprint"),
     );
   });
 

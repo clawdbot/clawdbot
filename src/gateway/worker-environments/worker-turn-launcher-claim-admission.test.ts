@@ -256,6 +256,11 @@ describe("worker turn launcher claim admission", () => {
     if (!launchRequest) {
       throw new Error("expected worker launch request");
     }
+    expect(launchRequest.plan.assignment).toMatchObject({
+      workspaceDir: "/worker/workspace",
+      permissionMode: "workspace",
+      workerContainmentRoot: "/worker/workspace",
+    });
     createWorkerSessionPlacementGate(placements).updateAckCursors({
       claim: launchRequest.turnClaim,
       transcriptSeq: 2,

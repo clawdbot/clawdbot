@@ -271,7 +271,6 @@ describe.concurrent("gateway startup-migration refusal", () => {
       gateway: { mode: "local", auth: { mode: "none" } },
       agents: {
         ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
         entries: { main: {}, blocker: {}, digest: {} },
       },
     } satisfies OpenClawConfig;

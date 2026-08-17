@@ -2,11 +2,11 @@ import { once } from "node:events";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import type { TLSSocket } from "node:tls";
+import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 
 type NodeWorkerTransferHttpErrorReason =
   | "invalid-gateway-transport"
@@ -53,7 +53,7 @@ function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<vo
   if (!expectedRaw?.trim()) {
     return Promise.resolve();
   }
-  const expected = normalizeFingerprint(expectedRaw);
+  const expected = normalizeTlsFingerprint(expectedRaw);
   if (!expected) {
     return Promise.reject(
       new NodeWorkerTransferHttpError(
@@ -99,7 +99,9 @@ function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<vo
         return;
       }
       verify = () => {
-        const actual = normalizeFingerprint(tlsSocket!.getPeerCertificate().fingerprint256 ?? "");
+        const actual = normalizeTlsFingerprint(
+          tlsSocket!.getPeerCertificate().fingerprint256 ?? "",
+        );
         if (!actual || expected !== actual) {
           finish(
             new NodeWorkerTransferHttpError(

@@ -42,6 +42,9 @@ openclaw uninstall --dry-run
 
 - Run `openclaw backup create` first for a restorable snapshot before removing
   state or workspaces.
+- Before removing state, `--state` requires exclusive state ownership. If an
+  unmanaged or externally supervised Gateway is still running, uninstall
+  refuses and asks you to stop it first.
 - `--state` preserves configured workspace directories unless `--workspace` is
   also selected.
 

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { requireTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import type { NodeHostConfig, NodeHostGatewayConfig } from "../../node-host/config.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
@@ -74,12 +75,18 @@ export function resolveNodeGatewayOptions(
   const port = options.port === undefined ? baselinePort : parsePort(options.port);
   const endpointChanged = host !== baselineHost || (port !== null && port !== baselinePort);
   const baselineTlsFingerprint = pair?.tlsFingerprint ?? config?.gateway?.tlsFingerprint;
-  const baselineTls = pair?.tls ?? config?.gateway?.tls;
-  const tlsFingerprint =
+  const selectedTlsFingerprint =
     options.tls === false
       ? undefined
-      : (normalizeOptionalString(options.tlsFingerprint) ??
-        (endpointChanged ? undefined : baselineTlsFingerprint));
+      : options.tlsFingerprint !== undefined
+        ? options.tlsFingerprint
+        : endpointChanged
+          ? undefined
+          : baselineTlsFingerprint;
+  const baselineTls = pair?.tls ?? config?.gateway?.tls;
+  const tlsFingerprint = selectedTlsFingerprint
+    ? requireTlsFingerprint(selectedTlsFingerprint)
+    : undefined;
   const tls =
     typeof options.tls === "boolean"
       ? options.tls

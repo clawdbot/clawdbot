@@ -1157,12 +1157,10 @@ function runConcurrentSchemaProbe(params: {
     const coordinatorContracts =
       mode === "fresh"
         ? await Promise.all([
-            import(new URL("../config/paths.ts", moduleUrl).href),
             import(new URL("../infra/boundary-path.ts", moduleUrl).href),
             import(new URL("../infra/crypto-digest.ts", moduleUrl).href),
             import(new URL("../infra/sqlite-coordinator.ts", moduleUrl).href),
             import(new URL("./openclaw-state-db-contract.ts", moduleUrl).href),
-            import(new URL("./openclaw-state-db.paths.ts", moduleUrl).href),
           ])
         : undefined;
 
@@ -1226,18 +1224,20 @@ function runConcurrentSchemaProbe(params: {
         throw new Error("fresh initialization coordinator contracts are unavailable");
       }
       const [
-        { resolveGatewayLockDir },
         { resolvePathViaExistingAncestorSync },
         { sha256HexPrefixCore },
         { ensurePrivateSqliteCoordinatorDirectory },
         { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
-        { resolveOpenClawStateDirForDatabasePath },
       ] = coordinatorContracts;
       const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-      const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
+      const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync("/tmp");
+      const suffix = typeof process.getuid === "function"
+        ? \`openclaw-state-locks-\${process.getuid()}\`
+        : "openclaw-state-locks";
       const coordinatorPath = path.join(
-        resolveGatewayLockDir(stateDir),
-        \`state-ownership.\${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite\`,
+        canonicalRuntimeDirectory,
+        suffix,
+        \`state-lifecycle.\${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite\`,
       );
       ensurePrivateSqliteCoordinatorDirectory(
         path.dirname(coordinatorPath),

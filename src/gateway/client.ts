@@ -27,7 +27,6 @@ import {
   ensureInheritedManagedProxyRoutingActive,
   registerManagedProxyGatewayLoopbackBypass,
 } from "../infra/net/proxy/proxy-lifecycle.js";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { logDebug, logError } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -117,7 +116,6 @@ function createOpenClawGatewayClientHostDeps(
     ...preparedDeviceAuthDeps,
     beforeConnect: ensureInheritedManagedProxyRoutingActive,
     registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
-    normalizeTlsFingerprint: (fingerprint) => normalizeFingerprint(fingerprint ?? ""),
     logDebug,
     logError,
     redactForLog: redactToolPayloadText,

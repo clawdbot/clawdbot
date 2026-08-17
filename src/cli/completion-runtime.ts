@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
+import { isErrno } from "../infra/errors.js";
 import { pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
 
@@ -420,6 +421,15 @@ export async function usesSlowDynamicCompletion(
     }
   }
   return false;
+}
+
+const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
+
+export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
+  if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
+    return err;
+  }
+  return err instanceof Error ? findCompletionProfileWriteError(err.cause) : undefined;
 }
 
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {

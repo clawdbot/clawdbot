@@ -19,6 +19,7 @@ import {
   DEVICE_WORKER_PROVIDER_ID,
 } from "./worker-environments/device-provider.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
+import { createWorkerNodeEnrollmentManager } from "./worker-environments/node-enrollment.js";
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from "./worker-environments/node-worker-gateway-namespace.js";
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
@@ -231,6 +232,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     },
     transfer: nodeWorkerBundleTransfer,
   });
+  const nodeEnrollment = createWorkerNodeEnrollmentManager({
+    store: params.startup.store,
+    getConfig: getRuntimeConfig,
+    resolveAvailability: deviceRuntime.resolveAvailability,
+  });
   let executeSessionTool: ReturnType<typeof createWorkerSessionToolExecutor> = async () => {
     throw new Error("Worker session tools are unavailable");
   };
@@ -247,6 +253,8 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         : resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
     ensureNodeWorkerBundle: async (deviceId) => await ensureNodeWorkerBundle({ deviceId }),
+    prepareNodeEnrollment: nodeEnrollment.begin,
+    retireNodeEnrollment: nodeEnrollment.retire,
     tunnelManager: workerTunnelManager,
     nodeTunnelManager: nodeWorkerTunnelManager,
     stopNodeWorkerBundleTransfers: () => nodeWorkerBundleTransfer.closeAll(),

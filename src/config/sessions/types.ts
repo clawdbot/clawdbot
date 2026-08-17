@@ -18,7 +18,6 @@ import type {
 } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
-import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
@@ -35,6 +34,7 @@ import type {
   SessionParticipant,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
+import type { SessionSkillSnapshot } from "./session-prompt-types.js";
 import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 import type { SessionToolOverrides } from "./session-tool-overrides.js";
 
@@ -853,32 +853,6 @@ export type GroupKeyResolution = {
   chatType?: SessionChatType;
 };
 
-export type SessionSkillPromptRef = {
-  version: 1;
-  algorithm: "sha256";
-  hash: string;
-  bytes: number;
-};
-
-export type SessionSkillSnapshot = {
-  prompt: string;
-  /** Persisted stores may replace large duplicate prompts with a content-addressed blob ref. */
-  promptRef?: SessionSkillPromptRef;
-  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
-  /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
-  skillFilter?: string[];
-  /** Effective node-exec eligibility used to select connected node-hosted skills. */
-  nodeSkillsEligibility?: { canExec: boolean; node?: string };
-  /**
-   * Runtime-only, never persisted. Carries the full parsed Skill[] (including
-   * each SKILL.md body) so the embedded runner can skip a workspace skill
-   * scan within a turn. Persistence projections strip it before committing
-   * session state. On a cold session resume this is undefined and
-   * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
-   */
-  resolvedSkills?: Skill[];
-  version?: number;
-};
+export type { SessionSkillPromptRef, SessionSkillSnapshot } from "./session-prompt-types.js";
 
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
-export const DEFAULT_IDLE_MINUTES = 0;

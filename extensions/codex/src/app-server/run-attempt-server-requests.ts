@@ -46,6 +46,7 @@ export function createCodexAttemptServerRequestController(
   const { connection } = runtime;
   const { params, computerUseConfig, runAbortController, appServer, sessionAgentId } = connection;
   const {
+    compactionPlanState,
     toolBridge,
     toolOutcomeOrdinals,
     suppressedDynamicToolOutcomeOrdinals,
@@ -266,8 +267,10 @@ export function createCodexAttemptServerRequestController(
           contentItems: protocolResponse.contentItems,
         });
         recordCodexDynamicToolResult(projector, call, response, protocolResponse);
-        if (protocolResponse.success && call.tool === "update_plan") {
-          projector?.recordDynamicPlanUpdate(response.executedArguments ?? call.arguments);
+        if (protocolResponse.success && call.tool === "progress_card") {
+          const progressCardInput = response.executedArguments ?? call.arguments;
+          await projector?.recordDynamicProgressCardUpdate(progressCardInput);
+          compactionPlanState.recordProgressCardInput(progressCardInput);
         }
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
