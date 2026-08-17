@@ -8,6 +8,8 @@ import {
   type SessionDiffBaselineCapture,
 } from "../config/sessions/session-diff-baseline-capture.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
+import { logVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
@@ -122,8 +124,11 @@ async function settleCapture(params: {
       sessionId: params.sessionId,
     });
   } catch (error) {
-    await persistCaptureResult(params);
-    throw error;
+    const entry = await persistCaptureResult(params);
+    logVerbose(
+      `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
+    );
+    return entry;
   }
   return await persistCaptureResult({ ...params, baseline });
 }

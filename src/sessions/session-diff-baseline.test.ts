@@ -117,7 +117,7 @@ describe("ensureSessionDiffBaseline", () => {
     expect(secondResult.sessionDiffBaseline).toEqual(baseline(sessionId));
   });
 
-  it("marks a thrown capture unavailable before rethrowing and never retries it", async () => {
+  it("returns a terminal unavailable entry after capture failure and never retries it", async () => {
     const sessionId = "failed-session";
     const entry: InternalSessionEntry = {
       createdVia: "operator",
@@ -128,13 +128,12 @@ describe("ensureSessionDiffBaseline", () => {
     const target = await seedEntry({ entry });
     captureMocks.capture.mockRejectedValue(new Error("capture failed"));
 
-    await expect(
-      ensureSessionDiffBaseline({
-        ...target,
-        cwd: "/workspace",
-        isNewSession: false,
-      }),
-    ).rejects.toThrow("capture failed");
+    const settled = await ensureSessionDiffBaseline({
+      ...target,
+      cwd: "/workspace",
+      isNewSession: false,
+    });
+    expect(settled.sessionDiffBaselineCapture).toMatchObject({ status: "unavailable" });
     const unavailable = loadInternal(target.sessionKey, target.storePath);
     expect(unavailable?.sessionDiffBaselineCapture).toMatchObject({
       status: "unavailable",

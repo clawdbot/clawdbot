@@ -4,7 +4,11 @@ import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/regist
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  persistSessionResetLifecycle,
+} from "../../config/sessions/session-accessor.js";
+import { createSessionDiffBaselineCaptureClaim } from "../../config/sessions/session-diff-baseline-capture.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -12,6 +16,7 @@ import {
   ModelSelectionLockedError,
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
 } from "../../sessions/model-overrides.js";
+import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 
 type ResetSessionOptions = {
@@ -95,7 +100,9 @@ export async function resetReplyRunSession(params: {
     systemPromptReport: undefined,
     fallbackNotice: undefined,
     sessionDiffBaseline: undefined,
-    sessionDiffBaselineCapture: undefined,
+    sessionDiffBaselineCapture: prevEntry.execNode
+      ? undefined
+      : createSessionDiffBaselineCaptureClaim(),
     compactionCount: 0,
     memoryFlush: undefined,
   };
@@ -121,6 +128,36 @@ export async function resetReplyRunSession(params: {
     );
     throw err;
   }
+  // A reset can return to the same write-capable turn, so its durable claim must settle before
+  // callbacks expose the generation; otherwise pre-reset dirt appears as work from that turn.
+  let settledEntry = nextEntry;
+  try {
+    if (nextEntry.sessionDiffBaselineCapture) {
+      settledEntry = await ensureSessionDiffBaseline({
+        cwd:
+          nextEntry.spawnedCwd ??
+          nextEntry.spawnedWorkspaceDir ??
+          params.followupRun.run.workspaceDir,
+        entry: nextEntry,
+        isNewSession: false,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      });
+    }
+  } catch (error) {
+    // Storage won the generation race; never retain this reset's stale pending snapshot.
+    const authoritative = loadSessionEntry({
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    if (authoritative) {
+      params.activeSessionStore[params.sessionKey] = authoritative;
+    } else {
+      delete params.activeSessionStore[params.sessionKey];
+    }
+    throw error;
+  }
+  params.activeSessionStore[params.sessionKey] = settledEntry;
   clearBootstrapSnapshotOnSessionBoundary({
     boundaryAppended: true,
     sessionKey: params.sessionKey,
@@ -140,7 +177,7 @@ export async function resetReplyRunSession(params: {
     nextSessionId,
     nextSessionFile,
   });
-  params.onActiveSessionEntry(nextEntry);
+  params.onActiveSessionEntry(settledEntry);
   params.onNewSession(nextSessionId, nextSessionFile);
   deps.error(params.options.buildLogMessage(nextSessionId));
   return true;

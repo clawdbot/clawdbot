@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -429,6 +430,7 @@ describe("runReplyAgent runtime config", () => {
           };
         },
       );
+      const baselineSettlement = createDeferredCore();
       resetReplyRunSessionMock.mockImplementation(async (params: unknown) => {
         const resetParams = params as {
           activeSessionEntry?: SessionEntry;
@@ -448,6 +450,7 @@ describe("runReplyAgent runtime config", () => {
           resetParams.activeSessionStore[sessionKey] = nextEntry;
         }
         await replaceSessionEntry({ storePath, sessionKey }, nextEntry);
+        await baselineSettlement.promise;
         resetParams.followupRun.run.sessionId = nextEntry.sessionId;
         resetParams.followupRun.run.sessionFile = sessionFile;
         resetParams.onActiveSessionEntry(nextEntry);
@@ -455,7 +458,11 @@ describe("runReplyAgent runtime config", () => {
         return true;
       });
 
-      const result = await runReplyAgent(replyParams);
+      const resultPromise = runReplyAgent(replyParams);
+      await vi.waitFor(() => expect(resetReplyRunSessionMock).toHaveBeenCalledOnce());
+      expect(executeAgentTurnMock).not.toHaveBeenCalled();
+      baselineSettlement.resolve();
+      const result = await resultPromise;
 
       expect(result).toEqual({ text: "main reply" });
       expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
