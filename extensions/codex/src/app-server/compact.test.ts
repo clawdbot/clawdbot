@@ -2036,165 +2036,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     warn.mockRestore();
   });
 
-  it("bounds ignored compaction override warnings through the compact entry point", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
-
-    async function runWithIgnoredOverrides(index: number): Promise<void> {
-      const agentId = `cap-${index}`;
-      await maybeCompactCodexAppServerSessionImpl(
-        {
-          sessionId: `session-${index}`,
-          sessionKey: `agent:${agentId}:session-${index}`,
-          sessionFile: path.join(tempDir, `${agentId}.jsonl`),
-          workspaceDir: tempDir,
-          trigger: "budget",
-          config: {
-            agents: {
-              entries: {
-                [agentId]: {
-                  compaction: {
-                    model: "openai/gpt-5.4-mini",
-                    provider: "custom-summary",
-                  },
-                },
-              },
-            },
-          },
-        },
-        { bindingStore: testCodexAppServerBindingStore },
-      );
-    }
-
-    // Fill exactly the advertised 4,096-entry cap: every distinct key warns once.
-    for (let index = 0; index < 4_096; index += 1) {
-      await runWithIgnoredOverrides(index);
-      if ((index + 1) % 256 === 0) {
-        // Thousands of resolved promises otherwise starve Vitest timeout and
-        // progress callbacks without increasing real LRU-cap coverage.
-        await flushAsyncTasks(1);
-      }
-    }
-    expect(warn).toHaveBeenCalledTimes(4_096);
-
-    // At exactly 4,096 entries the oldest key is still retained, so a duplicate stays suppressed.
-    await runWithIgnoredOverrides(0);
-    expect(warn).toHaveBeenCalledTimes(4_096);
-
-    // The 4,097th distinct key pushes past the cap and evicts the LRU entry. The duplicate
-    // check on key 0 refreshed its recency, so the evicted key is 1.
-    await runWithIgnoredOverrides(4_096);
-    expect(warn).toHaveBeenCalledTimes(4_097);
-
-    // The evicted key warns again on reappearance.
-    await runWithIgnoredOverrides(1);
-    expect(warn).toHaveBeenCalledTimes(4_098);
-
-    // A recent duplicate stays suppressed.
-    await runWithIgnoredOverrides(4_096);
-    expect(warn).toHaveBeenCalledTimes(4_098);
-    expect(warn.mock.calls.at(-1)).toEqual([
-      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:cap-1:session-1",
-        ignoredConfig: [
-          "agents.entries.cap-1.compaction.model",
-          "agents.entries.cap-1.compaction.provider",
-        ],
-      },
-    ]);
-    info.mockRestore();
-    warn.mockRestore();
-  });
-
-  it("warns when active agent compaction overrides are ignored", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const fake = createFakeCodexClient();
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding({}, "agent:sara:session-1");
-
-    await maybeCompactCodexAppServerSession({
-      sessionId: "session-1",
-      sessionKey: "agent:sara:session-1",
-      sessionFile,
-      workspaceDir: tempDir,
-      trigger: "manual",
-      config: {
-        agents: {
-          entries: {
-            sara: {
-              compaction: {
-                model: "openai/gpt-5.4-mini",
-                provider: "openai",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
-    expect(warn).toHaveBeenCalledWith(
-      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:sara:session-1",
-        ignoredConfig: [
-          "agents.entries.sara.compaction.model",
-          "agents.entries.sara.compaction.provider",
-        ],
-      },
-    );
-    warn.mockRestore();
-  });
-
-  it("reports inherited compaction providers at the source path", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const fake = createFakeCodexClient();
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding({}, "agent:nik:session-1");
-
-    await maybeCompactCodexAppServerSession({
-      sessionId: "session-1",
-      sessionKey: "agent:nik:session-1",
-      sessionFile,
-      workspaceDir: tempDir,
-      trigger: "manual",
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              provider: "custom-summary",
-            },
-          },
-          entries: {
-            nik: {
-              compaction: {
-                model: "openai/gpt-5.4-mini",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
-    expect(warn).toHaveBeenCalledWith(
-      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:nik:session-1",
-        ignoredConfig: [
-          "agents.defaults.compaction.provider",
-          "agents.entries.nik.compaction.model",
-        ],
-      },
-    );
-    warn.mockRestore();
-  });
-
-  it("warns for legacy Lossless config even when the Lossless context engine slot is active", async () => {
+  it("warns for a legacy Lossless default when the Lossless slot is active", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -2220,12 +2062,9 @@ describe("maybeCompactCodexAppServerSession", () => {
           },
         },
         agents: {
-          entries: {
-            lossless: {
-              compaction: {
-                model: "openai/gpt-5.4",
-                provider: "lossless-claw",
-              },
+          defaults: {
+            compaction: {
+              provider: "lossless-claw",
             },
           },
         },
@@ -2238,67 +2077,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       {
         sessionId: "session-1",
         sessionKey: "agent:lossless:session-1",
-        ignoredConfig: [
-          "agents.entries.lossless.compaction.model",
-          "agents.entries.lossless.compaction.provider",
-        ],
-      },
-    );
-    warn.mockRestore();
-  });
-
-  it("warns for inherited legacy Lossless provider when the Lossless slot is active", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const fake = createFakeCodexClient();
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding({}, "agent:lossless-child:session-1");
-    const contextEngine: ContextEngine = {
-      info: { id: "lcm", name: "Lossless Context Manager", ownsCompaction: true },
-      assemble: vi.fn() as never,
-      ingest: vi.fn() as never,
-      compact: vi.fn(async () => ({ ok: true, compacted: false, reason: "below threshold" })),
-    };
-
-    await maybeCompactCodexAppServerSession({
-      sessionId: "session-1",
-      sessionKey: "agent:lossless-child:session-1",
-      sessionFile,
-      workspaceDir: tempDir,
-      trigger: "manual",
-      contextEngine,
-      config: {
-        plugins: {
-          slots: {
-            contextEngine: "lossless-claw",
-          },
-        },
-        agents: {
-          defaults: {
-            compaction: {
-              provider: "lossless-claw",
-            },
-          },
-          entries: {
-            "lossless-child": {
-              compaction: {
-                model: "openai/gpt-5.4-mini",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
-    expect(warn).toHaveBeenCalledWith(
-      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:lossless-child:session-1",
-        ignoredConfig: [
-          "agents.defaults.compaction.provider",
-          "agents.entries.lossless-child.compaction.model",
-        ],
+        ignoredConfig: ["agents.defaults.compaction.provider"],
       },
     );
     warn.mockRestore();

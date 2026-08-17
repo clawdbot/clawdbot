@@ -5,7 +5,10 @@ import {
   resolveActiveEmbeddedRunSessionId,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveDefaultAgentId, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveSessionAgentIds,
+  tryResolveDefaultAgentId,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -1463,7 +1466,7 @@ function isDefaultAgentSessionKeyForAgent(params: {
   config: ResolvedCodexConversationConfig;
   agentId: string;
 }): boolean {
-  return normalizeAgentId(params.agentId) === resolveDefaultAgentId(params.config);
+  return normalizeAgentId(params.agentId) === tryResolveDefaultAgentId(params.config);
 }
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {

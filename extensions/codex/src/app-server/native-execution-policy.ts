@@ -1,4 +1,8 @@
-import { resolveAgentConfig, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveAgentConfig,
+  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 /**
  * Resolves whether Codex app-server native execution can own shell/file work,
  * or whether OpenClaw must keep exec/process on a configured node host.
@@ -64,6 +68,8 @@ export function resolveCodexNativeExecutionPolicy(params: {
       ? resolveSandboxRuntimeStatus({
           cfg: config,
           sessionKey,
+          agentId,
+          classificationAgentId: agentId,
         }).sandboxed
       : false);
   const agentExec = resolvePolicyAgentExec({ config, agentId });
@@ -169,7 +175,7 @@ function isDefaultAgentSessionKeyForAgent(params: {
   config: OpenClawConfig;
   agentId: string;
 }): boolean {
-  return normalizeAgentId(params.agentId) === resolveDefaultAgentId(params.config);
+  return normalizeAgentId(params.agentId) === tryResolveDefaultAgentId(params.config);
 }
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {

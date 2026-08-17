@@ -149,6 +149,7 @@ export function resolveCodexNativeSandboxBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
   sandbox?: Pick<SandboxContext, "enabled"> | null;
   sandboxEnvironmentSelected?: boolean;
   surface: string;
@@ -166,6 +167,8 @@ export function resolveCodexNativeSandboxBlock(params: {
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     sessionKey,
+    agentId: params.agentId,
+    classificationAgentId: params.agentId,
   });
   if (!runtime.sandboxed) {
     return undefined;

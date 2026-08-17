@@ -147,7 +147,7 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       resolveCodexNativeExecutionPolicy({
         config: {
           tools: { exec: { host: "gateway" } },
-          agents: { entries: { "bot-a": { default: true } } },
+          agents: { list: [{ id: "bot-a", default: true }] },
         },
         sessionKey: "node-session",
         agentId: "bot-a",
@@ -164,6 +164,32 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       agentId: "bot-a",
       hydrateSkillPromptRefs: false,
     });
+  });
+
+  it("does not read an unscoped session entry for an explicit multi-agent roster", () => {
+    sessionStoreMocks.getSessionEntry.mockReturnValue({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-6",
+    });
+
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: { entries: { alpha: {}, beta: {} } },
+        },
+        sessionKey: "node-session",
+        agentId: "alpha",
+        readRuntimeSessionEntry: true,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "gateway",
+      effectiveExecHost: "gateway",
+    });
+    expect(sessionStoreMocks.getSessionEntry).not.toHaveBeenCalled();
   });
 
   it("honors agent exec config before global exec config", () => {
