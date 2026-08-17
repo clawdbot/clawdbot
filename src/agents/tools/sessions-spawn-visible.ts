@@ -453,6 +453,7 @@ export async function maybeSpawnVisibleSession(params: {
       actor: { type: "agent", id: requesterAgentId },
       agentId: targetAgentId,
       sessionKey: childSessionKey,
+      source: "agent",
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
     });
     const ownerLabel = normalizeOptionalString(resolveAgentIdentity(cfg, requesterAgentId)?.name);

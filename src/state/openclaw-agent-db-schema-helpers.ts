@@ -61,6 +61,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
   allowedMissingColumns: [
+    "session_participants.actor_source",
     "standing_intents.creator_sender",
     ...FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.map(
       ({ columnName, tableName }) => `${tableName}.${columnName}`,

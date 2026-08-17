@@ -65,6 +65,7 @@ function recordSubagentControllerParticipant(params: {
     actor: { type: "agent", id: requesterAgentId },
     agentId: targetAgentId,
     sessionKey: params.entry.childSessionKey,
+    source: "agent",
     storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId: targetAgentId }),
   });
 }

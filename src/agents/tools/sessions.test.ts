@@ -371,6 +371,7 @@ async function executeFireAndForgetA2AFrom(
       actor: { type: "agent", id: "main" },
       agentId: "other",
       sessionKey: targetSessionKey,
+      source: "agent",
     }),
   );
   const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];

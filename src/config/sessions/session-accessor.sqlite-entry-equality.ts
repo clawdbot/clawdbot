@@ -17,7 +17,7 @@ export function sqliteSessionEntriesEqual(
     participantCount: _rightParticipantCount,
     ...rightEntry
   } = right;
-  // Participant history is a separately mutable display projection. It must not
+  // Participant history is a separately mutable SQLite projection. It must not
   // invalidate logical-session compare-and-swap or leak into entry_json writes.
   return JSON.stringify(leftEntry) === JSON.stringify(rightEntry);
 }

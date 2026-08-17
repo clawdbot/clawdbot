@@ -222,15 +222,29 @@ it("projects participant identities and filters sessions involving the viewer", 
     "agent:main:participating": {
       createdActor: { type: "human", id: "profile-bob" },
       participants: [
-        { type: "agent", id: "research" },
-        { type: "human", id: "profile-carol" },
-        { type: "human", id: "profile-dana" },
-        { type: "human", id: "profile-erin" },
-        { type: "human", id: "profile-ada" },
+        { type: "agent", id: "research", source: "agent" },
+        { type: "human", id: "profile-carol", source: "profile" },
+        { type: "human", id: "profile-dana", source: "profile" },
+        { type: "human", id: "profile-erin", source: "profile" },
+        { type: "human", id: "profile-ada", source: "profile" },
       ],
       participantCount: 5,
       sessionId: "session-participating",
       updatedAt: 2,
+    },
+    "agent:main:channel-collision": {
+      createdActor: { type: "human", id: "profile-bob" },
+      participants: [{ type: "human", id: "profile-ada", source: "channel" }],
+      participantCount: 1,
+      sessionId: "session-channel-collision",
+      updatedAt: 1,
+    },
+    "agent:main:legacy-collision": {
+      createdActor: { type: "human", id: "profile-bob" },
+      participants: [{ type: "human", id: "profile-ada" }],
+      participantCount: 1,
+      sessionId: "session-legacy-collision",
+      updatedAt: 1,
     },
     "agent:main:unrelated": {
       createdActor: { type: "human", id: "profile-bob" },
@@ -261,6 +275,19 @@ it("projects participant identities and filters sessions involving the viewer", 
       { type: "human", id: "profile-erin", label: "Bob" },
     ],
     participantCount: 5,
+  });
+
+  const unfiltered = listSessionsFromStore({
+    cfg,
+    storePath: "/tmp/openclaw-session-participants",
+    store,
+    opts: { archived: "all" },
+  });
+  expect(unfiltered.sessions.find((row) => row.key.endsWith(":channel-collision"))).toMatchObject({
+    participants: [{ type: "human", id: "profile-ada", label: "Ada" }],
+  });
+  expect(unfiltered.sessions.find((row) => row.key.endsWith(":legacy-collision"))).toMatchObject({
+    participants: [{ type: "human", id: "profile-ada", label: "Ada" }],
   });
 });
 

@@ -17,7 +17,11 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionCreatedActor } from "./session-entry-provenance.js";
+import {
+  mergeSessionParticipantSource,
+  type SessionCreatedActor,
+  type SessionParticipantSource,
+} from "./session-entry-provenance.js";
 
 export const MAX_SESSION_PARTICIPANTS = 32;
 
@@ -29,6 +33,7 @@ export function recordSessionParticipant(
     actor: SessionCreatedActor & { id: string };
     promptedAt?: number;
     sessionAgentId?: string;
+    source: SessionParticipantSource;
   },
 ): RecordSessionParticipantResult | null {
   const actorId = params.actor.id.trim();
@@ -54,7 +59,7 @@ export function recordSessionParticipant(
         database.db,
         kysely
           .selectFrom("session_participants")
-          .select(["actor_id", "last_prompted_at"])
+          .select(["actor_id", "actor_source", "last_prompted_at"])
           .where("session_key", "=", resolved.sessionKey)
           .where("actor_type", "=", params.actor.type)
           .where("actor_id", "=", actorId),
@@ -79,11 +84,13 @@ export function recordSessionParticipant(
             session_key: resolved.sessionKey,
             actor_type: params.actor.type,
             actor_id: actorId,
+            actor_source: params.source,
             first_prompted_at: promptedAt,
             last_prompted_at: promptedAt,
           })
           .onConflict((conflict) =>
             conflict.columns(["session_key", "actor_type", "actor_id"]).doUpdateSet({
+              actor_source: mergeSessionParticipantSource(existing?.actor_source, params.source),
               last_prompted_at: Math.max(existing?.last_prompted_at ?? promptedAt, promptedAt),
             }),
           ),

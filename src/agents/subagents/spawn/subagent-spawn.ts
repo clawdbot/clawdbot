@@ -438,6 +438,7 @@ export async function spawnSubagentDirect(
           actor: { type: "agent", id: requesterAgentId },
           agentId: targetAgentId,
           sessionKey: childSessionKey,
+          source: "agent",
           storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
         });
         return { runId: acceptedChildRunId };
@@ -584,6 +585,7 @@ export async function spawnSubagentDirect(
               actor: { type: "agent", id: requesterAgentId },
               agentId: targetAgentId,
               sessionKey: childSessionKey,
+              source: "agent",
               storePath: resolveSessionStorePathCore(cfg.session?.store, {
                 agentId: targetAgentId,
               }),

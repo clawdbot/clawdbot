@@ -272,6 +272,7 @@ export interface SessionNodes {
 
 export interface SessionParticipants {
   actor_id: string;
+  actor_source: string | null;
   actor_type: string;
   first_prompted_at: number;
   last_prompted_at: number;

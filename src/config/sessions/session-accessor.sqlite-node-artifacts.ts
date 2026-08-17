@@ -6,6 +6,7 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { mergeSessionParticipantSource } from "./session-entry-provenance.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 export function clearSessionCollaborationForKey(
@@ -37,6 +38,9 @@ export function rehomeLegacySessionNodeArtifacts(
 ): void {
   const db = getSessionKysely(database.db);
   const presentTables = readSessionNodeArtifactTables(database);
+  if (presentTables.has("session_participants")) {
+    ensureSessionParticipantsSchema(database.db);
+  }
   if (presentTables.has("board_tabs") && presentTables.has("board_widgets")) {
     const tabs = executeSqliteQuerySync(
       database.db,
@@ -183,7 +187,7 @@ export function rehomeLegacySessionNodeArtifacts(
         database.db,
         db
           .selectFrom("session_participants")
-          .select(["first_prompted_at", "last_prompted_at"])
+          .select(["actor_source", "first_prompted_at", "last_prompted_at"])
           .where("session_key", "=", canonicalKey)
           .where("actor_type", "=", participant.actor_type)
           .where("actor_id", "=", participant.actor_id),
@@ -195,6 +199,10 @@ export function rehomeLegacySessionNodeArtifacts(
           .values({ ...participant, session_key: canonicalKey })
           .onConflict((conflict) =>
             conflict.columns(["session_key", "actor_type", "actor_id"]).doUpdateSet({
+              actor_source: mergeSessionParticipantSource(
+                existing?.actor_source,
+                participant.actor_source,
+              ),
               first_prompted_at: Math.min(
                 existing?.first_prompted_at ?? participant.first_prompted_at,
                 participant.first_prompted_at,
@@ -234,6 +242,9 @@ export function copySessionNodeArtifactsForRepair(
   if (sourceTables.has("session_participants") && !destinationTables.has("session_participants")) {
     ensureSessionParticipantsSchema(destination.db);
     destinationTables = readSessionNodeArtifactTables(destination);
+  }
+  if (destinationTables.has("session_participants")) {
+    ensureSessionParticipantsSchema(destination.db);
   }
   if (
     sourceTables.has("board_tabs") &&
@@ -380,7 +391,7 @@ export function copySessionNodeArtifactsForRepair(
         destination.db,
         destinationDb
           .selectFrom("session_participants")
-          .select(["first_prompted_at", "last_prompted_at"])
+          .select(["actor_source", "first_prompted_at", "last_prompted_at"])
           .where("session_key", "=", canonicalKey)
           .where("actor_type", "=", participant.actor_type)
           .where("actor_id", "=", participant.actor_id),
@@ -392,6 +403,10 @@ export function copySessionNodeArtifactsForRepair(
           .values({ ...participant, session_key: canonicalKey })
           .onConflict((conflict) =>
             conflict.columns(["session_key", "actor_type", "actor_id"]).doUpdateSet({
+              actor_source: mergeSessionParticipantSource(
+                existing?.actor_source,
+                participant.actor_source,
+              ),
               first_prompted_at: Math.min(
                 existing?.first_prompted_at ?? participant.first_prompted_at,
                 participant.first_prompted_at,

@@ -1467,6 +1467,7 @@ describe("initSessionState RawBody", () => {
               actor: { type: "human", id: "profile-ada" },
               firstPromptedAt: expect.any(Number),
               lastPromptedAt: expect.any(Number),
+              source: "profile",
             },
           ]),
         );
@@ -1514,8 +1515,13 @@ describe("initSessionState RawBody", () => {
 
     await vi.waitFor(() => {
       const participants = listSessionParticipantsReadOnly({ agentId: "main", storePath });
-      expect(participants.get("agent:main:channel-participant")?.map((row) => row.actor)).toEqual([
-        { type: "human", id: "channel-sender" },
+      expect(participants.get("agent:main:channel-participant")).toEqual([
+        {
+          actor: { type: "human", id: "channel-sender" },
+          firstPromptedAt: expect.any(Number),
+          lastPromptedAt: expect.any(Number),
+          source: "channel",
+        },
       ]);
       expect(participants.get("agent:main:unknown-participant")).toBeUndefined();
       expect(participants.get("agent:main:own-agent-participant")).toBeUndefined();

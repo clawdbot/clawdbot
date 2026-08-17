@@ -29,16 +29,48 @@ describe("SQLite session participants", () => {
       });
       const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const storePath = initial.path;
-      initial.db.exec("DROP TABLE session_participants;");
+      initial.db.exec(`
+        DROP TABLE session_participants;
+        CREATE TABLE session_participants (
+          session_key TEXT NOT NULL,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT NOT NULL,
+          first_prompted_at INTEGER NOT NULL,
+          last_prompted_at INTEGER NOT NULL,
+          PRIMARY KEY (session_key, actor_type, actor_id),
+          FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+        ) STRICT;
+      `);
+      initial.db
+        .prepare(
+          `INSERT INTO session_participants
+            (session_key, actor_type, actor_id, first_prompted_at, last_prompted_at)
+           VALUES (?, 'human', 'profile-legacy', 0, 0)`,
+        )
+        .run(sessionKey);
       const schemaVersion = initial.db.prepare("PRAGMA user_version").get()?.user_version;
       closeOpenClawAgentDatabasesForTest();
 
-      expect(listSessionParticipantsReadOnly(scope)).toEqual(new Map());
+      expect(listSessionParticipantsReadOnly(scope).get(sessionKey)).toEqual([
+        {
+          actor: { type: "human", id: "profile-legacy" },
+          firstPromptedAt: 0,
+          lastPromptedAt: 0,
+        },
+      ]);
+      expect(loadSessionEntry(scope)?.participants).toEqual([
+        { type: "human", id: "profile-legacy" },
+      ]);
+      openOpenClawAgentDatabase({ agentId: "main", env: state.env })
+        .db.prepare("DELETE FROM session_participants WHERE actor_id = 'profile-legacy'")
+        .run();
+      closeOpenClawAgentDatabasesForTest();
       expect(
         recordSessionParticipant(scope, {
           actor: { type: "human", id: "profile-owner" },
           promptedAt: 1,
           sessionAgentId: "main",
+          source: "profile",
         }),
       ).toBe("inserted");
       for (let index = 0; index < MAX_SESSION_PARTICIPANTS - 1; index += 1) {
@@ -47,6 +79,7 @@ describe("SQLite session participants", () => {
             actor: { type: "human", id: `profile-${String(index).padStart(2, "0")}` },
             promptedAt: index + 10,
             sessionAgentId: "main",
+            source: "profile",
           }),
         ).toBe("inserted");
       }
@@ -55,6 +88,7 @@ describe("SQLite session participants", () => {
           actor: { type: "human", id: "profile-over-cap" },
           promptedAt: 100,
           sessionAgentId: "main",
+          source: "profile",
         }),
       ).toBe("capped");
       expect(
@@ -62,6 +96,7 @@ describe("SQLite session participants", () => {
           actor: { type: "human", id: "profile-00" },
           promptedAt: 200,
           sessionAgentId: "main",
+          source: "profile",
         }),
       ).toBe("updated");
       expect(
@@ -69,6 +104,7 @@ describe("SQLite session participants", () => {
           actor: { type: "human", id: "profile-00" },
           promptedAt: 50,
           sessionAgentId: "main",
+          source: "channel",
         }),
       ).toBe("updated");
       expect(
@@ -76,23 +112,35 @@ describe("SQLite session participants", () => {
           actor: { type: "agent", id: "main" },
           promptedAt: 300,
           sessionAgentId: "main",
+          source: "agent",
         }),
       ).toBeNull();
+
+      const participantDatabase = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      participantDatabase.db
+        .prepare(
+          "UPDATE session_participants SET actor_source = NULL WHERE actor_id = 'profile-01'",
+        )
+        .run();
 
       const records = listSessionParticipantsReadOnly(scope).get(sessionKey) ?? [];
       expect(records).toHaveLength(MAX_SESSION_PARTICIPANTS);
       expect(records.find((record) => record.actor.id === "profile-00")).toMatchObject({
         firstPromptedAt: 10,
         lastPromptedAt: 200,
+        source: "profile",
       });
+      const legacyRecord = records.find((record) => record.actor.id === "profile-01");
+      expect(legacyRecord?.actor).toEqual({ type: "human", id: "profile-01" });
+      expect(legacyRecord).not.toHaveProperty("source");
       const projected = loadSessionEntry(scope);
       expect(projected?.participantCount).toBe(MAX_SESSION_PARTICIPANTS - 1);
       expect(projected?.participants).toHaveLength(MAX_SESSION_PARTICIPANTS - 1);
       expect(projected?.participants?.slice(0, 4)).toEqual([
-        { type: "human", id: "profile-00" },
+        { type: "human", id: "profile-00", source: "profile" },
         { type: "human", id: "profile-01" },
-        { type: "human", id: "profile-02" },
-        { type: "human", id: "profile-03" },
+        { type: "human", id: "profile-02", source: "profile" },
+        { type: "human", id: "profile-03", source: "profile" },
       ]);
 
       closeOpenClawAgentDatabasesForTest();

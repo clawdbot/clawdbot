@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 
 export const SESSION_PARTICIPANTS_TABLE = "session_participants";
 
@@ -25,6 +26,7 @@ export function ensureSessionParticipantsSchema(database: DatabaseSync): boolean
   const ensure = () => {
     // sqlite-allow-raw -- canonical additive DDL only.
     database.exec(sessionParticipantsSchemaSql());
+    ensureColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source TEXT");
   };
   if (database.isTransaction) {
     ensure();

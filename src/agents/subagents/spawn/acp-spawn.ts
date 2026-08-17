@@ -610,6 +610,7 @@ export async function spawnAcpDirect(
         actor: { type: "agent", id: requesterAgentId },
         agentId: targetAgentId,
         sessionKey,
+        source: "agent",
         storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
       });
       const runId = readGatewayRunId(response) ?? childIdem;

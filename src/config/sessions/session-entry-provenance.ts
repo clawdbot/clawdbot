@@ -7,6 +7,28 @@ export type SessionCreatedActor = {
   label?: string;
 };
 
+export type SessionParticipantSource = "profile" | "channel" | "agent";
+
+export type SessionParticipant = SessionCreatedActor & {
+  /** Identity namespace recorded at the participant producer; absent means unknown legacy data. */
+  source?: SessionParticipantSource;
+};
+
+export function mergeSessionParticipantSource(
+  current: unknown,
+  incoming: unknown,
+): SessionParticipantSource | null {
+  // Canonical profile participation must survive later channel-id collisions.
+  if (current === "profile" || incoming === "profile") {
+    return "profile";
+  }
+  const next = incoming === "channel" || incoming === "agent" ? incoming : null;
+  if (next) {
+    return next;
+  }
+  return current === "channel" || current === "agent" ? current : null;
+}
+
 export type SessionOwnerAssignment = {
   actor: SessionCreatedActor;
   assignedBy?: SessionCreatedActor;

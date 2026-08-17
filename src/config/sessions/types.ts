@@ -29,9 +29,10 @@ import type {
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
-  SessionOwnerAssignment,
   SessionCreatedVia,
   SessionEntryProvenance,
+  SessionOwnerAssignment,
+  SessionParticipant,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import type { SessionToolOverrides } from "./session-tool-overrides.js";
@@ -384,7 +385,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
     owner?: SessionOwnerAssignment;
     /** Earliest external prompt actors, projected from the participant table. */
-    participants?: SessionCreatedActor[];
+    participants?: SessionParticipant[];
     /** Total external prompt actors after excluding the effective owner. */
     participantCount?: number;
     /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */

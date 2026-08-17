@@ -1,24 +1,27 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-session-participants-schema.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionCreatedActor } from "./session-entry-provenance.js";
+import type { SessionCreatedActor, SessionParticipantSource } from "./session-entry-provenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionParticipantRecord = {
   actor: SessionCreatedActor & { id: string };
   firstPromptedAt: number;
   lastPromptedAt: number;
+  source?: SessionParticipantSource;
 };
 
 function projectParticipantRow(row: {
   actor_id: string;
+  actor_source: string | null;
   actor_type: string;
   first_prompted_at: number;
   last_prompted_at: number;
@@ -30,6 +33,11 @@ function projectParticipantRow(row: {
     actor: { type: row.actor_type, id: row.actor_id },
     firstPromptedAt: row.first_prompted_at,
     lastPromptedAt: row.last_prompted_at,
+    ...(row.actor_source === "profile" ||
+    row.actor_source === "channel" ||
+    row.actor_source === "agent"
+      ? { source: row.actor_source }
+      : {}),
   };
 }
 
@@ -37,9 +45,19 @@ function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly stri
   if (!tableExists(database, SESSION_PARTICIPANTS_TABLE) || sessionKeys?.length === 0) {
     return [];
   }
+  const actorSource = tableHasColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source")
+    ? "actor_source"
+    : sql<string | null>`NULL`.as("actor_source");
   let query = getSessionKysely(database)
     .selectFrom("session_participants")
-    .select(["session_key", "actor_type", "actor_id", "first_prompted_at", "last_prompted_at"]);
+    .select([
+      "session_key",
+      "actor_type",
+      "actor_id",
+      actorSource,
+      "first_prompted_at",
+      "last_prompted_at",
+    ]);
   if (sessionKeys) {
     query = query.where("session_key", "in", sessionKeys);
   }
@@ -83,7 +101,10 @@ function withProjectedParticipants(
   }
   return {
     ...entry,
-    participants: effective.map((participant) => participant.actor),
+    participants: effective.map((participant) => ({
+      ...participant.actor,
+      ...(participant.source ? { source: participant.source } : {}),
+    })),
     participantCount: effective.length,
   };
 }

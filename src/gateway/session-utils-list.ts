@@ -329,8 +329,13 @@ function filterSessionEntries(params: {
     if (involvingActorId) {
       const owner = entry.owner?.actor ?? entry.createdActor;
       const viewerOwns = owner?.type === "human" && owner.id === involvingActorId;
+      // Only profile-backed ids share the authenticated viewer namespace.
+      // Channel-native and legacy unknown ids remain display-only.
       const viewerParticipates = entry.participants?.some(
-        (participant) => participant.type === "human" && participant.id === involvingActorId,
+        (participant) =>
+          participant.type === "human" &&
+          participant.source === "profile" &&
+          participant.id === involvingActorId,
       );
       if (!viewerOwns && !viewerParticipates) {
         continue;

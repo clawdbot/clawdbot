@@ -1048,17 +1048,20 @@ async function initSessionStateAttemptLocked(
   if (!isSystemEvent && !isInterSession) {
     const creationActor = ctx.SessionCreation?.actor;
     const senderId = normalizeOptionalString(ctx.SenderId);
-    const participant: (SessionCreatedActor & { id: string }) | undefined =
+    const participant:
+      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" }
+      | undefined =
       creationActor?.id && (creationActor.type === "human" || creationActor.type === "agent")
-        ? { ...creationActor, id: creationActor.id }
+        ? { actor: { ...creationActor, id: creationActor.id }, source: "profile" }
         : senderId
-          ? { type: "human", id: senderId }
+          ? { actor: { type: "human", id: senderId }, source: "channel" }
           : undefined;
     if (participant) {
       recordSessionParticipantBestEffort({
-        actor: participant,
+        actor: participant.actor,
         agentId,
         sessionKey,
+        source: participant.source,
         storePath,
         promptedAt: now,
         onError: (error) => log.warn("failed to record session participant", { error }),

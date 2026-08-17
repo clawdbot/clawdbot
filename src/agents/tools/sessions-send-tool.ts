@@ -113,6 +113,7 @@ function recordSessionsSendParticipant(params: {
     actor: { type: "agent", id: params.requesterAgentId },
     agentId: params.targetAgentId,
     sessionKey: params.sessionKey,
+    source: "agent",
     storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
       agentId: params.targetAgentId,
     }),
