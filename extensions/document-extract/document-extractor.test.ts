@@ -252,22 +252,34 @@ describe("PDF document extractor", () => {
         "",
       ].join("\n"),
     );
-    const extractor = createPdfDocumentExtractor();
+    let worker: Worker | undefined;
+    const extractor = createPdfDocumentExtractor({
+      createWorker: (url, options) => {
+        worker = new Worker(url, options);
+        return worker;
+      },
+    });
 
-    const result = await extractor.extract(
-      request({
-        buffer,
-        maxPages: 1,
-        maxPixels: 100,
-        minTextChars: 1,
-        signal: new AbortController().signal,
-      }),
-    );
+    try {
+      const result = await extractor.extract(
+        request({
+          buffer,
+          maxPages: 1,
+          maxPixels: 100,
+          minTextChars: 1,
+          signal: new AbortController().signal,
+        }),
+      );
 
-    expect(result?.text).toBe("");
-    expect(result?.images).toHaveLength(1);
-    expect(result?.images[0]).toMatchObject({ type: "image", mimeType: "image/png" });
-    expect(pdfDocument.extract).not.toHaveBeenCalled();
+      expect(result?.text).toBe("");
+      expect(result?.images).toHaveLength(1);
+      expect(result?.images[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+      expect(pdfDocument.extract).not.toHaveBeenCalled();
+    } finally {
+      if (worker && worker.threadId !== -1) {
+        await worker.terminate();
+      }
+    }
   });
 
   it("reuses a warm worker for sequential signal-aware PDF extractions", async () => {
