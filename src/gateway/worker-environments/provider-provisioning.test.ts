@@ -12,10 +12,8 @@ import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import { admitWorkerConnection } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
-import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -125,11 +123,6 @@ describe("worker environment service", () => {
 
   it("commits an installed Gateway bundle receipt and credential for a node lease", async () => {
     const workerBuild = structuredClone(support.BOOTSTRAP_RECEIPT);
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => support.testState.nowMs,
-    });
-    const placementGate = createWorkerSessionPlacementGate(placements);
     const workerService = support.createService(
       support.createProvider({
         provisionBeforeInstallation: true,
@@ -139,7 +132,7 @@ describe("worker environment service", () => {
           sharedHost: true,
         }),
       }),
-      { ensureNodeWorkerBundle: async () => workerBuild, placementStore: placementGate },
+      { ensureNodeWorkerBundle: async () => workerBuild },
     );
 
     const result = await workerService.create("development", "request-device");
@@ -163,36 +156,19 @@ describe("worker environment service", () => {
       credential: support.CREDENTIAL,
       bundleHash: support.BUNDLE_HASH,
     });
-    await workerService.attachSession({
+    const attachedCredential = await workerService.attachSession({
       environmentId: result.environmentId,
       ownerEpoch: result.ownerEpoch,
-      sessionId: REQUEST.sessionId,
+      sessionId: "session-device",
     });
     const attached = support.testState.store.get(result.environmentId)!;
-    seedActivePlacement(placements, {
-      environmentId: result.environmentId,
-      ownerEpoch: attached.ownerEpoch,
-    });
-    const turnClaim = placements.claimTurn({
-      sessionId: REQUEST.sessionId,
-      sessionKey: REQUEST.sessionKey,
-      agentId: REQUEST.agentId,
-      claimId: "claim-device",
-      runId: "run-device",
-      owner: {
-        kind: "worker",
-        environmentId: result.environmentId,
-        ownerEpoch: attached.ownerEpoch,
-      },
-    });
-    const turnCredential = await workerService.acquireTurnCredential(turnClaim);
     const admission = {
       environmentId: result.environmentId,
-      credential: turnCredential.credential,
+      credential: attachedCredential.credential,
       ownerEpoch: attached.ownerEpoch,
       rpcSetVersion: 1,
-      sessionId: REQUEST.sessionId,
-      runId: turnClaim.runId,
+      sessionId: "session-device",
+      runId: "run-device",
       handshake: workerBuild,
     } as const;
     expect(
@@ -201,7 +177,6 @@ describe("worker environment service", () => {
         admission,
         expectedBuild: workerBuild,
         nowMs: support.testState.nowMs,
-        turnClaim,
       }),
     ).toMatchObject({ ok: true });
     expect(
@@ -213,7 +188,6 @@ describe("worker environment service", () => {
         },
         expectedBuild: workerBuild,
         nowMs: support.testState.nowMs,
-        turnClaim,
       }),
     ).toEqual({ ok: false, reason: "bundle-mismatch" });
   });
@@ -1004,4 +978,88 @@ describe("worker environment service", () => {
       lastError: expect.stringContaining(error),
     });
   });
+
+  it("rejects plaintext secret fields before persisting intent", async () => {
+    support.getDevelopmentProfile().settings = {
+      keyRef: "not-a-secret-ref",
+    };
+    const provision = vi.fn(support.createProvider().provision);
+
+    await expect(
+      support
+        .createService(support.createProvider({ provision }))
+        .create("development", "request-secret"),
+    ).rejects.toMatchObject({ code: "invalid_profile" });
+    expect(provision).not.toHaveBeenCalled();
+    expect(support.testState.store.list()).toEqual([]);
+  });
+
+  it("records permanent provider profile rejection as terminal", async () => {
+    let provisionCalls = 0;
+    const provider = support.createProvider({
+      provision: async () => {
+        provisionCalls += 1;
+        throw new WorkerProviderError("region is required");
+      },
+    });
+    const workerService = support.createService(provider);
+
+    await expect(workerService.create("development", "request-invalid")).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: expect.stringContaining("region is required"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const record = expectDefined(
+      support.testState.store.list()[0],
+      "store.list()[0] test invariant",
+    );
+    expect(record).toMatchObject({ state: "failed", lastError: "region is required" });
+
+    await workerService.reconcileOnce();
+    await expect(workerService.destroy(record.environmentId)).resolves.toMatchObject({
+      state: "failed",
+    });
+    expect(provisionCalls).toBe(1);
+  });
+
+  it("rejects non-canonical profile ids before persistence", async () => {
+    const workerService = support.createService(support.createProvider());
+
+    await expect(workerService.create(" development ", "request-spaced")).rejects.toMatchObject({
+      code: "invalid_profile",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(support.testState.store.list()).toEqual([]);
+  });
+
+  it.each(["direct destroy", "restart reconcile"] as const)(
+    "cancels a requested intent without allocating on %s",
+    async (mode) => {
+      const intent = support.testState.store.createIntent({
+        environmentId: `worker-cancel-${mode}`,
+        providerId: "fake",
+        profileId: "development",
+        profileSnapshot: { settings: { region: "test" } },
+        provisionOperationId: `provision:cancel-${mode}`,
+      });
+      const provision = vi.fn(support.createProvider().provision);
+      const workerService = support.createService(support.createProvider({ provision }));
+
+      if (mode === "direct destroy") {
+        await workerService.destroy(intent.environmentId);
+      } else {
+        support.testState.store.requestDestroy({
+          environmentId: intent.environmentId,
+          state: "requested",
+        });
+        support.testState.providersEnabled = false;
+        await workerService.reconcileOnce();
+      }
+
+      expect(provision).not.toHaveBeenCalled();
+      expect(support.testState.store.get(intent.environmentId)).toMatchObject({
+        state: "failed",
+        lastError: "Provisioning canceled before provider allocation",
+        destroyRequestedAtMs: expect.any(Number),
+      });
+    },
+  );
 });
