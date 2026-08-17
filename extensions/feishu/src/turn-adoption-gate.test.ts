@@ -1,9 +1,11 @@
 // Feishu tests cover the turn adoption gate and adoption-gated queue tasks.
+// The gate itself is not exported: tests drive the wrapper lifecycle through
+// the production entry enqueueAdoptionGatedTurn, which hands it to runTurn.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createSequentialQueue } from "./sequential-queue.js";
-import { createTurnAdoptionGate, enqueueAdoptionGatedTurn } from "./turn-adoption-gate.js";
+import { enqueueAdoptionGatedTurn } from "./turn-adoption-gate.js";
 
 function createLifecycle() {
   const controller = new AbortController();
@@ -27,8 +29,36 @@ function createQueue() {
   return createSequentialQueue();
 }
 
-describe("createTurnAdoptionGate", () => {
-  it("releases the gate only after the original adoption settles", async () => {
+// Enqueues through the production entry and captures the wrapped lifecycle
+// from runTurn, so the gate is exercised exactly as the handlers use it. The
+// enqueue mock schedules the task on a later microtask, like the real
+// sequential queue, so the helper's own `turn` binding exists when the task
+// runs.
+function driveGate(params: { lifecycle?: FeishuIngressLifecycle }) {
+  const captured: { wrapped: FeishuIngressLifecycle | undefined } = { wrapped: undefined };
+  const turnGate = createDeferred<void>();
+  const { lane, turn } = enqueueAdoptionGatedTurn({
+    enqueue: (key, task) => Promise.resolve().then(() => task()),
+    sequentialKey: "feishu:default:oc-chat",
+    lifecycle: params.lifecycle,
+    runTurn: async (gated) => {
+      captured.wrapped = gated;
+      await turnGate.promise;
+    },
+  });
+  return {
+    lane,
+    turn,
+    getWrapped: async () => {
+      await vi.waitFor(() => expect(captured.wrapped).toBeDefined());
+      return captured.wrapped;
+    },
+    finishTurn: () => turnGate.resolve(),
+  };
+}
+
+describe("turn adoption gate (driven through enqueueAdoptionGatedTurn)", () => {
+  it("releases the lane only after the original adoption settles", async () => {
     const { lifecycle, calls } = createLifecycle();
     let finishAdoption!: () => void;
     calls.adopted.mockImplementationOnce(async () => {
@@ -36,107 +66,128 @@ describe("createTurnAdoptionGate", () => {
         finishAdoption = resolve;
       });
     });
-    const { lifecycle: wrapped, gate } = createTurnAdoptionGate(lifecycle);
+    const harness = driveGate({ lifecycle });
+    const wrapped = await harness.getWrapped();
     if (!wrapped) {
       throw new Error("expected a wrapped lifecycle");
     }
-    let gateOpened = false;
-    void gate.then(() => {
-      gateOpened = true;
+    let laneOpened = false;
+    void harness.lane.then(() => {
+      laneOpened = true;
     });
     const adoption = wrapped.onAdopted();
     await Promise.resolve();
     await Promise.resolve();
-    expect(gateOpened).toBe(false);
+    expect(laneOpened).toBe(false);
     finishAdoption();
     await adoption;
-    expect(gateOpened).toBe(true);
+    await harness.lane;
+    expect(laneOpened).toBe(true);
+    harness.finishTurn();
+    await harness.turn;
   });
 
-  it("releases the gate and propagates when the original adoption rejects", async () => {
+  it("rejects the lane when the original adoption rejects", async () => {
     const { lifecycle, calls } = createLifecycle();
     calls.adopted.mockRejectedValueOnce(new Error("adopt failed"));
-    const { lifecycle: wrapped, gate } = createTurnAdoptionGate(lifecycle);
+    const harness = driveGate({ lifecycle });
+    const wrapped = await harness.getWrapped();
     if (!wrapped) {
       throw new Error("expected a wrapped lifecycle");
     }
-    let gateOpened = false;
-    void gate.then(() => {
-      gateOpened = true;
-    });
     await expect(wrapped.onAdopted()).rejects.toThrow("adopt failed");
-    expect(gateOpened).toBe(true);
+    // The carried failure is the original error: the lane rejects with it so
+    // the flush's catch → onAbandoned → rethrow → onError path runs.
+    await expect(harness.lane).rejects.toThrow("adopt failed");
+    harness.finishTurn();
+    await harness.turn;
   });
 
-  it("releases the gate on deferral and preserves the accepted flag", async () => {
+  it("releases the lane on deferral and preserves the accepted flag", async () => {
     const { lifecycle, calls } = createLifecycle();
     calls.deferred.mockReturnValue(false);
-    const { lifecycle: wrapped, gate } = createTurnAdoptionGate(lifecycle);
+    const harness = driveGate({ lifecycle });
+    const wrapped = await harness.getWrapped();
     if (!wrapped) {
       throw new Error("expected a wrapped lifecycle");
     }
-    let gateOpened = false;
-    void gate.then(() => {
-      gateOpened = true;
+    let laneOpened = false;
+    void harness.lane.then(() => {
+      laneOpened = true;
     });
     expect(wrapped.onDeferred()).toBe(false);
-    await gate;
-    expect(gateOpened).toBe(true);
+    await harness.lane;
+    expect(laneOpened).toBe(true);
+    harness.finishTurn();
+    await harness.turn;
   });
 
-  it("releases the gate on failure when the lifecycle reports one", async () => {
+  it("releases the lane on failure when the lifecycle reports one", async () => {
     const { lifecycle } = createLifecycle();
     const failed = vi.fn(async () => {});
-    const { lifecycle: wrapped, gate } = createTurnAdoptionGate({
-      ...lifecycle,
-      onFailed: failed,
-    });
+    const harness = driveGate({ lifecycle: { ...lifecycle, onFailed: failed } });
+    const wrapped = await harness.getWrapped();
     if (!wrapped) {
       throw new Error("expected a wrapped lifecycle");
     }
-    let gateOpened = false;
-    void gate.then(() => {
-      gateOpened = true;
+    let laneOpened = false;
+    void harness.lane.then(() => {
+      laneOpened = true;
     });
     await wrapped.onFailed?.(new Error("failed"));
-    expect(gateOpened).toBe(true);
+    await harness.lane;
+    expect(laneOpened).toBe(true);
+    harness.finishTurn();
+    await harness.turn;
   });
 
-  it("releases the gate on abandon", async () => {
-    const { lifecycle } = createLifecycle();
-    const { lifecycle: wrapped, gate } = createTurnAdoptionGate(lifecycle);
+  it("releases the lane on abandon", async () => {
+    const { lifecycle, calls } = createLifecycle();
+    const harness = driveGate({ lifecycle });
+    const wrapped = await harness.getWrapped();
     if (!wrapped) {
       throw new Error("expected a wrapped lifecycle");
     }
-    let gateOpened = false;
-    void gate.then(() => {
-      gateOpened = true;
+    let laneOpened = false;
+    void harness.lane.then(() => {
+      laneOpened = true;
     });
     await wrapped.onAbandoned();
-    expect(gateOpened).toBe(true);
+    await harness.lane;
+    expect(laneOpened).toBe(true);
+    expect(calls.abandoned).toHaveBeenCalledTimes(1);
+    harness.finishTurn();
+    await harness.turn;
   });
 
-  it("releases once across repeated terminal signals", async () => {
+  it("releases the lane once across repeated terminal signals", async () => {
     const { lifecycle, controller } = createLifecycle();
-    const { lifecycle: wrapped, gate } = createTurnAdoptionGate(lifecycle);
+    const harness = driveGate({ lifecycle });
+    const wrapped = await harness.getWrapped();
     if (!wrapped) {
       throw new Error("expected a wrapped lifecycle");
     }
-    let gateOpenings = 0;
-    void gate.then(() => {
-      gateOpenings += 1;
+    let laneOpenings = 0;
+    void harness.lane.then(() => {
+      laneOpenings += 1;
     });
     await wrapped.onAdopted();
+    await harness.lane;
     controller.abort(new Error("late abort"));
     await wrapped.onAbandoned();
-    expect(gateOpenings).toBe(1);
+    expect(laneOpenings).toBe(1);
+    harness.finishTurn();
+    await harness.turn;
   });
 
-  it("releases the gate immediately when the signal is already aborted", async () => {
-    const { lifecycle, controller } = createLifecycle();
+  it("releases the lane immediately when the signal is already aborted", async () => {
+    const { lifecycle, controller, calls } = createLifecycle();
     controller.abort(new Error("pre-start abort"));
-    const { gate } = createTurnAdoptionGate(lifecycle);
-    await expect(gate).resolves.toEqual({ kind: "released" });
+    const harness = driveGate({ lifecycle });
+    await harness.lane;
+    expect(calls.abandoned).toHaveBeenCalledTimes(1);
+    harness.finishTurn();
+    await harness.turn;
   });
 });
 

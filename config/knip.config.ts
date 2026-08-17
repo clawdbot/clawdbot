@@ -437,9 +437,6 @@ const config = {
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
-    // Focused unit tests exercise the adoption-gate wrapper directly; production
-    // consumes only the adoption-gated enqueue helper.
-    "extensions/feishu/src/turn-adoption-gate.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {

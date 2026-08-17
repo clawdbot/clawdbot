@@ -34,7 +34,7 @@ type FeishuTurnAdoptionGate = {
 
 const NEVER_RESOLVING_GATE = new Promise<FeishuTurnAdoptionGateRelease>(() => {});
 
-export function createTurnAdoptionGate(
+function createTurnAdoptionGate(
   lifecycle: FeishuIngressLifecycle | undefined,
 ): FeishuTurnAdoptionGate {
   if (!lifecycle) {
