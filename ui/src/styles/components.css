@@ -3226,6 +3226,7 @@ td.data-table-key-col {
 :root[data-theme-mode="light"] .chat-line.user .chat-bubble {
   border-color: transparent;
   background: var(--accent-subtle);
+  box-shadow: none;
 }
 
 .chat-line.assistant .chat-bubble {
