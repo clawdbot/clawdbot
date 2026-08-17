@@ -25,7 +25,6 @@ import {
 
 export { createMcpAppStandaloneTicket, mcpAppStandaloneTesting, verifyMcpAppStandaloneTicket };
 
-const MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS = 30_000;
 const MCP_APP_STABLE_PROTOCOL_VERSION = "2026-01-26";
 const MCP_APP_OPERATION_MAX_BODY_BYTES = 256 * 1024;
 
@@ -78,11 +77,7 @@ function sendText(res: ServerResponse, statusCode: number, body: string): void {
   res.end(body);
 }
 
-function runStandaloneMcpAppHost(config: {
-  protocolVersion: string;
-  viewPath: string;
-  initialLoadTimeoutMs: number;
-}): void {
+function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: string }): void {
   type StandaloneElement = { className: string; textContent: string };
   type StandaloneFrame = StandaloneElement & {
     contentWindow?: { postMessage(message: unknown, targetOrigin: string): void };
@@ -125,7 +120,7 @@ function runStandaloneMcpAppHost(config: {
     toolResult: unknown;
     serverTools?: boolean;
     serverResources?: boolean;
-    operationTimeoutMs?: number;
+    operationTimeoutMs: number;
   };
 
   const host = browser.document.getElementById("host");
@@ -201,8 +196,8 @@ function runStandaloneMcpAppHost(config: {
     consume: (response: Response, signal: AbortSignal) => Promise<T>,
     timeoutMs?: number,
   ): Promise<T> => {
-    // Keep one signal across fetch and body consumption. The watchdog owns the
-    // request budget while pagehide can still abort every in-flight request.
+    // The server-owned active-view deadline governs bootstrap. Operations add
+    // the advertised client watchdog; page lifecycle owns both request kinds.
     const controller = new AbortController();
     const timeout =
       timeoutMs === undefined
@@ -231,8 +226,8 @@ function runStandaloneMcpAppHost(config: {
     }
   };
   const request = async (method: string, params: unknown): Promise<unknown> => {
-    if (!payload?.operationTimeoutMs) {
-      throw new Error("MCP App operation deadline is unavailable");
+    if (!payload) {
+      throw new Error("MCP App view is not loaded");
     }
     const { response, body } = await withViewResponse(
       {
@@ -426,7 +421,6 @@ function runStandaloneMcpAppHost(config: {
       }
       return (await response.json()) as ViewPayload;
     },
-    config.initialLoadTimeoutMs,
   )
     .then((view) => {
       payload = view;
@@ -449,7 +443,6 @@ function standaloneHostHtml(): { html: string; scriptHash: string } {
   const serializedConfig = JSON.stringify({
     protocolVersion: MCP_APP_STABLE_PROTOCOL_VERSION,
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
-    initialLoadTimeoutMs: MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS,
   });
   const clientSource = `;(() => { const __name = (target) => target; (${runStandaloneMcpAppHost.toString()})(${serializedConfig}); })();`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
