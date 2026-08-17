@@ -83,6 +83,17 @@ function hasLegacyFinalMediaDirective(text: string): boolean {
   return /(?:^|\n)\s*MEDIA\s*:/i.test(text);
 }
 
+// A voice-only send (structured voiceText, empty visible text) must still end in a visible
+// outcome when speech cannot be attempted at all; otherwise delivery normalizes the empty
+// payload to null and the send silently vanishes. Mirrors the synthesis-failure fallback.
+function applyExplicitSpeechVisibleFallback(payload: ReplyPayload): ReplyPayload {
+  const explicitText = getReplyPayloadMetadata(payload)?.tts?.text?.trim();
+  if (!explicitText || hasReplyPayloadContent(payload, {})) {
+    return payload;
+  }
+  return { ...payload, text: explicitText };
+}
+
 export async function maybeApplyTtsToPayloadCore(
   params: {
     payload: ReplyPayload;
@@ -97,7 +108,7 @@ export async function maybeApplyTtsToPayloadCore(
   persistTtsAudio: TtsAudioPersistence,
 ): Promise<ReplyPayload> {
   if (!isSpeechRuntimeAvailable()) {
-    return params.payload;
+    return applyExplicitSpeechVisibleFallback(params.payload);
   }
   if (params.payload.isCompactionNotice) {
     return params.payload;

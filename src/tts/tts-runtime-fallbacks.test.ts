@@ -790,3 +790,57 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
     });
   });
 });
+
+describe("cold speech runtime visible fallback", () => {
+  it("materializes voice-only structured speech as visible text when the runtime is unavailable", async () => {
+    const { setSpeechRuntimeAvailabilityGuard } = await import("./runtime-availability.js");
+    setSpeechRuntimeAvailabilityGuard(() => {
+      throw new Error("speech runtime configured cold");
+    });
+    try {
+      const payload: ReplyPayload = { text: "" };
+      setReplyPayloadMetadata(payload, {
+        ttsExplicit: true,
+        tts: { tagged: true, text: "Spoken greeting" },
+      });
+      const result = await maybeApplyTtsToPayloadCore(
+        {
+          payload,
+          cfg: createTtsConfig("openclaw-speech-cold-runtime-fallback-test"),
+          channel: "slack",
+          kind: "final",
+        },
+        async () => "unused",
+      );
+      expect(result.text).toBe("Spoken greeting");
+    } finally {
+      setSpeechRuntimeAvailabilityGuard(undefined);
+    }
+  });
+
+  it("keeps payloads with visible text unchanged when the runtime is unavailable", async () => {
+    const { setSpeechRuntimeAvailabilityGuard } = await import("./runtime-availability.js");
+    setSpeechRuntimeAvailabilityGuard(() => {
+      throw new Error("speech runtime configured cold");
+    });
+    try {
+      const payload: ReplyPayload = { text: "Visible answer" };
+      setReplyPayloadMetadata(payload, {
+        ttsExplicit: true,
+        tts: { tagged: true, text: "Spoken greeting" },
+      });
+      const result = await maybeApplyTtsToPayloadCore(
+        {
+          payload,
+          cfg: createTtsConfig("openclaw-speech-cold-runtime-unchanged-test"),
+          channel: "slack",
+          kind: "final",
+        },
+        async () => "unused",
+      );
+      expect(result).toBe(payload);
+    } finally {
+      setSpeechRuntimeAvailabilityGuard(undefined);
+    }
+  });
+});
