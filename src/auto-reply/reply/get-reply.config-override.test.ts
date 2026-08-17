@@ -119,7 +119,23 @@ describe("getReplyFromConfig configOverride", () => {
 
     vi.mocked(loadConfigMock).mockReturnValue({});
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
-    mocks.initSessionState.mockResolvedValue(createGetReplySessionState());
+    const sessionKey = "agent:main:telegram:123";
+    const storePath = path.join(tempDirs.make("openclaw-get-reply-session-"), "sessions.json");
+    const entry: InternalSessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    mocks.initSessionState.mockResolvedValue(
+      createGetReplySessionState({
+        initialSessionEntry: entry,
+        sessionEntry: entry,
+        sessionEntryHandle: { replaceCurrent: vi.fn() },
+        sessionKey,
+        sessionStore: { [sessionKey]: entry },
+        storePath,
+      }),
+    );
     mocks.captureSessionDiffBaseline.mockImplementation(async ({ sessionId }) => ({
       version: 1,
       sessionId,

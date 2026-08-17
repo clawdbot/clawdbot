@@ -42,8 +42,8 @@ import type {
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
-  generationValidPrivateFieldsForSameSession,
   clearGenerationPrivateFieldsForRotatedSessionPatch,
+  generationValidPrivateFieldsForSameSession,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
   projectPluginSessionStore,
@@ -155,9 +155,23 @@ function preserveGenerationPrivateFields(
   const nextSessionId = Object.hasOwn(publicPatch, "sessionId")
     ? publicPatch.sessionId
     : persistedEntry.sessionId;
-  const privateFields = generationValidPrivateFieldsForSameSession(persistedEntry, nextSessionId);
+  const nextLifecycleRevision = Object.hasOwn(publicPatch, "lifecycleRevision")
+    ? publicPatch.lifecycleRevision
+    : persistedEntry.lifecycleRevision;
+  const privateFields = generationValidPrivateFieldsForSameSession(
+    persistedEntry,
+    nextSessionId,
+    nextLifecycleRevision,
+  );
   return privateFields
-    ? { ...publicPatch, ...privateFields }
+    ? {
+        ...publicPatch,
+        ...(!Object.hasOwn(publicPatch, "lifecycleRevision") &&
+        persistedEntry.lifecycleRevision !== undefined
+          ? { lifecycleRevision: persistedEntry.lifecycleRevision }
+          : {}),
+        ...privateFields,
+      }
     : clearGenerationPrivateFieldsForRotatedSessionPatch(persistedEntry, publicPatch);
 }
 

@@ -60,8 +60,13 @@ export function projectPluginSessionStore(
 export function generationValidPrivateFieldsForSameSession(
   existingEntry: InternalSessionEntry | undefined,
   nextSessionId: string | undefined,
+  nextLifecycleRevision: string | undefined,
 ): Partial<InternalSessionEntry> | undefined {
-  if (!existingEntry || existingEntry.sessionId !== nextSessionId) {
+  if (
+    !existingEntry ||
+    existingEntry.sessionId !== nextSessionId ||
+    existingEntry.lifecycleRevision !== nextLifecycleRevision
+  ) {
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
@@ -89,8 +94,10 @@ export function clearGenerationPrivateFieldsForRotatedSessionPatch(
   existingEntry: InternalSessionEntry,
   publicPatch: Partial<SessionEntry>,
 ): Partial<InternalSessionEntry> {
-  return Object.hasOwn(publicPatch, "sessionId") &&
-    publicPatch.sessionId !== existingEntry.sessionId
+  return (Object.hasOwn(publicPatch, "sessionId") &&
+    publicPatch.sessionId !== existingEntry.sessionId) ||
+    (Object.hasOwn(publicPatch, "lifecycleRevision") &&
+      publicPatch.lifecycleRevision !== existingEntry.lifecycleRevision)
     ? {
         ...publicPatch,
         ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
@@ -110,20 +117,24 @@ export function reconcilePluginSessionStore(params: {
   }
   for (const [sessionKey, publicEntry] of Object.entries(params.publicStore)) {
     const projectedEntry = projectPluginSessionEntry(publicEntry as InternalSessionEntry);
-    const existingPrivateFields = generationValidPrivateFieldsForSameSession(
-      params.internalStore[sessionKey],
-      projectedEntry.sessionId,
-    );
     const existingEntry = params.internalStore[sessionKey];
-    params.internalStore[sessionKey] =
-      existingEntry && existingEntry.sessionId !== projectedEntry.sessionId
-        ? {
-            ...projectedEntry,
-            ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
-            ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
-          }
-        : existingPrivateFields
-          ? { ...projectedEntry, ...existingPrivateFields }
-          : projectedEntry;
+    const existingPrivateFields = generationValidPrivateFieldsForSameSession(
+      existingEntry,
+      projectedEntry.sessionId,
+      projectedEntry.lifecycleRevision,
+    );
+    const generationRotated =
+      existingEntry &&
+      (existingEntry.sessionId !== projectedEntry.sessionId ||
+        existingEntry.lifecycleRevision !== projectedEntry.lifecycleRevision);
+    params.internalStore[sessionKey] = generationRotated
+      ? {
+          ...projectedEntry,
+          ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
+          ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
+        }
+      : existingPrivateFields
+        ? { ...projectedEntry, ...existingPrivateFields }
+        : projectedEntry;
   }
 }
