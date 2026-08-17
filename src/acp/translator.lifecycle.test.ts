@@ -15,8 +15,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
 import { AcpGatewayAgent } from "./translator.js";
-import { acpGatewayDefaultResponse } from "./translator.test-helpers.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  acpGatewayDefaultResponse,
+  createAcpConnection,
+  createAcpGateway,
+} from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
