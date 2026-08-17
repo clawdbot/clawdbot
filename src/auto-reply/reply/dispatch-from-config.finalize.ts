@@ -300,7 +300,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     // (queued same-session mirroring) cannot deadlock the gate on themselves.
     queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
   }
-  let counts = dispatcher.getQueuedCounts();
+  let counts = dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
   // The agent-result classifier owns deliberate silence and pending continuation;
   // carry those facts here because filtered reply payloads cannot safely rederive either.
@@ -346,7 +346,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             noVisibleReplyFallbackDelivered = true;
             // Re-snapshot so the delivered fallback is reflected in reported counts,
             // matching the TTS-only path which enqueues before the snapshot.
-            counts = dispatcher.getQueuedCounts();
+            counts = dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts();
           }
         }
       }

@@ -11,6 +11,7 @@ function createUntrackedDispatcher(overrides: Partial<ReplyDispatcher> = {}): Re
     sendFinalReply: () => true,
     waitForIdle: async () => {},
     getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
     markComplete: () => {},
     ...overrides,
   };
@@ -96,10 +97,19 @@ describe("createReplyTurnLedger", () => {
     }
   });
 
-  it("does not fabricate visibility for an untracked dispatcher", async () => {
+  it("keeps legacy accepted sends visible when settlement has no receipt", async () => {
     const ledger = createReplyTurnLedger(createUntrackedDispatcher());
     const send = ledger.sendQueued("final", { text: "hello" });
     expect(send.outcome).toBeUndefined();
+    await ledger.settleQueued();
+    expect(ledger.hasVisibleDelivery()).toBe(true);
+  });
+
+  it("does not fabricate visibility when a receipt-capable dispatcher omits its receipt", async () => {
+    const ledger = createReplyTurnLedger(
+      createUntrackedDispatcher({ supportsSettledReceipt: true }),
+    );
+    ledger.sendQueued("final", { text: "hello" });
     await ledger.settleQueued();
     expect(ledger.hasVisibleDelivery()).toBe(false);
   });
@@ -108,10 +118,6 @@ describe("createReplyTurnLedger", () => {
     const dispatcher = createReplyDispatcher({ deliver: async () => {} });
     const ledger = createReplyTurnLedger(dispatcher);
     const payload: ReplyPayload = { text: "hi" };
-    // Untracked dispatcher admissions stay unknown and therefore invisible.
-    const untracked = createReplyTurnLedger(createUntrackedDispatcher());
-    untracked.sendQueued("final", { text: "   " });
-    expect(untracked.hasVisibleDelivery()).toBe(false);
     ledger.sendQueued("final", payload);
     await ledger.settleQueued();
     expect(ledger.hasVisibleDelivery()).toBe(true);

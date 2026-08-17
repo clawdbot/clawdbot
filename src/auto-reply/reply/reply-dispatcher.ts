@@ -390,6 +390,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     final: createReplyDispatchSettledCounts(),
   };
 
+  const projectSettledCounts = (
+    project: (counts: ReplyDispatchSettledCounts) => number,
+  ): Record<ReplyDispatchKind, number> => ({
+    tool: project(settledCounts.tool),
+    block: project(settledCounts.block),
+    final: project(settledCounts.final),
+  });
+
   const buildReceipt = (): ReplyDispatchReceipt | undefined =>
     queuedCounts.tool + queuedCounts.block + queuedCounts.final === 0
       ? undefined
@@ -672,11 +680,19 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         options: stageOptions,
       });
     },
+    supportsSettledReceipt: true,
     waitForIdle: async () => {
       await settlementBarrier.waitForIdle();
       return buildReceipt();
     },
-    getQueuedCounts: () => ({ ...queuedCounts }),
+    getAdmissionCounts: () => ({ ...queuedCounts }),
+    getQueuedCounts: () =>
+      projectSettledCounts((counts) =>
+        Object.values(counts).reduce((total, count) => total + count, 0),
+      ),
+    getCancelledCounts: () => projectSettledCounts((counts) => counts.cancelled),
+    getFailedCounts: () =>
+      projectSettledCounts((counts) => counts.failedBeforeSend + counts.failedAfterSend),
     markComplete,
     resolveFollowupAdmissionBarrierTimeoutPolicy:
       options.resolveFollowupAdmissionBarrierTimeoutPolicy

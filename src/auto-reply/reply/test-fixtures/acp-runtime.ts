@@ -20,6 +20,7 @@ export function createAcpTestReplyDispatcher(): ReplyDispatcher {
     sendToolResult,
     sendBlockReply,
     sendFinalReply,
+    supportsSettledReceipt: true,
     waitForIdle: vi.fn(async () => ({
       counts: {
         tool: settledCounts(sendToolResult.mock.calls.length),
@@ -33,6 +34,7 @@ export function createAcpTestReplyDispatcher(): ReplyDispatcher {
         0,
     })),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }

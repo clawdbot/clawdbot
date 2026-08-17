@@ -83,7 +83,7 @@ export async function gatherDispatchRequest(
       status: "complete" as const,
       result: {
         queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
+        counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
       },
     };
   }
@@ -235,7 +235,7 @@ export async function gatherDispatchRequest(
       status: "complete" as const,
       result: {
         queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
+        counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
       },
     };
   }

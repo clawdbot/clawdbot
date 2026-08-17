@@ -147,6 +147,7 @@ function installFeishuLifecycleRuntime(params: {
               await Promise.all(pendingDeliveries);
             },
             getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+            getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
             markComplete: () => {},
           };
           return await params.withReplyDispatcher({

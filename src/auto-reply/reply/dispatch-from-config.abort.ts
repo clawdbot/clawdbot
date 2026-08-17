@@ -69,12 +69,18 @@ export function createAbortAwareDispatcher(params: {
     (send: (payload: ReplyPayload) => boolean) =>
     (payload: ReplyPayload): boolean =>
       params.isAborted() ? false : send(payload);
+  const getCancelledCounts = params.dispatcher.getCancelledCounts;
   const dispatcher: ReplyDispatcher = {
     sendToolResult: sendIfActive(params.dispatcher.sendToolResult),
     sendBlockReply: sendIfActive(params.dispatcher.sendBlockReply),
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),
+    ...(params.dispatcher.supportsSettledReceipt ? { supportsSettledReceipt: true } : {}),
     waitForIdle: () => params.dispatcher.waitForIdle(),
+    getAdmissionCounts: () =>
+      params.dispatcher.getAdmissionCounts?.() ?? params.dispatcher.getQueuedCounts(),
     getQueuedCounts: () => params.dispatcher.getQueuedCounts(),
+    ...(getCancelledCounts ? { getCancelledCounts: () => getCancelledCounts() } : {}),
+    getFailedCounts: () => params.dispatcher.getFailedCounts(),
     markComplete: () => {
       if (!params.isAborted()) {
         params.dispatcher.markComplete();

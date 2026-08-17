@@ -51,8 +51,17 @@ export type ReplyDispatcher = {
     hook: ReplyDispatchBeforeDeliver,
     options?: ReplyDispatchBeforeDeliverOptions,
   ) => void;
+  /** Explicit capability marker; absent on legacy void-returning dispatchers. */
+  supportsSettledReceipt?: true;
   waitForIdle: () => Promise<void | ReplyDispatchReceipt>;
+  /** @internal Admission counts used only for queue lifecycle decisions. */
+  getAdmissionCounts?: () => Record<ReplyDispatchKind, number>;
+  /** @deprecated Remove in the next Plugin SDK major; derived from settled receipts. */
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
+  /** @deprecated Remove in the next Plugin SDK major; derived from settled receipts. */
+  getCancelledCounts?: () => Record<ReplyDispatchKind, number>;
+  /** @deprecated Remove in the next Plugin SDK major; derived from settled receipts. */
+  getFailedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
   /** Owner-declared deadline for holding queued follow-ups behind all queued deliveries. */
   resolveFollowupAdmissionBarrierTimeoutPolicy?: () =>

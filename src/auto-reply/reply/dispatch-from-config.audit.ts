@@ -250,7 +250,7 @@ export function createInboundMessageAuditTerminal(
     finishError() {
       let counts: Record<ReplyDispatchKind, number> = { tool: 0, block: 0, final: 0 };
       try {
-        counts = params.dispatcher.getQueuedCounts();
+        counts = params.dispatcher.getAdmissionCounts?.() ?? params.dispatcher.getQueuedCounts();
       } catch {
         // Preserve the original dispatch error if the dispatcher is also unhealthy.
       }

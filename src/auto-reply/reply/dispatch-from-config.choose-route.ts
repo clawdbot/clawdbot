@@ -602,7 +602,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         queuedFinal = handledReply.queuedFinal;
         routedFinalCount += handledReply.routedFinalCount;
       }
-      const counts = dispatcher.getQueuedCounts();
+      const counts = dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts();
       counts.final += routedFinalCount;
       recordProcessed("completed", { reason: "before_dispatch_handled" });
       markIdle("message_completed");

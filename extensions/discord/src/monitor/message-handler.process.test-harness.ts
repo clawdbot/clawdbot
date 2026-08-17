@@ -404,6 +404,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
           await Promise.all(pendingDeliveries);
         }),
         getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
         markComplete: vi.fn(),
       },
       replyOptions: {

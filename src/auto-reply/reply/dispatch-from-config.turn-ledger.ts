@@ -41,7 +41,7 @@ type ReplyTurnLedger = {
 
 export async function requireQueuedReplyDelivery(params: {
   delivery: LedgerQueuedSend;
-  dispatcher: Pick<ReplyDispatcher, "waitForIdle">;
+  dispatcher: Pick<ReplyDispatcher, "supportsSettledReceipt" | "waitForIdle">;
   abortSignal: AbortSignal | undefined;
 }): Promise<void> {
   if (!params.delivery.queued) {
@@ -50,7 +50,10 @@ export async function requireQueuedReplyDelivery(params: {
   const outcome = params.delivery.outcome;
   if (!outcome) {
     const receipt = await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
-    if (receipt?.anyVisibleDelivered !== true) {
+    if (
+      params.dispatcher.supportsSettledReceipt === true &&
+      receipt?.anyVisibleDelivered !== true
+    ) {
       throw new Error("queued reply delivery failed");
     }
     return;
@@ -74,10 +77,19 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
   };
   return {
     sendQueued(kind, payload) {
-      const capture = captureReplyDispatchDeliveryOutcome(payload);
+      const capture =
+        dispatcher.supportsSettledReceipt === true
+          ? captureReplyDispatchDeliveryOutcome(payload)
+          : undefined;
       const queued = enqueue(kind, payload);
       if (!queued) {
         return { queued: false };
+      }
+      if (!capture) {
+        // Legacy dispatchers expose admission only. Treat an accepted send as
+        // potentially visible so the fallback cannot duplicate its delivery.
+        visibleDeliveries += 1;
+        return { queued: true };
       }
       if (!capture.isTracked()) {
         return { queued: true };
@@ -119,7 +131,7 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
         if (timedOut) {
           return "timed-out";
         }
-        if (receipt?.anyVisibleDelivered === true) {
+        if (dispatcher.supportsSettledReceipt === true && receipt?.anyVisibleDelivered === true) {
           visibleDeliveries += 1;
         }
         return "settled";

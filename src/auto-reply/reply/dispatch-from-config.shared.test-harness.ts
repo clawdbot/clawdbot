@@ -744,6 +744,7 @@ export function createDispatcher(): ReplyDispatcher {
           }
         : hook;
     }),
+    supportsSettledReceipt: true,
     waitForIdle: vi.fn(async () => {
       await Promise.all(beforeDeliverTasks);
       const receipt = {
@@ -757,6 +758,7 @@ export function createDispatcher(): ReplyDispatcher {
       };
     }),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }
