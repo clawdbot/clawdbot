@@ -24,6 +24,7 @@ export type ClawsAddOptions = {
   agentId?: string;
   workspace?: string;
   adoptExistingWorkspace?: boolean;
+  adoptExistingAgent?: boolean;
 };
 
 export type ClawsStatusOptions = { json?: boolean };
@@ -122,6 +123,11 @@ export function registerClawsCli(program: Command) {
     .option(
       "--adopt-existing-workspace",
       "Adopt an existing workspace directory; declared files must already match or be absent",
+      false,
+    )
+    .option(
+      "--adopt-existing-agent",
+      "Adopt an exact existing unmanaged agent and its configured workspace",
       false,
     )
     .option("--json", "Print JSON", false)

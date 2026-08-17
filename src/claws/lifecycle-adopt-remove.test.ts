@@ -1,7 +1,7 @@
 // Removal coverage for Claw installs that adopted an existing operator-owned workspace.
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -111,6 +111,36 @@ describe("Claw remove with an adopted workspace", () => {
 
     expect(removed).toMatchObject({ status: "complete" });
     await expect(stat(current.workspace)).resolves.toMatchObject({});
+  });
+
+  it("still purges created-agent history when only its workspace was adopted", async () => {
+    const current = await adoptedFixture();
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    const purgeSessions = vi.fn(async () => undefined);
+    const trashed: string[] = [];
+
+    await applyClawRemovePlan(plan, {
+      env: current.env,
+      config: current.getConfig(),
+      consentPlanIntegrity: plan.planIntegrity,
+      commitConfig: async (transform) => {
+        transform(current.getConfig());
+      },
+      purgeSessions,
+      trashPath: async (target) => {
+        trashed.push(target);
+        return true;
+      },
+    });
+
+    const agentState = plan.actions.find((action) => action.kind === "agentState")?.target;
+    const transcripts = plan.actions.find((action) => action.kind === "sessionTranscripts")?.target;
+    expect(purgeSessions).toHaveBeenCalledOnce();
+    expect(trashed).toEqual(expect.arrayContaining([agentState, transcripts]));
+    expect(trashed).not.toContain(current.workspace);
   });
 
   it("keeps a removal preview read-only when no origin marker exists", async () => {

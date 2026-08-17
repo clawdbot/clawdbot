@@ -4,7 +4,8 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
-import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentEntry } from "../agents/agent-scope-config.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import {
   prepareLegacyWorkspaceStateReset,
@@ -126,6 +127,7 @@ export function synthesizeOrphanInstall(params: {
     agentId: params.agentId,
     workspace: params.workspace ?? "",
     agentConfigDigest: "sha256:missing",
+    agentOrigin: "created",
     agentOwnedPaths: [],
     status: "partial",
     addedAtMs: updatedAtMs,
@@ -134,7 +136,7 @@ export function synthesizeOrphanInstall(params: {
 }
 
 export function deletionEffects(config: OpenClawConfig, agentId: string, fallbackWorkspace = "") {
-  const agent = listAgentEntries(config).find((candidate) => candidate.id === agentId);
+  const agent = resolveAgentEntry(config, agentId);
   const pruned = pruneAgentConfig(config, agentId);
   const workspace = agent?.workspace ?? fallbackWorkspace;
   const agentDir = resolveAgentDir(config, agentId);
@@ -150,6 +152,53 @@ export function deletionEffects(config: OpenClawConfig, agentId: string, fallbac
     workspaceSharedWith,
     workspaceRetained: workspaceSharedWith.length > 0,
   };
+}
+
+export function planClawHistoricalAgentState(params: {
+  agentId: string;
+  agentDir?: string;
+  sessionsDir: string;
+  retain: boolean;
+  modified: boolean;
+}): ClawRemovePlanAction[] {
+  const blocked = params.retain ? false : params.modified;
+  const actions: ClawRemovePlanAction[] = params.agentDir
+    ? [
+        {
+          kind: "agentState",
+          id: params.agentId,
+          action: params.retain ? "retain" : "trash",
+          target: params.agentDir,
+          blocked,
+          ...(params.retain
+            ? { reason: "Agent state existed before this Claw adopted the agent." }
+            : {}),
+        },
+      ]
+    : [];
+  actions.push(
+    {
+      kind: "sessionIndex",
+      id: params.agentId,
+      action: params.retain ? "retain" : "delete",
+      target: `session store entries for agent:${params.agentId}`,
+      blocked,
+      ...(params.retain
+        ? { reason: "Session history existed before this Claw adopted the agent." }
+        : {}),
+    },
+    {
+      kind: "sessionTranscripts",
+      id: params.agentId,
+      action: params.retain ? "retain" : "trash",
+      target: params.sessionsDir,
+      blocked,
+      ...(params.retain
+        ? { reason: "Session transcripts existed before this Claw adopted the agent." }
+        : {}),
+    },
+  );
+  return actions;
 }
 
 /** Resolves the retain/trash plan for a workspace using the canonical reason priority. */
@@ -279,6 +328,7 @@ export async function cleanupClawAgentFilesystem(params: {
   runtime: RuntimeEnv;
   trashPath?: ClawTrashPath;
   retainWorkspace?: boolean;
+  retainHistoricalAgentState?: boolean;
 }): Promise<string[]> {
   const errors: string[] = [];
   const trashPath = params.trashPath ?? moveToTrash;
@@ -307,11 +357,13 @@ export async function cleanupClawAgentFilesystem(params: {
       errors.push(`Could not trash workspace ${params.targets.workspaceDir}.`);
     }
   }
-  if (!(await trashPath(params.targets.agentDir, params.runtime))) {
-    errors.push(`Could not trash agent state ${params.targets.agentDir}.`);
-  }
-  if (!(await trashPath(params.targets.sessionsDir, params.runtime))) {
-    errors.push(`Could not trash session transcripts ${params.targets.sessionsDir}.`);
+  if (!params.retainHistoricalAgentState) {
+    if (!(await trashPath(params.targets.agentDir, params.runtime))) {
+      errors.push(`Could not trash agent state ${params.targets.agentDir}.`);
+    }
+    if (!(await trashPath(params.targets.sessionsDir, params.runtime))) {
+      errors.push(`Could not trash session transcripts ${params.targets.sessionsDir}.`);
+    }
   }
   return errors;
 }

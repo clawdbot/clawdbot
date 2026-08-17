@@ -1,5 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import type { AgentConfig } from "../config/types.agents.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { ClawInstallStatus } from "./provenance.js";
 import type { ClawAddPlan } from "./types.js";
 
@@ -40,5 +41,8 @@ export function statusAtLeast(status: ClawInstallStatus, phase: ClawInstallStatu
 }
 
 export function sameCommittedAgent(existingAgent: AgentConfig, plan: ClawAddPlan): boolean {
-  return stableStringify(existingAgent) === stableStringify(plan.agent.config);
+  return (
+    stableStringify({ ...existingAgent, id: normalizeAgentId(existingAgent.id) }) ===
+    stableStringify(plan.agent.config)
+  );
 }

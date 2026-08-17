@@ -39,7 +39,7 @@ function normalizeWorkspacePathForComparison(input: string): string {
   return normalized;
 }
 
-function workspacePathsOverlap(left: string, right: string): boolean {
+export function workspacePathsOverlap(left: string, right: string): boolean {
   const normalizedLeft = normalizeWorkspacePathForComparison(left);
   const normalizedRight = normalizeWorkspacePathForComparison(right);
   return (
