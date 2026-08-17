@@ -11,12 +11,12 @@ type ControlUiBuildMismatch = {
  * reload, but an older document must never become an RPC-capable session.
  *
  * The exemptions are deliberate, not gaps (ui/AGENTS.md "Gateway Coupling"):
- * configured roots serve a non-dist build by definition, "dev" is the ui:dev
- * sentinel, and cross-origin stays exempt because build ids embed the build
- * timestamp — version-identical source-built installs carry different ids, so
- * equality would reject matched pairings, and "reload" cannot remediate a
- * client the Gateway did not serve. Exempted skew fails visibly at the first
- * missing method instead.
+ * configured roots serve an independently built artifact the Gateway owns no
+ * matching build identity for, "dev" is the ui:dev sentinel, and cross-origin
+ * stays exempt because build ids embed the build timestamp — version-identical
+ * source-built installs carry different ids, so equality would reject matched
+ * pairings, and "reload" cannot remediate a client the Gateway did not serve.
+ * Exempted skew fails visibly at the first missing method instead.
  */
 export function resolveControlUiBuildMismatch(params: {
   clientId: string;
