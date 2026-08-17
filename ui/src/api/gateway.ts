@@ -290,9 +290,6 @@ export class GatewayBrowserClient {
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
-  // Older shipped Gateways used a closed client schema. Downgrade once per
-  // browser client; a document reload creates a fresh exact-identity attempt.
-  private clientBuildIdCompatibilityDisabled = false;
   // Close/stop advances this generation before another socket can make stale hello work look active.
   private recovery = { value: "", resolved: false, generation: 0 };
   private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
@@ -383,7 +380,6 @@ export class GatewayBrowserClient {
     this.scopeUpgradeBinding = null;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
-    this.clientBuildIdCompatibilityDisabled = false;
   }
 
   get connected() {
@@ -423,10 +419,12 @@ export class GatewayBrowserClient {
   ): Promise<ConnectPlan> {
     this.recovery = { ...this.recovery, generation, resolved: false };
     const role = CONTROL_UI_OPERATOR_ROLE;
+    // Gateway Coupling makes the connect handshake the only version-skew gate.
+    // A configured build identity must never be omitted or downgraded.
     const client: ConnectParams["client"] = {
       id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
       version: this.opts.clientVersion ?? "control-ui",
-      buildId: this.clientBuildIdCompatibilityDisabled ? undefined : this.opts.clientBuildId,
+      buildId: this.opts.clientBuildId,
       platform: this.opts.platform ?? navigator.platform ?? "web",
       mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
       instanceId: this.opts.instanceId,
@@ -585,15 +583,6 @@ export class GatewayBrowserClient {
   private handleConnectFailure(err: GatewayProtocolRequestError, plan: ConnectPlan) {
     const connectErrorCode =
       err instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(err) : null;
-    if (
-      !this.clientBuildIdCompatibilityDisabled &&
-      plan.params.client.buildId &&
-      /invalid connect params.*unexpected property.*buildid/iu.test(err.message)
-    ) {
-      this.clientBuildIdCompatibilityDisabled = true;
-      this.client.resetReconnectBackoff(250);
-      return { closeCode: CONNECT_FAILED_CLOSE_CODE, closeReason: "connect retry" };
-    }
     if (
       shouldRetryGatewayWithDeviceToken({
         retryBudgetUsed: this.deviceTokenRetryBudgetUsed,

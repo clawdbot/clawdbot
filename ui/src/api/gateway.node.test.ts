@@ -475,12 +475,14 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 
-  it("retries an old closed-schema Gateway once without client build identity", async () => {
+  it("surfaces build identity rejection and never retries without build identity", async () => {
     useNodeFakeTimers();
+    const onClose = vi.fn();
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
       clientBuildId: "build-a",
+      onClose,
     });
 
     const first = await startConnect(client);
@@ -495,21 +497,26 @@ describe("GatewayBrowserClient", () => {
       },
     });
     await expectSocketClosed(first.ws);
-    first.ws.emitClose(4008, "connect retry");
+    expect(first.ws.lastClose).toEqual({ code: 4008, reason: "connect failed" });
+    first.ws.emitClose(4008, "connect failed");
+    expect(onClose).toHaveBeenCalledWith({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "invalid connect params: at /client: unexpected property 'buildId'",
+        details: undefined,
+        retryable: false,
+        retryAfterMs: undefined,
+      },
+      willRetry: true,
+    });
 
     await vi.advanceTimersByTimeAsync(250);
+    expect(wsInstances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(550);
     const second = await continueConnect(getLatestWebSocket(), "nonce-2");
-    expect(second.connectFrame.params?.client.buildId).toBeUndefined();
-    second.ws.emitMessage({
-      type: "res",
-      id: second.connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [] },
-      },
-    });
+    expect(second.connectFrame.params?.client.buildId).toBe("build-a");
     expect(wsInstances).toHaveLength(2);
 
     client.stop();
