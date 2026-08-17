@@ -116,11 +116,17 @@ under `agents.defaults.mediaModels.image`:
 ```
 
 OpenClaw sends canonical OpenRouter image requests to the dedicated image API
-(`POST /api/v1/images`). Gemini image models additionally receive
-`aspect_ratio` and `resolution` hints, and image edits pass source images as
-`input_references`. Generated images come back as base64 (`b64_json`) with an
-optional `media_type`; when `media_type` is absent, OpenClaw sniffs the image
-format from the bytes.
+(`POST /api/v1/images`). Per-model controls are discovered live from
+`GET /api/v1/images/models` (`supported_parameters`): `aspect_ratio`,
+`resolution`, `quality`, and `background` are forwarded when the selected
+model advertises them, values the model does not support are dropped and
+reported back as ignored overrides, and newly launched OpenRouter image models
+pick up the right controls without an OpenClaw update. Discovery results are
+cached briefly; if the lookup fails, OpenClaw falls back to its static
+capability defaults and the generation proceeds. Image edits pass source
+images as `input_references`. Generated images come back as base64
+(`b64_json`) with an optional `media_type`; when `media_type` is absent,
+OpenClaw sniffs the image format from the bytes.
 
 Configured custom OpenRouter `baseUrl` destinations retain the existing
 chat-completions image route for compatibility with proxies that do not expose

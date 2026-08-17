@@ -83,6 +83,9 @@ describe("openrouter image generation provider", () => {
     expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
     expect(provider.capabilities.edit.enabled).toBe(true);
     expect(provider.capabilities.edit.maxInputImages).toBe(5);
+    // Live per-model discovery hook; the runtime overlays its result onto the
+    // static capabilities above for the selected model.
+    expect(provider.resolveModelCapabilities).toBeTypeOf("function");
   });
 
   it("preserves chat-completion image requests for configured custom bases", async () => {
@@ -347,6 +350,121 @@ describe("openrouter image generation provider", () => {
     const image = requireGeneratedImage(result, 0);
     expect(image.buffer.toString()).toBe("webp-one");
     expect(image.mimeType).toBe("image/webp");
+  });
+
+  // Regression guard: the dedicated /images body must not be gated by model
+  // family — pre-discovery code silently dropped these axes for non-Gemini models.
+  it("forwards aspect_ratio for non-Gemini models on the dedicated endpoint", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: Response.json({
+        data: [{ b64_json: Buffer.from("png-wide").toString("base64") }],
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await buildOpenRouterImageGenerationProvider().generateImage({
+      provider: "openrouter",
+      model: "openai/gpt-5.4-image-2",
+      prompt: "draw a wide banner",
+      aspectRatio: "16:9",
+      cfg: {},
+    });
+
+    const request = requireOpenRouterPostRequest();
+    expect(request.url).toBe("https://openrouter.ai/api/v1/images");
+    expect(request.body).toEqual({
+      model: "openai/gpt-5.4-image-2",
+      prompt: "draw a wide banner",
+      n: 1,
+      aspect_ratio: "16:9",
+    });
+  });
+
+  it("forwards sanitized quality and background on the dedicated endpoint", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: Response.json({
+        data: [{ b64_json: Buffer.from("png-hq").toString("base64") }],
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await buildOpenRouterImageGenerationProvider().generateImage({
+      provider: "openrouter",
+      model: "openai/gpt-5.4-image-2",
+      prompt: "draw a logo",
+      quality: "high",
+      background: "opaque",
+      cfg: {},
+    });
+
+    expect(requireOpenRouterPostRequest().body).toEqual({
+      model: "openai/gpt-5.4-image-2",
+      prompt: "draw a logo",
+      n: 1,
+      quality: "high",
+      background: "opaque",
+    });
+  });
+
+  it("forwards aspect_ratio and resolution for Gemini models on the dedicated endpoint", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: Response.json({
+        data: [{ b64_json: Buffer.from("png-gem").toString("base64") }],
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await buildOpenRouterImageGenerationProvider().generateImage({
+      provider: "openrouter",
+      model: "google/gemini-3.1-flash-image-preview",
+      prompt: "draw a wide banner",
+      aspectRatio: "16:9",
+      resolution: "2K",
+      cfg: {},
+    });
+
+    expect(requireOpenRouterPostRequest().body).toEqual({
+      model: "google/gemini-3.1-flash-image-preview",
+      prompt: "draw a wide banner",
+      n: 1,
+      aspect_ratio: "16:9",
+      resolution: "2K",
+    });
+  });
+
+  // Pin: the legacy custom-base path keeps its Google-specific image_config and
+  // Gemini gate — discovery does not apply off the canonical base (see §3.4).
+  it("keeps custom-base chat completions Gemini-gated with no geometry for other models", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: Response.json({
+        choices: [
+          {
+            message: {
+              images: [{ image_url: { url: "data:image/png;base64,cG5n" } }],
+            },
+          },
+        ],
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await buildOpenRouterImageGenerationProvider().generateImage({
+      provider: "openrouter",
+      model: "openai/gpt-5.4-image-2",
+      prompt: "draw a wide banner",
+      aspectRatio: "16:9",
+      quality: "high",
+      cfg: customOpenRouterConfig(),
+    });
+
+    const request = requireOpenRouterPostRequest();
+    expect(request.url).toBe("https://custom.openrouter.test/api/v1/chat/completions");
+    expect(request.body).toEqual({
+      model: "openai/gpt-5.4-image-2",
+      messages: [{ role: "user", content: "draw a wide banner" }],
+      modalities: ["image", "text"],
+      n: 1,
+    });
   });
 
   it.each(["google/gemini-3.1-flash-image-preview", "openai/gpt-5.4-image-2"])(

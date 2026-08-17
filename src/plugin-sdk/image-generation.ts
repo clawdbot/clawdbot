@@ -27,11 +27,13 @@ export {
 export type {
   GeneratedImageAsset,
   ImageGenerationBackground,
+  ImageGenerationModelCapabilitiesContext,
   ImageGenerationOpenAIBackground,
   ImageGenerationOpenAIModeration,
   ImageGenerationOpenAIOptions,
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
+  ImageGenerationProviderCapabilities,
   ImageGenerationProviderConfiguredContext,
   ImageGenerationProviderOptions,
   ImageGenerationQuality,

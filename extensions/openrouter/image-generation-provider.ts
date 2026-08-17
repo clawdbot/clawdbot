@@ -23,6 +23,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveOpenRouterImageModelCapabilities } from "./image-model-catalog.js";
 import { normalizeOpenRouterBaseUrl, OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
@@ -197,15 +198,28 @@ function buildDedicatedImageBody(
     prompt: req.prompt,
     n: count,
   };
-  if (isGeminiImageModel(model)) {
-    const aspectRatio = normalizeOptionalString(req.aspectRatio);
-    if (aspectRatio) {
-      body.aspect_ratio = aspectRatio;
-    }
-    const resolution = normalizeOptionalString(req.resolution);
-    if (resolution) {
-      body.resolution = resolution;
-    }
+  // On the dedicated /images endpoint these are normalized cross-provider axes.
+  // Capability gating happens upstream: the runtime overlays live-discovered
+  // per-model caps (image-model-catalog.ts) and strips unsupported values into
+  // ignoredOverrides, so anything still present here is forwarded as-is.
+  // quality/background only survive that sanitization when discovery declared
+  // them (static caps have no output block), so on the static-caps fallback
+  // path they are always reported ignored rather than sent.
+  const aspectRatio = normalizeOptionalString(req.aspectRatio);
+  if (aspectRatio) {
+    body.aspect_ratio = aspectRatio;
+  }
+  const resolution = normalizeOptionalString(req.resolution);
+  if (resolution) {
+    body.resolution = resolution;
+  }
+  const quality = normalizeOptionalString(req.quality);
+  if (quality) {
+    body.quality = quality;
+  }
+  const background = normalizeOptionalString(req.background);
+  if (background) {
+    body.background = background;
   }
   const inputReferences = buildInputReferences(req);
   if (inputReferences.length > 0) {
@@ -248,6 +262,10 @@ function buildMessageContent(
 }
 
 function buildImageConfig(req: ImageGenerationRequest, model: string): Record<string, string> {
+  // Legacy /chat/completions path for custom (non-canonical) bases only. The
+  // `image_config` body shape is Google-specific, and capability discovery is
+  // unavailable off the canonical base, so the Gemini predicate stays here even
+  // though the dedicated /images path above no longer gates by model family.
   if (!isGeminiImageModel(model)) {
     return {};
   }
@@ -270,6 +288,10 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
     defaultModel: DEFAULT_MODEL,
     models: [...SUPPORTED_MODELS],
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
+    resolveModelCapabilities: resolveOpenRouterImageModelCapabilities,
+    // Static caps below are the fallback when discovery is unavailable (custom
+    // base, outage, model missing from the catalog); discovered caps otherwise
+    // overlay them per model at request time.
     capabilities: {
       generate: {
         maxCount: MAX_IMAGE_RESULTS,

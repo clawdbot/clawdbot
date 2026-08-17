@@ -19,11 +19,16 @@ import {
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
+import { resolveProviderWithModelCapabilities } from "./capability-overlays.js";
 import { resolveImageGenerationOverrides } from "./normalization.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 import type { ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
+
+// Discovery hooks run on the request path; bound them well below generation timeouts
+// so a slow catalog lookup degrades to static caps instead of stalling the request.
+const MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS = 10_000;
 
 // Runtime dependency seam for tests and plugin-host callers. Production uses
 // the plugin registry and provider-env helpers by default.
@@ -32,7 +37,7 @@ type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
   listProviders?: typeof listImageGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
-  log?: Pick<typeof log, "warn">;
+  log?: Pick<typeof log, "debug" | "warn">;
 };
 
 export type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
@@ -102,9 +107,22 @@ export async function generateImage(
       continue;
     }
 
+    // Overlay discovered per-model caps before ANY capability gate — the
+    // maxInputImages check below and the geometry sanitizer both must see them.
+    const activeProvider = await resolveProviderWithModelCapabilities({
+      provider,
+      providerId: candidate.provider,
+      model: candidate.model,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+      timeoutMs: MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS,
+      log: logger,
+    });
+
     const inputImageCount = params.inputImages?.length ?? 0;
     const maxInputImages = resolveImageGenerationMaxInputImages({
-      provider,
+      provider: activeProvider,
       model: candidate.model,
     });
     if (maxInputImages !== undefined && inputImageCount > maxInputImages) {
@@ -122,19 +140,19 @@ export async function generateImage(
     try {
       const timeoutMs = resolveMediaProviderRequestTimeoutMs({
         timeoutMs: requestedTimeoutMs,
-        providerDefaultTimeoutMs: provider.defaultTimeoutMs,
+        providerDefaultTimeoutMs: activeProvider.defaultTimeoutMs,
       });
       const modelResolutions =
-        provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
+        activeProvider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
       const modeCapabilities = params.inputImages?.length
-        ? provider.capabilities.edit
-        : provider.capabilities.generate;
+        ? activeProvider.capabilities.edit
+        : activeProvider.capabilities.generate;
       const inferredResolution =
         modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
           ? undefined
           : params.inferredResolution;
       const sanitized = resolveImageGenerationOverrides({
-        provider,
+        provider: activeProvider,
         model: candidate.model,
         size: params.size,
         aspectRatio: params.aspectRatio,
@@ -146,7 +164,7 @@ export async function generateImage(
       });
       // Providers receive only supported overrides. Ignored/normalized values
       // are returned to callers so user-facing replies can explain adjustments.
-      const result: ImageGenerationResult = await provider.generateImage({
+      const result: ImageGenerationResult = await activeProvider.generateImage({
         provider: candidate.provider,
         model: candidate.model,
         prompt: params.prompt,
