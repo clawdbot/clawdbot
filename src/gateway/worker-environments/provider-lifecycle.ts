@@ -7,6 +7,7 @@ import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.clou
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
+  type WorkerExecutionMode,
   type WorkerLease,
   type WorkerNodeEnrollment,
   type WorkerProfile,
@@ -165,6 +166,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const prepareInstallation = (record: WorkerEnvironmentRecord) =>
     options.prepareInstallation(installFor(record));
 
+  const providerExecutionMode = (provider: WorkerProvider): WorkerExecutionMode | undefined => {
+    const modes = provider.supportedExecutionModes;
+    return modes?.length === 1 ? modes[0] : undefined;
+  };
+
   const finishProvenDestroy = async (record: WorkerEnvironmentRecord) => {
     const destroying = beginDestroy(record);
     if (destroying.nodeSetupId) {
@@ -187,15 +193,21 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     leaseId: string,
     provider: WorkerProvider,
     error: unknown,
+    failureCode: "bootstrap_failure" | "invalid_profile" = "bootstrap_failure",
+    leasePatch?: TransitionPatch,
   ): Promise<never> => {
     const detail = boundedError(error);
+    const failureLabel =
+      failureCode === "invalid_profile"
+        ? "Worker provider returned an incompatible lease"
+        : "Worker bootstrap failed";
     const requested = store.requestDestroy({
       environmentId: record.environmentId,
       state: record.state,
       terminalState: "failed",
       lastError: detail,
     });
-    const draining = move(requested, "draining", { lastError: detail });
+    const draining = move(requested, "draining", { ...leasePatch, lastError: detail });
     await tunnels?.stop(record.environmentId);
     const destroying = move(draining, "destroying", { lastError: detail });
     try {
@@ -209,13 +221,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         destroying,
         new Error(`${detail}; provider teardown pending: ${boundedError(cleanupError)}`),
       );
-      throw serviceError(
-        "bootstrap_failure",
-        `Worker bootstrap failed; teardown is pending: ${detail}`,
-      );
+      throw serviceError(failureCode, `${failureLabel}; teardown is pending: ${detail}`);
     }
     await finishProvenDestroy(destroying);
-    throw serviceError("bootstrap_failure", `Worker bootstrap failed: ${detail}`);
+    throw serviceError(failureCode, `${failureLabel}: ${detail}`);
   };
 
   const finishNodeProvisioning = createWorkerNodeProvisioning({
@@ -317,6 +326,26 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       sharedHost: lease.sharedHost === true,
       desktop: lease.desktop ?? null,
     };
+    const executionMode = providerExecutionMode(provider);
+    const leaseMode: WorkerExecutionMode = lease.node ? "worker-turn" : "remote-exec";
+    if (executionMode && executionMode !== leaseMode) {
+      const leasePatch = {
+        ...patch,
+        ...(lease.node
+          ? { nodeDeviceId: lease.node.deviceId, sshEndpoint: null }
+          : { nodeDeviceId: null, sshEndpoint: lease.ssh }),
+      };
+      return await failBootstrap(
+        record,
+        lease.leaseId,
+        provider,
+        new WorkerProviderError(
+          `${executionMode} providers must return a ${executionMode === "worker-turn" ? "node" : "SSH"} lease`,
+        ),
+        "invalid_profile",
+        leasePatch,
+      );
+    }
     if (lease.node) {
       return await finishNodeProvisioning(record, lease, provider, patch);
     }
