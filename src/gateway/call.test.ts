@@ -935,6 +935,12 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
     expect(lastClientOptions?.scopes).toBeUndefined();
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastClientOptions?.preparedDeviceAuth).toEqual({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read", "operator.pairing"],
+      updatedAtMs: 123,
+    });
   });
 
   it("keeps explicit credentials and diagnostic scopes ahead of stored device auth", async () => {

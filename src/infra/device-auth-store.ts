@@ -24,6 +24,12 @@ type DeviceAuthDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "device_auth_tokens" | "gateway_origin_device_tokens"
 >;
+type DeviceAuthRow = {
+  token: string;
+  role: string;
+  scopes_json: string;
+  updated_at_ms: number;
+};
 // The Gateway lock makes state-directory contents process-stable. Cache both
 // outcomes to keep reconnects free of freshness polling; Doctor invalidates
 // the entry after its exclusive legacy import removes the retired file.
@@ -78,12 +84,7 @@ export function resetLegacyDeviceAuthPresenceCache(env: NodeJS.ProcessEnv): void
   legacyPresenceCache.delete(resolveStateDir(env));
 }
 
-function fromRow(row: {
-  token: string;
-  role: string;
-  scopes_json: string;
-  updated_at_ms: number;
-}): DeviceAuthEntry | null {
+function fromRow(row: DeviceAuthRow): DeviceAuthEntry | null {
   try {
     const scopes = JSON.parse(row.scopes_json) as unknown;
     if (!Array.isArray(scopes)) {
@@ -98,6 +99,37 @@ function fromRow(row: {
   } catch {
     return null;
   }
+}
+
+function readDeviceAuthTokenFromDatabase(
+  db: DatabaseSync,
+  params: { deviceId: string; role: string },
+): DeviceAuthEntry | null {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<DeviceAuthDatabase>(db)
+      .selectFrom("device_auth_tokens")
+      .select(["token", "role", "scopes_json", "updated_at_ms"])
+      .where("device_id", "=", params.deviceId)
+      .where("role", "=", normalizeDeviceAuthRole(params.role)),
+  );
+  return row ? fromRow(row) : null;
+}
+
+function readOriginDeviceTokenFromDatabase(
+  db: DatabaseSync,
+  params: { gatewayScope: string; deviceId: string; role: string },
+): DeviceAuthEntry | null {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<DeviceAuthDatabase>(db)
+      .selectFrom("gateway_origin_device_tokens")
+      .select(["token", "role", "scopes_json", "updated_at_ms"])
+      .where("gateway_scope", "=", params.gatewayScope)
+      .where("device_id", "=", params.deviceId)
+      .where("role", "=", normalizeDeviceAuthRole(params.role)),
+  );
+  return row ? fromRow(row) : null;
 }
 
 function createDeviceAuthEntry(params: {
@@ -121,15 +153,7 @@ export function loadDeviceAuthToken(params: {
 }): DeviceAuthEntry | null {
   assertNoLegacyDeviceAuth(params.env);
   const { db } = openOpenClawStateDatabase({ env: params.env });
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<DeviceAuthDatabase>(db)
-      .selectFrom("device_auth_tokens")
-      .select(["token", "role", "scopes_json", "updated_at_ms"])
-      .where("device_id", "=", params.deviceId)
-      .where("role", "=", normalizeDeviceAuthRole(params.role)),
-  );
-  return row ? fromRow(row) : null;
+  return readDeviceAuthTokenFromDatabase(db, params);
 }
 
 /** Load one cached device-auth token without creating or joining writable state. */
@@ -142,15 +166,7 @@ export function loadDeviceAuthTokenReadOnly(params: {
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
       ({ db }) => {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<DeviceAuthDatabase>(db)
-            .selectFrom("device_auth_tokens")
-            .select(["token", "role", "scopes_json", "updated_at_ms"])
-            .where("device_id", "=", params.deviceId)
-            .where("role", "=", normalizeDeviceAuthRole(params.role)),
-        );
-        return row ? fromRow(row) : null;
+        return readDeviceAuthTokenFromDatabase(db, params);
       },
       { env: params.env },
     ) ?? null
@@ -244,16 +260,7 @@ export function loadOriginDeviceToken(params: {
 }): DeviceAuthEntry | null {
   ensureOriginDeviceAuthSchema(params.env);
   const { db } = openOpenClawStateDatabase({ env: params.env });
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<DeviceAuthDatabase>(db)
-      .selectFrom("gateway_origin_device_tokens")
-      .select(["token", "role", "scopes_json", "updated_at_ms"])
-      .where("gateway_scope", "=", params.gatewayScope)
-      .where("device_id", "=", params.deviceId)
-      .where("role", "=", normalizeDeviceAuthRole(params.role)),
-  );
-  return row ? fromRow(row) : null;
+  return readOriginDeviceTokenFromDatabase(db, params);
 }
 
 /** Load one origin-bound device token without schema creation or writable state access. */
@@ -267,16 +274,7 @@ export function loadOriginDeviceTokenReadOnly(params: {
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
       ({ db }) => {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<DeviceAuthDatabase>(db)
-            .selectFrom("gateway_origin_device_tokens")
-            .select(["token", "role", "scopes_json", "updated_at_ms"])
-            .where("gateway_scope", "=", params.gatewayScope)
-            .where("device_id", "=", params.deviceId)
-            .where("role", "=", normalizeDeviceAuthRole(params.role)),
-        );
-        return row ? fromRow(row) : null;
+        return readOriginDeviceTokenFromDatabase(db, params);
       },
       { env: params.env },
     ) ?? null

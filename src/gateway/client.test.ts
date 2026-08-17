@@ -1965,6 +1965,29 @@ describe("GatewayClient connect auth payload", () => {
     second.stop();
   });
 
+  it("uses prepared device auth without rereading the token store", () => {
+    const client = createClientWithIdentity("device-1", () => {}, {
+      preparedDeviceAuth: {
+        token: "prepared-device-token",
+        role: "operator",
+        scopes: ["operator.read"],
+        updatedAtMs: 123,
+      },
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "prepared-device-token",
+      deviceToken: "prepared-device-token",
+    });
+    expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
+    client.stop();
+  });
+
   it("keeps read-only origin auth loads and hello tokens off writable host callbacks", async () => {
     loadOriginDeviceTokenReadOnlyMock.mockReturnValue({
       token: "stored-origin-token",
