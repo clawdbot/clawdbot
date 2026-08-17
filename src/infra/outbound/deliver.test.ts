@@ -2464,7 +2464,7 @@ describe("deliverOutboundPayloads", () => {
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
     const sendMatrix = vi.fn().mockResolvedValue({
       messageId: "platform-message-1",
-      roomId: "!room:example",
+      target: { kind: "room", id: "!room:example" },
     });
 
     try {
