@@ -85,7 +85,18 @@ async function persistCaptureResult(params: {
           } satisfies Partial<InternalSessionEntry>);
     },
     { preserveActivity: true, skipMaintenance: true },
-  );
+  ).catch((error: unknown) => {
+    if (isSessionWorkStartInvalidatedError(error)) {
+      throw error;
+    }
+    logVerbose(
+      `session diff baseline settlement failed for ${params.sessionKey}: ${formatErrorMessage(error)}`,
+    );
+    // The durable pending claim stays authoritative until settlement can persist.
+    throw new SessionWorkStartInvalidatedError(
+      `Session "${params.sessionKey}" could not persist its diff baseline before starting work. Retry.`,
+    );
+  });
   const authoritative = requireAuthoritativeGeneration({
     entry: persisted,
     expectedLifecycleRevision: params.expectedLifecycleRevision,

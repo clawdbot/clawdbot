@@ -1,7 +1,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { isSessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
+import {
+  isSessionWorkStartInvalidatedError,
+  SessionWorkStartInvalidatedError,
+} from "../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -13,10 +16,22 @@ import { createDeferredCore } from "../shared/deferred.js";
 
 type CaptureSessionDiffBaseline =
   (typeof import("./session-diff.js"))["captureSessionDiffBaseline"];
+type PatchSessionEntryCore =
+  (typeof import("../config/sessions/session-accessor.js"))["patchSessionEntryCore"];
 
 const captureMocks = vi.hoisted(() => ({
   capture: vi.fn<CaptureSessionDiffBaseline>(),
 }));
+const persistenceMocks = vi.hoisted(() => ({
+  actualPatch: undefined as PatchSessionEntryCore | undefined,
+  patch: vi.fn<PatchSessionEntryCore>(),
+}));
+
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  persistenceMocks.actualPatch = actual.patchSessionEntryCore;
+  return { ...actual, patchSessionEntryCore: persistenceMocks.patch };
+});
 
 vi.mock("./session-diff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-diff.js")>()),
@@ -62,6 +77,13 @@ function expectInvalidated(result: PromiseSettledResult<unknown>, message: RegEx
 describe("ensureSessionDiffBaseline", () => {
   beforeEach(() => {
     captureMocks.capture.mockReset();
+    persistenceMocks.patch.mockReset();
+    persistenceMocks.patch.mockImplementation((...args) => {
+      if (!persistenceMocks.actualPatch) {
+        throw new Error("missing actual session entry patcher");
+      }
+      return persistenceMocks.actualPatch(...args);
+    });
   });
 
   it("settles a Gateway-precreated pending claim for an existing session", async () => {
@@ -151,6 +173,69 @@ describe("ensureSessionDiffBaseline", () => {
       }),
     ).resolves.toBe(unavailable);
     expect(captureMocks.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["captured baseline", false],
+    ["terminal unavailable", true],
+  ] as const)("fails closed when persisting %s fails", async (_label, captureFails) => {
+    const sessionId = `settlement-failure-${captureFails ? "unavailable" : "baseline"}`;
+    const claim = createSessionDiffBaselineCaptureClaim();
+    const entry: InternalSessionEntry = {
+      createdVia: "operator",
+      sessionId,
+      sessionDiffBaselineCapture: claim,
+      updatedAt: Date.now(),
+    };
+    const target = await seedEntry({ entry });
+    if (captureFails) {
+      captureMocks.capture.mockRejectedValueOnce(new Error("capture failed"));
+    } else {
+      captureMocks.capture.mockResolvedValueOnce(baseline(sessionId));
+    }
+    persistenceMocks.patch.mockRejectedValueOnce(new Error("settlement write failed"));
+
+    const [settled] = await Promise.allSettled([
+      ensureSessionDiffBaseline({
+        ...target,
+        cwd: "/workspace",
+        isNewSession: false,
+      }),
+    ]);
+    if (!settled) {
+      throw new Error("expected capture settlement");
+    }
+    expectInvalidated(settled, /could not persist its diff baseline/i);
+    expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
+      sessionDiffBaselineCapture: claim,
+    });
+  });
+
+  it("preserves an existing work-start invalidation from settlement persistence", async () => {
+    const sessionId = "settlement-invalidation";
+    const entry: InternalSessionEntry = {
+      createdVia: "operator",
+      sessionId,
+      sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
+      updatedAt: Date.now(),
+    };
+    const target = await seedEntry({ entry });
+    const invalidation = new SessionWorkStartInvalidatedError(
+      "session reset while persisting baseline",
+    );
+    captureMocks.capture.mockResolvedValueOnce(baseline(sessionId));
+    persistenceMocks.patch.mockRejectedValueOnce(invalidation);
+
+    await expect(
+      ensureSessionDiffBaseline({
+        ...target,
+        cwd: "/workspace",
+        isNewSession: false,
+      }),
+    ).rejects.toBe(invalidation);
+    expect(loadInternal(target.sessionKey, target.storePath)).toMatchObject({
+      sessionDiffBaselineCapture: entry.sessionDiffBaselineCapture,
+    });
   });
 
   it("does not retroactively capture a legacy existing session", async () => {

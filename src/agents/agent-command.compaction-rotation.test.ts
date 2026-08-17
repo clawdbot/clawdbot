@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { SessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -346,14 +347,28 @@ const COMPACTION_ERROR =
   "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.";
 
 describe("agentCommand compaction transcript rotation", () => {
-  it("settles a precreated baseline claim before embedded execution", async () => {
-    const sessionId = "precreated-agent-command",
+  it.each([
+    ["settles a precreated baseline claim before embedded execution", false],
+    ["does not execute after baseline work-start invalidation", true],
+  ] as const)("%s", async (_name, invalidated) => {
+    const sessionId = invalidated ? "invalidated-agent-command" : "precreated-agent-command",
       sessionKey = `agent:main:explicit:${sessionId}`;
     await replaceSessionEntry({ sessionKey, storePath: requireStorePath() }, {
       sessionId,
       sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
       updatedAt: Date.now(),
     } as InternalSessionEntry);
+    if (invalidated) {
+      const error = new SessionWorkStartInvalidatedError(
+        "session changed during baseline settlement",
+      );
+      state.captureSessionDiffBaselineMock.mockRejectedValueOnce(error);
+      await expect(
+        agentCommand({ message: "must not execute", sessionId, sessionKey }),
+      ).rejects.toBe(error);
+      expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+      return;
+    }
     state.captureSessionDiffBaselineMock.mockResolvedValueOnce({
       version: 1,
       sessionId,
@@ -369,7 +384,6 @@ describe("agentCommand compaction transcript rotation", () => {
     });
 
     await agentCommand({ message: "write after capture", sessionId, sessionKey });
-
     expect(state.captureSessionDiffBaselineMock).toHaveBeenCalledOnce();
   });
 
