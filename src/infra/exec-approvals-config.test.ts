@@ -179,7 +179,7 @@ describe("persisted exec approvals schema", () => {
     const parsed = tryParsePersistedExecApprovals(
       JSON.stringify({
         version: 1,
-        agents: { main: { allowlist: ["ls", { pattern: "cat", source: "legacy" }] } },
+        agents: { main: { allowlist: ["  ls  ", { pattern: "cat", source: "legacy" }] } },
       }),
     );
     expect(parsed?.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });

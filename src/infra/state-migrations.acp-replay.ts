@@ -6,6 +6,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -63,7 +64,10 @@ type AcpReplayMigrationDatabase = Pick<
   "acp_replay_events" | "acp_replay_sessions"
 >;
 
-const legacyAcpReplayUpdateSchema = z.looseObject({ sessionUpdate: z.string() });
+const legacyAcpReplayRecordSchema = z.custom<Record<string, unknown>>(isRecord);
+const legacyAcpReplayUpdateSchema = legacyAcpReplayRecordSchema.refine(
+  (update) => typeof update.sessionUpdate === "string",
+);
 const legacyAcpReplayEventSchema = z.looseObject({
   seq: z
     .number()
@@ -90,7 +94,7 @@ const legacyAcpReplaySessionSchema = z.looseObject({
 });
 const legacyAcpReplayLedgerSchema = z.looseObject({
   version: z.literal(LEGACY_LEDGER_VERSION),
-  sessions: z.record(z.string(), z.unknown()),
+  sessions: legacyAcpReplayRecordSchema,
 });
 
 function resolveLegacyAcpReplayLedgerPath(stateDir: string): string {

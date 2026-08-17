@@ -45,7 +45,7 @@ const optionalCronTokenCountSchema = z
   .optional()
   .transform((value) => asSafeIntegerInRange(value, { min: 0 }));
 const cronUsageSchema = z
-  .looseObject({
+  .object({
     input_tokens: optionalCronTokenCountSchema,
     output_tokens: optionalCronTokenCountSchema,
     total_tokens: optionalCronTokenCountSchema,
