@@ -579,7 +579,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     codingRoot,
     containmentRoot,
     includeBaseCodingTools,
-    includeShellTools,
+    shellTools: includeShellTools ? "full" : "disabled",
     workspaceOnly,
     readOnly,
     sandbox,

@@ -147,8 +147,15 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     onMessagePersisted: transcriptRuntime.onMessagePersisted,
   });
 
+  // Exec security/ask are host-relative; substituting a host reinterprets the authority.
+  // Deny unavailable worker exec here or sandbox grants become Gateway over-grants.
+  const execUnavailable =
+    params.execAuthority === undefined || params.execAuthority.host === "sandbox";
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
+  if (execUnavailable) {
+    allowedToolNameSet.delete("exec");
+    allowedToolNameSet.delete("process");
+  }
   const permissionToolPolicy = params.permissionMode
     ? resolveSessionPermissionCoreToolPolicy({ mode: params.permissionMode })
     : undefined;
@@ -158,6 +165,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   const activeToolNames = WORKER_TOOL_NAMES.filter(
     (name) => allowedToolNameSet.has(name) && !omittedToolNames?.has(name),
   );
+  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const headlessApprovalText = params.permissionMode
     ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
     : undefined;
@@ -172,7 +180,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     codingRoot: params.cwd,
     containmentRoot: params.workerContainmentRoot,
     includeBaseCodingTools: true,
-    includeShellTools: true,
+    shellTools: execUnavailable ? "patch-only" : "full",
     workspaceOnly: permissionToolPolicy?.workspaceOnly ?? false,
     readOnly: permissionToolPolicy?.readOnly ?? false,
     modelContextWindowTokens: model.contextWindow,
@@ -187,8 +195,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     execDefaults: {
       bypassHostApprovalFloors: permissionToolPolicy?.bypassHostApprovalFloors,
       ...execAuthority,
-      // The worker is already isolated; a nested sandbox runtime does not exist here.
-      host: execAuthority.host === "sandbox" ? "gateway" : execAuthority.host,
       mode: permissionToolPolicy?.execMode ?? "full",
       // Safe clamp v1 keeps allowlist hits local but denies misses before review.
       // Worker LLM review and interactive approval RPC remain a named follow-up.
@@ -255,7 +261,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       );
       const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
       for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
-        if (omittedToolNames?.has(toolName)) {
+        if (
+          omittedToolNames?.has(toolName) ||
+          (execUnavailable && (toolName === "exec" || toolName === "process"))
+        ) {
           continue;
         }
         if (!discoveredToolNames.has(toolName)) {

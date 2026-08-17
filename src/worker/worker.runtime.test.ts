@@ -1997,24 +1997,41 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests).toHaveLength(2);
   });
 
-  it("honors reachable full sandbox-host authority in the isolated worker", async () => {
-    const { workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
-    launch.assignment.toolAuthority = {
-      allowedToolNames: ["exec", "process"],
-      exec: { host: "sandbox", security: "full", ask: "off" },
-    };
+  it("fails closed resolved sandbox-host authority at worker launch", async () => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["text"] });
+    launch.assignment.toolAuthority = resolveWorkerToolAuthority({
+      modelRef: MODEL_REF,
+      turn: restrictedTurn(workspaceDir, { host: "sandbox", mode: "full" }),
+    });
     const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
 
+    expect(admitted.assignment.toolAuthority.allowedToolNames).toEqual(["exec", "process"]);
     expect(admitted.assignment.toolAuthority.exec).toEqual({
       host: "sandbox",
       security: "full",
       ask: "off",
     });
     await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
-    await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
-      "worker-local",
-    );
+    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? []).toEqual([]);
   });
+
+  it.each(["gateway", "node"] as const)(
+    "leaves resolved full %s-host authority available at worker launch",
+    async (host) => {
+      const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["text"] });
+      launch.assignment.toolAuthority = resolveWorkerToolAuthority({
+        modelRef: MODEL_REF,
+        turn: restrictedTurn(workspaceDir, { host, mode: "full" }),
+      });
+      const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
+
+      await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
+      expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
+        "exec",
+        "process",
+      ]);
+    },
+  );
 
   it("retains explicit full gateway-host execution", async () => {
     const { workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
