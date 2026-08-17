@@ -1140,6 +1140,34 @@ describe("mac elevation host command contract", () => {
   );
 
   it.skipIf(process.platform !== "darwin")(
+    "never deletes a pending install transaction owned by another invocation",
+    () => {
+      const harness = createInstallRollbackHarness();
+      const pendingPath = path.join(harness.stateDir, "elevation-host-install.pending.json");
+      writeFileSync(pendingPath, "other-install-transaction\n", "utf8");
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("incomplete elevation install transaction exists");
+      expect(readFileSync(pendingPath, "utf8")).toBe("other-install-transaction\n");
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
     "rejects an explicit config path that differs from the source owner's default",
     () => {
       const harness = createMigrationPlanHarness();

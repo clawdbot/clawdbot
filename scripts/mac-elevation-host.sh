@@ -86,6 +86,7 @@ INSTALL_TRANSACTION_ID=""
 FINAL_RECEIPT_PATH=""
 PENDING_RECEIPT_PATH=""
 RECOVERY_PENDING_INSTALL=0
+PENDING_RECEIPT_CREATED=0
 EXPECTED_NODE_ID=""
 EXPECTED_NODE_PROFILE=""
 BEFORE_NODE_CONNECTED_AT=0
@@ -247,7 +248,7 @@ cleanup() {
     fi
   fi
   if [[ "$CUTOVER_COMMITTED" != "1" && "$CUTOVER_ACTIVE" != "1" ]]; then
-    if [[ "$COMMAND" == "install" ]]; then
+    if [[ "$COMMAND" == "install" && "$PENDING_RECEIPT_CREATED" == "1" ]]; then
       remove_pending_receipt ||
         printf 'ERROR: could not remove the recovered pending install receipt\n' >&2
     fi
@@ -830,7 +831,8 @@ run_authenticated_elevation_helper() {
 }
 
 rename_app_exclusively() {
-  run_authenticated_elevation_helper --elevation-rename-exclusive "$1" "$2"
+  run_authenticated_elevation_helper --elevation-rename-exclusive "$1" "$2" || return 1
+  fsync_parent "$2"
 }
 
 preserve_current_app_for_recovery() {
@@ -1545,6 +1547,10 @@ fsync_parent() {
   run_authenticated_elevation_helper --elevation-sync-directory "$(dirname "$1")"
 }
 
+fsync_tree() {
+  run_authenticated_elevation_helper --elevation-sync-tree "$1"
+}
+
 write_install_receipt() {
   local target="$1" transaction_state="$2" source_commit="$3" peekaboo_commit="$4" archive_sha="$5"
   local arm64_cdhash="$6" x86_64_cdhash="$7"
@@ -1602,7 +1608,12 @@ write_install_receipt() {
     rm -f "$tmp"
     fail 'authenticated elevation helper could not sync the install receipt'
   fi
-  if ! mv "$tmp" "$target"; then
+  if [[ "$transaction_state" == "installing" ]]; then
+    if ! rename_app_exclusively "$tmp" "$target"; then
+      rm -f "$tmp"
+      fail 'could not exclusively publish the prepared install receipt'
+    fi
+  elif ! mv "$tmp" "$target"; then
     rm -f "$tmp"
     fail 'could not atomically publish the install receipt'
   fi
@@ -1615,8 +1626,12 @@ write_receipt() {
 }
 
 remove_pending_receipt() {
+  local expected_transaction_id="${1:-$INSTALL_TRANSACTION_ID}"
   [[ -e "$PENDING_RECEIPT_PATH" || -L "$PENDING_RECEIPT_PATH" ]] || return 0
   [[ -f "$PENDING_RECEIPT_PATH" && ! -L "$PENDING_RECEIPT_PATH" ]] || return 1
+  [[ "$expected_transaction_id" =~ ^[0-9A-F-]{36}$ &&
+    "$(jq -r '.transactionId // empty' "$PENDING_RECEIPT_PATH" 2>/dev/null)" == "$expected_transaction_id" ]] ||
+    return 1
   rm "$PENDING_RECEIPT_PATH" || return 1
   fsync_parent "$PENDING_RECEIPT_PATH"
 }
@@ -1962,6 +1977,24 @@ install_host() {
       fail 'migration LaunchAgent custody path is already occupied'
     MIGRATION_CUSTODY_IDENTITY="$MIGRATION_PLIST_IDENTITY"
   fi
+  local rollback_payload
+  for rollback_payload in "${PREMUTATION_BACKUPS[@]:-}"; do
+    [[ -n "$rollback_payload" ]] || continue
+    fsync_file_and_parent "$rollback_payload" ||
+      fail 'authenticated elevation helper could not sync a rollback payload'
+  done
+  fsync_tree "$STAGED_INSTALL_APP_PATH" ||
+    fail 'authenticated elevation helper could not sync the staged install app'
+  fsync_parent "$STAGED_INSTALL_APP_PATH" ||
+    fail 'authenticated elevation helper could not sync the staged app namespace'
+  if [[ -e "$APP_PATH" || -L "$APP_PATH" ]]; then
+    fsync_parent "$APP_PATH" ||
+      fail 'authenticated elevation helper could not sync the installed app namespace'
+  fi
+  if [[ -n "$MIGRATE_LAUNCH_AGENT" ]]; then
+    fsync_parent "$MIGRATE_LAUNCH_AGENT" ||
+      fail 'authenticated elevation helper could not sync the migration namespace'
+  fi
   write_install_receipt \
     "$PENDING_RECEIPT_PATH" \
     installing \
@@ -1970,6 +2003,7 @@ install_host() {
     "$planned_archive_sha" \
     "$planned_arm64_cdhash" \
     "$planned_x86_64_cdhash"
+  PENDING_RECEIPT_CREATED=1
   CUTOVER_ACTIVE=1
   if [[ -n "$MIGRATE_LAUNCH_AGENT" ]]; then
     take_migration_plist_custody "$MIGRATE_LAUNCH_AGENT" "$MIGRATION_PLIST_SHA"
@@ -2054,6 +2088,8 @@ install_host() {
   STAGED_APP_CONTAINER=""
   STAGED_INSTALL_APP_PATH=""
   mv "$plist_tmp" "$PLIST_PATH"
+  fsync_file_and_parent "$PLIST_PATH" ||
+    fail 'authenticated elevation helper could not sync the elevation LaunchAgent'
 
   if ! launchctl bootstrap "$launch_domain" "$PLIST_PATH" ||
      ! launchctl kickstart -k "$job_domain"
@@ -2521,7 +2557,8 @@ select_recovery_receipt() {
     -f "$FINAL_RECEIPT_PATH" && ! -L "$FINAL_RECEIPT_PATH" ]] &&
     (verify_install_receipt 1 && require_committed_install_receipt) >/dev/null 2>&1
   then
-    remove_pending_receipt || fail 'could not remove a completed pending install receipt'
+    remove_pending_receipt "$pending_transaction_id" ||
+      fail 'could not remove a completed pending install receipt'
     RECEIPT_PATH="$FINAL_RECEIPT_PATH"
     return 0
   fi

@@ -49,6 +49,22 @@ struct AppLaunchRuntimePlanTests {
             arguments: ["OpenClaw", ElevationFilesystemSync.directoryArgument, root.path],
             launchApplication: { applicationConstructed = true }))
         #expect(directoryStatus == 0)
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: false)
+        try Data("payload\n".utf8).write(to: nested.appendingPathComponent("payload.txt"))
+        let treeStatus = try #require(OpenClawProcessEntrypoint.run(
+            arguments: ["OpenClaw", ElevationFilesystemSync.treeArgument, root.path],
+            launchApplication: { applicationConstructed = true }))
+        #expect(treeStatus == 0)
+        let unreadable = root.appendingPathComponent("unreadable", isDirectory: true)
+        try FileManager.default.createDirectory(at: unreadable, withIntermediateDirectories: false)
+        try Data("hidden\n".utf8).write(to: unreadable.appendingPathComponent("hidden.txt"))
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: unreadable.path)
+        let incompleteTreeStatus = try #require(OpenClawProcessEntrypoint.run(
+            arguments: ["OpenClaw", ElevationFilesystemSync.treeArgument, root.path],
+            launchApplication: { applicationConstructed = true }))
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: unreadable.path)
+        #expect(incompleteTreeStatus != 0)
         let symlink = root.appendingPathComponent("receipt-link.json")
         try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: receipt)
         let symlinkStatus = try #require(OpenClawProcessEntrypoint.run(
