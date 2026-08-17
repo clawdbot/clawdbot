@@ -7,6 +7,50 @@ import type {
   ReplyDispatchReceipt,
   ReplyDispatchSettledCounts,
 } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import type { RecordInboundSession } from "../session.types.js";
+import type { ChannelTurnResult } from "./types.js";
+
+export function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
+  return {
+    Body: "hello",
+    RawBody: "hello",
+    CommandBody: "hello",
+    From: "sender",
+    To: "target",
+    SessionKey: "agent:main:test:peer",
+    Provider: "test",
+    Surface: "test",
+    ...overrides,
+  } as FinalizedMsgContext;
+}
+
+export function createRecordInboundSession(events: string[] = []): RecordInboundSession {
+  return vi.fn(async () => {
+    events.push("record");
+  }) as unknown as RecordInboundSession;
+}
+
+export function createDurableSendResult(messageIds: string[]) {
+  return {
+    status: "sent",
+    results: messageIds.map((messageId) => ({ messageId })),
+    receipt: {
+      platformMessageIds: messageIds,
+      parts: [],
+      sentAt: 1,
+    },
+  };
+}
+
+export function expectDispatched<TDispatchResult>(
+  result: ChannelTurnResult<TDispatchResult>,
+): asserts result is Extract<ChannelTurnResult<TDispatchResult>, { dispatched: true }> {
+  expect(result.dispatched).toBe(true);
+  if (!result.dispatched) {
+    throw new Error("expected dispatch");
+  }
+}
 
 export function createDispatch(
   events: string[] = [],

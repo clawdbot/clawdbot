@@ -7,12 +7,10 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatchReceipt } from "../../auto-reply/reply/reply-dispatcher.types.js";
-import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
-import type { RecordInboundSession } from "../session.types.js";
 import {
   readAgentRunTerminalOutcome,
   recordAgentRunTerminalOutcome,
@@ -20,12 +18,16 @@ import {
 import { hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch } from "./dispatch-result.js";
 import { dispatchAssembledChannelTurn, dispatchRoutedChannelTurn } from "./lifecycle.js";
 import {
+  createCtx,
   createDispatch,
   createDispatcherBackedDispatch,
+  createDurableSendResult,
+  createRecordInboundSession,
   createReplyDispatchReceipt,
+  expectDispatched,
   expectNonVisibleFinalReceipt,
 } from "./run-channel-turn.delivery.test-helpers.js";
-import type { ChannelDeliveryInfo, ChannelTurnResult } from "./types.js";
+import type { ChannelDeliveryInfo } from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
@@ -103,26 +105,6 @@ vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) =>
 
 const cfg = {} as OpenClawConfig;
 
-function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
-  return {
-    Body: "hello",
-    RawBody: "hello",
-    CommandBody: "hello",
-    From: "sender",
-    To: "target",
-    SessionKey: "agent:main:test:peer",
-    Provider: "test",
-    Surface: "test",
-    ...overrides,
-  } as FinalizedMsgContext;
-}
-
-function createRecordInboundSession(events: string[] = []): RecordInboundSession {
-  return vi.fn(async () => {
-    events.push("record");
-  }) as unknown as RecordInboundSession;
-}
-
 function dispatchTestAssembledTurn(
   overrides: Omit<
     Parameters<typeof dispatchAssembledChannelTurn>[0],
@@ -135,18 +117,6 @@ function dispatchTestAssembledTurn(
     storePath: "/tmp/sessions.json",
     ...overrides,
   });
-}
-
-function createDurableSendResult(messageIds: string[]) {
-  return {
-    status: "sent",
-    results: messageIds.map((messageId) => ({ messageId })),
-    receipt: {
-      platformMessageIds: messageIds,
-      parts: [],
-      sentAt: 1,
-    },
-  };
 }
 
 type DurableSendRequest = {
@@ -199,15 +169,6 @@ function latestDurableSupportRequest(): DurableSupportRequest {
 
 function deliveryResult(value: unknown): DeliveryResult {
   return value as DeliveryResult;
-}
-
-function expectDispatched<TDispatchResult>(
-  result: ChannelTurnResult<TDispatchResult>,
-): asserts result is Extract<ChannelTurnResult<TDispatchResult>, { dispatched: true }> {
-  expect(result.dispatched).toBe(true);
-  if (!result.dispatched) {
-    throw new Error("expected dispatch");
-  }
 }
 
 describe("channel turn delivery", () => {
