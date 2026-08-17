@@ -18,7 +18,6 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
         onDeferred: onEnqueued,
       },
       admissionSessionId: "sess-rotated",
-      onReplyAdmissionWaitChange: vi.fn(),
     });
 
     const recovery = resolveStrandedReplyRecovery({
@@ -42,7 +41,6 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
     expect(retry.summaryLine).toBe(STRANDED_REPLY_RETRY_MARKER);
     // Session routing stays; only the client-turn lifecycle identity is detached.
     expect(retry.admissionSessionId).toBe("sess-rotated");
-    expect(retry.onReplyAdmissionWaitChange).toBe(parent.onReplyAdmissionWaitChange);
     expect(retry.run.sessionKey).toBe(parent.run.sessionKey);
 
     // mark/complete no-op when lifecycle is absent (drop-policy onDrop path too).

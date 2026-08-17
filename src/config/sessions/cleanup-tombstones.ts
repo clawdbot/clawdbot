@@ -1,3 +1,4 @@
+import fs from "node:fs";
 /**
  * Reclaims expired cron-run retained-history placeholders.
  *
@@ -14,10 +15,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  discardCreatedSessionStateArchives,
-  materializeSessionStateDeletePlans,
-} from "./session-accessor.sqlite-archive.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
@@ -253,63 +251,56 @@ export async function sweepTombstonedCronRunRemnants(params: {
             return null;
           }
           const materialized = await materializeSessionStateDeletePlans(plans);
-          let archivedTranscripts: ReturnType<typeof deleteMaterializedSessionStatePlans> =
-            [];
+          let archivedTranscripts: ReturnType<typeof deleteMaterializedSessionStatePlans> = [];
           let removed = false;
-          try {
-            runOpenClawAgentWriteTransaction(
-              (transactionDb) => {
-                const current = listCanonicalCronRunTombstones(
-                  transactionDb,
-                  cutoffMs,
-                  includeUnidentified,
-                ).find((entry) => entry.sessionKey === candidate.sessionKey);
-                if (!sameCandidate(candidate, current)) {
-                  return;
-                }
-                const protectedAtDelete = readProtectedSessionIds({
-                  candidate,
-                  database: transactionDb,
-                  storePath: params.storePath,
-                });
-                if (candidate.generationIds.some((sessionId) => protectedAtDelete.has(sessionId))) {
-                  return;
-                }
-                archivedTranscripts = deleteMaterializedSessionStatePlans(
-                  transactionDb,
-                  materialized,
-                  protectedAtDelete,
-                  new Set([candidate.sessionKey]),
-                );
-                const db = getSessionKysely(transactionDb.db);
-                const remainingGenerationIds = executeSqliteQuerySync(
+          runOpenClawAgentWriteTransaction(
+            (transactionDb) => {
+              const current = listCanonicalCronRunTombstones(
+                transactionDb,
+                cutoffMs,
+                includeUnidentified,
+              ).find((entry) => entry.sessionKey === candidate.sessionKey);
+              if (!sameCandidate(candidate, current)) {
+                return;
+              }
+              const protectedAtDelete = readProtectedSessionIds({
+                candidate,
+                database: transactionDb,
+                storePath: params.storePath,
+              });
+              if (candidate.generationIds.some((sessionId) => protectedAtDelete.has(sessionId))) {
+                return;
+              }
+              archivedTranscripts = deleteMaterializedSessionStatePlans(
+                transactionDb,
+                materialized,
+                protectedAtDelete,
+                new Set([candidate.sessionKey]),
+              );
+              const db = getSessionKysely(transactionDb.db);
+              const remainingGenerationIds = executeSqliteQuerySync(
+                transactionDb.db,
+                db
+                  .selectFrom("session_windows")
+                  .select("session_id")
+                  .where("session_key", "=", candidate.sessionKey),
+              ).rows;
+              if (remainingGenerationIds.length > 0) {
+                return;
+              }
+              deleteSessionEntryRows(transactionDb, candidate.sessionKey);
+              removed =
+                executeSqliteQuerySync(
                   transactionDb.db,
                   db
-                    .selectFrom("session_windows")
-                    .select("session_id")
+                    .selectFrom("session_nodes")
+                    .select("session_key")
                     .where("session_key", "=", candidate.sessionKey),
-                ).rows;
-                if (remainingGenerationIds.length > 0) {
-                  return;
-                }
-                deleteSessionEntryRows(transactionDb, candidate.sessionKey);
-                removed =
-                  executeSqliteQuerySync(
-                    transactionDb.db,
-                    db
-                      .selectFrom("session_nodes")
-                      .select("session_key")
-                      .where("session_key", "=", candidate.sessionKey),
-                  ).rows.length === 0;
-              },
-              scope,
-              { operationLabel: "sessions.cleanup.tombstoned-cron-run-remnants" },
-            );
-          } finally {
-            if (!removed) {
-              discardCreatedSessionStateArchives(materialized);
-            }
-          }
+                ).rows.length === 0;
+            },
+            scope,
+            { operationLabel: "sessions.cleanup.tombstoned-cron-run-remnants" },
+          );
           if (!removed) {
             return null;
           }
@@ -333,4 +324,30 @@ export async function sweepTombstonedCronRunRemnants(params: {
     sweptTranscriptStates,
     olderThanMs,
   };
+}
+
+/**
+ * Resolves the cron-run tombstone sweep for one store, or null when retention
+ * is disabled or the store has no SQLite file yet. Lives here rather than in
+ * cleanup-service so the preview and apply paths share one definition.
+ */
+export async function sweepTombstonedCronRunRemnantsForStore(params: {
+  agentId: string;
+  storePath: string;
+  sqlitePath: string;
+  retentionMs: number | null;
+  dryRun: boolean;
+  includeUnidentifiedPlaceholders?: boolean;
+}): Promise<SessionTombstoneSweepResult | null> {
+  if (params.retentionMs == null || !fs.existsSync(params.sqlitePath)) {
+    return null;
+  }
+  return await sweepTombstonedCronRunRemnants({
+    agentId: params.agentId,
+    storePath: params.storePath,
+    sqlitePath: params.sqlitePath,
+    olderThanMs: params.retentionMs,
+    dryRun: params.dryRun,
+    includeUnidentifiedPlaceholders: params.includeUnidentifiedPlaceholders === true,
+  });
 }

@@ -8,6 +8,7 @@ import {
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isInflightSteer, isSteeredQueueItem } from "../steered-chip.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
@@ -100,11 +101,7 @@ function renderChatQueueItem(
   const steered = isSteeredQueueItem(item) && !failed;
   const reconnecting = item.sendState === "waiting-reconnect";
   const busy = item.sendState === "executing-command" || isInflightSteer(item);
-  const canSteer =
-    Boolean(props.canAbort && props.onQueueSteer) &&
-    !steered &&
-    (item.sendState === undefined || item.sendState === "waiting-idle") &&
-    !item.localCommandName;
+  const canSteer = Boolean(props.canAbort && props.onQueueSteer) && isSteerableQueuedMessage(item);
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);
   const move = props.onQueueMove;
@@ -198,7 +195,7 @@ function renderChatQueueItem(
       ${reconnecting
         ? html`<span class="chat-queue__dot" aria-hidden="true"></span>`
         : html`<span class="chat-queue__icon" aria-hidden="true">
-            ${failed ? icons.alertTriangle : steered ? icons.cornerDownRight : icons.clock}
+            ${failed ? icons.alertTriangle : steered ? icons.cornerDownRight : icons.outbox}
           </span>`}
       ${renderChatAuthorAvatar(item.sender)}
       ${steered
@@ -267,7 +264,13 @@ function renderChatQueueItem(
                   type="button"
                   ?disabled=${editing}
                   aria-label=${t("chat.queue.removeQueuedMessage")}
-                  @click=${() => props.onQueueRemove(item.id)}
+                  @click=${(event: MouseEvent) => {
+                    // Chromium retargets click 2 after row removal; detail still owns the gesture.
+                    if (event.detail <= 1) {
+                      props.onQueueRemove(item.id);
+                    }
+                  }}
+                  @dblclick=${(event: MouseEvent) => event.stopPropagation()}
                 >
                   ${icons.x}
                 </button>

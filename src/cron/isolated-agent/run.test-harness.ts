@@ -72,7 +72,7 @@ export const resolveEffectiveAgentRuntimeMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedAgentMock = createMock();
 export const runCliAgentMock = createMock();
-export const lookupContextTokensMock = createMock();
+export const resolveContextTokensForModelMock = createMock();
 export const getCliSessionBindingMock = createMock();
 const getCliSessionIdMock = createMock();
 export const clearCliSessionMock = createMock();
@@ -182,7 +182,7 @@ vi.mock("./run-external-content.runtime.js", () => ({
 }));
 
 vi.mock("./run-context.runtime.js", () => ({
-  lookupContextTokens: lookupContextTokensMock,
+  resolveContextTokensForModel: resolveContextTokensForModelMock,
 }));
 
 vi.mock("../../web-search/runtime.js", () => ({
@@ -633,8 +633,8 @@ function resetRunExecutionMocks(): void {
 }
 
 function resetRunOutcomeMocks(): void {
-  lookupContextTokensMock.mockReset();
-  lookupContextTokensMock.mockReturnValue(undefined);
+  resolveContextTokensForModelMock.mockReset();
+  resolveContextTokensForModelMock.mockReturnValue(undefined);
   pickLastNonEmptyTextFromPayloadsMock.mockReset();
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
   resolveCronPayloadOutcomeMock.mockReset();

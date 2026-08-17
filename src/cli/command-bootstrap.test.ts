@@ -82,6 +82,24 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
+  it("forwards validation-only config guards without state migration", async () => {
+    const runtime = {} as never;
+
+    await ensureCliCommandBootstrap({
+      runtime,
+      commandPath: ["nodes", "approve"],
+      validateConfigOnly: true,
+      loadPlugins: false,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime,
+      commandPath: ["nodes", "approve"],
+      measure: expect.any(Function),
+      validateConfigOnly: true,
+    });
+  });
+
   it("loads configured channel plugins with repair enabled for operational channel commands", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,

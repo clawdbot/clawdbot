@@ -129,7 +129,7 @@ export async function markRestartAbortedMainSessions(params: {
         `failed to resolve configured session stores for restart marker: ${String(err)}`,
       );
     }
-    for (const sessionKey of sessionKeys) {
+    for (const sessionKey of preferSessionIdMatch ? [] : sessionKeys) {
       try {
         const target = resolveGatewaySessionStoreTarget({
           cfg,

@@ -23,11 +23,9 @@ import type { MatrixAuth, MatrixStoragePaths } from "./client/types.js";
 import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
+  type MatrixThreadBindingManager,
 } from "./thread-bindings-shared.js";
-import {
-  createMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-} from "./thread-bindings.js";
+import { createMatrixThreadBindingManager } from "./thread-bindings.js";
 
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
@@ -52,10 +50,12 @@ describe("matrix thread bindings", () => {
   const accountId = "ops";
   const idleTimeoutMs = 24 * 60 * 60 * 1000;
   const matrixClient = {} as never;
+  const trackedManagers = new Set<MatrixThreadBindingManager>();
 
-  function resetThreadBindingAdapters() {
+  async function resetThreadBindingAdapters() {
+    await Promise.all([...trackedManagers].map((manager) => manager.stop()));
+    trackedManagers.clear();
     testing.resetSessionBindingAdaptersForTests();
-    resetMatrixThreadBindingsForTests();
   }
 
   function currentThreadConversation(params?: {
@@ -70,7 +70,7 @@ describe("matrix thread bindings", () => {
     };
   }
 
-  function createBindingManager(
+  async function createBindingManager(
     params: {
       auth?: MatrixAuth;
       cfg?: OpenClawConfig;
@@ -81,7 +81,7 @@ describe("matrix thread bindings", () => {
       logVerboseMessage?: (message: string) => void;
     } = {},
   ) {
-    return createMatrixThreadBindingManager({
+    const manager = await createMatrixThreadBindingManager({
       cfg: params.cfg ?? {},
       accountId,
       auth: params.auth ?? auth,
@@ -92,6 +92,8 @@ describe("matrix thread bindings", () => {
       enableSweeper: params.enableSweeper ?? false,
       ...(params.logVerboseMessage ? { logVerboseMessage: params.logVerboseMessage } : {}),
     });
+    trackedManagers.add(manager);
+    return manager;
   }
 
   async function createStaticThreadBindingManager() {
@@ -193,9 +195,9 @@ describe("matrix thread bindings", () => {
     return call;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "matrix-thread-bindings-"));
-    resetThreadBindingAdapters();
+    await resetThreadBindingAdapters();
     resetPluginStateStoreForTests();
     sendMessageMatrixMock.mockClear();
     setMatrixRuntime({
@@ -209,23 +211,15 @@ describe("matrix thread bindings", () => {
     } as PluginRuntime);
   });
 
-  afterEach(() => {
-    resetThreadBindingAdapters();
+  afterEach(async () => {
+    await resetThreadBindingAdapters();
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
   it("creates child Matrix thread bindings from a top-level room context", async () => {
-    await createMatrixThreadBindingManager({
-      cfg: {},
-      accountId,
-      auth,
-      client: matrixClient,
-      idleTimeoutMs,
-      maxAgeMs: 0,
-      enableSweeper: false,
-    });
+    await createBindingManager();
 
     const binding = await getSessionBindingService().bind({
       targetSessionKey: "agent:ops:subagent:child",
@@ -286,13 +280,10 @@ describe("matrix thread bindings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
-      await createMatrixThreadBindingManager({
-        cfg: {},
-        accountId: "ops",
-        auth,
-        client: {} as never,
+      await createBindingManager({
         idleTimeoutMs: 1_000,
         maxAgeMs: 0,
+        enableSweeper: true,
       });
 
       await getSessionBindingService().bind({
@@ -331,13 +322,10 @@ describe("matrix thread bindings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
-      await createMatrixThreadBindingManager({
-        cfg: {},
-        accountId: "ops",
-        auth,
-        client: {} as never,
+      await createBindingManager({
         idleTimeoutMs: 1_000,
         maxAgeMs: 0,
+        enableSweeper: true,
       });
 
       await getSessionBindingService().bind({
@@ -389,14 +377,9 @@ describe("matrix thread bindings", () => {
   });
 
   it("sends threaded farewell messages when bindings are unbound", async () => {
-    await createMatrixThreadBindingManager({
-      cfg: {},
-      accountId: "ops",
-      auth,
-      client: {} as never,
+    await createBindingManager({
       idleTimeoutMs: 1_000,
       maxAgeMs: 0,
-      enableSweeper: false,
     });
 
     const binding = await getSessionBindingService().bind({
@@ -448,8 +431,8 @@ describe("matrix thread bindings", () => {
     });
     writeAuthStorageMeta(initialAuth, initialStoragePaths);
 
-    initialManager.stop();
-    resetThreadBindingAdapters();
+    await initialManager.stop();
+    await resetThreadBindingAdapters();
 
     await createBindingManager({ auth: rotatedAuth });
 
@@ -499,8 +482,8 @@ describe("matrix thread bindings", () => {
       targetSessionKey: "agent:ops:subagent:child",
     });
 
-    initialManager.stop();
-    resetThreadBindingAdapters();
+    await initialManager.stop();
+    await resetThreadBindingAdapters();
 
     await createBindingManager({ auth: rotatedAuth });
 
@@ -563,20 +546,24 @@ describe("matrix thread bindings", () => {
       conversationId: "$thread",
       targetSessionKey: "agent:ops:subagent:child",
     });
+
+    await initialManager.stop();
+
+    expect(
+      replacementManager.getByConversation({
+        conversationId: "$thread-2",
+        parentConversationId: "!room:example",
+      })?.targetSessionKey,
+    ).toBe("agent:ops:subagent:replacement");
   });
 
   it("updates lifecycle windows by session key and refreshes activity", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
-      const manager = await createMatrixThreadBindingManager({
-        cfg: {},
-        accountId: "ops",
-        auth,
-        client: {} as never,
+      const manager = await createBindingManager({
         idleTimeoutMs: 24 * 60 * 60 * 1000,
         maxAgeMs: 0,
-        enableSweeper: false,
       });
 
       await getSessionBindingService().bind({
@@ -646,13 +633,8 @@ describe("matrix thread bindings", () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
       vi.useRealTimers();
-      manager.stop();
-      await vi.waitFor(
-        async () => {
-          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
-        },
-        { interval: 1, timeout: 5_000 },
-      );
+      await manager.stop();
+      expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
     } finally {
       vi.useRealTimers();
     }
@@ -667,16 +649,11 @@ describe("matrix thread bindings", () => {
       const touchedAt = Date.parse("2026-03-06T12:00:00.000Z");
       getSessionBindingService().touch(binding.bindingId, touchedAt);
 
-      manager.stop();
+      await manager.stop();
       vi.useRealTimers();
 
       const bindingsPath = resolveBindingsFilePath();
-      await vi.waitFor(
-        async () => {
-          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
-        },
-        { interval: 1, timeout: 1_000 },
-      );
+      expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
     } finally {
       vi.useRealTimers();
     }

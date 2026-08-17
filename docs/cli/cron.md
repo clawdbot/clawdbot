@@ -313,7 +313,9 @@ openclaw automations runs --id <job-id> --run-id <run-id>
 
 `openclaw automations list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
 
-`openclaw automations get <job-id>` returns the stored job JSON directly. `get` and `runs` accept `--json` as the explicit machine-output spelling. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
+`--json` always requests JSON output. Commands whose product is already a machine-readable result emit JSON results by default: `add`/`create`, `status`, `enable`, `disable`, `rm`/`remove`/`delete`, `run`, `edit`, `get`, and `runs`. They accept `--json` as the explicit machine-output spelling. `openclaw automations get <job-id>` returns the stored job JSON directly; use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
+
+`list` and `show` use human-readable output by default and switch to JSON with `--json`. `scratch` reads raw scratch content by default and prints the scratch plus revision metadata with `--json`; scratch writes return the revision result as JSON by default and accept `--json` as the explicit machine-output spelling.
 
 `automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated so external tooling can read job state without re-deriving it; human output may decorate repeated `error` statuses with a failure count.
 

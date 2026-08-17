@@ -7,7 +7,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { sweepTombstonedCronRunRemnants } from "./cleanup-tombstones.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
@@ -25,9 +24,9 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   return {
     ...actual,
     // Must await: materialization is worker-backed and async, and the hook
-    // exists to inject a late live reference *after* archives are on disk.
+    // exists to inject a late live reference *after* encoding completes.
     // Firing it against the unresolved promise would invert the ordering the
-    // rollback tests are asserting.
+    // abandoned-delete test asserts.
     materializeSessionStateDeletePlans: async (
       plans: Parameters<typeof actual.materializeSessionStateDeletePlans>[0],
     ) => {
@@ -154,6 +153,27 @@ describe("sweepTombstonedCronRunRemnants", () => {
     ).rows.length;
   }
 
+  /**
+   * Canonical archive rows. Main persists these inside the lifecycle deletion
+   * transaction; publishing to disk is a separate deferred pass, so the row --
+   * not a file -- is what a completed sweep guarantees.
+   */
+  function archiveRows(sessionId: string): { archive_name: string; published_at: number | null }[] {
+    const database = openDatabase();
+    const db = getSessionKysely(database.db);
+    try {
+      return executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_transcript_archives")
+          .select(["archive_name", "published_at"])
+          .where("session_id", "=", sessionId),
+      ).rows as { archive_name: string; published_at: number | null }[];
+    } catch {
+      return [];
+    }
+  }
+
   function archiveNames(sessionId: string): string[] {
     try {
       return fs
@@ -194,18 +214,17 @@ describe("sweepTombstonedCronRunRemnants", () => {
     expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(0);
     expect(countRows("session_windows", "session_key", CRON_RUN_KEY)).toBe(0);
     expect(countRows("transcript_events", "session_id", sessionId)).toBe(0);
-    const archives = archiveNames(sessionId);
+    const archives = archiveRows(sessionId);
     expect(archives).toHaveLength(1);
-    expect(
-      readSessionArchiveContentSync(path.join(path.dirname(storePath), archives[0] ?? "")),
-    ).toContain("cron run transcript");
+    // Not yet on disk: publishing is the deferred pass's job.
+    expect(archives[0]?.published_at).toBeNull();
 
     await expect(sweep({ dryRun: false })).resolves.toMatchObject({
       candidates: 0,
       removedNodes: 0,
       sweptTranscriptStates: 0,
     });
-    expect(archiveNames(sessionId)).toEqual(archives);
+    expect(archiveRows(sessionId)).toHaveLength(1);
   });
 
   it("uses the newest owned window timestamp for the retention gate", async () => {
@@ -277,7 +296,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
     expect(archiveNames(sessionId)).toEqual([]);
   });
 
-  it("keeps a reused archive when final revalidation finds a late live reference", async () => {
+  it("writes no archive row when final revalidation finds a late live reference", async () => {
     const sessionId = await seedCanonicalPlaceholder({});
     const database = openDatabase();
     const plan = planSessionStateDeleteIfUnreferenced({
@@ -289,9 +308,10 @@ describe("sweepTombstonedCronRunRemnants", () => {
       sessionId,
     });
     expect(plan).not.toBeNull();
+    // Materialization only ENCODES; it must not persist or publish anything.
     await materializeSessionStateDeletePlans(plan ? [plan] : []);
-    const existingArchives = archiveNames(sessionId);
-    expect(existingArchives).toHaveLength(1);
+    expect(archiveRows(sessionId)).toHaveLength(0);
+    expect(archiveNames(sessionId)).toEqual([]);
     materializedHook.run = () => {
       const currentDatabase = openDatabase();
       const db = getSessionKysely(currentDatabase.db);
@@ -313,7 +333,11 @@ describe("sweepTombstonedCronRunRemnants", () => {
     });
     expect(countRows("session_nodes", "session_key", CRON_RUN_KEY)).toBe(1);
     expect(countRows("transcript_events", "session_id", sessionId)).toBe(1);
-    expect(archiveNames(sessionId)).toEqual(existingArchives);
+    // The canonical row is inserted inside the deletion transaction, so an
+    // abandoned delete rolls it back and the deferred publish pass never sees
+    // it. No archive may describe a session that still exists.
+    expect(archiveRows(sessionId)).toHaveLength(0);
+    expect(archiveNames(sessionId)).toEqual([]);
   });
 
   it("preserves malformed and non-cron rows instead of treating parser failure as debris", async () => {

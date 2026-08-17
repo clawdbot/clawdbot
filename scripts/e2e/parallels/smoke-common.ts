@@ -3,8 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { extractLastOpenClawVersionFromLog } from "./filesystem.ts";
 import { run, say } from "./host-command.ts";
-import { resolveHostIp, resolveHostPort } from "./host-server.ts";
-import { startHostServer } from "./host-server.ts";
+import { resolveHostIp, resolveHostPort, startHostServer } from "./host-server.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import {
   packageBuildCommitFromTgz,
@@ -71,11 +70,14 @@ interface CommonSmokeSummary {
 export abstract class SmokeRunController<TOptions extends SmokeRunOptions & SmokeHostOptions> {
   protected hostIp = "";
   protected hostPort = 0;
+  protected options: TOptions;
   protected runDir = "";
   protected server: HostServer | null = null;
   protected tgzDir = "";
 
-  protected constructor(protected options: TOptions) {}
+  protected constructor(options: TOptions) {
+    this.options = options;
+  }
 
   protected abstract runFreshLane(): Promise<void>;
   protected abstract runUpgradeLane(): Promise<void>;

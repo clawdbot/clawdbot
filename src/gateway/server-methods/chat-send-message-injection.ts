@@ -89,7 +89,9 @@ export function createChatSendMessageInjectionStarter(params: {
   session: Pick<PreparedChatSendSession, "cfg" | "entry">;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
-  userTurnTranscriptRecorder: ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"];
+  userTurnTranscriptRecorder: NonNullable<
+    ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
+  >;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { cfg, entry } = params.session;
@@ -105,7 +107,7 @@ export function createChatSendMessageInjectionStarter(params: {
       inlineMode: p.queueMode,
     });
     const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
-    return beginReplyMessageInjectionTarget(
+    const attempt = beginReplyMessageInjectionTarget(
       params.target,
       p.replyToId
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
@@ -123,6 +125,7 @@ export function createChatSendMessageInjectionStarter(params: {
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
     );
+    return attempt;
   };
 }
 
@@ -186,7 +189,11 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   recordAcceptedReplyMessageInjectionTarget(target, {
     inboundAudio: hasInboundAudio(finalizedCtx),
   });
-  if (outcome.result?.transcriptCommit === "unconfirmed") {
+  // An unconfirmed transcript commit aborts the exact target without replay:
+  // the steer did not take effect, so diagnostics and audit must record the
+  // abort, not a completed injection.
+  const steerAborted = outcome.result?.transcriptCommit === "unconfirmed";
+  if (steerAborted) {
     abortReplyMessageInjectionTarget(target);
     context.logGateway.warn(
       `active run ${params.targetRunId ?? "unknown"} accepted chat steering without transcript confirmation; aborted exact target without replay`,
@@ -208,8 +215,8 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       sessionId: entry?.sessionId,
       sessionKey,
       durationMs: Math.max(0, Date.now() - params.startedAt),
-      outcome: "completed",
-      reason: "active_run_injected",
+      outcome: steerAborted ? "skipped" : "completed",
+      reason: steerAborted ? "reply_operation_aborted" : "active_run_injected",
     });
   }
   emitMessageReceivedHooks({
@@ -227,7 +234,9 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     ctx: finalizedCtx,
     observedRunId: clientRunId,
     startedAt: params.startedAt,
-    terminal: { outcome: "completed", options: { reason: "active_run_injected" } },
+    terminal: steerAborted
+      ? { outcome: "skipped", options: { reason: "reply_operation_aborted" } }
+      : { outcome: "completed", options: { reason: "active_run_injected" } },
   });
   const updatedAt = Date.now();
   if (entry) {

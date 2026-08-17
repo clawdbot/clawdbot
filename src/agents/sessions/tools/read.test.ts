@@ -67,6 +67,13 @@ describe("read tool", () => {
     decodeWindowsTextFileBufferMock.mockImplementation(({ buffer }) => buffer.toString("utf8"));
   });
 
+  it("describes image reads as private model context", () => {
+    const description = createReadToolDefinition("/workspace").description;
+
+    expect(description).toContain("images attach to model context");
+    expect(description).not.toContain("images attach.");
+  });
+
   it("reads managed inbound media refs as image files", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-"));
     const mediaId = `read-tool-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;

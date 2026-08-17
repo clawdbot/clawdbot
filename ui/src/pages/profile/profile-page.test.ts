@@ -461,10 +461,11 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
   await Promise.all([pageWithIdentity.loadIdentity(), pageWithIdentity.loadIdentity()]);
   expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1);
 
-  rejectIdentity?.(new Error("identity unavailable"));
+  rejectIdentity?.(new Error("identity unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
   await waitForFast(() => expect(refresh.disabled).toBe(false));
   expect(refresh.textContent?.trim()).toBe(t("common.refresh"));
-  expect(page.textContent).toContain("identity unavailable");
+  expect(page.textContent).toContain("identity unavailable: OPENAI_API_KEY=sk-123...cdef");
+  expect(page.textContent).not.toContain("sk-1234567890abcdef");
 
   refresh.click();
   await waitForFast(() =>

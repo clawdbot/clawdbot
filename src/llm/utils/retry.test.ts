@@ -55,6 +55,15 @@ describe("isRetryableAssistantError", () => {
     ).toBe(false);
   });
 
+  it("retries a structured transient Undici error", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("provider connection closed"),
+        errorCode: "UND_ERR_HEADERS_TIMEOUT",
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     "An error occurred while processing your request. You can retry your request.",
     "The system encountered an unexpected error. Try your request again.",

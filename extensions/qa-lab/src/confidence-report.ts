@@ -26,6 +26,7 @@ import {
   type RuntimeParityResult,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
+import { findQaSuiteSummaryAccountingError } from "./suite-summary.js";
 import { buildTokenEfficiencyReport } from "./token-efficiency-report.js";
 
 const QA_CONFIDENCE_VERDICTS = [
@@ -364,44 +365,19 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       details: "qa-suite-summary payload was not an object",
     };
   }
-  const counts = isRecord(payload.counts) ? payload.counts : undefined;
-  for (const key of ["total", "passed", "failed", "skipped"] as const) {
-    if (counts && Object.hasOwn(counts, key) && readCount(counts[key]) === undefined) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: `qa-suite-summary counts.${key} must be a non-negative integer`,
-      };
-    }
+  const accountingError = findQaSuiteSummaryAccountingError(payload);
+  if (accountingError) {
+    return {
+      passed: false,
+      status: "unknown",
+      details: `qa-suite-summary ${accountingError}`,
+    };
   }
+  const counts = isRecord(payload.counts) ? payload.counts : undefined;
   const totalCount = readCount(counts?.total);
   const passedCount = readCount(counts?.passed);
   const failedCount = readCount(counts?.failed);
   const explicitSkippedCount = readCount(counts?.skipped);
-  if (totalCount !== undefined) {
-    const providedCountSum = (passedCount ?? 0) + (failedCount ?? 0) + (explicitSkippedCount ?? 0);
-    if (totalCount < providedCountSum) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: `qa-suite-summary counts.total=${totalCount} is less than provided count sum=${providedCountSum}`,
-      };
-    }
-    if (
-      passedCount !== undefined &&
-      failedCount !== undefined &&
-      explicitSkippedCount !== undefined &&
-      totalCount !== providedCountSum
-    ) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: `qa-suite-summary counts.total=${totalCount} does not match counts.passed+counts.failed+counts.skipped=${
-          providedCountSum
-        }`,
-      };
-    }
-  }
   const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : undefined;
   const failedScenarios = scenarios?.filter(
     (scenario) => isRecord(scenario) && scenario.status === "fail",

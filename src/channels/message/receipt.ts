@@ -17,6 +17,7 @@ type MessageReceiptInputResult = MessageReceiptSourceResult & {
 function resolveReceiptMessageId(result: MessageReceiptInputResult): string | undefined {
   return (
     result.messageId ||
+    result.target?.id ||
     result.chatId ||
     result.channelId ||
     result.roomId ||

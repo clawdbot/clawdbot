@@ -63,11 +63,10 @@ function findSubagentForTask(task: TaskRecord): SubagentRunRecord | undefined {
 function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskRecord): void {
   const live = subagentRuns.get(subagent.runId);
   if (live) {
-    const mutable = live as unknown as Record<string, unknown>;
-    for (const key of Object.keys(mutable)) {
-      delete mutable[key];
+    for (const key of Object.keys(live)) {
+      Reflect.deleteProperty(live, key);
     }
-    Object.assign(mutable, subagent);
+    Object.assign(live, subagent);
   } else {
     subagentRuns.set(subagent.runId, subagent);
   }

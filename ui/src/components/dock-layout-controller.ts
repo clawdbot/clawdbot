@@ -26,7 +26,6 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   height: number;
   width: number;
 
-  private previousDock: TDock | undefined;
   private suppressed = false;
   private resizeCleanup: (() => void) | null = null;
   private readonly onViewportResize = () => {
@@ -60,7 +59,6 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     const layout = this.options.layout.load();
     this.open = layout.open && this.options.isAvailable();
     this.dock = layout.dock;
-    this.previousDock = layout.previousDock;
     this.height = layout.height;
     this.width = Math.min(layout.width, this.maxWidth());
     window.addEventListener("resize", this.onViewportResize);
@@ -132,26 +130,10 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     this.host.requestUpdate();
   }
 
-  setRestorableDock(dock: TDock): void {
-    if (dock !== this.dock) {
-      this.previousDock = this.dock;
-    }
-    this.setDock(dock);
-  }
-
-  toggleDock(dock: TDock): void {
-    if (this.dock === dock) {
-      this.setDock(this.previousDock ?? this.options.layout.defaults.dock);
-    } else {
-      this.setRestorableDock(dock);
-    }
-  }
-
   persist(): void {
     this.options.layout.save({
       open: this.open,
       dock: this.dock,
-      ...(this.previousDock ? { previousDock: this.previousDock } : {}),
       height: this.height,
       width: this.width,
     });
@@ -161,7 +143,10 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     if (this.options.reserveViewport === false) {
       return;
     }
-    const visible = !this.isFullscreen() && this.options.isAvailable() && this.open;
+    // Embedded docks live inside a parent layout that already owns their geometry.
+    // Reserving the viewport here would apply the standalone dock a second time.
+    const embedded = this.host instanceof HTMLElement && this.host.hasAttribute("embedded");
+    const visible = !embedded && !this.isFullscreen() && this.options.isAvailable() && this.open;
     const root = document.documentElement.style;
     root.setProperty(
       `--oc-${this.options.reservationPrefix}-reserve-bottom`,
@@ -261,6 +246,15 @@ export const dockPanelStyles = css`
     z-index: 60;
     color: var(--text, #d7dae0);
     font-family: var(--font-body);
+  }
+  :host([embedded]) {
+    position: static;
+    z-index: auto;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
   }
   :is(.bp, .tp) {
     position: fixed;

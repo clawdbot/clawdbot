@@ -131,6 +131,18 @@ The lists below are generated from the source target registry and checked agains
 
 [//]: # "secretref-supported-list-end"
 
+### Node-host connection targets
+
+- `gateway.cloudflareAccess.clientId`
+- `gateway.cloudflareAccess.clientSecret`
+
+These fields live in the node host's canonical `node_host_config` SQLite row,
+not `openclaw.json`. They accept the same SecretInput forms and resolve through
+the configured SecretRef providers when the node starts. The conventional
+`CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` fallback persists env refs for
+these fields automatically. They are not targets for `secrets configure` or
+`secrets apply`.
+
 Notes:
 
 - Store refs use names matching `^[A-Z][A-Z0-9_]{0,127}$` and resolve only from the Gateway-wide team scope in this release. A typical ref is `{"source":"store","provider":"default","id":"OPENAI_API_KEY"}`.

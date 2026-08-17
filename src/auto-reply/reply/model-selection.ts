@@ -41,11 +41,6 @@ import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.shared.js";
-export {
-  resolveModelDirectiveSelection,
-  type ModelDirectiveSelection,
-} from "./model-selection-directive.js";
-export { resolveContextTokens } from "./model-selection-context.js";
 import { normalizeRuntimeRef, resolveRuntimeNormalization } from "./model-runtime-normalization.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -53,6 +48,11 @@ import {
   resolveDirectStoredModelOverride,
   resolveStoredModelOverride,
 } from "./stored-model-override.js";
+export {
+  resolveModelDirectiveSelection,
+  type ModelDirectiveSelection,
+} from "./model-selection-directive.js";
+export { resolveContextTokens } from "./model-selection-context.js";
 
 type ModelCatalog = ModelCatalogEntry[];
 

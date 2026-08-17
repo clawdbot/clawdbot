@@ -254,6 +254,7 @@ describe("terminal gateway policy", () => {
     await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
 
     expect(openTerminal).toHaveBeenCalledWith({
+      agentId: "main",
       allowProcessHomeFallback: false,
       hostId: "gateway:local",
       threadId: "thread",

@@ -725,7 +725,6 @@ describe("session cost usage", () => {
         const row = readSessionCostUsageRollupRows("main").find(
           (candidate) => candidate.key === sessionFile,
         );
-        expect(row).toBeDefined();
         expect(Buffer.byteLength(row?.valueJson ?? "")).toBeLessThan(32 * 1024);
         expect(JSON.parse(row?.valueJson ?? "null")).toMatchObject({
           pricingFingerprint,

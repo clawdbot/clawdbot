@@ -3,7 +3,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
+import { probeTelegram } from "./probe.js";
 
 describe("probeTelegram startup retry loop honors abortSignal", () => {
   let server: Server;
@@ -60,7 +60,6 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
   });
 
   afterAll(async () => {
-    resetTelegramProbeFetcherCacheForTests();
     vi.unstubAllEnvs();
     for (const socket of liveSockets) {
       socket.destroy();

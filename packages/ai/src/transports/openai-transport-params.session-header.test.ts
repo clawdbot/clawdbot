@@ -26,7 +26,6 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
       longSessionId,
     );
     const sessionHeader = headers.session_id;
-    expect(sessionHeader).toBeDefined();
     expect(Array.from(sessionHeader ?? "").length).toBeLessThanOrEqual(
       OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH,
     );

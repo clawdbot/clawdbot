@@ -27,12 +27,10 @@ import {
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { createChatRunRegistry } from "./server-chat.js";
+import { createChatRunState, createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
-import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
-import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import type * as GatewayMethodTypes from "./server-methods/types.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -185,7 +183,7 @@ describe("GatewayClient", () => {
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
     expectNoGatewayClientAgent({
       url: "wss://gateway.example.com",
-      tlsFingerprint: "SHA256:AA:BB",
+      tlsFingerprint: "ab".repeat(32),
     });
   });
 
@@ -916,7 +914,7 @@ describe("gateway broadcaster", () => {
 
 describe("chat run registry", () => {
   test("queues and removes runs per session", () => {
-    const registry = createChatRunRegistry();
+    const registry = createChatRunState().registry;
 
     registry.add("s1", { sessionKey: "main", clientRunId: "c1" });
     registry.add("s1", { sessionKey: "main", clientRunId: "c2" });
@@ -947,14 +945,14 @@ describe("late-arriving invoke results", () => {
     ] as const;
 
     for (const params of cases) {
-      const respond = vi.fn<RespondFn>();
+      const respond = vi.fn<GatewayMethodTypes.RespondFn>();
       const context = {
         nodeRegistry: { handleInvokeResult: () => false },
         logGateway: { debug: vi.fn() },
-      } as unknown as GatewayRequestContext;
+      } as unknown as GatewayMethodTypes.GatewayRequestContext;
       const client = {
         connect: { device: { id: nodeId } },
-      } as unknown as GatewayMethodClient;
+      } as unknown as GatewayMethodTypes.GatewayClient;
 
       await handleNodeInvokeResult({
         req: { method: "node.invoke.result" } as unknown as RequestFrame,

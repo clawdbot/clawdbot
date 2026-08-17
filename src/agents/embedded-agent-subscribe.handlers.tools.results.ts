@@ -575,15 +575,15 @@ export async function emitToolResultOutput(params: {
     const message = error instanceof Error ? error.message : String(error);
     ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
     const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
-    ctx.state.lastToolError = (
-      ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx)
-    )({
+    const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
       toolName,
       meta: approvalMeta,
       executionStarted: false,
       outcome: "failure",
       failure: { error: `Approval prompt delivery failed: ${message}` },
-    }).lastToolError;
+    });
+    ctx.state.lastToolError = terminal.lastToolError;
+    ctx.state.lastToolRecovery = terminal.lastToolRecovery;
     ctx.state.deterministicApprovalPromptSent = false;
   };
   const hasStructuredMedia = Boolean(

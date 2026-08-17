@@ -351,29 +351,74 @@ export function registerContextEngineInRegistry(
   return { ok: true };
 }
 
-/** Carries runtime-safe factories into a matching non-activating prepared registry. */
-export function promoteMatchingRuntimeContextEngineRegistrations(
+function canAdoptRuntimeContextEngineFromRoot(params: {
+  pluginId: string | undefined;
+  targetRegistry: PluginRegistry;
+  runtimeRegistry: PluginRegistry;
+}): boolean {
+  if (!params.pluginId) {
+    return false;
+  }
+  const targetPlugin = params.targetRegistry.plugins.find(
+    (plugin) => plugin.id === params.pluginId,
+  );
+  const runtimePlugin = params.runtimeRegistry.plugins.find(
+    (plugin) => plugin.id === params.pluginId,
+  );
+  // Same ids can come from workspace shadows. Only carry a factory across registry generations
+  // when both registrations came from the exact same trusted plugin source.
+  return Boolean(
+    targetPlugin &&
+    runtimePlugin &&
+    targetPlugin.status === "loaded" &&
+    runtimePlugin.status === "loaded" &&
+    targetPlugin.source === runtimePlugin.source,
+  );
+}
+
+/**
+ * Scoped production handles stay in discovery mode so full-only plugins cannot
+ * mutate process-global backends. Runtime context engines are adopted from the
+ * composition-root registry instead of re-running `registrationMode: "full"`.
+ */
+export function adoptRuntimeContextEngineRegistrations(
   targetRegistry: PluginRegistry,
   runtimeRegistry: PluginRegistry,
-): void {
-  for (const [id, target] of targetRegistry.contextEngines) {
-    if (target.lifecycle !== "readOnlyDiscovery") {
+): PluginRegistry {
+  let adopted: Map<string, ContextEngineRegistration> | undefined;
+  const takeAdopted = () => {
+    adopted ??= new Map(targetRegistry.contextEngines);
+    return adopted;
+  };
+
+  for (const [id, runtime] of runtimeRegistry.contextEngines) {
+    if (runtime.lifecycle !== "runtime") {
       continue;
     }
-    const runtime = runtimeRegistry.contextEngines.get(id);
-    if (!runtime || runtime.lifecycle !== "runtime" || runtime.owner !== target.owner) {
+    const target = targetRegistry.contextEngines.get(id);
+    if (target?.lifecycle === "runtime") {
       continue;
     }
-    const pluginId = pluginIdFromContextEngineOwner(target.owner);
-    const targetPlugin = targetRegistry.plugins.find((plugin) => plugin.id === pluginId);
-    const runtimePlugin = runtimeRegistry.plugins.find((plugin) => plugin.id === pluginId);
-    // Same ids can come from workspace shadows. Only carry a factory across registry generations
-    // when both registrations came from the exact same trusted plugin source.
-    if (!targetPlugin || !runtimePlugin || targetPlugin.source !== runtimePlugin.source) {
+    if (target && target.owner !== runtime.owner) {
       continue;
     }
-    targetRegistry.contextEngines.set(id, runtime);
+    if (
+      !canAdoptRuntimeContextEngineFromRoot({
+        pluginId: pluginIdFromContextEngineOwner(runtime.owner),
+        targetRegistry,
+        runtimeRegistry,
+      })
+    ) {
+      continue;
+    }
+    takeAdopted().set(id, runtime);
   }
+
+  if (!adopted) {
+    return targetRegistry;
+  }
+  // Copy-on-write so cached discovery snapshots are not mutated into runtime handles.
+  return { ...targetRegistry, contextEngines: adopted };
 }
 
 /** Clear runtime quarantine only after a complete builder-local registry becomes active. */
