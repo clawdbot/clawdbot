@@ -168,8 +168,20 @@ function filterDefaultDenyForExplicitAllows(params: {
 }
 
 function expandResolvedPolicy(policy: SandboxToolPolicy): SandboxToolPolicy {
-  const expandedDeny = expandToolGroups(policy.deny ?? []);
+  let expandedDeny = expandToolGroups(policy.deny ?? []);
   let expandedAllow = expandToolGroups(policy.allow ?? []);
+  const denyPatterns = compileGlobPatterns({
+    raw: expandedDeny,
+    normalize: normalizeToolPolicyName,
+  });
+  // Shipped sandbox denies are security boundaries. Keep the old spelling
+  // fail-closed until Doctor rewrites it, without restoring a runtime alias.
+  if (
+    matchesAnyGlobPattern("image", denyPatterns) &&
+    !matchesAnyGlobPattern("view_image", denyPatterns)
+  ) {
+    expandedDeny = [...expandedDeny, "view_image"];
+  }
   const expandedDenyLower = expandedDeny.map(normalizeLowercaseStringOrEmpty);
   const expandedAllowLower = expandedAllow.map(normalizeLowercaseStringOrEmpty);
 
