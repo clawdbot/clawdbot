@@ -1061,6 +1061,18 @@
       "title": "Apply Patch",
       "detailKeys": []
     },
+    "image": {
+      "emoji": "🖼️",
+      "title": "Image",
+      "detailKeys": [
+        "path",
+        "paths",
+        "url",
+        "urls",
+        "prompt",
+        "model"
+      ]
+    },
     "view_image": {
       "emoji": "🖼️",
       "title": "View Image",
