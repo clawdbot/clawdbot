@@ -3098,8 +3098,8 @@ describe("runMemoryFlushIfNeeded", () => {
         {
           type: "message",
           message: {
-            role: "tool",
-            content: `large interrupted tool output ${"x".repeat(450_000)}`,
+            role: "user",
+            content: `large follow-up ${"x".repeat(450_000)}`,
           },
         },
       ],
@@ -3155,8 +3155,8 @@ describe("runMemoryFlushIfNeeded", () => {
         {
           type: "message",
           message: {
-            role: "tool",
-            content: `moderate interrupted tool output ${"x".repeat(36_000)}`,
+            role: "user",
+            content: `moderate follow-up ${"x".repeat(36_000)}`,
           },
         },
       ],
