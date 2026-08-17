@@ -348,6 +348,21 @@
   text-decoration: underline;
 }
 
+:is(.chat-text, .sidebar-markdown) a.markdown-session-link--titled {
+  display: inline-block;
+  max-width: min(28em, 100%);
+  padding: 0.08em 0.45em;
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
+  color: var(--text-strong);
+  font-family: var(--font-body);
+  font-weight: 600;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: -0.12em;
+  white-space: nowrap;
+}
+
 :is(.chat-text, .sidebar-markdown) a.markdown-session-link > code {
   padding: 0;
   border: 0;

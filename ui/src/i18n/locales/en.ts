@@ -160,6 +160,12 @@ export const en: TranslationMap = {
     issue: "issue",
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, by {author}",
   },
+  sessionPreview: {
+    loading: "Loading session details…",
+    unavailable: "Session preview unavailable",
+    archived: "Archived",
+    ariaLabel: "Session: {title}",
+  },
   channels: {
     lastError: "Last error",
     refreshingStaleSnapshot:

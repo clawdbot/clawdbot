@@ -802,6 +802,10 @@ openclaw-github-link-hovercard-provider {
   display: contents;
 }
 
+openclaw-session-link-hovercard-provider {
+  display: contents;
+}
+
 .github-link-hovercard {
   position: fixed;
   z-index: 1990;
@@ -1045,6 +1049,129 @@ openclaw-github-link-hovercard-provider {
   }
 
   .github-link-hovercard__loading::before {
+    animation: none;
+  }
+}
+
+.session-link-hovercard {
+  position: fixed;
+  z-index: 1990;
+  width: min(400px, calc(100vw - 24px));
+  min-height: 96px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 88%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-family: var(--font-body);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(-5px) scale(0.99);
+  transform-origin: bottom left;
+  transition:
+    opacity var(--duration-normal) var(--ease-out),
+    transform var(--duration-normal) var(--ease-out);
+}
+
+.session-link-hovercard[data-side="bottom"] {
+  transform: translateY(5px) scale(0.99);
+  transform-origin: top left;
+}
+
+.session-link-hovercard[data-open="true"] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.session-link-hovercard__title {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.session-link-hovercard__meta {
+  margin-top: 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.session-link-hovercard__message {
+  display: -webkit-box;
+  margin-top: 14px;
+  color: var(--text);
+  font-size: var(--control-ui-text-md);
+  line-height: 1.45;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.session-link-hovercard__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.session-link-hovercard__archived {
+  padding: 3px 7px;
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+}
+
+.session-link-hovercard__time {
+  margin-left: auto;
+}
+
+.session-link-hovercard__loading,
+.session-link-hovercard__unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 64px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.session-link-hovercard__loading::before {
+  width: 18px;
+  height: 18px;
+  margin-right: 9px;
+  border: 2px solid color-mix(in srgb, var(--muted) 25%, transparent);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  content: "";
+  animation: session-hovercard-spin 0.8s linear infinite;
+}
+
+@keyframes session-hovercard-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 560px) {
+  .session-link-hovercard {
+    padding: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-link-hovercard {
+    transition: none;
+  }
+
+  .session-link-hovercard__loading::before {
     animation: none;
   }
 }

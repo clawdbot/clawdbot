@@ -7,6 +7,7 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/openclaw-mascot.ts";
+import "../components/session-link-hovercard-registration.ts";
 import "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -362,11 +363,16 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return html`
       <openclaw-tooltip-provider>
         <openclaw-github-link-hovercard-provider .client=${gatewaySnapshot.client}>
-          ${gatewayUrlConfirmation}
-          <openclaw-app-shell
-            .runtime=${runtime}
-            .onboarding=${this.onboarding}
-          ></openclaw-app-shell>
+          <openclaw-session-link-hovercard-provider
+            .client=${gatewaySnapshot.client}
+            .context=${context}
+          >
+            ${gatewayUrlConfirmation}
+            <openclaw-app-shell
+              .runtime=${runtime}
+              .onboarding=${this.onboarding}
+            ></openclaw-app-shell>
+          </openclaw-session-link-hovercard-provider>
         </openclaw-github-link-hovercard-provider>
       </openclaw-tooltip-provider>
     `;
