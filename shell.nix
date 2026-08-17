@@ -1,4 +1,6 @@
-{ pkgs ? import <nixpkgs> {} }:
+{
+  pkgs ? import <nixpkgs> { },
+}:
 
 let
   nodejs = pkgs.nodejs_24;
@@ -30,8 +32,6 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
-    # Suppress corepack shim interference — pnpm comes from nixpkgs
-    export COREPACK_ENABLE_SHIM=0
     echo "openclaw dev shell  node $(node -v)  pnpm $(pnpm -v)  bun $(bun --version)"
   '';
 }
