@@ -3,6 +3,7 @@
  * node-exec routing guarantees.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveSandboxRuntimeStatus, type SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { isCodexRemoteExecPlacementSandbox } from "./config-parsing.js";
 import {
@@ -164,11 +165,12 @@ export function resolveCodexNativeSandboxBlock(params: {
   if (isCodexRemoteExecPlacementSandbox(params.sandbox) || params.sandbox?.enabled === true) {
     return formatCodexNativeSandboxBlock({ surface: params.surface });
   }
+  const sandboxAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? params.agentId;
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     sessionKey,
-    agentId: params.agentId,
-    classificationAgentId: params.agentId,
+    agentId: sandboxAgentId,
+    classificationAgentId: sandboxAgentId,
   });
   if (!runtime.sandboxed) {
     return undefined;

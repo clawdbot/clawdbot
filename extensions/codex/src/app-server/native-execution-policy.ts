@@ -8,7 +8,7 @@ import {
  * or whether OpenClaw must keep exec/process on a configured node host.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
 import { getSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 
@@ -62,14 +62,15 @@ export function resolveCodexNativeExecutionPolicy(params: {
     (canReadSessionEntry && sessionKey
       ? readRuntimeSessionEntryBestEffort({ sessionKey, agentId })
       : undefined);
+  const sandboxAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? agentId;
   const sandboxAvailable =
     params.sandboxAvailable ??
     (sessionKey
       ? resolveSandboxRuntimeStatus({
           cfg: config,
           sessionKey,
-          agentId,
-          classificationAgentId: agentId,
+          agentId: sandboxAgentId,
+          classificationAgentId: sandboxAgentId,
         }).sandboxed
       : false);
   const agentExec = resolvePolicyAgentExec({ config, agentId });
