@@ -105,6 +105,8 @@ RECOVERY_CURRENT_RECEIPT_SHA=""
 RECOVERY_RESTORED_MIGRATION_IDENTITY=""
 RECOVERY_RELAUNCHED_ADOPTED_PID=""
 RECOVERY_RESUMED=0
+UNSAFE_ELEVATION_APP_QUARANTINE=""
+UNSAFE_ELEVATION_APP_WAS_QUARANTINED=0
 OPENCLAW_CLI=()
 
 fail() {
@@ -366,6 +368,12 @@ elevation_app_is_cua_free() {
   [[ ! -e "$cua_driver" && ! -L "$cua_driver" ]]
 }
 
+elevation_ownership_is_evidenced() {
+  [[ -n "$ROLLBACK_ELEVATION_PLIST" || -n "$ROLLBACK_INSTALL_RECEIPT" ||
+    -n "$RECOVERY_CURRENT_PLIST" || -n "$RECOVERY_CURRENT_RECEIPT" ||
+    -e "$PLIST_PATH" || -L "$PLIST_PATH" ]]
+}
+
 quarantine_elevation_plist() {
   local description="$1" quarantine_path source_identity source_sha="" source_kind
   [[ -e "$PLIST_PATH" || -L "$PLIST_PATH" ]] || return 0
@@ -420,6 +428,44 @@ neutralize_unsafe_elevation_launch_agent() {
     backup_file_matches "$evidence_path" "$evidence_sha" || neutralization_failed=1
   fi
   [[ "$neutralization_failed" == "0" ]]
+}
+
+quarantine_entry_unsafe_elevation_app() {
+  local app_identity quarantine_container quarantine_app quarantine_failed=0
+  elevation_ownership_is_evidenced || return 0
+  [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]] || return 0
+  elevation_app_is_cua_free "$APP_PATH" && return 0
+
+  neutralize_unsafe_elevation_launch_agent 'entry for unsafe elevation app' '' '' ||
+    quarantine_failed=1
+  if app_identity="$(durable_path_identity "$APP_PATH")"; then
+    if quarantine_container="$(mktemp -d "$STATE_DIR/elevation-host.quarantined-app.XXXXXX")"; then
+      quarantine_app="$quarantine_container/OpenClaw.app"
+      rename_app_exclusively "$APP_PATH" "$quarantine_app" || quarantine_failed=1
+      if [[ -d "$quarantine_app" && ! -L "$quarantine_app" ]] &&
+        path_matches_identity "$quarantine_app" "$app_identity" &&
+        ! elevation_app_is_cua_free "$quarantine_app" &&
+        [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]]
+      then
+        UNSAFE_ELEVATION_APP_QUARANTINE="$quarantine_app"
+        UNSAFE_ELEVATION_APP_WAS_QUARANTINED=1
+        fsync_parent "$APP_PATH" || quarantine_failed=1
+      else
+        quarantine_failed=1
+      fi
+    else
+      quarantine_failed=1
+    fi
+  else
+    quarantine_failed=1
+  fi
+  [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || quarantine_failed=1
+  [[ ! -e "$PLIST_PATH" && ! -L "$PLIST_PATH" ]] || quarantine_failed=1
+  if [[ "$UNSAFE_ELEVATION_APP_WAS_QUARANTINED" == "1" ]]; then
+    printf 'Quarantined CUA-bearing elevation app outside its launchd path at %s\n' \
+      "$UNSAFE_ELEVATION_APP_QUARANTINE" >&2
+  fi
+  [[ "$quarantine_failed" == "0" ]]
 }
 
 # Canonical elevation identity check: a strict superset of verify_elevation_signature in
@@ -2229,6 +2275,8 @@ install_host() {
 recover_install() {
   local recovery_failed=0 elevation_state restored_state prior_owner_state
   local unsafe_previous_elevation=0 rollback_app_candidate=""
+  quarantine_entry_unsafe_elevation_app || return 1
+  [[ "$UNSAFE_ELEVATION_APP_WAS_QUARANTINED" == "0" ]] || recovery_failed=1
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -n "$ROLLBACK_APP_PATH" ]]; then
     verify_recorded_rollback_app "$APP_PATH" ||
       verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || return 1
@@ -2236,16 +2284,14 @@ recover_install() {
   if [[ (-n "$ROLLBACK_ELEVATION_PLIST" || -n "$ROLLBACK_INSTALL_RECEIPT") &&
     -n "$ROLLBACK_APP_PATH" ]]
   then
-    if verify_recorded_rollback_app "$ROLLBACK_APP_PATH"; then
+    if [[ -d "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] &&
+      ! elevation_app_is_cua_free "$ROLLBACK_APP_PATH"
+    then
       rollback_app_candidate="$ROLLBACK_APP_PATH"
-    elif verify_recorded_rollback_app "$APP_PATH"; then
+    elif [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]] && ! elevation_app_is_cua_free "$APP_PATH"; then
       rollback_app_candidate="$APP_PATH"
     fi
-    if [[ -n "$rollback_app_candidate" ]] &&
-      ! elevation_app_is_cua_free "$rollback_app_candidate"
-    then
-      unsafe_previous_elevation=1
-    fi
+    [[ -z "$rollback_app_candidate" ]] || unsafe_previous_elevation=1
   fi
   if [[ "$unsafe_previous_elevation" == "0" ]]; then
     [[ -z "$ROLLBACK_ELEVATION_PLIST" ]] ||
@@ -2479,6 +2525,12 @@ recover_install() {
 restore_current_generation_after_recovery_failure() {
   local restore_failed=0 app_restore_failed=0 state
   local unsafe_current_elevation=0 current_app_evidence_path=""
+  quarantine_entry_unsafe_elevation_app || return 1
+  if [[ "$UNSAFE_ELEVATION_APP_WAS_QUARANTINED" == "1" ]]; then
+    unsafe_current_elevation=1
+    current_app_evidence_path="$UNSAFE_ELEVATION_APP_QUARANTINE"
+    app_restore_failed=1
+  fi
 
   if [[ "$RECOVERY_RELAUNCHED_ADOPTED_PID" =~ ^[0-9]+$ ]]; then
     ADOPTION_PID="$RECOVERY_RELAUNCHED_ADOPTED_PID"
@@ -2528,16 +2580,17 @@ restore_current_generation_after_recovery_failure() {
     [[ "$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")" == "absent" ]] || return 1
   fi
 
-  if [[ "$RECOVERY_CURRENT_APP_STATE" == "valid" ||
-    "$RECOVERY_CURRENT_APP_STATE" == "damaged" ]]
+  if [[ "$unsafe_current_elevation" == "0" &&
+    ( "$RECOVERY_CURRENT_APP_STATE" == "valid" ||
+    "$RECOVERY_CURRENT_APP_STATE" == "damaged" ) ]]
   then
-    if [[ -n "$RECOVERED_FAILED_APP_PATH" ]] &&
-      verify_recorded_current_app "$RECOVERED_FAILED_APP_PATH" &&
+    if [[ -n "$RECOVERED_FAILED_APP_PATH" && -d "$RECOVERED_FAILED_APP_PATH" &&
+      ! -L "$RECOVERED_FAILED_APP_PATH" ]] &&
       ! elevation_app_is_cua_free "$RECOVERED_FAILED_APP_PATH"
     then
       unsafe_current_elevation=1
       current_app_evidence_path="$RECOVERED_FAILED_APP_PATH"
-    elif verify_recorded_current_app "$APP_PATH" && ! elevation_app_is_cua_free "$APP_PATH"; then
+    elif [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]] && ! elevation_app_is_cua_free "$APP_PATH"; then
       unsafe_current_elevation=1
       if preserve_current_app_for_recovery 'unsafe current elevation app'; then
         current_app_evidence_path="$RECOVERED_FAILED_APP_PATH"
