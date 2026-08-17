@@ -538,11 +538,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return refresh({ ...options, force: true });
     },
     lastOptions: () => lastListOptions,
-    scheduleEvent(options: { agentId?: string | null; filtered?: boolean } = {}) {
+    scheduleEvent(options: { agentId?: string | null } = {}) {
       eventRefreshCoordinator.schedule();
-      if (options.filtered === false) {
-        return;
-      }
       const agentId = options.agentId ? normalizeAgentId(options.agentId) : null;
       for (const entry of managedLists.values()) {
         const queryAgentId = managedSessionListAgentId(entry);

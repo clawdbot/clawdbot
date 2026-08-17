@@ -187,6 +187,88 @@ describe("event-driven session list refresh", () => {
     }
   });
 
+  it("refreshes a Sessions-style managed query after a terminal session message", async () => {
+    vi.useFakeTimers();
+    const key = "agent:main:main";
+    const calls = { canonical: 0, main: 0, research: 0 };
+    const request = vi.fn(
+      async (method: string, params?: { agentId?: string; includeUnknown?: boolean }) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        const lane =
+          params?.includeUnknown === true
+            ? "canonical"
+            : params?.agentId === "main"
+              ? "main"
+              : "research";
+        calls[lane] += 1;
+        const done = lane !== "research" && calls[lane] > 1;
+        const rowKey = lane === "research" ? "agent:research:other" : key;
+        return sessionsResult(calls[lane], [
+          {
+            key: rowKey,
+            kind: "direct",
+            updatedAt: calls[lane],
+            hasActiveRun: !done,
+            status: done ? "done" : "running",
+          },
+        ]);
+      },
+    );
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const mainQuery = {
+      agentId: "main",
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: false,
+      includeDerivedTitles: false,
+      includeLastMessage: false,
+      archivedFilter: "active" as const,
+    };
+    const researchQuery = { ...mainQuery, agentId: "research" };
+    const stopMain = sessions.subscribeList(mainQuery, () => undefined);
+    const stopResearch = sessions.subscribeList(researchQuery, () => undefined);
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      await sessions.refreshList({ ...mainQuery, force: true });
+      await sessions.refreshList({ ...researchQuery, force: true });
+      expect(sessions.listSnapshot(mainQuery).result?.sessions[0]).toMatchObject({
+        hasActiveRun: true,
+        status: "running",
+      });
+      request.mockClear();
+
+      emitEvent({
+        type: "event",
+        event: "session.message",
+        payload: { sessionKey: key, updatedAt: 1, status: "done" },
+      });
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(calls).toEqual({ canonical: 2, main: 2, research: 1 });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        key,
+        hasActiveRun: false,
+        status: "done",
+      });
+      expect(sessions.listSnapshot(mainQuery).result?.sessions[0]).toMatchObject({
+        key,
+        hasActiveRun: false,
+        status: "done",
+      });
+    } finally {
+      stopMain();
+      stopResearch();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("retains every loaded page when a session event replaces the canonical list", async () => {
     vi.useFakeTimers();
     const rows = Array.from({ length: 120 }, (_, index) => ({
