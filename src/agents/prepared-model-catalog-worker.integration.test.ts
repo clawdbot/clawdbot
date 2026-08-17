@@ -38,6 +38,7 @@ import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.fa
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 const PROVIDER_ID = "worker-catalog-fixture";
+const HARNESS_ID = "worker-catalog-fixture-harness";
 const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
 const PLUGIN_ID = "worker-catalog-fixture";
 const PROFILE_ID = `${SHARED_AUTH_PROVIDER_ID}:named`;
@@ -97,6 +98,19 @@ function writeFixturePlugin(params: {
 module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
+    api.registerAgentHarness({
+      id: ${JSON.stringify(HARNESS_ID)},
+      label: "Worker catalog fixture harness",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => ({ ok: false, error: "unused" }),
+      loadModelCatalog: async () => [{
+        provider: ${JSON.stringify(PROVIDER_ID)},
+        id: "account-scoped-model",
+        name: "Account scoped model",
+        api: "openai-completions",
+        baseUrl: "https://worker-catalog.invalid/v1",
+      }],
+    });
     api.registerProvider({
       id: ${JSON.stringify(PROVIDER_ID)},
       label: "Worker catalog fixture",
@@ -210,7 +224,14 @@ async function createStaticSnapshot(
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
   const config = {
-    agents: { defaults: { model: `${PROVIDER_ID}/sqlite-model` } },
+    agents: {
+      defaults: {
+        model: `${PROVIDER_ID}/sqlite-model`,
+        models: {
+          [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
+        },
+      },
+    },
     plugins: {
       allow: [PLUGIN_ID],
       load: { paths: [pluginFile] },
@@ -293,6 +314,23 @@ async function waitForMarker(marker: string): Promise<void> {
 }
 
 describe("prepared model catalog worker boundary", () => {
+  it("publishes account-scoped harness models only in the full catalog", async () => {
+    const fixture = await createStaticSnapshot(0);
+
+    expect(fixture.snapshot.modelCatalog.entries).not.toContainEqual(
+      expect.objectContaining({ id: "account-scoped-model" }),
+    );
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "account-scoped-model",
+      }),
+    );
+  });
+
   it("refreshes durable auth before provider hooks decide catalog membership", async () => {
     const fixture = await createStaticSnapshot(0);
     saveAuthProfileStore(

@@ -174,6 +174,13 @@ export function createCodexAppServerAgentHarness(
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    loadModelCatalog: async (params) => {
+      const { loadCodexAppServerModelCatalog } = await import("./src/app-server/model-catalog.js");
+      return await loadCodexAppServerModelCatalog(
+        params,
+        resolveAttemptPluginConfig(params.config),
+      );
+    },
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");

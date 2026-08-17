@@ -81,6 +81,7 @@ export type {
   AgentHarnessNativeCompaction,
   AgentHarnessNativeCompactionParams,
   AgentHarnessNativeCompactionRequest,
+  AgentHarnessModelCatalogParams,
   AgentHarnessRegistrationOptions,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
