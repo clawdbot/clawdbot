@@ -3,9 +3,11 @@ import type MarkdownIt from "markdown-it";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { icons } from "./icons.ts";
+import { toolIcons } from "./icons-tools.ts";
+import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
-const tableShellSelector = ".markdown-table";
+const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
@@ -18,10 +20,20 @@ type TableOwnerState = {
 };
 
 export function installMarkdownTables(markdownParser: MarkdownIt): void {
-  markdownParser.renderer.rules.table_open = () =>
-    '<div class="markdown-table"><div class="markdown-table__viewport"><table>';
-  markdownParser.renderer.rules.table_close = () =>
-    `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div></div>`;
+  const defaultTableOpen = markdownParser.renderer.rules.table_open;
+  const defaultTableClose = markdownParser.renderer.rules.table_close;
+  markdownParser.renderer.rules.table_open = (tokens, index, options, env, renderer) => {
+    if ((env as Partial<MarkdownRenderEnv>).tableInteractions !== "enabled") {
+      return defaultTableOpen?.(tokens, index, options, env, renderer) ?? "<table>\n";
+    }
+    return '<div class="markdown-table" data-table-interactions><div class="markdown-table__viewport"><table>';
+  };
+  markdownParser.renderer.rules.table_close = (tokens, index, options, env, renderer) => {
+    if ((env as Partial<MarkdownRenderEnv>).tableInteractions !== "enabled") {
+      return defaultTableClose?.(tokens, index, options, env, renderer) ?? "</table>\n";
+    }
+    return `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div></div>`;
+  };
 }
 
 function tableText(table: HTMLTableElement): string {
@@ -55,7 +67,7 @@ function enhanceTableShell(shell: HTMLElement, resizeObserver?: ResizeObserver |
     return;
   }
   enhancedTableShells.add(shell);
-  render(icons.maximize, expand);
+  render(toolIcons.maximize, expand);
   render(icons.copy, copy);
   viewport.addEventListener("scroll", () => syncTableOverflow(shell), { passive: true });
   resizeObserver?.observe(viewport);
