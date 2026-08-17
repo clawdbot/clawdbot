@@ -49,9 +49,8 @@ export function mergeReplyDirectiveResults(
     replyToTag: first.replyToTag || second.replyToTag,
     audioAsVoice: first.audioAsVoice || second.audioAsVoice || undefined,
     isSilent: first.isSilent || second.isSilent,
-    mediaTokenSkippedInFence: Boolean(
-      first.mediaTokenSkippedInFence || second.mediaTokenSkippedInFence,
-    ),
+    mediaTokenSkippedInFence:
+      first.mediaTokenSkippedInFence === true || second.mediaTokenSkippedInFence === true,
     fencedSkippedMediaDirectives,
   };
 }

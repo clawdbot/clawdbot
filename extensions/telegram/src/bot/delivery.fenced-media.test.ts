@@ -5,17 +5,66 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const warnFencedMediaSkipsForAcceptedOutboundDelivery = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", () => ({
-  createDirectAcceptedFencedMediaWarnLatch: () => ({
-    afterAcceptedVisibleText: (...args: unknown[]) =>
-      warnFencedMediaSkipsForAcceptedOutboundDelivery(
-        ...(args as Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>),
-      ),
-  }),
-  warnFencedMediaSkipsForAcceptedOutboundDelivery: (
-    ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
-  ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
-}));
+vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async () => {
+  // Keep plan+identity behavior local to the test: production latch imports the warn
+  // helper via a relative path, so mocking only the runtime export of `warn*` is not
+  // enough. Mirror createDirectAcceptedFencedMediaWarnLatch with the real plan builder.
+  const { createOutboundPayloadPlan } = await import("openclaw/plugin-sdk/channel-outbound");
+  return {
+    warnFencedMediaSkipsForAcceptedOutboundDelivery: (
+      ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
+    ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
+    createDirectAcceptedFencedMediaWarnLatch: (params: {
+      payload: object;
+      cfg?: unknown;
+      surface?: string;
+    }) => {
+      const planEntry = createOutboundPayloadPlan([params.payload as never], {
+        cfg: params.cfg as never,
+        surface: params.surface,
+      })[0];
+      if (!planEntry?.mediaTokenSkippedInFence) {
+        return { afterAcceptedVisibleText(_chunk: string) {} };
+      }
+      let warned = false;
+      let acceptedVisibleText = "";
+      const identities = planEntry.fencedSkippedMediaDirectives ?? [];
+      return {
+        afterAcceptedVisibleText(visibleChunk: string) {
+          if (warned) {
+            return;
+          }
+          if (visibleChunk.trim()) {
+            acceptedVisibleText = acceptedVisibleText
+              ? `${acceptedVisibleText}\n${visibleChunk}`
+              : visibleChunk;
+          }
+          const retained =
+            identities.length > 0
+              ? identities.some((directive: string) => {
+                  const identity = directive.trim();
+                  return (
+                    identity.length > 0 &&
+                    acceptedVisibleText.split("\n").some((line) => line.trim() === identity)
+                  );
+                })
+              : /media:/i.test(acceptedVisibleText);
+          if (!retained) {
+            return;
+          }
+          warned = true;
+          warnFencedMediaSkipsForAcceptedOutboundDelivery([
+            {
+              text: acceptedVisibleText,
+              mediaTokenSkippedInFence: true,
+              fencedSkippedMediaDirectives: identities,
+            },
+          ]);
+        },
+      };
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: vi.fn(),
