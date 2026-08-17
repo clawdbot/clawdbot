@@ -372,6 +372,8 @@ describe("WorkboardPage lifecycle", () => {
     expect(Boolean(chip)).toBe(visible);
     if (visible) {
       expect(chip?.getAttribute("href")).toBe("/automations");
+      expect(chip?.getAttribute("title")).toBe("Open Automations");
+      expect(chip?.getAttribute("aria-label")).toBe("Open Automations");
       expect(chip?.textContent?.trim()).toBe("Automation");
     }
   });

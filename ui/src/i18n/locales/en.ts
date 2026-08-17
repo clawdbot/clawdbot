@@ -3662,7 +3662,7 @@ export const en: TranslationMap = {
     boardFilter: "Filter by board",
     defaultBoard: "Default board",
     automationAttached: "Automation",
-    automationAttachedTitle: "Open the attached automation",
+    automationAttachedTitle: "Open Automations",
     boardFilterSummary: "{active} active · {total} total",
     boardFilterArchivedSummary: "Archived · {active} active · {total} total",
     agentFilterUnassigned: "Unassigned (uses {agent})",
