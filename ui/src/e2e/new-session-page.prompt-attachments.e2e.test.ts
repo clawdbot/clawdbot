@@ -34,6 +34,34 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
 }
 
 suite.define(() => {
+  it("restores a text-only prompt in a fresh page", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    try {
+      const text = "restore this text-only prompt after restart";
+      const firstPage = await context.newPage();
+      await installMockGateway(firstPage);
+      await firstPage.goto(`${suite.server.baseUrl}new`);
+      const firstMessage = firstPage.locator(".new-session-page__message");
+      await firstMessage.fill(text);
+      await firstPage.reload();
+      await expect.poll(() => firstMessage.inputValue()).toBe(text);
+      await firstPage.close();
+
+      const restoredPage = await context.newPage();
+      await installMockGateway(restoredPage);
+      await restoredPage.goto(`${suite.server.baseUrl}new`);
+      await expect
+        .poll(() => restoredPage.locator(".new-session-page__message").inputValue())
+        .toBe(text);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("restores a prompt and image in a fresh page, then clears them after creation", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     if (artifactDir) {

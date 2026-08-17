@@ -1,7 +1,5 @@
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
-import { navigateWithRouteTransition } from "../../app/route-transition.ts";
 import { t } from "../../i18n/index.ts";
 import {
   readSessionMethodAccess,
@@ -28,6 +26,7 @@ import {
   type NewSessionVisibility,
 } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
+import { navigateToStartedSession } from "./draft-navigation-handoff.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type {
@@ -102,6 +101,11 @@ export class DraftSubmissionFlow {
   setMessage(message: string) {
     this.messageValue = message;
     this.draftPersistence.noteUserMutation();
+    this.callbacks.requestUpdate();
+  }
+
+  restoreMessage(message: string) {
+    this.messageValue = message;
     this.callbacks.requestUpdate();
   }
 
@@ -369,22 +373,6 @@ export class DraftSubmissionFlow {
     this.callbacks.requestUpdate();
   }
 
-  private navigateToStartedSession(
-    context: ApplicationContext,
-    options: ApplicationNavigationOptions,
-  ): Promise<void> {
-    // Keep transition code on the lazy new-session path instead of the startup bundle.
-    return navigateWithRouteTransition({
-      document,
-      from: "new-session",
-      to: "chat",
-      prefersReducedMotion:
-        globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
-      prepare: () => context.preload("chat", options),
-      navigate: () => context.navigateAndWait("chat", options),
-    }).catch(() => undefined);
-  }
-
   async submit() {
     const context = this.read().context;
     if (!context || !this.canSubmit()) {
@@ -576,7 +564,7 @@ export class DraftSubmissionFlow {
           sessionKey: result.key,
           agentId: submissionAgentId,
         });
-        await this.navigateToStartedSession(
+        await navigateToStartedSession(
           context,
           sessionNavigationTarget({
             context,
@@ -624,7 +612,7 @@ export class DraftSubmissionFlow {
         sessionKey: result.key,
         agentId: submissionAgentId,
       });
-      await this.navigateToStartedSession(
+      await navigateToStartedSession(
         context,
         sessionNavigationTarget({
           context,
