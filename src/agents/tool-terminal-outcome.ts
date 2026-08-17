@@ -71,10 +71,12 @@ export function createToolTerminalObserver(
           : {}),
       };
       for (const fileTarget of (mutatingAction ? fileTargets : undefined) ?? [undefined]) {
-        lastToolError = errors.recordFailure({
+        const failureState = errors.recordFailure({
           ...failure,
           ...(fileTarget ? { fileTarget } : {}),
         });
+        lastToolError = failureState.lastToolError;
+        lastToolRecovery = failureState.lastToolRecovery;
       }
     } else {
       const success = {
@@ -83,14 +85,9 @@ export function createToolTerminalObserver(
         ...(observation.ownerMutation ? { ownerKey: observation.ownerMutation.ownerKey } : {}),
         ...(mutation.actionFingerprint ? { actionFingerprint: mutation.actionFingerprint } : {}),
       };
-      for (const fileTarget of fileTargets ?? [undefined]) {
-        const successState = errors.recordSuccess({
-          ...success,
-          ...(fileTarget ? { fileTarget } : {}),
-        });
-        lastToolError = successState.lastToolError;
-        lastToolRecovery = successState.lastToolRecovery;
-      }
+      const successState = errors.recordSuccess(success, fileTargets);
+      lastToolError = successState.lastToolError;
+      lastToolRecovery = successState.lastToolRecovery;
     }
 
     return {

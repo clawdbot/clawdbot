@@ -72,6 +72,23 @@ describe("tool terminal outcome observer", () => {
     expect(payloads.map((payload) => payload.text)).toEqual(["✅ ✍️ Write succeeded after retry."]);
     expect(JSON.stringify(payloads)).not.toContain("TOP_SECRET");
     expect(JSON.stringify(payloads)).not.toContain("/tmp/demo.txt");
+
+    const afterUnrelatedFailure = observe({
+      toolName: "message",
+      arguments: { action: "send", to: "channel:other", message: "hello" },
+      outcome: "failure",
+      failure: { error: "send failed" },
+    });
+    expect(afterUnrelatedFailure.lastToolError).toMatchObject({ error: "send failed" });
+    expect(afterUnrelatedFailure.lastToolRecovery).toEqual({ toolName: "write" });
+
+    const afterSameTargetFailure = observe({
+      toolName: "edit",
+      arguments: { path: "/tmp/demo.txt", oldText: "after", newText: "later" },
+      outcome: "failure",
+      failure: { error: "second edit failed" },
+    });
+    expect(afterSameTargetFailure.lastToolRecovery).toBeUndefined();
   });
 
   it("uses host execution and adjusted-argument evidence before fallback facts", () => {
