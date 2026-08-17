@@ -281,6 +281,26 @@ describe("plugin harness prompt media", () => {
           pluginHarnessOwnsTransport: true,
         } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
       ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+
+      // Session-key owner wins over a conflicting explicit agentId, mirroring
+      // the CLI runner's owner resolution: arthur's staging hydrates even when
+      // the caller passes the sibling's agentId alongside arthur's session key.
+      const sessionOwnerResult = await preparePluginHarnessPromptImages({
+        runParams: {
+          agentId: "merlin",
+          sessionKey: "agent:arthur:main",
+          config,
+          media: [{ path: imagePath, contentType: "image/png" }],
+          sessionId: "session-agent-media",
+        },
+        runtime: {
+          model: { input: ["text", "image"] },
+          sessionId: "session-agent-media",
+          workspaceDir,
+        },
+        pluginHarnessOwnsTransport: true,
+      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+      expect(sessionOwnerResult.images ?? []).toHaveLength(1);
     } finally {
       envSnapshot.restore();
       await fs.rm(stateDir, { recursive: true, force: true });
