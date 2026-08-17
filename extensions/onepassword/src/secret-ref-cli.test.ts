@@ -21,14 +21,17 @@ function captureStdout() {
   return () => output;
 }
 
-function createProgram(config: OpenClawConfig = {}): Command {
+function createProgram(
+  config: OpenClawConfig = {},
+  options: { env?: NodeJS.ProcessEnv; tokenFile?: string } = {},
+): Command {
   const program = new Command().exitOverride();
   const onepassword = program.command("onepassword");
   registerOnePasswordSecretRefCommands({
     command: onepassword,
     config,
-    tokenFile: path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
-    env: { PATH: "" },
+    tokenFile: options.tokenFile ?? path.join(os.tmpdir(), "openclaw-onepassword-missing-token"),
+    env: options.env ?? { PATH: "" },
   });
   return program;
 }
@@ -258,6 +261,7 @@ describe("1Password readiness", () => {
     ).resolves.toEqual({
       opCommand: "/trusted/op",
       opBinaryPath: "/trusted/op",
+      opError: null,
       opStatus: "ready",
       tokenFile: "/state/credentials/onepassword/service-account-token",
       tokenFileStatus: "ready",
@@ -288,6 +292,7 @@ describe("1Password readiness", () => {
     ).resolves.toEqual({
       opCommand: "op",
       opBinaryPath: null,
+      opError: null,
       opStatus: "untrusted",
       tokenFile: "/missing-token",
       tokenFileStatus: "missing-or-unsafe",
@@ -297,6 +302,31 @@ describe("1Password readiness", () => {
 });
 
 describe("1Password CLI status", () => {
+  it.skipIf(process.platform === "win32")(
+    "explains why a discovered op executable is untrusted",
+    async () => {
+      const tempDir = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-op-untrusted-")),
+      );
+      const executable = path.join(tempDir, "op");
+      const output = captureStdout();
+      try {
+        await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+        await fs.chmod(tempDir, 0o777);
+        await createProgram({}, { env: { PATH: tempDir } }).parseAsync(
+          ["onepassword", "secretref", "status"],
+          { from: "user" },
+        );
+        expect(output().split("\n")).toContain(
+          `op error: Refusing unsafe 1Password CLI path "${executable}": path is writable by another user: ${tempDir}`,
+        );
+      } finally {
+        await fs.chmod(tempDir, 0o700);
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("discovers a configured custom provider alias", async () => {
     const result = await runStatus({
       secrets: {

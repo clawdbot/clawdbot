@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   DEFAULT_SECRET_FILE_MAX_BYTES,
@@ -8,7 +9,10 @@ import {
 import { createPluginSecretRefSetupCli } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
+import {
+  OnePasswordCliPathTrustError,
+  resolveTrustedOnePasswordCli,
+} from "../onepassword-op-path.js";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 
 const ONEPASSWORD_PROVIDER_ALIAS = "onepassword";
@@ -58,6 +62,7 @@ type StatusOptions = {
 type SecretRefReadiness = {
   opCommand: string;
   opBinaryPath: string | null;
+  opError: string | null;
   opStatus: "ready" | "not-found" | "untrusted";
   tokenFile: string;
   tokenFileStatus: "ready" | "missing-or-unsafe";
@@ -92,7 +97,7 @@ async function inspectSecretRefReadiness(
       }));
   const configuredOpCommand = normalizeOptionalString(params.env.CLAW_1PASSWORD_OP);
   const opCommand = configuredOpCommand ?? "op";
-  const { opBinaryPath, opStatus } = await (async () => {
+  const { opBinaryPath, opError, opStatus } = await (async () => {
     try {
       const resolvedPath =
         (await resolveTrustedCli({
@@ -101,10 +106,16 @@ async function inspectSecretRefReadiness(
         })) ?? null;
       return {
         opBinaryPath: resolvedPath,
+        opError: null,
         opStatus: resolvedPath ? ("ready" as const) : ("not-found" as const),
       };
-    } catch {
-      return { opBinaryPath: null, opStatus: "untrusted" as const };
+    } catch (error) {
+      return {
+        opBinaryPath: null,
+        opError:
+          error instanceof OnePasswordCliPathTrustError ? formatErrorMessage(error.message) : null,
+        opStatus: "untrusted" as const,
+      };
     }
   })();
 
@@ -118,6 +129,7 @@ async function inspectSecretRefReadiness(
   return {
     opCommand,
     opBinaryPath,
+    opError,
     opStatus,
     tokenFile: params.tokenFile,
     tokenFileStatus,
@@ -172,6 +184,9 @@ async function runStatus(
   }
   writeLine(`op command: ${readiness.opCommand}`);
   writeLine(`op status: ${readiness.opStatus}`);
+  if (readiness.opError) {
+    writeLine(`op error: ${readiness.opError}`);
+  }
   if (readiness.opBinaryPath) {
     writeLine(`op binary: ${readiness.opBinaryPath}`);
   }
