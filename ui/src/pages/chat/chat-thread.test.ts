@@ -431,6 +431,30 @@ describe("assistant commentary grouping", () => {
     resetChatThreadState(paneId);
   });
 
+  it("keeps an active stream above an already persisted queued user", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-active",
+        messages: [
+          userMessage("Active prompt", 2_000, {
+            __openclaw: { idempotencyKey: "run-active:user" },
+          }),
+          userMessage("Queued follow-up", 3_000, {
+            __openclaw: { idempotencyKey: "run-future:user" },
+          }),
+        ],
+        stream: "Current partial reply",
+        streamStartedAt: 1_000,
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+      "user",
+    ]);
+  });
+
   it("keeps current-run segments below their user boundary under clock skew", () => {
     const items = buildCachedChatItems(
       createProps({

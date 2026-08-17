@@ -120,6 +120,36 @@ suite.define(() => {
       });
       await page.getByText(preSteerReply, { exact: true }).waitFor({ timeout: 10_000 });
 
+      const queuedFollowUp = "queued follow-up before steer";
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [activeRunId],
+        clientRunId: "queued-run",
+        hasActiveRun: true,
+        message: {
+          __openclaw: {
+            id: "persisted-queued-user",
+            idempotencyKey: "queued-run:user",
+            seq: 3,
+          },
+          content: [{ text: queuedFollowUp, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "persisted-queued-user",
+        messageSeq: 3,
+        session: {
+          activeRunIds: [activeRunId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await page.getByText(queuedFollowUp, { exact: true }).waitFor({ timeout: 10_000 });
+      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
+
       const followUp = "tighten the active plan";
       await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
       await page.getByRole("button", { name: "Steer into the active run" }).click();
@@ -147,7 +177,8 @@ suite.define(() => {
         .poll(() => page.locator(".chat-thread .chat-group.user", { hasText: followUp }).count())
         .toBe(1);
       await expectChatBubbleAbove(page, originalPrompt, preSteerReply);
-      await expectChatBubbleAbove(page, preSteerReply, followUp);
+      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
+      await expectChatBubbleAbove(page, queuedFollowUp, followUp);
 
       await gateway.emitGatewayEvent("session.message", {
         activeRunIds: [activeRunId],
@@ -157,7 +188,7 @@ suite.define(() => {
           __openclaw: {
             id: "persisted-steer-user",
             idempotencyKey: `${steerRunId}:user`,
-            seq: 3,
+            seq: 4,
             steerTargetRunId: activeRunId,
           },
           content: [{ text: followUp, type: "text" }],
@@ -165,7 +196,7 @@ suite.define(() => {
           timestamp: Date.now(),
         },
         messageId: "persisted-steer-user",
-        messageSeq: 3,
+        messageSeq: 4,
         session: {
           activeRunIds: [activeRunId],
           hasActiveRun: true,
@@ -197,7 +228,8 @@ suite.define(() => {
       });
       await page.locator(".chat-bubble", { hasText: postSteerReply }).waitFor({ timeout: 10_000 });
       await expectChatBubbleAbove(page, originalPrompt, preSteerReply);
-      await expectChatBubbleAbove(page, preSteerReply, followUp);
+      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
+      await expectChatBubbleAbove(page, queuedFollowUp, followUp);
       await expectChatBubbleAbove(page, followUp, postSteerReply);
       const authoritativeMessages = [
         {
@@ -218,9 +250,19 @@ suite.define(() => {
         },
         {
           __openclaw: {
+            id: "persisted-queued-user",
+            idempotencyKey: "queued-run:user",
+            seq: 3,
+          },
+          content: [{ text: queuedFollowUp, type: "text" }],
+          role: "user",
+          timestamp: 250,
+        },
+        {
+          __openclaw: {
             id: "persisted-steer-user",
             idempotencyKey: `${steerRunId}:user`,
-            seq: 3,
+            seq: 4,
             steerTargetRunId: activeRunId,
           },
           content: [{ text: followUp, type: "text" }],
@@ -228,7 +270,7 @@ suite.define(() => {
           timestamp: 50,
         },
         {
-          __openclaw: { id: "persisted-post-steer", idempotencyKey: activeRunId, seq: 4 },
+          __openclaw: { id: "persisted-post-steer", idempotencyKey: activeRunId, seq: 5 },
           content: [{ text: terminalPostSteerReply, type: "text" }],
           role: "assistant",
           timestamp: 300,
@@ -256,7 +298,8 @@ suite.define(() => {
       await page
         .locator(".chat-bubble", { hasText: terminalPostSteerReply })
         .waitFor({ timeout: 10_000 });
-      await expectChatBubbleAbove(page, preSteerReply, followUp);
+      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
+      await expectChatBubbleAbove(page, queuedFollowUp, followUp);
       await expectChatBubbleAbove(page, followUp, postSteerReply);
 
       await page.reload();
@@ -264,7 +307,8 @@ suite.define(() => {
         .locator(".chat-bubble", { hasText: terminalPostSteerReply })
         .waitFor({ timeout: 10_000 });
       await expectChatBubbleAbove(page, originalPrompt, preSteerReply);
-      await expectChatBubbleAbove(page, preSteerReply, followUp);
+      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
+      await expectChatBubbleAbove(page, queuedFollowUp, followUp);
       await expectChatBubbleAbove(page, followUp, postSteerReply);
     } finally {
       await suite.closeBrowserContext(context);

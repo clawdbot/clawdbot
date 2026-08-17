@@ -352,6 +352,107 @@ describe("canonical session message recovery", () => {
     );
   });
 
+  it("keeps pre-steer output above an earlier ordinary queued user", () => {
+    const activeRunId = "active-run";
+    const originalPrompt = {
+      role: "user",
+      content: [{ type: "text", text: "Original prompt" }],
+      timestamp: 100,
+      __openclaw: {
+        id: "original-user",
+        idempotencyKey: `${activeRunId}:user`,
+        seq: 1,
+      },
+    };
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [originalPrompt],
+      chatRunId: activeRunId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: activeRunId,
+        state: "delta",
+        deltaText: "Before steer.",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Before steer." }],
+        },
+      },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        clientRunId: "queued-run",
+        hasActiveRun: true,
+        messageId: "ordinary-queued-user",
+        messageSeq: 2,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Queued follow-up" }],
+          timestamp: 200,
+          __openclaw: {
+            id: "ordinary-queued-user",
+            idempotencyKey: "queued-run:user",
+            seq: 2,
+          },
+        },
+      },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        clientRunId: "steer-run",
+        hasActiveRun: true,
+        messageId: "persisted-steer-user",
+        messageSeq: 3,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Steer prompt" }],
+          timestamp: 300,
+          __openclaw: {
+            id: "persisted-steer-user",
+            idempotencyKey: "steer-run:user",
+            seq: 3,
+            steerTargetRunId: activeRunId,
+          },
+        },
+      },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: activeRunId,
+        state: "delta",
+        deltaText: " After steer.",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Before steer. After steer." }],
+        },
+      },
+    });
+
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Original prompt" },
+      { role: "assistant", text: "Before steer." },
+      { role: "user", text: "Queued follow-up" },
+      { role: "user", text: "Steer prompt" },
+      { role: "assistant", text: "After steer." },
+    ]);
+  });
+
   it("keeps a previous run final before a newer active user turn", () => {
     const previousUser = {
       role: "user",

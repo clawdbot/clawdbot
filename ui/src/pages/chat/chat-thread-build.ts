@@ -720,11 +720,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,
       };
-      const afterBoundaryBounds = latestBoundaryRunId
-        ? findRunTurnBounds(items, latestBoundaryRunId)
-        : null;
-      if (afterBoundaryBounds) {
-        const { maximum } = insertionIndexesForBounds(items, afterBoundaryBounds);
+      const liveTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
+      const liveTurnBounds = liveTurnRunId ? findRunTurnBounds(items, liveTurnRunId) : null;
+      if (liveTurnBounds) {
+        const { maximum } = insertionIndexesForBounds(items, liveTurnBounds);
         items.splice(maximum, 0, liveStreamItem);
       } else {
         items.push(liveStreamItem);

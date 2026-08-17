@@ -16,6 +16,7 @@ export type StreamCausalBoundaryState = {
 };
 
 type StreamRolloverState = {
+  chatMessages?: unknown[];
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
@@ -361,6 +362,40 @@ export function reconcileTerminalStreamBoundary(
   };
 }
 
+// An ordinary queued user is a hard ceiling for text produced before a later steer.
+// Preserve the first intervening user instead of relabeling that text as pre-steer output.
+function interveningUserBoundaryRunId(params: {
+  messages: unknown[] | undefined;
+  runId: string;
+  boundaryRunId: string;
+  afterBoundaryRunId?: string;
+}): string | undefined {
+  const messages = params.messages;
+  if (!messages) {
+    return undefined;
+  }
+  const boundaryIndex = messages.findIndex(
+    (message) => userTurnSendIdentity(message) === `send:${params.boundaryRunId}`,
+  );
+  const floorRunId = params.afterBoundaryRunId ?? params.runId;
+  const floorIndex = messages.findIndex(
+    (message) => userTurnSendIdentity(message) === `send:${floorRunId}`,
+  );
+  if (floorIndex < 0 || boundaryIndex <= floorIndex) {
+    return undefined;
+  }
+  for (let index = floorIndex + 1; index < boundaryIndex; index += 1) {
+    if (readSessionMessageIdentity(messages[index])?.role !== "user") {
+      continue;
+    }
+    const identity = userTurnSendIdentity(messages[index]);
+    if (identity?.startsWith("send:")) {
+      return identity.slice("send:".length);
+    }
+  }
+  return undefined;
+}
+
 /** Closes cumulative assistant output at a tool or persisted user boundary. */
 export function rolloverChatStream(
   host: StreamRolloverState,
@@ -384,29 +419,21 @@ export function rolloverChatStream(
   }
   const hasStream = typeof host.chatStream === "string";
   const hasStreamText = hasStream && Boolean(host.chatStream?.trim());
-  if (options.boundaryRunId) {
+  const streamBoundaryRunId = options.boundaryRunId
+    ? (interveningUserBoundaryRunId({
+        messages: host.chatMessages,
+        runId: options.runId,
+        boundaryRunId: options.boundaryRunId,
+        afterBoundaryRunId: previousBoundaryRunId,
+      }) ?? options.boundaryRunId)
+    : undefined;
+  if (streamBoundaryRunId) {
     const previousBoundaryIndex = segments.findLastIndex((segment) => segment.boundaryRunId);
     segments = segments.map((segment, index) =>
       index <= previousBoundaryIndex || segment.boundaryRunId
         ? segment
-        : { ...segment, boundaryRunId: options.boundaryRunId },
+        : { ...segment, boundaryRunId: streamBoundaryRunId },
     );
-    if (
-      !hasStreamText &&
-      !segments.some((segment) => segment.boundaryRunId === options.boundaryRunId)
-    ) {
-      segments = [
-        ...segments,
-        {
-          text: "",
-          ts: host.chatStreamStartedAt ?? options.timestamp ?? Date.now(),
-          runId: options.runId,
-          boundaryRunId: options.boundaryRunId,
-          boundaryMarker: true,
-          ...(previousBoundaryRunId ? { afterBoundaryRunId: previousBoundaryRunId } : {}),
-        },
-      ];
-    }
   }
   if (hasStreamText) {
     segments = [
@@ -416,8 +443,26 @@ export function rolloverChatStream(
         ts: host.chatStreamStartedAt ?? options.timestamp ?? Date.now(),
         runId: options.runId,
         ...(previousBoundaryRunId ? { afterBoundaryRunId: previousBoundaryRunId } : {}),
-        ...(options.boundaryRunId ? { boundaryRunId: options.boundaryRunId } : {}),
+        ...(streamBoundaryRunId ? { boundaryRunId: streamBoundaryRunId } : {}),
         ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+      },
+    ];
+  }
+  if (
+    options.boundaryRunId &&
+    !segments.some((segment) => segment.boundaryRunId === options.boundaryRunId)
+  ) {
+    const markerAfterBoundaryRunId =
+      streamBoundaryRunId !== options.boundaryRunId ? streamBoundaryRunId : previousBoundaryRunId;
+    segments = [
+      ...segments,
+      {
+        text: "",
+        ts: host.chatStreamStartedAt ?? options.timestamp ?? Date.now(),
+        runId: options.runId,
+        boundaryRunId: options.boundaryRunId,
+        boundaryMarker: true,
+        ...(markerAfterBoundaryRunId ? { afterBoundaryRunId: markerAfterBoundaryRunId } : {}),
       },
     ];
   }
