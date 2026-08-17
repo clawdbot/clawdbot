@@ -92,6 +92,7 @@ describe("exec GitHub service credential isolation", () => {
         },
       },
     });
+    expect(preparedCredentialIsolation.credentialScrubEnv.PREVIEW_STORE_TOKEN).toBe("");
     const tool = createExecTool({
       host: "gateway",
       security: "full",

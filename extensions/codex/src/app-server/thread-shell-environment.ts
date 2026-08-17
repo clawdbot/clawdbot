@@ -4,10 +4,9 @@ import { isJsonObject, type JsonObject } from "./protocol.js";
 export function applyCodexHostShellEnvironment(
   config: JsonObject,
   environment: Readonly<Record<string, string>> | undefined,
-  disableLoginShell = false,
 ): JsonObject {
   if (!environment || Object.keys(environment).length === 0) {
-    return disableLoginShell ? { ...config, allow_login_shell: false } : config;
+    return { ...config, allow_login_shell: false };
   }
   const current = isJsonObject(config.shell_environment_policy)
     ? config.shell_environment_policy
@@ -23,7 +22,7 @@ export function applyCodexHostShellEnvironment(
     ...config,
     shell_environment_policy: {
       ...current,
-      use_profile: false,
+      experimental_use_profile: false,
       set: { ...currentSet, ...environment },
       ...(filters
         ? hasIncludeFilter
@@ -39,5 +38,5 @@ export function applyCodexHostShellEnvironment(
           : {}),
     },
   };
-  return disableLoginShell ? { ...hostConfig, allow_login_shell: false } : hostConfig;
+  return { ...hostConfig, allow_login_shell: false };
 }

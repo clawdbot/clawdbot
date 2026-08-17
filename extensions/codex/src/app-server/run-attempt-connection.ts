@@ -119,7 +119,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
   const shellEnvironment = preparedEnvironment?.credentialScrubEnv;
-  const disableLoginShell = Boolean(preparedEnvironment?.credentialScrubRequiresNonLoginShell);
   const withPreparedProcessEnv = <T extends { start: { env?: Record<string, string> } }>(
     appServer: T,
   ) => {
@@ -427,7 +426,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     sandbox,
     agentDir,
     shellEnvironment,
-    disableLoginShell,
     bindingIdentity,
     bindingStore,
     activeContextEngine,

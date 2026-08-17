@@ -200,22 +200,9 @@ describe("agent harness host capability", () => {
 
     expect(host.capabilities.preparedEnvironment?.()).toEqual({
       credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
-      credentialScrubRequiresNonLoginShell: false,
     });
     host.close();
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
-  });
-
-  it("records ambient GitHub service-token risk without exposing its value", async () => {
-    vi.stubEnv("GH_TOKEN", "test-token");
-    vi.stubEnv("GITHUB_TOKEN", "");
-    const { attempt } = await admittedAttempt("run-native-service-token", { config: {} });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-
-    expect(host.capabilities.preparedEnvironment?.()).toEqual({
-      credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
-      credentialScrubRequiresNonLoginShell: true,
-    });
   });
 
   it.each(["env", "store"] as const)(
@@ -239,12 +226,7 @@ describe("agent harness host capability", () => {
         GH_TOKEN: "",
         GITHUB_TOKEN: "",
       });
-      if (source === "env") {
-        expect(environment?.credentialScrubEnv).toHaveProperty("PREVIEW_SERVICE_TOKEN", "");
-      } else {
-        expect(environment?.credentialScrubEnv).not.toHaveProperty("PREVIEW_SERVICE_TOKEN");
-      }
-      expect(environment?.credentialScrubRequiresNonLoginShell).toBe(true);
+      expect(environment?.credentialScrubEnv).toHaveProperty("PREVIEW_SERVICE_TOKEN", "");
     },
   );
 

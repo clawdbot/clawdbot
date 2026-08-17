@@ -4,8 +4,6 @@ type AgentHarnessHostApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 export type AgentHarnessPreparedEnvironment = Readonly<{
   credentialScrubEnv: Readonly<Record<string, string>>;
-  /** Non-secret fact used to select the final harness login-shell policy. */
-  credentialScrubRequiresNonLoginShell: boolean;
 }>;
 
 export type AgentHarnessHostCapabilities = Readonly<{

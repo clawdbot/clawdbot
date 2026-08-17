@@ -294,8 +294,6 @@ export function createAgentHarnessHostCapabilities(params: {
       assertActive();
       return Object.freeze({
         credentialScrubEnv: Object.freeze({ ...preparedEnvironment.credentialScrubEnv }),
-        credentialScrubRequiresNonLoginShell:
-          preparedEnvironment.credentialScrubRequiresNonLoginShell,
       });
     },
     bindToolSurface: (tools, options) => {

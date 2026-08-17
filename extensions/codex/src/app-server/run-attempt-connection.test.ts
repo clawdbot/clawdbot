@@ -31,7 +31,6 @@ describe("prepareCodexAttemptConnection", () => {
       preparedEnvironment: () =>
         Object.freeze({
           credentialScrubEnv: Object.freeze({ GH_TOKEN: "", GITHUB_TOKEN: "" }),
-          credentialScrubRequiresNonLoginShell: false,
         }),
     });
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
@@ -43,7 +42,6 @@ describe("prepareCodexAttemptConnection", () => {
 
     expect(connection.appServer.start.env).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "" });
     expect(connection.shellEnvironment).toEqual({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-    expect(connection.disableLoginShell).toBe(false);
   });
 
   it("adds service credential scrubbing to remote execution", async () => {
@@ -55,7 +53,6 @@ describe("prepareCodexAttemptConnection", () => {
       preparedEnvironment: () =>
         Object.freeze({
           credentialScrubEnv: Object.freeze({ GH_TOKEN: "", GITHUB_TOKEN: "" }),
-          credentialScrubRequiresNonLoginShell: true,
         }),
     });
     params.sandbox = {
@@ -90,7 +87,6 @@ describe("prepareCodexAttemptConnection", () => {
 
     expect(connection.appServer.start.env).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "" });
     expect(connection.shellEnvironment).toEqual({ GH_TOKEN: "", GITHUB_TOKEN: "" });
-    expect(connection.disableLoginShell).toBe(true);
   });
 
   it.each([
