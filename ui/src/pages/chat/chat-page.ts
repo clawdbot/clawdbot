@@ -28,6 +28,7 @@ import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-foc
 import { locationWithoutDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
+import { installSessionPrefetch } from "./session-prefetch.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import {
   resolveSplitDropZone,
@@ -78,8 +79,8 @@ export class ChatPage extends OpenClawLightDomElement {
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
   private consumedDraftData: SessionChatRouteData | null = null;
   private readonly draftFocus = new RouteDraftComposerFocus(this);
-  private readonly chatMessagesBySession: ChatMessageCache = new Map();
-  private readonly sessionSnapshotStore = new SessionSnapshotStore(this.chatMessagesBySession);
+  private readonly messageCache: ChatMessageCache = new Map();
+  private readonly snapshotStore = new SessionSnapshotStore(this.messageCache);
   private classicColumnId = "c1";
   private classicPaneId = "p1";
   private routeHref = "";
@@ -94,10 +95,15 @@ export class ChatPage extends OpenClawLightDomElement {
     },
   });
 
+  constructor() {
+    super();
+    installSessionPrefetch(this, this.messageCache, this.snapshotStore, () => this.context);
+  }
+
   override connectedCallback() {
     super.connectedCallback();
-    this.sessionSnapshotStore.connect();
-    observeChatCache(this.chatMessagesBySession, this.sessionSnapshotStore);
+    this.snapshotStore.connect();
+    observeChatCache(this.messageCache, this.snapshotStore);
     this.routeHref = window.location.href;
     this.layout = loadSettings().chatSplitLayout;
     this.mediaQuery = window.matchMedia("(max-width: 1099px)");
@@ -120,7 +126,7 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    this.sessionSnapshotStore.disconnect();
+    this.snapshotStore.disconnect();
     this.retainedSessions.disconnect();
     this.viewerPresence.dispose();
     this.subscriptions.clear();
@@ -599,8 +605,8 @@ export class ChatPage extends OpenClawLightDomElement {
                 (pane, paneIndex) => html`
                   ${renderChatPagePaneCell({
                     active: pane.id === layout.activePaneId,
-                    chatMessagesBySession: this.chatMessagesBySession,
-                    sessionSnapshotStore: this.sessionSnapshotStore,
+                    chatMessagesBySession: this.messageCache,
+                    sessionSnapshotStore: this.snapshotStore,
                     consumedDraftData: this.consumedDraftData,
                     context: this.context,
                     data: this.data,

@@ -282,6 +282,21 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     return record.snapshot;
   }
 
+  async readSavedAt(sessionKey: string): Promise<number | null> {
+    const pending = this.pending.get(sessionKey);
+    if (pending) {
+      return pending.savedAt;
+    }
+    const generation = snapshotStoreGeneration;
+    const revision = this.revisions.get(sessionKey) ?? 0;
+    const record = await readSnapshotRecord(sessionKey);
+    return record &&
+      generation === snapshotStoreGeneration &&
+      revision === (this.revisions.get(sessionKey) ?? 0)
+      ? record.savedAt
+      : null;
+  }
+
   write(sessionKey: string, snapshot: ChatSessionSnapshot): void {
     this.revisions.set(sessionKey, (this.revisions.get(sessionKey) ?? 0) + 1);
     if (getSessionCacheValue(this.hydratedSnapshots, sessionKey) === snapshot) {

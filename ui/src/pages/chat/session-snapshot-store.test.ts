@@ -83,10 +83,13 @@ describe("persistent chat session snapshots", () => {
     const writer = new SessionSnapshotStore();
     writer.write("agent:main:shared", snapshot({ text: "cached", callback: () => true }));
     writer.recordRowHeight("agent:main:shared", "message:1", 184);
+    const savedAt = await writer.readSavedAt("agent:main:shared");
+    expect(savedAt).not.toBeNull();
     await writer.flush();
 
     const reader = new SessionSnapshotStore();
     expect(await reader.read("agent:main:shared")).toEqual(snapshot({ text: "cached" }));
+    expect(await reader.readSavedAt("agent:main:shared")).toBe(savedAt);
     expect(reader.readRowHeight("agent:main:shared", "message:1")).toBe(184);
   });
 

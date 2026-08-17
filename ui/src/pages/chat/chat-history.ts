@@ -63,7 +63,11 @@ import {
 } from "./performance.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import { cacheChatSessionSnapshot, clearChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  cacheChatSessionSnapshot,
+  clearChatMessagesFromCache,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 import { retirePersistedSteeredChips } from "./steer-lifecycle.ts";
 import {
   clearToolStreamSegments,
@@ -992,6 +996,34 @@ function requestSharedChatHistory(
     shared?.consumers.delete(consumer);
     updateChatHistoryOwnerRequestCount(registry, consumerOwner, requestKey, -1);
   });
+}
+
+export async function requestChatSessionSnapshot(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  consumerOwner: object,
+  isCurrentConsumer: () => boolean,
+): Promise<ChatSessionSnapshot> {
+  const method = "chat.history";
+  const requestKey = `prefetch\u0000${method}\u0000${sessionKey}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
+  const result = await requestSharedChatHistory(
+    client,
+    requestKey,
+    method,
+    sessionKey,
+    undefined,
+    consumerOwner,
+    isCurrentConsumer,
+  );
+  const sessionInfo = result.sessionInfo;
+  return {
+    ...(Object.hasOwn(sessionInfo ?? {}, "activeLeafEntryId")
+      ? { displayedLeafEntryId: sessionInfo?.activeLeafEntryId?.trim() || null }
+      : {}),
+    messages: visibleChatHistoryMessages(result.messages),
+    pagination: resolveChatHistoryPagination(result),
+    sessionId: resolveChatHistorySessionId(result),
+  };
 }
 
 function recordChatHistoryTiming(
