@@ -1032,6 +1032,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           (
             this.db
               .prepare(`SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?`)
+              // SAFETY: the query selects the schema's non-null TEXT id column only.
               .all(entry.path, source) as Array<{ id: string }>
           ).map((row) => row.id),
         );
@@ -1179,6 +1180,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         `SELECT id, embedding = '[]' AS empty_embedding
          FROM memory_index_chunks WHERE path = ? AND source = ?`,
       )
+      // SAFETY: id is non-null TEXT and the SQLite comparison expression returns 0 or 1.
       .all(entry.path, source) as Array<{ id: string; empty_embedding: number }>;
     if (existing.length === 0) {
       return null;
@@ -1267,6 +1269,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     const rows = this.db
       .prepare(`SELECT id FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+      // SAFETY: the FTS schema defines id as the non-null text chunk identifier.
       .all(path, source) as Array<{ id: string }>;
     const actualIds = new Set(rows.map((row) => row.id));
     return rows.length === ids.length && ids.every((id) => actualIds.has(id));
@@ -1279,6 +1282,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           `SELECT COUNT(*) AS c FROM ${tableName}
            WHERE ${idColumn} IN (SELECT value FROM json_each(?))`,
         )
+        // SAFETY: COUNT(*) always returns one row whose c value is an SQLite integer.
         .get(JSON.stringify(ids)) as { c: number } | undefined;
       return (row?.c ?? 0) === ids.length;
     } catch {
