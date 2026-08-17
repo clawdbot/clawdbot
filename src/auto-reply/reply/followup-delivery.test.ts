@@ -473,6 +473,30 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
+  it("delivers a yield acknowledgment in message-tool-only mode", () => {
+    const turn = createTurn();
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    const execution = createSettledExecution();
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.meta = {
+        durationMs: 0,
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      };
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution,
+        accounting: createAccounting(),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "Research started; results will follow." }],
+    });
+  });
+
   it("keeps ambient room-event finals silent", () => {
     const turn = createTurn({
       queued: {

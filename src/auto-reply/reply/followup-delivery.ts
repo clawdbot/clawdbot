@@ -216,7 +216,6 @@ export function resolveFollowupDeliveryDecision(params: {
         isInteractive,
         isHeartbeat: opts?.isHeartbeat,
         silentExpected: turn.queued.run.silentExpected,
-        isMessageToolOnly: sourcePolicy.sourceReplyDeliveryMode === "message_tool_only",
         isSubagentSession:
           turn.session.kind === "session" && isSubagentSessionKey(turn.session.key),
         hasExplicitSilentReply: hasDeliberateSilentTerminalReply(result),

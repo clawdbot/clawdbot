@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { buildSessionsYieldAcknowledgmentPayload } from "./sessions-yield-acknowledgment.js";
 
 describe("buildSessionsYieldAcknowledgmentPayload", () => {
@@ -6,16 +7,18 @@ describe("buildSessionsYieldAcknowledgmentPayload", () => {
     yielded: true,
     yieldAcknowledgment: " Research started; results will follow. ",
     isInteractive: true,
-    isMessageToolOnly: false,
     isSubagentSession: false,
     hasExplicitSilentReply: false,
     hasVisibleMessageDelivery: false,
   } as const;
 
   it("builds an explicit waiting status", () => {
-    expect(buildSessionsYieldAcknowledgmentPayload(baseParams)).toEqual({
+    const payload = buildSessionsYieldAcknowledgmentPayload(baseParams);
+
+    expect(payload).toEqual({
       text: "Research started; results will follow.",
     });
+    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
   it.each([
@@ -24,7 +27,6 @@ describe("buildSessionsYieldAcknowledgmentPayload", () => {
     { label: "internal turn", overrides: { isInteractive: false } },
     { label: "heartbeat", overrides: { isHeartbeat: true } },
     { label: "silent turn", overrides: { silentExpected: true } },
-    { label: "message-tool-only turn", overrides: { isMessageToolOnly: true } },
     { label: "subagent session", overrides: { isSubagentSession: true } },
     { label: "explicit silent reply", overrides: { hasExplicitSilentReply: true } },
     { label: "visible message delivery", overrides: { hasVisibleMessageDelivery: true } },

@@ -141,9 +141,6 @@ export async function prepareReplyAgentPayloads(state: {
     followupRun.currentInboundEventKind !== "room_event" &&
     (followupRun.run.inputProvenance?.kind === undefined ||
       followupRun.run.inputProvenance.kind === "external_user");
-  const isMessageToolOnly =
-    (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
-    "message_tool_only";
   const yieldAcknowledgmentPayload = terminalFailurePayload
     ? undefined
     : buildSessionsYieldAcknowledgmentPayload({
@@ -152,7 +149,6 @@ export async function prepareReplyAgentPayloads(state: {
         isInteractive,
         isHeartbeat,
         silentExpected: followupRun.run.silentExpected,
-        isMessageToolOnly,
         isSubagentSession: isSubagentSessionKey(sessionKey ?? followupRun.run.sessionKey),
         hasExplicitSilentReply: deliberateSilentTerminalReply,
         // Child spawns are side effects, not user-visible messages. They must not

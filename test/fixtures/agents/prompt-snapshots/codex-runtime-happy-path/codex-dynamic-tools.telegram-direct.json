@@ -1351,10 +1351,15 @@
     "name": "openclaw_direct",
     "tools": [
       {
-        "description": "End turn after subagent spawn; results arrive next message.",
+        "description": "End turn after subagent spawn; results arrive next message. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
         "inputSchema": {
           "properties": {
+            "acknowledgment": {
+              "description": "Optional waiting reply for an otherwise-silent interactive parent turn.",
+              "type": "string"
+            },
             "message": {
+              "description": "Private context for the resumed turn; not sent to the user.",
               "type": "string"
             }
           },

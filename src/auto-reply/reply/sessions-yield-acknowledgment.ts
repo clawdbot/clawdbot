@@ -1,3 +1,4 @@
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 export function buildSessionsYieldAcknowledgmentPayload(params: {
@@ -6,7 +7,6 @@ export function buildSessionsYieldAcknowledgmentPayload(params: {
   isInteractive: boolean;
   isHeartbeat?: boolean;
   silentExpected?: boolean;
-  isMessageToolOnly: boolean;
   isSubagentSession: boolean;
   hasExplicitSilentReply: boolean;
   hasVisibleMessageDelivery: boolean;
@@ -18,12 +18,11 @@ export function buildSessionsYieldAcknowledgmentPayload(params: {
     !params.isInteractive ||
     params.isHeartbeat === true ||
     params.silentExpected === true ||
-    params.isMessageToolOnly ||
     params.isSubagentSession ||
     params.hasExplicitSilentReply ||
     params.hasVisibleMessageDelivery
   ) {
     return undefined;
   }
-  return { text };
+  return markReplyPayloadForSourceSuppressionDelivery({ text });
 }
