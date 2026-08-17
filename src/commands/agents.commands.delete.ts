@@ -29,6 +29,7 @@ import {
 } from "../agents/workspace-state-store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import {
@@ -202,7 +203,7 @@ export async function agentsDeleteCommand(
   }
 
   if (!opts.force) {
-    if (!process.stdin.isTTY) {
+    if (!isTerminalInteractive()) {
       failAgentsDelete(opts, runtime, "Non-interactive session. Re-run with --force.");
       return;
     }
