@@ -180,17 +180,17 @@
   scrollbar-width: thin;
 }
 
-.chat-thread .chat-bubble .chat-markdown-table.is-scrolled-start .chat-markdown-table__viewport {
+.chat-thread .chat-bubble .chat-markdown-table.has-overflow-left .chat-markdown-table__viewport {
   mask-image: linear-gradient(to right, transparent, black 32px);
 }
 
-.chat-thread .chat-bubble .chat-markdown-table.is-scrolled-end .chat-markdown-table__viewport {
+.chat-thread .chat-bubble .chat-markdown-table.has-overflow-right .chat-markdown-table__viewport {
   mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
 }
 
 .chat-thread
   .chat-bubble
-  .chat-markdown-table.is-scrolled-start.is-scrolled-end
+  .chat-markdown-table.has-overflow-left.has-overflow-right
   .chat-markdown-table__viewport {
   mask-image: linear-gradient(
     to right,
@@ -210,6 +210,10 @@
   background: transparent;
   box-shadow: none;
   overflow: visible;
+}
+
+.chat-thread .chat-bubble .chat-text :where(table, thead, tbody, tr, th, td) {
+  background: transparent;
 }
 
 .chat-thread .chat-bubble .chat-text :where(th, td) {

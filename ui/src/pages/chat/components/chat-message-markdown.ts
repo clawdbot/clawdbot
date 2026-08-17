@@ -36,8 +36,8 @@ function syncMarkdownTableOverflow(root?: Element) {
       const remaining = viewport.scrollWidth - viewport.clientWidth;
       const hasOverflow = remaining > 1;
       shell.classList.toggle("has-overflow", hasOverflow);
-      shell.classList.toggle("is-scrolled-start", hasOverflow && viewport.scrollLeft > 1);
-      shell.classList.toggle("is-scrolled-end", hasOverflow && viewport.scrollLeft < remaining - 1);
+      shell.classList.toggle("has-overflow-left", hasOverflow && viewport.scrollLeft > 1);
+      shell.classList.toggle("has-overflow-right", hasOverflow && viewport.scrollLeft < remaining - 1);
     };
     if (!initializedTableViewports.has(viewport)) {
       initializedTableViewports.add(viewport);
