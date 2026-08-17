@@ -236,5 +236,17 @@ describe("OpenClaw shell dock suppression", () => {
     ];
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+
+    // Advertised but read-scoped: openclaw.chat requires operator.admin, so the
+    // control must hide instead of opening a panel the store refuses to use.
+    context.gateway.snapshot.hello!.features!.methods = [
+      "terminal.open",
+      "browser.request",
+      "openclaw.chat",
+      "desktop.observe",
+    ];
+    context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   });
 });

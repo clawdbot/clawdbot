@@ -47,6 +47,7 @@ describe("OpenClaw shell panel toggles", () => {
         gateway: {
           snapshot: {
             phase: "connected",
+            client: {},
             hello: {
               auth: { role: "operator", scopes: ["operator.admin"] },
               features: { methods: ["terminal.open", "browser.request", "openclaw.chat"] },

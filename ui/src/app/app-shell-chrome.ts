@@ -20,7 +20,7 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -544,7 +544,7 @@ export class ShellChromeOwner {
       return;
     }
     const snapshot = host.context?.gateway?.snapshot;
-    if (snapshot && isGatewayMethodAdvertised(snapshot, "openclaw.chat") === true) {
+    if (canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
       this.deliverPanelEventAfterLoad(host.custodianPanelElement, event);
     }
   };

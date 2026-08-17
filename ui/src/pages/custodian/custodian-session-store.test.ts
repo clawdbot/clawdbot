@@ -66,6 +66,27 @@ describe("CustodianSessionStore", () => {
     expect(panelSurfaceUpdates).toHaveBeenCalled();
   });
 
+  it("restores a live wizard interaction from the rejoin projection", async () => {
+    const step = { id: "step-1", type: "text", message: "Enter a value" };
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "rejoined-session",
+      reply: "Welcome back.",
+      action: "none",
+      wizardInputPending: true,
+      step,
+    });
+    const { context } = createContext(request);
+    const store = new CustodianSessionStore();
+
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.sending).toBe(false));
+
+    // The reconnecting surface must re-render the answer control the Gateway
+    // session still awaits, not just the transcript text.
+    expect(store.wizardInputPending).toBe(true);
+    expect(store.messages.at(-1)?.step).toMatchObject({ id: "step-1" });
+  });
+
   it("reuses the persisted session id across store instances", async () => {
     const request = vi.fn((_method: string, params: { sessionId: string }) =>
       Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" }),

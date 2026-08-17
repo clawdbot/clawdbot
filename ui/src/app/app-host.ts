@@ -25,7 +25,7 @@ import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -583,8 +583,13 @@ class OpenClawShell
     const gatewaySnapshot = context.gateway?.snapshot;
     if (gatewaySnapshot) {
       const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
-      const custodianAvailable =
-        isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
+      // Scope-aware: openclaw.chat is operator.admin; advertisement alone would
+      // show read-scoped clients a control the store then refuses to use.
+      const custodianAvailable = canCallGatewayMethod(
+        gatewaySnapshot,
+        "openclaw.chat",
+        "operator.admin",
+      );
       if (this.commandPalette) {
         this.commandPalette.desktopAvailable = desktopAvailable;
         this.commandPalette.custodianAvailable = custodianAvailable;

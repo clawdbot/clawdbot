@@ -10,6 +10,42 @@ type SystemAgentChatEngineInput = Pick<
   "answerWizard" | "cancelWizard" | "handle"
 >;
 
+/**
+ * Build the welcome-only result for rejoining an existing session. A
+ * reconnecting client must re-render the live wizard/question controls the
+ * session still awaits; the stale welcome question only fills in when no live
+ * interaction exists.
+ */
+export function buildSystemAgentRejoinResult(params: {
+  sessionId: string;
+  welcome: string;
+  welcomeQuestion?: SystemAgentChatResult["question"];
+  engine: {
+    decorateRejoinReply: (reply: { text: string; action: "none" }) => {
+      text: string;
+      sensitive?: boolean;
+      wizardInputPending?: boolean;
+      question?: SystemAgentChatResult["question"];
+      step?: SystemAgentChatResult["step"];
+    };
+  };
+}): SystemAgentChatResult {
+  const rejoin = params.engine.decorateRejoinReply({ text: params.welcome, action: "none" });
+  return {
+    sessionId: params.sessionId,
+    reply: rejoin.text || params.welcome,
+    action: "none",
+    ...(rejoin.sensitive === true ? { sensitive: true } : {}),
+    ...(rejoin.wizardInputPending === true ? { wizardInputPending: true } : {}),
+    ...(rejoin.step ? { step: rejoin.step } : {}),
+    ...(rejoin.question
+      ? { question: rejoin.question }
+      : params.welcomeQuestion
+        ? { question: params.welcomeQuestion }
+        : {}),
+  };
+}
+
 export function getSystemAgentChatInputError(params: SystemAgentChatParams): string | undefined {
   if (params.message !== undefined && params.wizardAnswer !== undefined) {
     return "Send either message or wizardAnswer, not both.";

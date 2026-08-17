@@ -59,6 +59,7 @@ import {
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import {
   buildSystemAgentChatResult,
+  buildSystemAgentRejoinResult,
   getSystemAgentChatInputError,
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
@@ -687,12 +688,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         ) {
           respond(
             true,
-            {
+            buildSystemAgentRejoinResult({
               sessionId,
-              reply: session.welcome,
-              action: "none",
-              ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
-            },
+              welcome: session.welcome,
+              ...(session.welcomeQuestion ? { welcomeQuestion: session.welcomeQuestion } : {}),
+              engine: session.engine,
+            }),
             undefined,
           );
           acknowledgeDeliveredSystemAgentWelcome(session);

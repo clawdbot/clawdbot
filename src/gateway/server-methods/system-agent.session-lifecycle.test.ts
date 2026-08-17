@@ -39,6 +39,7 @@ vi.mock("../../system-agent/greeting.js", () => ({
 type FakeEngine = {
   answerWizard: ReturnType<typeof vi.fn>;
   cancelWizard: ReturnType<typeof vi.fn>;
+  decorateRejoinReply: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
   getPendingOperatorProposal: ReturnType<typeof vi.fn>;
   handle: ReturnType<typeof vi.fn>;
@@ -54,6 +55,7 @@ function makeEngine(): FakeEngine {
   return {
     answerWizard: vi.fn(),
     cancelWizard: vi.fn(),
+    decorateRejoinReply: vi.fn((reply: unknown) => reply),
     dispose: vi.fn(async () => undefined),
     getPendingOperatorProposal: vi.fn(() => null),
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
@@ -163,6 +165,55 @@ describe("openclaw.chat session lifecycle", () => {
         details: buildSystemAgentSessionInvalidatedErrorDetails(),
       },
     });
+  });
+
+  it("projects the live wizard interaction on a welcome-only rejoin", async () => {
+    const engine = makeEngine();
+    const liveQuestion = { id: "wizard-q", header: "Pick", options: [{ label: "A" }] };
+    const liveStep = { id: "step-1", type: "text", message: "Enter a value" };
+    engine.decorateRejoinReply = vi.fn((reply: Record<string, unknown>) => ({
+      ...reply,
+      sensitive: true,
+      wizardInputPending: true,
+      question: liveQuestion,
+      step: liveStep,
+    }));
+    const session = seededSession({ engine });
+    (session as { welcomeQuestion?: unknown }).welcomeQuestion = {
+      id: "welcome-q",
+      header: "Welcome",
+      options: [],
+    };
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", session]]);
+
+    const call = await callChat(makeContext(sessions), { sessionId: "s1" });
+
+    // A reconnecting client must re-render the answer controls the session
+    // still awaits; the live interaction outranks the stale welcome question.
+    expect(call.ok).toBe(true);
+    expect(call.payload).toMatchObject({
+      sessionId: "s1",
+      sensitive: true,
+      wizardInputPending: true,
+      question: liveQuestion,
+      step: liveStep,
+    });
+  });
+
+  it("falls back to the welcome question when no interaction is live", async () => {
+    const session = seededSession();
+    (session as { welcomeQuestion?: unknown }).welcomeQuestion = {
+      id: "welcome-q",
+      header: "Welcome",
+      options: [],
+    };
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", session]]);
+
+    const call = await callChat(makeContext(sessions), { sessionId: "s1" });
+
+    expect(call.ok).toBe(true);
+    expect(call.payload).toMatchObject({ question: { id: "welcome-q" } });
+    expect((call.payload as { step?: unknown }).step).toBeUndefined();
   });
 
   it("keeps the session map bounded during concurrent unique initialization", async () => {
