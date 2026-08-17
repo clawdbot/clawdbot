@@ -5,6 +5,7 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAudioFormat,
+  RealtimeVoiceMinBargeInScope,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceCloseReason,
   RealtimeVoiceBridgeEvent,
@@ -61,6 +62,8 @@ export type RealtimeVoiceBridgeSessionParams = {
   agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
+  /** See [RealtimeVoiceMinBargeInScope]; omitted keeps the shipped ignore-below-threshold behaviour. */
+  minBargeInScope?: RealtimeVoiceMinBargeInScope;
   audioSink: RealtimeVoiceAudioSink;
   instructions?: string;
   language?: string;
@@ -169,6 +172,7 @@ export function createRealtimeVoiceBridgeSession(
     agentId: params.agentId,
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
+    minBargeInScope: params.minBargeInScope,
     instructions: params.instructions,
     language: params.language,
     autoRespondToAudio: params.autoRespondToAudio,

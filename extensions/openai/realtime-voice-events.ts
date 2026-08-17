@@ -77,15 +77,14 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         if (!audioDelta) {
           return;
         }
-        // Stale tail of an item we already truncated: the truncate request
-        // and the provider's in-flight generation can race, so more deltas
-        // for that exact item_id can still arrive after we told the server
-        // (and the client) to stop at audioEndMs. Re-adopting it here as if
+        // Stale tail of an item we already abandoned on a barge-in: our request
+        // and the provider's in-flight generation can race, so more deltas for
+        // that exact item_id can still arrive after we stopped playing it. Re-adopting it here as if
         // it were a new item would restart clock/byte accounting mid-item
         // and could produce a second truncate whose audio_end_ms looks
         // small and plausible but is actually counted from the truncation
         // point rather than the item's real start.
-        if (event.item_id && event.item_id === this.lastTruncatedItemId) {
+        if (event.item_id && event.item_id === this.abandonedAssistantItemId) {
           return;
         }
         const audio = base64ToBuffer(audioDelta);

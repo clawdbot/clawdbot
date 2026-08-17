@@ -109,7 +109,7 @@ describe("OpenAI realtime voice bridge events", () => {
     ]);
   });
 
-  it("skips truncate when only a sub-minimum sliver of audio has been confirmed played", async () => {
+  it("skips truncate but still cancels for a sub-minimum sliver when the caller trusts its barge-in signal", async () => {
     // Regression guard for the truncate audio_end_ms bug: before the fix,
     // audio_end_ms was derived from an unrelated input-media-timestamp diff
     // that could report tens of seconds of "played" audio for an item that
@@ -121,6 +121,9 @@ describe("OpenAI realtime voice bridge events", () => {
     const bridge = createNativeBridge({
       onClearAudio,
       onMark: () => bridge.acknowledgeMark(),
+      // Relay-style caller: the barge-in signal is trustworthy, so the minimum
+      // window governs only truncate precision.
+      minBargeInScope: "truncate-only",
     });
     const socket = await connectReadyBridge(bridge);
 
@@ -441,12 +444,68 @@ describe("OpenAI realtime voice bridge events", () => {
     });
   });
 
-  it("clears audio and cancels the response for zero-length playback barge-in, but skips provider truncate", async () => {
+  it("drops the in-flight tail of an item abandoned below the minimum window", async () => {
+    // response.cancel is asynchronous, so the provider can still emit deltas for
+    // the item we just stopped playing. Forwarding them would restart playback
+    // and let the assistant talk over the user - the exact failure this endpoint
+    // work exists to remove.
+    const onAudio = vi.fn();
+    const onClearAudio = vi.fn();
+    const bridge = createNativeBridge({
+      onAudio,
+      onClearAudio,
+      minBargeInScope: "truncate-only",
+    });
+    const socket = await connectReadyBridge(bridge);
+    bridge.setMediaTimestamp(0);
+    emitAssistantPlayback(socket, { audio: Buffer.from([0x00]), itemId: "item_1" });
+    expect(onAudio).toHaveBeenCalledTimes(1);
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(parseSent(socket).some((event) => event.type === "conversation.item.truncate")).toBe(
+      false,
+    );
+
+    // Same item_id keeps streaming after the cancel request.
+    emitAssistantPlayback(socket, { audio: Buffer.from([0x01]), itemId: "item_1" });
+
+    expect(onAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves playback alone below the minimum window by default, preserving the shipped contract", async () => {
+    // Discord voice depends on this and documents it: below
+    // minBargeInAudioEndMs the signal is treated as likely echo and ignored, so
+    // local playback must keep running and no response.cancel may be sent. Its
+    // barge-in handler passes a deliberately empty fallback for that reason.
+    const onClearAudio = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = createNativeBridge({ onClearAudio, onEvent });
+    const socket = await connectReadyBridge(bridge);
+    bridge.setMediaTimestamp(1000);
+    emitAssistantPlayback(socket);
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+    expect(onClearAudio).not.toHaveBeenCalled();
+    expect(hasSentEventType(socket, "response.cancel")).toBe(false);
+    expect(parseSent(socket).some((event) => event.type === "conversation.item.truncate")).toBe(
+      false,
+    );
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "conversation.item.truncate.skipped",
+      detail: "reason=barge-in audioEndMs=0 minAudioEndMs=250",
+    });
+  });
+
+  it("clears audio and cancels the response for zero-length playback barge-in when the caller trusts its signal, but skips provider truncate", async () => {
     const onClearAudio = vi.fn();
     const onEvent = vi.fn();
     const bridge = createNativeBridge({
       onClearAudio,
       onEvent,
+      minBargeInScope: "truncate-only",
     });
     const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);

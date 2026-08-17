@@ -193,8 +193,25 @@ export type RealtimeVoiceAgentConsultRunner = (params: {
   signal?: AbortSignal;
 }) => Promise<{ text: string }>;
 
+/**
+ * What a provider's minimum barge-in audio window gates.
+ *
+ * `truncate-and-playback` (default) is the shipped behaviour: below the threshold the
+ * barge-in is treated as likely echo and ignored entirely, so local playback keeps going.
+ * Discord voice documents and relies on this — its echo-room remedy is to raise the
+ * threshold.
+ *
+ * `truncate-only` is for consumers whose barge-in signal is already trustworthy, such as a
+ * relay whose device applies platform echo cancellation and whose cancels are explicit.
+ * There the threshold should govern only whether a precise provider-side truncation point
+ * is known yet — never whether to stop playing over the user.
+ */
+export type RealtimeVoiceMinBargeInScope = "truncate-and-playback" | "truncate-only";
+
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   cfg?: OpenClawConfig;
+  /** See [RealtimeVoiceMinBargeInScope]; omitted means the shipped ignore-below-threshold behaviour. */
+  minBargeInScope?: RealtimeVoiceMinBargeInScope;
   /** Host-selected agent scope for provider auth and agent-owned bridge state. */
   agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;

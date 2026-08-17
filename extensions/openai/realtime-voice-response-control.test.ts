@@ -394,7 +394,13 @@ describe("OpenAI realtime voice response control", () => {
     const bridge = createNativeBridge({ onError });
     const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
-    emitAssistantPlayback(socket);
+    // 2016 bytes at the default g711_ulaw/8kHz output format is 252ms of
+    // delivered audio, so the barge-in below is above minBargeInAudioEndMs on
+    // its own merits. audio_end_ms is clamped to audio the item actually
+    // delivered, so a media-clock jump alone no longer carries it over the
+    // threshold - and this test needs a real response.cancel as the precondition
+    // for its actual subject, the stale cancellation error.
+    emitAssistantPlayback(socket, { audio: Buffer.alloc(2016, 0x41) });
     bridge.setMediaTimestamp(1300);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });

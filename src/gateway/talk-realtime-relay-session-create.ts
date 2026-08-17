@@ -210,6 +210,12 @@ export function createTalkRealtimeRelaySession(
     interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
     tools: params.tools,
     markStrategy: "transport",
+    // The relay's barge-in signals are trustworthy: they are either the provider's own
+    // VAD or an explicit client cancel, and the Android endpoint applies platform echo
+    // cancellation before forwarding. So the minimum window governs only whether a
+    // precise truncate point is known yet - it must never leave the assistant talking
+    // over the user while mark acknowledgements catch up.
+    minBargeInScope: "truncate-only",
     audioSink: {
       isOpen: () => Boolean(getActiveRelay()),
       sendAudio: (audio) => {

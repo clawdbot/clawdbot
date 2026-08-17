@@ -34,6 +34,14 @@ export abstract class XaiRealtimeVoiceProtocol {
   protected pendingToolCallIds = new Set<string>();
   protected latestMediaTimestamp = 0;
   protected lastAssistantItemId: string | null = null;
+
+  // Bytes of assistant audio delivered for the item currently identified by
+  // lastAssistantItemId. conversation.item.truncate's audio_end_ms is otherwise
+  // derived from the INPUT-audio media clock, which only tracks output for a
+  // transport where both share one real-time clock; a relayed mobile client's
+  // clocks drift independently, so the estimate must be clamped to audio this
+  // item actually produced.
+  protected deliveredAudioBytesForCurrentItem = 0;
   protected toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
   protected deliveredToolCallKeys = new Set<string>();
   protected pendingToolResultAcks = new Set<string>();
@@ -108,11 +116,13 @@ export abstract class XaiRealtimeVoiceProtocol {
       (this.responseActive || this.markQueue.length > 0 || options?.audioPlaybackActive === true);
     const shouldInterruptProvider = assistantItemId !== null && outputInterruptible;
     const audioEndMs = shouldInterruptProvider
-      ? Math.max(
-          0,
-          responseStartTimestamp === null
-            ? this.latestMediaTimestamp
-            : this.latestMediaTimestamp - responseStartTimestamp,
+      ? this.clampAudioEndMsToDelivered(
+          Math.max(
+            0,
+            responseStartTimestamp === null
+              ? this.latestMediaTimestamp
+              : this.latestMediaTimestamp - responseStartTimestamp,
+          ),
         )
       : null;
     if (this.responseActive && !this.responseCancelInFlight) {
@@ -133,6 +143,7 @@ export abstract class XaiRealtimeVoiceProtocol {
       this.markQueue = [];
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
+      this.resetItemAudioAccounting();
       return;
     }
     this.config.onClearAudio("barge-in");
@@ -147,7 +158,9 @@ export abstract class XaiRealtimeVoiceProtocol {
       this.responseStartTimestamp !== null &&
       this.markQueue.length > 0
     ) {
-      const audioEndMs = Math.max(0, this.latestMediaTimestamp - this.responseStartTimestamp);
+      const audioEndMs = this.clampAudioEndMsToDelivered(
+        Math.max(0, this.latestMediaTimestamp - this.responseStartTimestamp),
+      );
       this.sendEvent(
         {
           type: "conversation.item.truncate",
@@ -195,6 +208,29 @@ export abstract class XaiRealtimeVoiceProtocol {
           : {}),
       },
     };
+  }
+
+  /** Upper bound, in ms, on how much of the current item could possibly have played. */
+  protected deliveredAudioMsForCurrentItem(): number | null {
+    if (this.deliveredAudioBytesForCurrentItem <= 0) {
+      return null;
+    }
+    const bytesPerSample = this.audioFormat.encoding === "pcm16" ? 2 : 1;
+    const bytesPerMs = (this.audioFormat.sampleRateHz * bytesPerSample) / 1000;
+    if (!Number.isFinite(bytesPerMs) || bytesPerMs <= 0) {
+      return null;
+    }
+    return Math.floor(this.deliveredAudioBytesForCurrentItem / bytesPerMs);
+  }
+
+  /** Clamps a media-clock estimate to audio this item actually delivered. */
+  protected clampAudioEndMsToDelivered(audioEndMs: number): number {
+    const deliveredMs = this.deliveredAudioMsForCurrentItem();
+    return deliveredMs === null ? audioEndMs : Math.min(audioEndMs, deliveredMs);
+  }
+
+  protected resetItemAudioAccounting(): void {
+    this.deliveredAudioBytesForCurrentItem = 0;
   }
 
   private resolveRealtimeAudioFormat(): XaiRealtimeAudioFormatConfig {

@@ -39,6 +39,7 @@ internal class AndroidAudioInputSession private constructor(
   private val audioManager: AudioManager,
   private val audioRecord: AudioRecord,
   private val acousticEchoCanceler: AcousticEchoCanceler?,
+  private val profile: AndroidAudioInputProfile,
   private val preferredInputKey: String?,
   private val onAppliedPreferredDeviceChanged: (String?) -> Unit,
   private val setPreferredDevice: (AudioDeviceInfo?) -> Boolean,
@@ -93,6 +94,7 @@ internal class AndroidAudioInputSession private constructor(
         audioManager = audioManager,
         audioRecord = audioRecord,
         acousticEchoCanceler = acousticEchoCanceler,
+        profile = profile,
         preferredInputKey = preferredDeviceKey,
         onAppliedPreferredDeviceChanged = onAppliedPreferredDeviceChanged,
         setPreferredDevice = setPreferredDevice ?: audioRecord::setPreferredDevice,
@@ -178,6 +180,7 @@ internal class AndroidAudioInputSession private constructor(
   private var requestedCommunicationDevice: AudioDeviceInfo? = null
   private var selectedInput: AudioDeviceInfo? = null
   private var appliedPreferredInputKey: String? = null
+  private var appliedCommunicationType: Int? = null
 
   private val deviceCallback =
     object : AudioDeviceCallback() {
@@ -198,6 +201,36 @@ internal class AndroidAudioInputSession private constructor(
 
   internal val appliedPreferredDeviceKey: String?
     get() = synchronized(lock) { appliedPreferredInputKey }
+
+  /** Type of the communication output device this session actually holds, or null when it
+   * holds none — either because it is a recognition-profile session, or because the
+   * platform rejected the selection. Never inferred from what was requested. */
+  internal val appliedCommunicationDeviceType: Int?
+    get() = synchronized(lock) { appliedCommunicationType }
+
+  /**
+   * The built-in speaker, but only when selecting it is the difference between the
+   * loudspeaker and the earpiece.
+   *
+   * Any external communication output — wired or USB headset, hearing aid, dock —
+   * already outranks the earpiece in Android's own routing, so forcing the speaker
+   * there would blast audio out of the phone while a headset is plugged in. The only
+   * case that needs an explicit choice is a device whose communication outputs are
+   * just the built-in pair, where the default lands on the earpiece.
+   */
+  private fun builtInSpeakerForCommunicationCapture(available: List<AudioDeviceInfo>): AudioDeviceInfo? {
+    if (profile != AndroidAudioInputProfile.VoiceCommunication) return null
+    val hasExternalOutput =
+      available.any {
+        it.type != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER && it.type != AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+      }
+    if (hasExternalOutput) return null
+    return available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+  }
+
+  private fun setAppliedCommunicationDeviceType(value: Int?) {
+    appliedCommunicationType = value
+  }
 
   /** The rate AudioRecord actually negotiated, which need not be the requested one;
    * callers converting capture to a wire rate must build that conversion from this. */
@@ -263,14 +296,27 @@ internal class AndroidAudioInputSession private constructor(
     inputs: List<AudioDeviceInfo>,
     preferredInput: AudioDeviceInfo?,
   ): Boolean {
-    val communicationDevice =
+    val available = audioManager.availableCommunicationDevices
+    val bluetoothDevice =
       if (preferredInput == null) {
-        selectBluetoothDevice(audioManager.availableCommunicationDevices, requestedCommunicationDevice)
+        selectBluetoothDevice(available, requestedCommunicationDevice)
       } else {
-        selectCommunicationDevice(audioManager.availableCommunicationDevices, preferredInput)
+        selectCommunicationDevice(available, preferredInput)
       }
-    val communicationSelected = bluetoothCommunicationRoute.update(audioManager, communicationRouteOwner, communicationDevice)
-    requestedCommunicationDevice = communicationDevice.takeIf { communicationSelected }
+    // Communication-profile capture owns the output route too. Without an explicit
+    // selection Android's phone strategy sends STREAM_VOICE_CALL to the earpiece,
+    // which turns hands-free Talk into hold-to-your-ear Talk; the recognition
+    // profile (manual Mic/STT) must keep its existing no-ownership behaviour.
+    val communicationDevice = bluetoothDevice ?: builtInSpeakerForCommunicationCapture(available)
+    val outcome = bluetoothCommunicationRoute.update(audioManager, communicationRouteOwner, communicationDevice)
+    if (outcome == CommunicationRouteOutcome.Rejected) {
+      Log.w(tag, "communication device rejected type=${communicationDevice?.type}")
+    }
+    val selectedCommunicationDevice = communicationDevice.takeIf { outcome == CommunicationRouteOutcome.Selected }
+    setAppliedCommunicationDeviceType(selectedCommunicationDevice?.type)
+    // Input following stays Bluetooth-only: the built-in speaker is an output device
+    // and must never be fed to the input selector as if it were a headset.
+    requestedCommunicationDevice = bluetoothDevice.takeIf { outcome == CommunicationRouteOutcome.Selected }
     val input = preferredInput ?: selectBluetoothInput(inputs, requestedInput, requestedCommunicationDevice)
     if (sameDevice(requestedInput, input) && sameDevice(selectedInput, input)) return true
     requestedInput = input
@@ -341,10 +387,29 @@ internal class AndroidAudioInputSession private constructor(
         runCatching { audioRecord.stop() }
       }
       runCatching { audioRecord.release() }
+      // Releases the process communication route this session held, so Talk-owned
+      // routing does not leak into unrelated app audio after Talk stops.
       bluetoothCommunicationRoute.close(audioManager, communicationRouteOwner)
       requestedCommunicationDevice = null
+      appliedCommunicationType = null
     }
   }
+}
+
+/**
+ * Result of one communication-route update. Distinguishing a rejection from "nothing was
+ * wanted" is the point: a Boolean cannot say whether the platform refused a device we asked
+ * for, and callers must never report speaker routing as achieved when it was refused.
+ */
+private enum class CommunicationRouteOutcome {
+  /** The requested device is now the active communication device. */
+  Selected,
+
+  /** No device was requested; any previously held route was released. */
+  Cleared,
+
+  /** A device was requested and the platform refused it. */
+  Rejected,
 }
 
 /** Serializes Android's process-wide communication route across overlapping capture cleanup. */
@@ -366,21 +431,23 @@ private class BluetoothCommunicationRoute {
     audioManager: AudioManager,
     owner: Long,
     device: AudioDeviceInfo?,
-  ): Boolean {
-    if (owner < latestOwner) return false
+  ): CommunicationRouteOutcome {
+    // A superseded owner must not disturb a newer session's route, and it has not
+    // requested anything of its own, so this is Cleared rather than Rejected.
+    if (owner < latestOwner) return CommunicationRouteOutcome.Cleared
     latestOwner = owner
     if (device == null) {
       if (activeOwner != null) audioManager.clearCommunicationDevice()
       activeOwner = null
-      return false
+      return CommunicationRouteOutcome.Cleared
     }
     if (!audioManager.setCommunicationDevice(device)) {
       if (activeOwner != null) audioManager.clearCommunicationDevice()
       activeOwner = null
-      return false
+      return CommunicationRouteOutcome.Rejected
     }
     activeOwner = owner
-    return true
+    return CommunicationRouteOutcome.Selected
   }
 
   @Synchronized

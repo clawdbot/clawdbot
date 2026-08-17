@@ -83,6 +83,194 @@ class AndroidAudioInputSessionTest {
   }
 
   @Test
+  fun communicationCaptureSelectsBuiltInSpeakerWhenNoBluetoothIsAvailable() {
+    // Without an explicit selection Android's phone strategy routes
+    // STREAM_VOICE_CALL to the earpiece, which is what made hands-free Talk
+    // unusable. Talk must claim the loudspeaker instead.
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    val earpiece = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(earpiece, speaker))
+
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+
+    assertEquals(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, audioManager.communicationDevice?.type)
+    assertEquals(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, session.appliedCommunicationDeviceType)
+    session.close()
+  }
+
+  @Test
+  fun communicationCaptureNeverFallsThroughToTheEarpiece() {
+    // Even when the earpiece is the first available communication device, it must
+    // never be the one Talk ends up on.
+    val earpiece = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(earpiece, speaker))
+
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+
+    assertFalse(audioManager.communicationDevice?.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+    assertFalse(session.appliedCommunicationDeviceType == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+    session.close()
+  }
+
+  @Test
+  fun communicationCaptureLeavesWiredHeadsetRoutingAlone() {
+    // A wired headset already outranks the earpiece in Android's own routing, so
+    // forcing the speaker here would play out of the phone while headphones are
+    // plugged in. Only the built-in-only case needs an explicit choice.
+    val wired = audioDevice(AudioDeviceInfo.TYPE_WIRED_HEADSET)
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    val earpiece = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(earpiece, speaker, wired))
+
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+
+    assertNull(audioManager.communicationDevice)
+    assertNull(session.appliedCommunicationDeviceType)
+    session.close()
+  }
+
+  @Test
+  fun communicationCaptureLeavesUsbHeadsetRoutingAlone() {
+    val usb = audioDevice(AudioDeviceInfo.TYPE_USB_HEADSET)
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    val earpiece = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(earpiece, speaker, usb))
+
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+
+    assertNull(audioManager.communicationDevice)
+    assertNull(session.appliedCommunicationDeviceType)
+    session.close()
+  }
+
+  @Test
+  fun communicationCapturePrefersBluetoothOverTheBuiltInSpeaker() {
+    val sco = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    val scoOutput = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    shadowAudioManager.setInputDevices(listOf(sco))
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(scoOutput, speaker))
+
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+
+    assertEquals(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, audioManager.communicationDevice?.type)
+    assertEquals(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, session.appliedCommunicationDeviceType)
+    session.close()
+  }
+
+  @Test
+  fun bluetoothDisconnectDuringCommunicationCaptureFallsBackToTheBuiltInSpeaker() {
+    val sco = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    val scoOutput = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    shadowAudioManager.setInputDevices(listOf(sco))
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(scoOutput, speaker))
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+    assertEquals(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, session.appliedCommunicationDeviceType)
+
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(speaker))
+    shadowAudioManager.removeInputDevice(sco, true)
+    shadowOf(Looper.getMainLooper()).idle()
+
+    assertEquals(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, audioManager.communicationDevice?.type)
+    assertEquals(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, session.appliedCommunicationDeviceType)
+    session.close()
+  }
+
+  @Test
+  fun closingCommunicationCaptureReleasesTheRouteItHeld() {
+    // Talk-owned routing must not leak into unrelated app audio after Talk stops.
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(speaker))
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+    assertEquals(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, audioManager.communicationDevice?.type)
+
+    session.close()
+
+    assertNull(audioManager.communicationDevice)
+    assertNull(session.appliedCommunicationDeviceType)
+  }
+
+  @Test
+  fun rejectedSpeakerSelectionIsReportedAsUnheldRatherThanAssumedSuccessful() {
+    // setCommunicationDevice() returning false is a routing failure, not a
+    // silent success: the session must not claim it holds the speaker.
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(speaker))
+    shadowAudioManager.lockCommunicationDevice(true)
+
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        profile = AndroidAudioInputProfile.VoiceCommunication,
+      )
+
+    assertNull(session.appliedCommunicationDeviceType)
+    session.close()
+    shadowAudioManager.lockCommunicationDevice(false)
+  }
+
+  @Test
+  fun recognitionCaptureDoesNotClaimAnyCommunicationRoute() {
+    // Manual Mic/STT semantics are unchanged: it never took ownership of the
+    // process communication route and must not start now.
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    val earpiece = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(speaker, earpiece))
+
+    val session = AndroidAudioInputSession.open(context, sampleRateHz = 24_000, frameBytes = 4_800)
+
+    assertNull(audioManager.communicationDevice)
+    assertNull(session.appliedCommunicationDeviceType)
+    session.close()
+  }
+
+  @Test
   fun presentPreferredInputResolvesByStableKey() {
     val sco = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
     val ble = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)

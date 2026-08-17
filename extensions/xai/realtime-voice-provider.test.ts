@@ -902,7 +902,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
           type: "conversation.item.truncate",
           item_id: "item_1",
           content_index: 0,
-          audio_end_ms: 300,
+          audio_end_ms: 0,
         },
       ],
     },
@@ -915,7 +915,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
           type: "conversation.item.truncate",
           item_id: "item_1",
           content_index: 0,
-          audio_end_ms: 250,
+          audio_end_ms: 0,
         },
       ],
     },
@@ -946,7 +946,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
           type: "conversation.item.truncate",
           item_id: "item_1",
           content_index: 0,
-          audio_end_ms: 300,
+          audio_end_ms: 0,
         },
       ],
     },
@@ -960,6 +960,10 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       expectedActions: [],
     },
   ])(
+    // audio_end_ms below is 0, not the media-clock delta, because these cases deliver a
+    // 15-byte synthetic audio delta - well under 1ms at PCM16/24kHz - and audio_end_ms is
+    // clamped to audio the item actually delivered. The previous 250/300 values were the
+    // unclamped input-media-clock estimate, i.e. they encoded the defect.
     "$name",
     async ({
       hasAudio,
@@ -1019,6 +1023,39 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       ).toEqual(expectedActions);
     },
   );
+
+  it("clamps barge-in audio_end_ms to audio the current item actually delivered", async () => {
+    // The media clock is the client's INPUT-audio clock. On a relayed mobile
+    // client its drift against output is unbounded, so an unclamped
+    // audio_end_ms can claim minutes of playback for an item that produced
+    // milliseconds, trimming provider history at the wrong point.
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const onAudio = vi.fn();
+    const onClearAudio = vi.fn();
+    const bridge = createTestBridge({
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio,
+    });
+    const { socket } = await startRealtimeBridge(bridge);
+
+    socket.emitServer({ type: "response.created", response: { id: "resp_1" } });
+    bridge.setMediaTimestamp(0);
+    // 24000 bytes of PCM16 at 24kHz is exactly 500ms of assistant audio.
+    socket.emitServer({
+      type: "response.output_audio.delta",
+      item_id: "item_1",
+      delta: Buffer.alloc(24_000, 0x41).toString("base64"),
+    });
+
+    // Input clock jumps 10 minutes; only 500ms of audio was ever delivered.
+    bridge.setMediaTimestamp(600_000);
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+    bridge.close();
+
+    const truncate = parseSent(socket).find((event) => event.type === "conversation.item.truncate");
+    expect(truncate).toMatchObject({ item_id: "item_1", audio_end_ms: 500 });
+  });
 
   it("terminates realtime voice on non-canonical base64 audio", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret

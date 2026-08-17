@@ -91,8 +91,16 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {
           this.lastAssistantItemId = event.item_id;
           this.responseStartTimestamp = this.latestMediaTimestamp;
+          // New item: the previous item's delivered-byte count no longer bounds it.
+          this.resetItemAudioAccounting();
         } else if (this.responseStartTimestamp === null) {
           this.responseStartTimestamp = this.latestMediaTimestamp;
+        }
+        if (event.item_id) {
+          this.deliveredAudioBytesForCurrentItem += Buffer.from(
+            canonicalAudio,
+            "base64",
+          ).byteLength;
         }
         this.responseActive = true;
         return;

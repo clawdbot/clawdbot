@@ -61,12 +61,14 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected lastAssistantItemId: string | null = null;
 
-  // item_id of the assistant item we most recently sent
-  // conversation.item.truncate for. Deltas that keep arriving for this exact
-  // item after the truncate (a race between the request and the provider's
-  // in-flight generation) must not be re-adopted as a new item - see
-  // OpenAIRealtimeEvents' response.audio.delta handling.
-  protected lastTruncatedItemId: string | null = null;
+  // item_id of the assistant item we most recently abandoned on a barge-in.
+  // Deltas that keep arriving for this exact item afterwards (a race between our
+  // request and the provider's in-flight generation) must be dropped, not
+  // re-adopted as a new item - see OpenAIRealtimeEvents' response.audio.delta
+  // handling. Set whether or not a provider-side truncate was sent: an item
+  // abandoned without a trustworthy truncation point still must not restart
+  // playback after we cleared it.
+  protected abandonedAssistantItemId: string | null = null;
 
   // event_id of the most recently sent conversation.item.truncate, so a
   // provider-side rejection of that specific request can be recognized and
@@ -381,6 +383,14 @@ export abstract class OpenAIRealtimeProtocol {
         type: "conversation.item.truncate.skipped",
         detail: `reason=barge-in audioEndMs=${audioEndMs} minAudioEndMs=${minBargeInAudioEndMs}`,
       });
+      // Default scope keeps the shipped contract: below the threshold the whole
+      // barge-in is treated as likely echo and ignored, so local playback is left
+      // alone. Only a consumer that declares its barge-in signal trustworthy
+      // (minBargeInScope "truncate-only") continues past here to cancel the
+      // response and clear playback while skipping the imprecise truncate.
+      if ((this.config.minBargeInScope ?? "truncate-and-playback") === "truncate-and-playback") {
+        return;
+      }
     }
     if (
       options?.audioPlaybackActive === true &&
@@ -413,11 +423,21 @@ export abstract class OpenAIRealtimeProtocol {
       // instead of re-adopting it as a brand new item, which would restart
       // clock/byte accounting mid-stream and could trigger a second,
       // spuriously-small-looking truncate rejection for the same item.
-      this.lastTruncatedItemId = assistantItemId;
+      this.abandonedAssistantItemId = assistantItemId;
       this.clearOutstandingMarks();
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
       return;
+    }
+    if (shouldInterruptProvider && audioEndMsBelowMinimum) {
+      // No trustworthy truncation point, so no provider truncate - but this item
+      // is still being abandoned locally. Without marking it stale, its
+      // in-flight tail arrives after response.cancel (which is asynchronous),
+      // gets forwarded, and restarts playback over the user.
+      this.abandonedAssistantItemId = assistantItemId;
+      this.clearOutstandingMarks();
+      this.lastAssistantItemId = null;
+      this.responseStartTimestamp = null;
     }
     this.config.onClearAudio("barge-in");
   }
@@ -511,7 +531,7 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected resetRealtimeSessionState(): void {
     this.clearOutstandingMarks();
-    this.lastTruncatedItemId = null;
+    this.abandonedAssistantItemId = null;
     this.manualTruncateEventId = null;
     this.responseStartTimestamp = null;
     this.responseActive = false;
