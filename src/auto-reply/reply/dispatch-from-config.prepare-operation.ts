@@ -103,7 +103,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         `dispatch-from-config: ${fast.logKind} reply suppressed by ${deliverySuppressionReason} (session=${sessionKey ?? "unknown"})`,
       );
     }
-    const counts = dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts();
+    const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     recordProcessed("completed", { reason: fast.reason });
     markIdle("message_completed");
@@ -255,7 +255,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             status: "complete" as const,
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
-              counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
+              counts: dispatcher.getQueuedCounts(),
             }),
           };
         }
@@ -280,7 +280,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               status: "complete" as const,
               result: attachSourceReplyDeliveryMode({
                 queuedFinal: false,
-                counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
+                counts: dispatcher.getQueuedCounts(),
               }),
             };
           }
@@ -310,7 +310,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             status: "complete" as const,
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
-              counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
+              counts: dispatcher.getQueuedCounts(),
             }),
           };
         }
@@ -332,7 +332,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             status: "complete" as const,
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
-              counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
+              counts: dispatcher.getQueuedCounts(),
             }),
           };
         }

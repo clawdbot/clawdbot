@@ -61,7 +61,10 @@ describe("createReplyDispatcher", () => {
 
     const receipt = await dispatcher.waitForIdle();
     expect(deliver).not.toHaveBeenCalled();
-    expect(receipt).toBeUndefined();
+    expect(receipt).toMatchObject({
+      anyVisibleDelivered: false,
+      counts: { final: { delivered: 0 } },
+    });
   });
 
   it("still drops exact NO_REPLY final payloads for group sessions where silence is allowed", async () => {

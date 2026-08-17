@@ -22,6 +22,21 @@ export type ChannelTurnVisibleDeliverySignals = {
   fallbackDelivered?: boolean;
   deliverySummaryDelivered?: boolean;
 };
+type FinalDeliverySignals = Pick<
+  ChannelTurnVisibleDeliverySignals,
+  "fallbackDelivered" | "deliverySummaryDelivered"
+>;
+
+const hasFinalSignal = (signals: FinalDeliverySignals) =>
+  signals.fallbackDelivered === true || signals.deliverySummaryDelivered === true;
+
+const hasVisibleSignal = (
+  result: ChannelTurnDispatchResultLike,
+  signals: ChannelTurnVisibleDeliverySignals,
+) =>
+  result?.observedReplyDelivery === true ||
+  signals.observedReplyDelivery === true ||
+  hasFinalSignal(signals);
 
 /** Zero-filled reply dispatch count map used before merging optional provider counts. */
 export const EMPTY_CHANNEL_TURN_DISPATCH_COUNTS: Record<ReplyDispatchKind, number> = {
@@ -47,28 +62,48 @@ export function hasVisibleChannelTurnDispatchFromReceipt(
   result: ChannelTurnDispatchResultLike,
   signals: ChannelTurnVisibleDeliverySignals = {},
 ): boolean {
-  return (
-    result?.settledReceipt?.anyVisibleDelivered === true ||
-    result?.observedReplyDelivery === true ||
-    signals.observedReplyDelivery === true ||
-    signals.fallbackDelivered === true ||
-    signals.deliverySummaryDelivered === true
-  );
+  return result?.settledReceipt?.anyVisibleDelivered === true || hasVisibleSignal(result, signals);
 }
 
-/** Returns whether a turn produced a final reply, fallback, summary, or queued final payload. */
 export function hasFinalChannelTurnDispatchFromReceipt(
   result: ChannelTurnDispatchResultLike,
-  signals: Pick<
-    ChannelTurnVisibleDeliverySignals,
-    "fallbackDelivered" | "deliverySummaryDelivered"
-  > = {},
+  signals: FinalDeliverySignals = {},
 ): boolean {
   const finalCounts = result?.settledReceipt?.counts.final;
   return (
-    signals.fallbackDelivered === true ||
-    signals.deliverySummaryDelivered === true ||
+    hasFinalSignal(signals) ||
     (finalCounts?.delivered ?? 0) > 0 ||
     (finalCounts?.failedAfterSend ?? 0) > 0
   );
+}
+
+export function resolveChannelTurnDispatchCounts(result: ChannelTurnDispatchResultLike) {
+  return result?.settledReceipt
+    ? resolveChannelTurnDispatchCountsFromReceipt(result)
+    : { ...EMPTY_CHANNEL_TURN_DISPATCH_COUNTS, ...result?.counts };
+}
+
+export function hasVisibleChannelTurnDispatch(
+  result: ChannelTurnDispatchResultLike,
+  signals: ChannelTurnVisibleDeliverySignals = {},
+): boolean {
+  if (result?.settledReceipt) {
+    return hasVisibleChannelTurnDispatchFromReceipt(result, signals);
+  }
+  return (
+    hasVisibleSignal(result, signals) ||
+    result?.queuedFinal === true ||
+    Object.values(resolveChannelTurnDispatchCounts(result)).some((count) => count > 0)
+  );
+}
+
+export function hasFinalChannelTurnDispatch(
+  result: ChannelTurnDispatchResultLike,
+  signals: FinalDeliverySignals = {},
+): boolean {
+  return result?.settledReceipt
+    ? hasFinalChannelTurnDispatchFromReceipt(result, signals)
+    : hasFinalSignal(signals) ||
+        result?.queuedFinal === true ||
+        resolveChannelTurnDispatchCounts(result).final > 0;
 }

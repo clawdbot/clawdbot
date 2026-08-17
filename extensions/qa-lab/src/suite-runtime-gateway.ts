@@ -134,14 +134,6 @@ function isGatewayRestartRace(error: unknown) {
   );
 }
 
-function isStoppedGatewayClient(error: unknown) {
-  const text = formatGatewayPrimaryErrorText(error);
-  return (
-    text.includes("gateway rpc client already stopped") ||
-    text.includes("plugin migration inputs changed during startup convergence")
-  );
-}
-
 function isConfigHashConflict(error: unknown) {
   return formatGatewayPrimaryErrorText(error).includes("config changed since last load");
 }
@@ -348,15 +340,6 @@ async function runConfigMutation(params: {
         await waitForGatewayHealthy(params.env, Math.max(15_000, restartDelayMs + 10_000)).catch(
           () => undefined,
         );
-        continue;
-      }
-      if (isStoppedGatewayClient(error) && params.env.gateway.restartAfterStateMutation) {
-        await params.env.gateway.restartAfterStateMutation(async () => {});
-        const recoveredSnapshot = await readConfigSnapshot(params.env);
-        if (isConfigMutationNoopForSnapshot(params.action, recoveredSnapshot.config, params.raw)) {
-          return { ok: true, restarted: true };
-        }
-        lastConflict = error;
         continue;
       }
       if (!isGatewayRestartRace(error)) {

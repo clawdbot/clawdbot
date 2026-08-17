@@ -25,26 +25,29 @@ import {
   type NormalizeReplyOutcome,
   type NormalizeReplySkipReason,
 } from "./normalize-reply.js";
+import {
+  composeReplyDispatchBeforeDeliver,
+  DEFAULT_BEFORE_DELIVER_TIMEOUT_MS,
+  markReplyDispatchBeforeDeliverDeadlineOwned,
+  runReplyDispatchBeforeDeliverStage,
+} from "./reply-dispatch-before-deliver.js";
 import { getHumanDelay, getHumanDelayMax } from "./reply-dispatch-delay.js";
 import {
   createReplyDispatchSettledCounts,
   isReplyDispatchProvenInvisible,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
+import { createReplyDispatchSettlementBarrier } from "./reply-dispatch-settlement.js";
 import {
-  createPendingFinalSettlementCallbacks,
-  createReplyDispatchSettlementBarrier,
-  type ReplyDispatchDeliveryAttempt,
-} from "./reply-dispatch-settlement.js";
-import type {
-  ReplyDispatchBeforeDeliver,
-  ReplyDispatchBeforeDeliverOptions,
-  ReplyDispatchKind,
-  ReplyDispatchReceipt,
-  ReplyDispatchRuntimeInfo,
-  ReplyDispatchSettledCounts,
-  ReplyDispatcher,
-  ReplyFollowupAdmissionBarrierTimeoutPolicy,
+  mapReplyDispatchCounts,
+  type ReplyDispatchBeforeDeliver,
+  type ReplyDispatchBeforeDeliverOptions,
+  type ReplyDispatchKind,
+  type ReplyDispatchReceipt,
+  type ReplyDispatchRuntimeInfo,
+  type ReplyDispatchSettledCounts,
+  type ReplyDispatcher,
+  type ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
@@ -99,8 +102,8 @@ type ReplyDispatchDeliverer = (
 ) => Promise<unknown>;
 
 export type { ReplyDispatchBeforeDeliver };
+export { composeReplyDispatchBeforeDeliver, markReplyDispatchBeforeDeliverDeadlineOwned };
 
-const DEFAULT_BEFORE_DELIVER_TIMEOUT_MS = 15_000;
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const deliveryOutcomeTrackers = new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>();
 const undeliveredFallbacks = new WeakMap<ReplyPayload, ReplyPayload>();
@@ -111,125 +114,6 @@ const replyDispatcherPreparers = new WeakMap<
     normalize: (kind: ReplyDispatchKind, payload: ReplyPayload) => NormalizeReplyOutcome;
   }
 >();
-
-type ReplyDispatchBeforeDeliverStage = {
-  hook: ReplyDispatchBeforeDeliver;
-  timeoutMs?: number;
-};
-
-type ReplyDispatchBeforeDeliverStageInput =
-  | ReplyDispatchBeforeDeliver
-  | {
-      hook: ReplyDispatchBeforeDeliver;
-      options?: ReplyDispatchBeforeDeliverOptions;
-    }
-  | undefined;
-
-const beforeDeliverStagesByHook = new WeakMap<
-  ReplyDispatchBeforeDeliver,
-  readonly ReplyDispatchBeforeDeliverStage[]
->();
-
-function resolveReplyDispatchBeforeDeliverTimeoutMs(
-  options: ReplyDispatchBeforeDeliverOptions | undefined,
-): number {
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_BEFORE_DELIVER_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new RangeError("beforeDeliver timeoutMs must be a positive finite number");
-  }
-  return timeoutMs;
-}
-
-async function runReplyDispatchBeforeDeliverStage(
-  stage: ReplyDispatchBeforeDeliverStage,
-  payload: ReplyPayload,
-  info: ReplyDispatchRuntimeInfo,
-): Promise<ReplyPayload | null> {
-  const timeoutMs = stage.timeoutMs;
-  if (!timeoutMs) {
-    return await stage.hook(payload, info);
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  // The hook promise cannot be cancelled. The deadline releases the serialized
-  // delivery owner; Promise.race still observes any late rejection.
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`beforeDeliver timed out after ${timeoutMs}ms`)),
-      timeoutMs,
-    );
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([Promise.resolve(stage.hook(payload, info)), timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-function resolveReplyDispatchBeforeDeliverStages(
-  input: ReplyDispatchBeforeDeliverStageInput,
-): readonly ReplyDispatchBeforeDeliverStage[] {
-  if (!input) {
-    return [];
-  }
-  if (typeof input === "function") {
-    return (
-      beforeDeliverStagesByHook.get(input) ?? [
-        { hook: input, timeoutMs: DEFAULT_BEFORE_DELIVER_TIMEOUT_MS },
-      ]
-    );
-  }
-  const existingStages = beforeDeliverStagesByHook.get(input.hook);
-  // Internal composition already assigned each real stage its owner budget.
-  // Wrapping that chain again would turn one stage budget into an aggregate deadline.
-  if (existingStages) {
-    return existingStages;
-  }
-  return [
-    {
-      hook: input.hook,
-      timeoutMs: resolveReplyDispatchBeforeDeliverTimeoutMs(input.options),
-    },
-  ];
-}
-
-/** Compose core delivery stages while retaining a separate deadline for each actual hook. */
-export function composeReplyDispatchBeforeDeliver(
-  ...hooks: ReplyDispatchBeforeDeliverStageInput[]
-): ReplyDispatchBeforeDeliver | undefined {
-  const stages: ReplyDispatchBeforeDeliverStage[] = [];
-  for (const hook of hooks) {
-    if (hook) {
-      stages.push(...resolveReplyDispatchBeforeDeliverStages(hook));
-    }
-  }
-  if (stages.length === 0) {
-    return undefined;
-  }
-  const composed: ReplyDispatchBeforeDeliver = async (payload, info) => {
-    let current: ReplyPayload | null = payload;
-    for (const stage of stages) {
-      if (!current) {
-        return null;
-      }
-      const next = await runReplyDispatchBeforeDeliverStage(stage, current, info);
-      current = next ? copyReplyPayloadMetadata(current, next) : null;
-    }
-    return current;
-  };
-  beforeDeliverStagesByHook.set(composed, stages);
-  return composed;
-}
-
-/** Mark a core hook whose lifecycle owner controls settlement and any deadline. */
-export function markReplyDispatchBeforeDeliverDeadlineOwned(
-  hook: ReplyDispatchBeforeDeliver,
-): ReplyDispatchBeforeDeliver {
-  beforeDeliverStagesByHook.set(hook, [{ hook }]);
-  return hook;
-}
 
 /** Capture one core-dispatcher delivery outcome without changing send* return types. */
 export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
@@ -390,27 +274,16 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     final: createReplyDispatchSettledCounts(),
   };
 
-  const projectSettledCounts = (
-    project: (counts: ReplyDispatchSettledCounts) => number,
-  ): Record<ReplyDispatchKind, number> => ({
-    tool: project(settledCounts.tool),
-    block: project(settledCounts.block),
-    final: project(settledCounts.final),
+  const buildReceipt = (): ReplyDispatchReceipt => ({
+    counts: {
+      tool: { ...settledCounts.tool },
+      block: { ...settledCounts.block },
+      final: { ...settledCounts.final },
+    },
+    anyVisibleDelivered: Object.values(settledCounts).some(
+      (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
+    ),
   });
-
-  const buildReceipt = (): ReplyDispatchReceipt | undefined =>
-    queuedCounts.tool + queuedCounts.block + queuedCounts.final === 0
-      ? undefined
-      : {
-          counts: {
-            tool: { ...settledCounts.tool },
-            block: { ...settledCounts.block },
-            final: { ...settledCounts.final },
-          },
-          anyVisibleDelivered: Object.values(settledCounts).some(
-            (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
-          ),
-        };
 
   const settlementBarrier = createReplyDispatchSettlementBarrier(options.onIdle);
 
@@ -468,10 +341,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     }
   };
 
-  const deliverOnce = async (
-    payload: ReplyPayload,
-    info: ReplyDispatchRuntimeInfo,
-  ): Promise<ReplyDispatchDeliveryAttempt> => {
+  const deliverOnce = async (payload: ReplyPayload, info: ReplyDispatchRuntimeInfo) => {
     let deliverPayload: ReplyPayload | null = payload;
     let deliveryStarted = false;
     const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
@@ -492,7 +362,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             ]);
           }
           await notifyBeforeDeliverCancelled(payload, info);
-          return { settlement: Promise.resolve("cancelled") };
+          return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
         }
         deliverPayload = copyReplyPayloadMetadata(payload, deliverPayload);
       }
@@ -507,14 +377,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         );
         if (claim.state !== "queued") {
           await notifyBeforeDeliverCancelled(payload, info);
-          return { settlement: Promise.resolve("cancelled") };
+          return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
         }
       }
       deliveryStarted = true;
       const result = await options.deliver(deliverPayload, info);
-      return settlementBarrier.resolve(result, createPendingFinalSettlementCallbacks(custody));
+      return settlementBarrier.resolve(result, custody);
     } catch (error) {
-      const outcome =
+      const outcome: ReplyDispatchDeliveryOutcome =
         deliveryStarted && !isRetryableNoSendFailure(error)
           ? "failed-deliver"
           : "failed-before-deliver";
@@ -540,7 +410,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     payload: ReplyPayload,
     info: ReplyDispatchRuntimeInfo,
     shouldDelay: boolean,
-  ): Promise<ReplyDispatchDeliveryAttempt> =>
+  ) =>
     settlementBarrier.schedule(async () => {
       if (shouldDelay) {
         const delayMs = getHumanDelay(options.humanDelay);
@@ -685,14 +555,16 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       await settlementBarrier.waitForIdle();
       return buildReceipt();
     },
-    getAdmissionCounts: () => ({ ...queuedCounts }),
     getQueuedCounts: () =>
-      projectSettledCounts((counts) =>
+      mapReplyDispatchCounts(settledCounts, (counts) =>
         Object.values(counts).reduce((total, count) => total + count, 0),
       ),
-    getCancelledCounts: () => projectSettledCounts((counts) => counts.cancelled),
+    getCancelledCounts: () => mapReplyDispatchCounts(settledCounts, (counts) => counts.cancelled),
     getFailedCounts: () =>
-      projectSettledCounts((counts) => counts.failedBeforeSend + counts.failedAfterSend),
+      mapReplyDispatchCounts(
+        settledCounts,
+        (counts) => counts.failedBeforeSend + counts.failedAfterSend,
+      ),
     markComplete,
     resolveFollowupAdmissionBarrierTimeoutPolicy:
       options.resolveFollowupAdmissionBarrierTimeoutPolicy

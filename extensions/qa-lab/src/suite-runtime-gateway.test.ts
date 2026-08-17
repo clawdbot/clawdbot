@@ -506,34 +506,6 @@ describe("qa suite gateway helpers", () => {
     expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
   });
 
-  it("recovers a stopped RPC client after config restart convergence", async () => {
-    const snapshots = [
-      { hash: "hash-1", config: { tools: {} } },
-      { hash: "hash-2", config: { tools: { deny: ["read"] } } },
-    ];
-    const gatewayCall = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return snapshots.shift();
-      }
-      throw new Error(
-        "OpenClaw plugin migration inputs changed during startup convergence; gateway rpc client already stopped",
-      );
-    });
-    const { env } = createConfigMutationEnv(gatewayCall);
-    const restartAfterStateMutation = vi.fn(async () => undefined);
-    env.gateway.restartAfterStateMutation = restartAfterStateMutation;
-
-    await expect(
-      patchConfig({
-        env,
-        patch: { tools: { deny: ["read"] } },
-        restartDelayMs: 0,
-      }),
-    ).resolves.toEqual({ ok: true, restarted: true });
-    expect(restartAfterStateMutation).toHaveBeenCalledOnce();
-    expect(gatewayCall).toHaveBeenCalledTimes(3);
-  });
-
   it("retries when a restart race settles before the config mutation is visible", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({

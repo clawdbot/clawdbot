@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ReplyPayload } from "../reply-payload.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -112,17 +111,6 @@ describe("createReplyTurnLedger", () => {
     ledger.sendQueued("final", { text: "hello" });
     await ledger.settleQueued();
     expect(ledger.hasVisibleDelivery()).toBe(false);
-  });
-
-  it("never counts contentless payloads as visible", async () => {
-    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
-    const ledger = createReplyTurnLedger(dispatcher);
-    const payload: ReplyPayload = { text: "hi" };
-    ledger.sendQueued("final", payload);
-    await ledger.settleQueued();
-    expect(ledger.hasVisibleDelivery()).toBe(true);
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
   });
 
   it("records routed settlements only when delivered and contentful", () => {

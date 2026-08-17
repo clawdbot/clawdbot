@@ -16,6 +16,13 @@ export type ReplyDispatchReceipt = {
   anyVisibleDelivered: boolean;
 };
 
+export function mapReplyDispatchCounts<T>(
+  counts: Record<ReplyDispatchKind, T>,
+  select: (counts: T) => number,
+): Record<ReplyDispatchKind, number> {
+  return { tool: select(counts.tool), block: select(counts.block), final: select(counts.final) };
+}
+
 export type ReplyFollowupAdmissionBarrierTimeoutPolicy = {
   /** Absolute failsafe for owner activity that never settles. */
   maxTimeoutMs: number;
@@ -51,11 +58,8 @@ export type ReplyDispatcher = {
     hook: ReplyDispatchBeforeDeliver,
     options?: ReplyDispatchBeforeDeliverOptions,
   ) => void;
-  /** Explicit capability marker; absent on legacy void-returning dispatchers. */
   supportsSettledReceipt?: true;
   waitForIdle: () => Promise<void | ReplyDispatchReceipt>;
-  /** @internal Admission counts used only for queue lifecycle decisions. */
-  getAdmissionCounts?: () => Record<ReplyDispatchKind, number>;
   /** @deprecated Remove in the next Plugin SDK major; derived from settled receipts. */
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   /** @deprecated Remove in the next Plugin SDK major; derived from settled receipts. */

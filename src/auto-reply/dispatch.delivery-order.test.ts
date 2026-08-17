@@ -339,10 +339,12 @@ describe("foreground reply delivery order", () => {
     releaseOlderFinal.resolve();
 
     await expect(olderDispatch).resolves.toEqual(settledFinalResult());
-    await expect(newerDispatch).resolves.toEqual({
+    const newerResult = await newerDispatch;
+    expect(newerResult).toMatchObject({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
+    expect(newerResult.settledReceipt?.anyVisibleDelivered).toBe(false);
     expect(deliveries).toEqual([{ kind: "final", text: "old final" }]);
   });
 

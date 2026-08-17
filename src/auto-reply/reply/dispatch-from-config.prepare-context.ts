@@ -419,7 +419,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       status: "complete" as const,
       result: attachSourceReplyDeliveryMode({
         queuedFinal: false,
-        counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
+        counts: dispatcher.getQueuedCounts(),
       }),
     };
   }
@@ -431,7 +431,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       status: "complete" as const,
       result: attachSourceReplyDeliveryMode({
         queuedFinal: false,
-        counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
+        counts: dispatcher.getQueuedCounts(),
       }),
     };
   }
@@ -463,7 +463,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     }
     return attachSourceReplyDeliveryMode({
       queuedFinal: false,
-      counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
+      counts: dispatcher.getQueuedCounts(),
       ...(opts?.sessionMetadataChanges
         ? { sessionMetadataChanges: opts.sessionMetadataChanges }
         : {}),
@@ -490,7 +490,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     state.completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
       queuedFinal,
-      counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
+      counts: dispatcher.getQueuedCounts(),
     });
   };
 
@@ -518,7 +518,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       status: "complete" as const,
       result: attachSourceReplyDeliveryMode({
         queuedFinal: false,
-        counts: dispatcher.getAdmissionCounts?.() ?? dispatcher.getQueuedCounts(),
+        counts: dispatcher.getQueuedCounts(),
         observedReplyDelivery: true,
       }),
     };

@@ -20,7 +20,6 @@ const SETTLE_QUEUED_TIMEOUT_MS = 30_000;
 
 type LedgerQueuedSend = {
   queued: boolean;
-  /** Present only when the core dispatcher exposes this payload's settlement. */
   outcome?: Promise<ReplyDispatchDeliveryOutcome>;
 };
 

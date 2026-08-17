@@ -9,11 +9,7 @@ export type ReplyDispatchDeliveryOutcome =
   | "failed-deliver";
 
 export function isReplyDispatchProvenInvisible(outcome: ReplyDispatchDeliveryOutcome): boolean {
-  return (
-    outcome === "delivered-not-visible" ||
-    outcome === "cancelled" ||
-    outcome === "failed-before-deliver"
-  );
+  return outcome !== "delivered" && outcome !== "failed-deliver";
 }
 
 export function isExplicitlyNonVisibleDelivery(result: unknown): boolean {

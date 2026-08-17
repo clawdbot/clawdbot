@@ -228,7 +228,7 @@ function finishAcpDispatchAttempt(params: {
   recordProcessed: DispatchProcessedRecorder;
   markIdle: (reason: string) => void;
 }): AcpDispatchAttemptResult {
-  const counts = params.dispatcher.getAdmissionCounts?.() ?? params.dispatcher.getQueuedCounts();
+  const counts = params.dispatcher.getQueuedCounts();
   params.delivery.applyRoutedCounts(counts);
   const hasQueuedDelivery = counts.tool + counts.block + counts.final > 0 || params.queuedFinal;
   const suppressionReason = hasQueuedDelivery
@@ -789,8 +789,7 @@ export async function tryDispatchAcpReplyCore(params: {
       : promptText;
     transcriptPromptText = turnPromptText;
     if (!turnPromptText && attachments.length === 0) {
-      const counts =
-        params.dispatcher.getAdmissionCounts?.() ?? params.dispatcher.getQueuedCounts();
+      const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_empty_prompt" });
       params.markIdle("message_completed");
@@ -863,8 +862,7 @@ export async function tryDispatchAcpReplyCore(params: {
       queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
       await persistTranscript(await delivery.resolveAccumulatedDeliveredTranscriptText());
       queuedFinal = delivery.hasDeliveredFinalReply() || queuedFinal;
-      const counts =
-        params.dispatcher.getAdmissionCounts?.() ?? params.dispatcher.getQueuedCounts();
+      const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_aborted" });
       params.markIdle("message_aborted");

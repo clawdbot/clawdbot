@@ -76,8 +76,6 @@ export function createAbortAwareDispatcher(params: {
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),
     ...(params.dispatcher.supportsSettledReceipt ? { supportsSettledReceipt: true } : {}),
     waitForIdle: () => params.dispatcher.waitForIdle(),
-    getAdmissionCounts: () =>
-      params.dispatcher.getAdmissionCounts?.() ?? params.dispatcher.getQueuedCounts(),
     getQueuedCounts: () => params.dispatcher.getQueuedCounts(),
     ...(getCancelledCounts ? { getCancelledCounts: () => getCancelledCounts() } : {}),
     getFailedCounts: () => params.dispatcher.getFailedCounts(),

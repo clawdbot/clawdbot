@@ -13,6 +13,7 @@ describe("defineChannelMessageAdapter", () => {
     await Promise.all([
       import("openclaw/plugin-sdk/channel-outbound"),
       import("openclaw/plugin-sdk/channel-message"),
+      import("openclaw/plugin-sdk/channel-inbound"),
       import("openclaw/plugin-sdk/channel-reply-pipeline"),
     ] as const);
   let pluginSdkSubpaths: Awaited<ReturnType<typeof loadPluginSdkSubpaths>>;
@@ -22,7 +23,7 @@ describe("defineChannelMessageAdapter", () => {
   });
 
   it("keeps channel plugin SDK subpaths aligned", async () => {
-    const [channelOutbound, channelMessage, channelReplyPipeline] = pluginSdkSubpaths;
+    const [channelOutbound, channelMessage, , channelReplyPipeline] = pluginSdkSubpaths;
 
     expect(channelOutbound.createChannelMessageReplyPipeline).toBe(
       channelReplyPipeline.createChannelReplyPipeline,
@@ -38,19 +39,37 @@ describe("defineChannelMessageAdapter", () => {
   });
 
   it("preserves legacy count-shaped dispatch projections", () => {
-    const [, channelMessage] = pluginSdkSubpaths;
+    const [, channelMessage, channelInbound] = pluginSdkSubpaths;
     const legacyResult = {
-      queuedFinal: true,
+      queuedFinal: false,
       counts: { tool: 1, block: 2, final: 1 },
     };
+    const facades = [
+      {
+        counts: channelMessage.resolveChannelTurnDispatchCounts,
+        visible: channelMessage.hasVisibleChannelTurnDispatch,
+        final: channelMessage.hasFinalChannelTurnDispatch,
+      },
+      {
+        counts: channelInbound.resolveInboundReplyDispatchCounts,
+        visible: channelInbound.hasVisibleInboundReplyDispatch,
+        final: channelInbound.hasFinalInboundReplyDispatch,
+      },
+    ];
 
-    expect(channelMessage.resolveChannelTurnDispatchCounts(legacyResult)).toEqual({
-      tool: 1,
-      block: 2,
-      final: 1,
-    });
-    expect(channelMessage.hasVisibleChannelTurnDispatch(legacyResult)).toBe(true);
-    expect(channelMessage.hasFinalChannelTurnDispatch(legacyResult)).toBe(true);
+    for (const facade of facades) {
+      expect(facade.counts(legacyResult)).toEqual({ tool: 1, block: 2, final: 1 });
+      expect(facade.visible(legacyResult)).toBe(true);
+      expect(facade.final(legacyResult)).toBe(true);
+      const receiptResult = {
+        ...legacyResult,
+        queuedFinal: true,
+        settledReceipt: { anyVisibleDelivered: false, counts: {} },
+      };
+      expect(facade.counts(receiptResult)).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(facade.visible(receiptResult)).toBe(false);
+      expect(facade.final(receiptResult)).toBe(false);
+    }
   });
 
   it("defaults new message adapters to plugin-owned receive acknowledgement", () => {

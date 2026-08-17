@@ -4,6 +4,7 @@
  */
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
+import { mapReplyDispatchCounts } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import {
   deliverInboundReplyWithMessageSendContextCore,
@@ -27,24 +28,18 @@ type RecordInboundSessionFn = typeof import("../channels/session.js").recordInbo
 function withLegacyDispatchCounts(
   dispatch: DispatchReplyWithBufferedBlockDispatcher,
 ): DispatchReplyWithBufferedBlockDispatcher {
-  // @deprecated Remove this receipt-to-count projection with this shim in the next Plugin SDK
-  // major. Core consumers use the settled receipt directly.
+  // @deprecated Remove this receipt-to-count projection with the shim in the next Plugin SDK major.
   return async (params) => {
     const result = await dispatch(params);
     const receipt = result.settledReceipt;
     if (!receipt) {
       return result;
     }
-    const counts = {
-      tool: receipt.counts.tool.delivered,
-      block: receipt.counts.block.delivered,
-      final: receipt.counts.final.delivered,
-    };
-    const failedCounts = {
-      tool: receipt.counts.tool.failedBeforeSend + receipt.counts.tool.failedAfterSend,
-      block: receipt.counts.block.failedBeforeSend + receipt.counts.block.failedAfterSend,
-      final: receipt.counts.final.failedBeforeSend + receipt.counts.final.failedAfterSend,
-    };
+    const counts = mapReplyDispatchCounts(receipt.counts, (entry) => entry.delivered);
+    const failedCounts = mapReplyDispatchCounts(
+      receipt.counts,
+      (entry) => entry.failedBeforeSend + entry.failedAfterSend,
+    );
     return {
       ...result,
       queuedFinal: counts.final > 0,

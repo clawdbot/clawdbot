@@ -2,6 +2,7 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
+  resolveInboundReplyDispatchCounts,
   readAgentRunTerminalOutcome,
   type InboundReplyRecordOptions,
   hasVisibleInboundReplyDispatch,
@@ -449,7 +450,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
   let dispatchError: unknown;
   let agentRunFailed = false;
-  let counts: Partial<Record<ReplyDispatchKind, number>> = {};
   let settledDispatchResult: Parameters<typeof hasVisibleInboundReplyDispatch>[0];
   try {
     const turnResult = await dispatchChannelInboundTurn({
@@ -591,7 +591,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     if (turnResult.dispatched) {
       const result = turnResult.dispatchResult;
       settledDispatchResult = result;
-      counts = result.counts;
       const agentRunOutcome = readAgentRunTerminalOutcome(result);
       agentRunFailed = agentRunOutcome === "failed";
       if (
@@ -661,7 +660,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  counts = delivery.reconcileCounts(counts);
   const anyReplyDelivered = hasVisibleInboundReplyDispatch(settledDispatchResult, {
     observedReplyDelivery: delivery.observedReplyDelivery,
     fallbackDelivered: streamFallbackDelivered,
@@ -714,7 +712,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (shouldLogVerbose()) {
-    const finalCount = counts.final;
+    const finalCount = resolveInboundReplyDispatchCounts(settledDispatchResult).final;
     logVerbose(
       `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
     );
