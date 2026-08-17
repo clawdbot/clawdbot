@@ -62,25 +62,23 @@ export function resolveWorkerPlacementSessionTarget<
     target.canonicalKey,
   );
   const expected = params.expectedTarget;
-  if (
-    (expected &&
-      (target.storePath !== expected.storePath ||
-        target.canonicalKey !== expected.canonicalKey ||
-        target.agentId !== expected.agentId)) ||
-    entry?.sessionId !== params.sessionId ||
-    !entry.worktree?.id ||
-    !worktree ||
-    worktree.id !== entry.worktree.id ||
-    worktree.ownerId !== target.canonicalKey
-  ) {
-    throw expected
+  const targetChangedError = () =>
+    expected
       ? new WorkerDispatchTargetChangedError(params.errorMessage)
       : new Error(params.errorMessage);
+  if (
+    expected &&
+    (target.storePath !== expected.storePath ||
+      target.canonicalKey !== expected.canonicalKey ||
+      target.agentId !== expected.agentId)
+  ) {
+    throw targetChangedError();
   }
-  return { config: params.config, target, entry, worktree } as {
-    config: OpenClawConfig;
-    target: Target;
-    entry: Entry;
-    worktree: Worktree;
-  };
+  if (!entry || entry.sessionId !== params.sessionId || !entry.worktree?.id) {
+    throw targetChangedError();
+  }
+  if (!worktree || worktree.id !== entry.worktree.id || worktree.ownerId !== target.canonicalKey) {
+    throw targetChangedError();
+  }
+  return { config: params.config, target, entry, worktree };
 }
