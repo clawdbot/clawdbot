@@ -50,7 +50,14 @@ describe("responses compact endpoint", () => {
   it("posts the normal Responses input and returns the validated checkpoint with usage", async () => {
     sdkState.post.mockResolvedValue({
       object: "response.compaction",
-      output: [{ type: "compaction", id: "cmp_1", encrypted_content: "opaque" }],
+      output: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
+        },
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      ],
       usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
     });
 
@@ -89,8 +96,28 @@ describe("responses compact endpoint", () => {
     });
   });
 
-  it("rejects responses without exactly one encrypted compaction item", async () => {
-    sdkState.post.mockResolvedValue({ object: "response.compaction", output: [], usage: {} });
+  it.each([
+    ["missing", [{ type: "message", role: "user", content: [] }]],
+    [
+      "duplicated",
+      [
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque-1" },
+        { type: "compaction", id: "cmp_2", encrypted_content: "opaque-2" },
+      ],
+    ],
+    [
+      "non-trailing",
+      [
+        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+        { type: "message", role: "user", content: [] },
+      ],
+    ],
+  ])("rejects a %s compaction item", async (_case, output) => {
+    sdkState.post.mockResolvedValue({
+      object: "response.compaction",
+      output,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
 
     await expect(
       requestPreparedOpenAIResponsesCompaction(
@@ -99,7 +126,7 @@ describe("responses compact endpoint", () => {
         context,
         { apiKey: "test-key" },
       ),
-    ).rejects.toThrow("exactly one compaction item");
+    ).rejects.toThrow("one trailing compaction item");
   });
 
   it.each([

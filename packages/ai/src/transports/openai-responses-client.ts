@@ -177,12 +177,16 @@ async function postOpenAIResponsesCompaction(params: {
     body: { model: params.request.model, input: params.request.input },
   });
   const output = isRecord(response) && Array.isArray(response.output) ? response.output : [];
-  const item = output[0];
+  const item = output.at(-1);
+  const compactionItems = output.filter(
+    (candidate) => isRecord(candidate) && candidate.type === "compaction",
+  );
   const usage = isRecord(response) && isRecord(response.usage) ? response.usage : undefined;
   if (
     !isRecord(response) ||
     response.object !== "response.compaction" ||
-    output.length !== 1 ||
+    compactionItems.length !== 1 ||
+    compactionItems[0] !== item ||
     !isRecord(item) ||
     item.type !== "compaction" ||
     typeof item.encrypted_content !== "string" ||
@@ -191,7 +195,7 @@ async function postOpenAIResponsesCompaction(params: {
     typeof usage.input_tokens !== "number" ||
     typeof usage.output_tokens !== "number"
   ) {
-    throw new Error("Responses compact endpoint did not return exactly one compaction item");
+    throw new Error("Responses compact endpoint did not return one trailing compaction item");
   }
   return {
     item,
