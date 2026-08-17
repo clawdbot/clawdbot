@@ -217,7 +217,7 @@ async function startGatewayStabilityRpcServer(
           ws,
           frame.id,
           buildMinimalGatewayHelloOkPayload({
-            methods: ["diagnostics.stability"],
+            methods: ["diagnostics.stability", "status"],
             auth: {
               role: "operator",
               scopes: ["operator.admin"],
@@ -233,6 +233,13 @@ async function startGatewayStabilityRpcServer(
       calls.push(frame.method);
       if (frame.method === "diagnostics.stability") {
         sendMinimalGatewayResponse(ws, frame.id, EMPTY_STABILITY_SNAPSHOT);
+        return;
+      }
+      if (frame.method === "status") {
+        sendMinimalGatewayResponse(ws, frame.id, {
+          runtimeVersion: "2026.8.17-test",
+          status: "ok",
+        });
       }
     });
   });
@@ -614,6 +621,71 @@ describe("gateway-backed CLI process exit", () => {
     ).toBe(storedToken);
     expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
   }, 30_000);
+
+  it.each([
+    { label: "absent", seeded: false },
+    { label: "seeded", seeded: true },
+  ])(
+    "requires a reachable status RPC without changing $label shared state",
+    async ({ label, seeded }) => {
+      const root = tempDirs.make(`openclaw-gateway-status-${label}-`);
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const token = "configured-token";
+      const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
+      const stateEnv = {
+        ...process.env,
+        HOME: root,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url, token } } }),
+      );
+      if (seeded) {
+        const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
+        storeOriginDeviceToken({
+          gatewayScope: gatewayOriginScope(gateway.url),
+          deviceId: identity.deviceId,
+          role: "operator",
+          token,
+          scopes: ["operator.admin"],
+          env: stateEnv,
+        });
+        closeOpenClawStateDatabaseForTest();
+      }
+      const before = await snapshotSharedStateArtifacts(stateDir);
+      expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
+
+      const result = await runIsolatedGatewayCli({
+        args: [
+          "gateway",
+          "status",
+          "--url",
+          gateway.url,
+          "--token",
+          token,
+          "--require-rpc",
+          "--json",
+          "--timeout",
+          "2000",
+        ],
+        root,
+        stateDir,
+        configPath,
+      });
+
+      expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        rpc: { ok: true, kind: "read" },
+      });
+      expect(gateway.calls).toEqual(["status"]);
+      expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
+    },
+    30_000,
+  );
 
   it.each([
     { label: "absent", seeded: false },
