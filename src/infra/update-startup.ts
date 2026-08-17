@@ -126,6 +126,13 @@ export function getUpdateSchedule(): UpdateScheduleState | null {
   return updateScheduleCache;
 }
 
+export function getUpdateEffectiveChannel(): UpdateChannel {
+  return (
+    updateScheduleCache?.channel ??
+    resolveEffectiveUpdateChannel({ currentVersion: VERSION, installKind: "package" }).channel
+  );
+}
+
 export function resetUpdateAvailableStateForTest(): void {
   updateAvailableCache = null;
   updateScheduleCache = null;

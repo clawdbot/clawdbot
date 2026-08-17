@@ -53,6 +53,7 @@ import {
 import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
 import {
   getUpdateAvailable,
+  getUpdateEffectiveChannel,
   getUpdateSchedule,
   refreshGatewayUpdateStatus,
 } from "../../infra/update-startup.js";
@@ -185,7 +186,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       }
     }
     const schedule = getUpdateSchedule();
-    const effectiveChannel = configChannel ?? schedule?.channel;
+    const effectiveChannel = configChannel ?? getUpdateEffectiveChannel();
     const result = {
       sentinel,
       updateAvailable: getUpdateAvailable(),

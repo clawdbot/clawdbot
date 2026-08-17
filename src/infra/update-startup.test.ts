@@ -161,6 +161,7 @@ describe("update-startup", () => {
   let runGatewayUpdateCheck: (typeof import("./update-startup.js"))["runGatewayUpdateCheck"];
   let scheduleGatewayUpdateCheck: (typeof import("./update-startup.js"))["scheduleGatewayUpdateCheck"];
   let getUpdateAvailable: (typeof import("./update-startup.js"))["getUpdateAvailable"];
+  let getUpdateEffectiveChannel: (typeof import("./update-startup.js"))["getUpdateEffectiveChannel"];
   let getUpdateSchedule: (typeof import("./update-startup.js"))["getUpdateSchedule"];
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
@@ -265,6 +266,7 @@ describe("update-startup", () => {
         runGatewayUpdateCheck,
         scheduleGatewayUpdateCheck,
         getUpdateAvailable,
+        getUpdateEffectiveChannel,
         getUpdateSchedule,
         resetUpdateAvailableStateForTest,
       } = await import("./update-startup.js"));
@@ -303,6 +305,13 @@ describe("update-startup", () => {
     closeOpenClawStateDatabaseForTest();
     await testState.cleanup();
     resetUpdateAvailableStateForTest();
+  });
+
+  it("exposes the installed-version channel before the schedule cache is ready", () => {
+    versionMock.value = "2026.6.33";
+
+    expect(getUpdateSchedule()).toBeNull();
+    expect(getUpdateEffectiveChannel()).toBe("extended-stable");
   });
 
   function mockPackageUpdateStatus(tag = "latest", version = "2.0.0") {

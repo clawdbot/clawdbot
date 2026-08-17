@@ -15,8 +15,8 @@ type TestUpdateSchedule =
   | import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState
   | null;
 
-const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
 const getUpdateAvailableMock = vi.hoisted(() => vi.fn<() => TestUpdateAvailable>(() => null));
+const getUpdateEffectiveChannelMock = vi.hoisted(() => vi.fn(() => "stable" as const));
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => TestUpdateSchedule>(() => null));
 const refreshGatewayUpdateStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 const getLatestUpdateRestartSentinelMock = vi.hoisted(() =>
@@ -28,14 +28,9 @@ const refreshLatestUpdateRestartSentinelMock = vi.hoisted(() =>
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
+  getUpdateEffectiveChannel: getUpdateEffectiveChannelMock,
   getUpdateSchedule: getUpdateScheduleMock,
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
-}));
-
-vi.mock("../../version.js", () => ({
-  get VERSION() {
-    return versionMock.value;
-  },
 }));
 
 vi.mock("../server-restart-sentinel.js", () => ({
@@ -48,9 +43,10 @@ vi.mock("./validation.js", () => ({
 }));
 
 beforeEach(() => {
-  versionMock.value = "1.0.0";
   getUpdateAvailableMock.mockReset();
   getUpdateAvailableMock.mockReturnValue(null);
+  getUpdateEffectiveChannelMock.mockReset();
+  getUpdateEffectiveChannelMock.mockReturnValue("stable");
   getUpdateScheduleMock.mockReset();
   getUpdateScheduleMock.mockReturnValue(null);
   refreshGatewayUpdateStatusMock.mockReset();
@@ -62,12 +58,8 @@ beforeEach(() => {
 });
 
 describe("update.status effective channel", () => {
-  it("reports a verified configless extended-stable package channel", async () => {
-    versionMock.value = "2026.6.33";
-    getUpdateScheduleMock.mockReturnValueOnce({
-      channel: "extended-stable",
-      autoEnabled: false,
-    });
+  it("reports the lifecycle-owned channel before the startup schedule is ready", async () => {
+    getUpdateEffectiveChannelMock.mockReturnValueOnce("extended-stable");
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 
