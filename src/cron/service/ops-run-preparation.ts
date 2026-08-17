@@ -39,12 +39,7 @@ type PreparedManualRun =
   | {
       ok: true;
       ran: false;
-      reason:
-        | "already-running"
-        | "disabled"
-        | "not-due"
-        | "invalid-spec"
-        | "stopped";
+      reason: "already-running" | "disabled" | "not-due" | "invalid-spec" | "stopped";
     }
   | {
       ok: true;
