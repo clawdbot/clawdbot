@@ -85,6 +85,7 @@ export function createCodexNativeMcpRuntime(params: {
           serverName: status.name,
           safeServerName: status.name,
           toolName: String(tool.name),
+          // SAFETY: Codex status schemas are JSON objects; fallback supplies the required shape.
           inputSchema: (asOptionalRecord(tool.inputSchema) ?? { type: "object" }) as never,
           fallbackDescription: normalizeOptionalString(tool.description) ?? String(tool.name),
         })),
@@ -121,10 +122,11 @@ export function createCodexNativeMcpRuntime(params: {
             threadId: params.threadId,
             server: serverName,
             tool: toolName,
+            // SAFETY: MCP tool arguments are JSON values normalized to an object at this boundary.
             arguments: (asOptionalRecord(input) ?? {}) as JsonObject,
           },
           options?.signal,
-        )) as never;
+        )) as never; // SAFETY: Codex returns the MCP CallToolResult JSON payload unchanged.
       } catch (error) {
         if (
           isCodexAppServerIndeterminateRequestCancellationError(error) ||
@@ -140,6 +142,7 @@ export function createCodexNativeMcpRuntime(params: {
       const status = (await loadStatuses(options?.signal)).find(
         (entry) => entry.name === serverName,
       );
+      // SAFETY: Full Codex status entries use the MCP Tool wire shape expected by this runtime.
       return { tools: status ? statusTools(status) : [] } as never;
     },
     readResource: async (serverName, uri, options) =>
@@ -162,6 +165,7 @@ export function createCodexNativeMcpRuntime(params: {
       const status = (await loadStatuses(options?.signal)).find(
         (entry) => entry.name === serverName,
       );
+      // SAFETY: Codex status templates use the MCP ResourceTemplate wire shape expected here.
       return { resourceTemplates: status?.resourceTemplates ?? [] } as never;
     },
     dispose: async () => {},
