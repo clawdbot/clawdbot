@@ -1,6 +1,7 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { isCronSessionKey } from "openclaw/plugin-sdk/routing";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import { cardBoardId } from "./store-card-helpers.js";
 import { MAX_CARDS } from "./store-constants.js";
@@ -41,9 +42,9 @@ function clearPendingBoardNudges(state: WorkboardAutomationNudgeState): void {
 }
 
 function getWorkboardAutomationNudgeState(): WorkboardAutomationNudgeState {
-  return resolveGlobalSingleton(
+  return resolveGlobalSingleton<WorkboardAutomationNudgeState>(
     WORKBOARD_AUTOMATION_NUDGE_STATE_KEY,
-    () => ({ pendingByBoard: new Map() }),
+    () => ({ pendingByBoard: new Map<string, PendingBoardNudge>() }),
     (state) => {
       state.owner = undefined;
       state.logger = undefined;
@@ -87,12 +88,7 @@ export function createWorkboardAutomationNudgeService(params: {
         { id: jobId, mode: "force" },
         { scopes: ["operator.admin"] },
       );
-      const runId =
-        result &&
-        typeof result === "object" &&
-        typeof (result as { runId?: unknown }).runId === "string"
-          ? (result as { runId: string }).runId
-          : undefined;
+      const runId = isRecord(result) && typeof result.runId === "string" ? result.runId : undefined;
       state.logger.info(
         `workboard automation nudge requested for board ${boardId}: job ${jobId}${runId ? ` run ${runId}` : ""}`,
       );
