@@ -25,11 +25,6 @@ type ChatSnapshotKeyTarget = {
   agentId?: string | null;
 };
 
-type StoredChatSessionIdentity = {
-  key: string;
-  agentId?: string | null;
-};
-
 export function resolveChatSnapshotKey(
   host: ChatSnapshotKeyHost,
   target: ChatSnapshotKeyTarget,
@@ -109,22 +104,6 @@ export async function deleteStoredChatSnapshot(sessionKey: string): Promise<void
       });
     });
   } catch {}
-}
-
-export async function deleteStoredChatSessionSnapshots(
-  host: ChatSnapshotKeyHost,
-  sessions: readonly StoredChatSessionIdentity[],
-): Promise<void> {
-  await Promise.all(
-    sessions.map(({ key, agentId }) =>
-      deleteStoredChatSnapshot(
-        resolveChatSnapshotKey(
-          { ...host, assistantAgentId: agentId ?? host.assistantAgentId },
-          { sessionKey: key, agentId },
-        ),
-      ),
-    ),
-  );
 }
 
 export async function clearStoredChatSnapshots(): Promise<void> {

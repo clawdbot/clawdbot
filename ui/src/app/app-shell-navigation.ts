@@ -15,6 +15,10 @@ import {
   resolveUiConfiguredMainKey,
   uiSessionEventMatches,
 } from "../lib/sessions/session-key.ts";
+import {
+  deleteStoredChatSnapshot,
+  resolveChatSnapshotKey,
+} from "../pages/chat/session-snapshot-invalidation.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -159,22 +163,34 @@ export class ShellNavigationOwner {
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void {
     const context = this.host.context;
-    const routeId = this.host.routeState.routeId;
-    const sessionKey = this.host.activeSessionKey.trim();
-    if (!context || !routeId || !isSessionRouteId(routeId) || !sessionKey) {
+    if (!context) {
       return;
     }
-    const selectedSessionDeleted = sessionState.deletedSessions.some(({ key, agentId }) =>
-      uiSessionEventMatches(
-        {
-          agentsList: context.agents.state.agentsList,
-          hello: context.gateway.snapshot.hello,
-          sessionKey,
-        },
+    const agentsList = context.agents.state.agentsList;
+    const { assistantAgentId, hello } = context.gateway.snapshot;
+    const sessionKey = this.host.activeSessionKey.trim();
+    let selectedSessionDeleted = false;
+    for (const { key, agentId } of sessionState.deletedSessions) {
+      void deleteStoredChatSnapshot(
+        resolveChatSnapshotKey(
+          {
+            assistantAgentId: agentId ?? assistantAgentId,
+            agentsList,
+            hello,
+          },
+          { sessionKey: key, agentId },
+        ),
+      );
+      selectedSessionDeleted ||= uiSessionEventMatches(
+        { agentsList, hello, sessionKey },
         key,
         agentId,
-      ),
-    );
+      );
+    }
+    const routeId = this.host.routeState.routeId;
+    if (!routeId || !isSessionRouteId(routeId) || !sessionKey) {
+      return;
+    }
     if (selectedSessionDeleted) {
       this.replaceChatWithCurrentSession();
     }

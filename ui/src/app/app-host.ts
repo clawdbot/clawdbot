@@ -318,10 +318,7 @@ class OpenClawShell
       .watch(
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
-        (sessions) => {
-          this.invalidateDeletedSessionSnapshots(sessions.state);
-          this.recoverDeletedActiveSession(sessions.state);
-        },
+        (sessions) => this.recoverDeletedActiveSession(sessions.state),
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -473,25 +470,6 @@ class OpenClawShell
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
     this.shellNavigation.recoverDeletedActiveSession(sessionState);
-  }
-
-  private invalidateDeletedSessionSnapshots(
-    sessionState: ApplicationContext["sessions"]["state"],
-  ): void {
-    const context = this.context;
-    const deletedSessions = sessionState.deletedSessions;
-    if (!context || deletedSessions.length === 0) {
-      return;
-    }
-    const snapshotHost = {
-      assistantAgentId: context.gateway.snapshot.assistantAgentId,
-      agentsList: context.agents.state.agentsList,
-      hello: context.gateway.snapshot.hello,
-    };
-    void import("../pages/chat/session-snapshot-invalidation.ts").then(
-      ({ deleteStoredChatSessionSnapshots }) =>
-        deleteStoredChatSessionSnapshots(snapshotHost, deletedSessions),
-    );
   }
 
   exitSettings() {
