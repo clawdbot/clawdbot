@@ -1,7 +1,6 @@
 // Telegram plugin module implements account inspect behavior.
 import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
@@ -9,6 +8,7 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   mergeTelegramAccountConfig,
