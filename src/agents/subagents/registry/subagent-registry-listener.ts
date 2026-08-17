@@ -1,10 +1,8 @@
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
-import {
-  buildAgentRunTerminalOutcomeFromLifecycleEvent,
-  classifyAgentRunTerminalOutcome,
-} from "../../agent-run-terminal-outcome.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -104,7 +102,7 @@ export function createSubagentRegistryListener(config: {
           startedAt,
           endedAt,
         });
-        const classification = classifyAgentRunTerminalOutcome(terminalOutcome);
+        const classification = classifySubagentTerminalOutcome(terminalOutcome);
         if (
           classification === "cancellation" &&
           evt.data?.aborted === true &&

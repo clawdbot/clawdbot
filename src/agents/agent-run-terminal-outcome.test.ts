@@ -29,21 +29,12 @@ describe("agent run terminal outcome", () => {
   });
 
   it("normalizes lifecycle signals with timeout, cancellation, failure precedence", () => {
-    const bareAbort = { phase: "end", data: { aborted: true } } as const;
-    expect(buildAgentRunTerminalOutcomeFromLifecycleEvent(bareAbort)).toMatchObject({
-      reason: "aborted",
-      status: "error",
-      stopReason: "aborted",
-    });
-    const explicitAbort = {
-      phase: "end",
-      data: { aborted: true, stopReason: "aborted", livenessState: "blocked" },
-    } as const;
-    expect(buildAgentRunTerminalOutcomeFromLifecycleEvent(explicitAbort)).toMatchObject({
-      reason: "aborted",
-      status: "error",
-      stopReason: "aborted",
-    });
+    expect(
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({
+        phase: "end",
+        data: { aborted: true },
+      }),
+    ).toMatchObject({ reason: "aborted", status: "error", stopReason: "aborted" });
     expect(
       buildAgentRunTerminalOutcomeFromLifecycleEvent({
         phase: "end",
@@ -288,23 +279,20 @@ describe("agent run terminal outcome", () => {
     });
   });
 
-  it.each(["blocked", "abandoned"])(
-    "keeps explicit cancellation ahead of %s liveness",
-    (livenessState) => {
-      expect(
-        buildAgentRunTerminalOutcome({
-          status: "error",
-          stopReason: "stop",
-          livenessState,
-        }),
-      ).toEqual({
-        reason: "cancelled",
+  it("keeps explicit cancellation ahead of abandoned liveness", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
         status: "error",
         stopReason: "stop",
-        livenessState,
-      });
-    },
-  );
+        livenessState: "abandoned",
+      }),
+    ).toEqual({
+      reason: "cancelled",
+      status: "error",
+      stopReason: "stop",
+      livenessState: "abandoned",
+    });
+  });
 
   it("keeps a hard timeout over later aborts or failures for the same run", () => {
     const timeout = buildAgentRunTerminalOutcome({
