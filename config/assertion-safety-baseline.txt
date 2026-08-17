@@ -2680,7 +2680,6 @@ src/commands/setup.ts	1
 src/commands/status-all/channels.ts	3
 src/commands/status-all/diagnosis.ts	1
 src/commands/status-all/gateway.ts	1
-src/commands/status-json-runtime.ts	1
 src/commands/status.command.ts	1
 src/commands/status.scan.bootstrap-shared.ts	1
 src/commands/status.scan.shared.ts	1
