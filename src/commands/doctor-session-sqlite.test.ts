@@ -548,6 +548,33 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
+  it("aborts a batch when a prepared transcript changes before import", async () => {
+    const store = createLegacyStore();
+    const realStatSync = fs.statSync.bind(fs);
+    let changed = false;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((candidate, options) => {
+      const stat = realStatSync(candidate, options as never);
+      if (
+        !changed &&
+        path.resolve(String(candidate)) === path.resolve(store.transcriptPath) &&
+        !(options as { bigint?: boolean } | undefined)?.bigint
+      ) {
+        changed = true;
+        fs.appendFileSync(store.transcriptPath, '{"type":"custom","customType":"late"}\n');
+      }
+      return stat;
+    }) as typeof fs.statSync);
+
+    try {
+      await expect(
+        runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath }),
+      ).rejects.toThrow(/stop active session writers and rerun `openclaw doctor --fix`/);
+      expect(fs.existsSync(store.transcriptPath)).toBe(true);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
   it("preserves the legacy transcript mtime as the SQLite mutation watermark", async () => {
     const store = createLegacyStore();
     const transcriptMtimeMs = 1_700_000_000_000;

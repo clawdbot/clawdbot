@@ -2583,7 +2583,7 @@ src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	5
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-migration-run.ts	8
-src/commands/doctor-session-sqlite-readers.ts	12
+src/commands/doctor-session-sqlite-readers.ts	11
 src/commands/doctor-session-sqlite-recover-report.ts	3
 src/commands/doctor-session-sqlite.ts	3
 src/commands/doctor-session-state-providers.ts	3
