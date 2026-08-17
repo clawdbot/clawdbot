@@ -247,22 +247,6 @@ describe("config state model", () => {
     });
   });
 
-  it("finds explicit agent entries in the authored list roster", () => {
-    expect(
-      resolveAgentConfigEntryTarget(
-        {
-          agents: {
-            list: [{ id: "main", skills: ["github"] }, { id: "assistant" }],
-          },
-        },
-        "MAIN",
-      ),
-    ).toEqual({
-      path: ["agents", "list", 0],
-      entry: { id: "main", skills: ["github"] },
-    });
-  });
-
   it("does not resolve missing, blank, or blocked entry keys", () => {
     const entries = JSON.parse(
       '{"__proto__":{"model":"openai/gpt-5.4"},"foo bar":{"model":"openai/gpt-5.4"}}',

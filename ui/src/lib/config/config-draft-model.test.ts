@@ -246,35 +246,6 @@ describe("config draft model", () => {
     runtimeConfig.dispose();
   });
 
-  it("stages the default in the authored list roster", async () => {
-    const request = vi.fn(async (method: string) =>
-      method === "config.get"
-        ? {
-            sourceConfig: {
-              agents: {
-                list: [{ id: "main", default: true }, { id: "reviewer" }],
-              },
-            },
-            hash: "hash-1",
-            valid: true,
-            issues: [],
-          }
-        : { hash: "hash-2" },
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const runtimeConfig = createRuntimeConfigCapability(gateway);
-    await runtimeConfig.ensureLoaded();
-
-    expect(runtimeConfig.stageDefaultAgent("reviewer")).toBe(true);
-    expect(runtimeConfig.state.configForm).toEqual({
-      agents: {
-        list: [{ id: "main" }, { id: "reviewer", default: true }],
-      },
-    });
-    runtimeConfig.dispose();
-  });
-
   it("refuses to create blocked agent entry paths", async () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"

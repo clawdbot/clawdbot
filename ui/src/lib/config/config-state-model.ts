@@ -168,7 +168,7 @@ export function currentConfigObject(
   return state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
 }
 export type AgentConfigEntryTarget = {
-  path: ["agents", "entries", string] | ["agents", "list", number];
+  path: ["agents", "entries", string];
   entry: Record<string, unknown>;
 };
 
@@ -196,7 +196,6 @@ export function resolveAgentConfigEntryTarget(
     return null;
   }
   const agents = isRecord(config?.agents) ? config.agents : null;
-  const hasEntriesRoster = Boolean(agents && Object.hasOwn(agents, "entries"));
   const entries = isRecord(agents?.entries) ? agents.entries : null;
   const authoredAgentId = Object.keys(entries ?? {}).find(
     (candidate) =>
@@ -204,36 +203,17 @@ export function resolveAgentConfigEntryTarget(
       !BLOCKED_AGENT_CONFIG_ENTRY_IDS.has(candidate) &&
       normalizeAgentId(candidate) === normalizedAgentId,
   );
-  if (entries && authoredAgentId && Object.hasOwn(entries, authoredAgentId)) {
-    const entry = entries[authoredAgentId];
-    if (isRecord(entry)) {
-      return {
-        path: ["agents", "entries", authoredAgentId],
-        entry,
-      };
-    }
-  }
-  if (hasEntriesRoster) {
+  if (!entries || !authoredAgentId || !Object.hasOwn(entries, authoredAgentId)) {
     return null;
   }
-
-  const list = Array.isArray(agents?.list) ? agents.list : null;
-  const listIndex = list?.findIndex((candidate) => {
-    if (!isRecord(candidate) || typeof candidate.id !== "string") {
-      return false;
-    }
-    return normalizeAgentId(candidate.id) === normalizedAgentId;
-  });
-  if (list && listIndex !== undefined && listIndex >= 0) {
-    const entry = list[listIndex];
-    if (isRecord(entry)) {
-      return {
-        path: ["agents", "list", listIndex],
-        entry,
-      };
-    }
+  const entry = entries[authoredAgentId];
+  if (!isRecord(entry)) {
+    return null;
   }
-  return null;
+  return {
+    path: ["agents", "entries", authoredAgentId],
+    entry,
+  };
 }
 
 export function agentConfigEntry(
@@ -251,12 +231,6 @@ export function agentConfigEntry(
     return existing;
   }
   if (!options.ensure) {
-    return null;
-  }
-  const agents = isRecord(source?.agents) ? source.agents : null;
-  if (Array.isArray(agents?.list)) {
-    // A list-form roster is authoritative. Do not shadow it with a new
-    // entries-form override when the requested id is not in that roster.
     return null;
   }
   const path = ["agents", "entries", normalizedAgentId] as const;
