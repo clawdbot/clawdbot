@@ -148,7 +148,10 @@ export async function prepareCodexAttemptContext(
     memoryToolNames,
     sandboxed: sandbox?.enabled === true,
     // Same predicate that gates the exec-server environment, so the two cannot
-    // drift: only that environment hands Codex a container cwd.
+    // drift: only that environment hands Codex a container cwd its host-side
+    // project-doc loader cannot resolve. A remote app-server is not that case —
+    // it keeps its own workspace under remoteWorkspaceRoot, so the mapped cwd
+    // still resolves natively and must not open this fallback.
     execCwdRemapped: shouldRequireCodexSandboxExecServerEnvironment({
       sandbox,
       nativeToolSurfaceEnabled: runtime.nativeToolSurfaceEnabled,
