@@ -23,7 +23,7 @@ export function formatGatewayAuthFailureMessage(params: {
   const isCli = isGatewayCliClient(client);
   const isControlUi = isOperatorUiClient(client);
   const isWebchat = isWebchatClient(client);
-  if (client?.mode === "node" && reason?.startsWith("trusted_proxy_")) {
+  if (client?.mode === "node" && reason?.startsWith("trusted_proxy_missing_header_")) {
     return "gateway rejected this node: trusted-proxy identity-header authentication is required and no usable machine credential was accepted; run `openclaw doctor` on the Gateway";
   }
   const uiHint = "open the dashboard URL and paste the token in Control UI settings";

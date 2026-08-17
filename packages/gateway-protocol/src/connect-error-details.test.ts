@@ -270,6 +270,12 @@ describe("resolveAuthConnectErrorDetailCode", () => {
       resolveAuthConnectErrorDetailCode("trusted_proxy_missing_header_cf-access-jwt-assertion"),
     ).toBe("AUTH_IDENTITY_HEADER_REQUIRED");
   });
+
+  it("keeps non-header trusted-proxy rejection generic", () => {
+    expect(resolveAuthConnectErrorDetailCode("trusted_proxy_local_interface_check_failed")).toBe(
+      "AUTH_UNAUTHORIZED",
+    );
+  });
 });
 
 describe("pairing connect details", () => {

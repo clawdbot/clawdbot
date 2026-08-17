@@ -167,7 +167,7 @@ const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
-  if (reason?.startsWith("trusted_proxy_")) {
+  if (reason?.startsWith("trusted_proxy_missing_header_")) {
     return ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED;
   }
   switch (reason) {

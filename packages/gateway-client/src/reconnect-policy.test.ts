@@ -50,6 +50,10 @@ describe("shouldPauseGatewayReconnect", () => {
     ).toBe(false);
   });
 
+  it("keeps generic unauthorized failures reconnecting", () => {
+    expect(shouldPause({ code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED })).toBe(false);
+  });
+
   it.each([undefined, {}, { code: "SOME_FUTURE_CODE" }])(
     "keeps reconnect active for recoverable details",
     (details) => {
