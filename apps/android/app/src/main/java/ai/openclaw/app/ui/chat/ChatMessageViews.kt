@@ -84,8 +84,8 @@ import java.util.Locale
 private fun ChatBubbleContainer(
   user: Boolean,
   speaker: String,
-  borderColor: Color? = null,
   modifier: Modifier = Modifier,
+  borderColor: Color? = null,
   content: @Composable () -> Unit,
 ) {
   Row(
