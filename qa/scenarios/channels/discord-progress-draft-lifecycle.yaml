@@ -20,7 +20,6 @@ scenario:
   execution:
     kind: flow
     channel: discord
-    providerMode: mock-openai
     timeoutMs: 90000
     retryCount: 0
     suiteIsolation: isolated
