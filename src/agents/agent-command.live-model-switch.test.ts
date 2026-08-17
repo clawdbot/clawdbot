@@ -64,6 +64,16 @@ const state = vi.hoisted(() => ({
   persistAcpTurnTranscriptMock: vi.fn(),
   appendExactAssistantMessageMock: vi.fn(),
   runCliTurnCompactionLifecycleMock: vi.fn(),
+  runMemoryFlushIfNeededMock: vi.fn(
+    async ({
+      sessionEntry,
+    }: {
+      sessionEntry?: SessionEntry;
+    }): Promise<{ sessionEntry?: SessionEntry; outcome: "skipped" | "failed" }> => ({
+      sessionEntry,
+      outcome: "skipped",
+    }),
+  ),
   resolveAcpAgentPolicyErrorMock: vi.fn(),
   resolveAcpDispatchPolicyErrorMock: vi.fn(),
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
@@ -193,6 +203,11 @@ vi.mock("./command/delivery.runtime.js", () => ({
 vi.mock("./command/cli-compaction.js", () => ({
   runCliTurnCompactionLifecycle: (...args: unknown[]) =>
     state.runCliTurnCompactionLifecycleMock(...args),
+}));
+
+vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
+  runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
+    state.runMemoryFlushIfNeededMock(params),
 }));
 
 vi.mock("./command/run-context.js", () => ({
@@ -1554,6 +1569,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         message: "hello",
         to: "+1234567890",
         abortSignal: controller.signal,
+        runtimePluginToolGrant: { pluginId: "owner-tools", toolNames: ["owner-only"] },
       }),
     ).rejects.toThrow("agent run aborted for restart");
 
@@ -1572,6 +1588,115 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       ]),
     );
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["restart abort", "agent run aborted for restart"],
+    ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
+  ] as const)(
+    "does not start memory maintenance when %s closes after persistence",
+    async (mode, error) => {
+      setupSingleAttemptFallback();
+      setupStoredSession();
+      const controller = new AbortController();
+      const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+        typeof makeSuccessResult
+      > & { meta: Record<string, unknown> };
+      result.meta.executionTrace = {
+        runner: "cli",
+        fallbackUsed: false,
+        winnerProvider: "openai",
+        winnerModel: "gpt-5.4",
+      };
+      state.runAgentAttemptMock.mockResolvedValue(result);
+      state.persistCliTurnTranscriptMock.mockImplementationOnce(
+        async (params: { sessionEntry?: SessionEntry }) => {
+          if (mode === "restart abort") {
+            controller.abort(createAgentRunRestartAbortError());
+          } else {
+            state.assertLifecycleCurrentMock.mockImplementationOnce(() => {
+              throw new Error(error);
+            });
+          }
+          return { kind: "persisted", sessionEntry: params.sessionEntry };
+        },
+      );
+
+      await expect(
+        agentCommand({
+          message: "hello",
+          to: "+1234567890",
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toThrow(error);
+
+      expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledOnce();
+      expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+      expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+      expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["restart abort", "agent run aborted for restart"],
+    ["lifecycle replacement", "Agent run belongs to a stale gateway lifecycle"],
+  ] as const)("stops finalization when memory maintenance sees a %s", async (mode, error) => {
+    setupSingleAttemptFallback();
+    const { store } = setupStoredSession({
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+    });
+    const controller = new AbortController();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & { meta: Record<string, unknown> };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+      if (mode === "restart abort") {
+        controller.abort(createAgentRunRestartAbortError());
+      } else {
+        state.assertLifecycleCurrentMock.mockImplementationOnce(() => {
+          throw new Error(error);
+        });
+      }
+      return { sessionEntry: params.sessionEntry, outcome: "failed" as const };
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        to: "+1234567890",
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toThrow(error);
+
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
+    const flushParams = state.runMemoryFlushIfNeededMock.mock.calls[0]?.[0] as
+      | { followupRun?: { run?: Record<string, unknown> } }
+      | undefined;
+    const flushRun = flushParams?.followupRun?.run;
+    expect(flushRun).toBeDefined();
+    expect(flushRun).toMatchObject({
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
+    });
+    for (const field of [
+      "runtimePluginToolGrant",
+      "scheduledToolPolicy",
+      "trustedInternalHandoff",
+      "bashElevated",
+    ]) {
+      expect(flushRun).not.toHaveProperty(field);
+    }
+    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+    expect(store["agent:main:main"]?.pendingFinalDelivery).toBeUndefined();
   });
 
   it("preserves restart ownership when an aborted ACP turn resolves normally", async () => {
@@ -2131,6 +2256,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
   });
@@ -2172,6 +2298,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(findPersistedTranscriptRepair()).toEqual([
       expect.objectContaining({ text: "ok", provider: "openai", model: "gpt-5.4" }),
     ]);
+    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
   });
 
   it("does not queue repair for a final owned by another transcript writer", async () => {

@@ -77,6 +77,7 @@ export const TARGET_KEYS = [
   "session",
   "session.scope",
   "session.dmScope",
+  "session.groupScope",
   "session.identityLinks",
   "session.resetTriggers",
   "session.reset",
@@ -334,6 +335,8 @@ export const TARGET_KEYS = [
 ] as const;
 
 export const ENUM_EXPECTATIONS: Record<string, string[]> = {
+  "session.groupScope": ['"main"', '"per-group"'],
+  "bindings[].session.groupScope": ['"main"', '"per-group"'],
   "skills.workshop.autonomous.mode": ['"off"', '"propose"', '"auto"'],
   "memory.citations": ['"auto"', '"on"', '"off"'],
   "models.mode": ['"merge"', '"replace"'],

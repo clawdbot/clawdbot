@@ -56,8 +56,11 @@ describe("msteamsPlugin", () => {
     ).toMatchObject({ chatType: "direct" });
   });
 
-  it("shares account and metadata contracts with the lightweight setup plugin", () => {
+  it("shares setup and directory contracts with the lightweight artifacts", () => {
     expect(msteamsSetupPlugin.meta).toEqual(msteamsPlugin.meta);
+    expect(msteamsPlugin.capabilities).toBe(msteamsSetupPlugin.capabilities);
+    expect(msteamsPlugin.reload).toBe(msteamsSetupPlugin.reload);
+    expect(msteamsPlugin.configSchema).toBe(msteamsSetupPlugin.configSchema);
 
     for (const key of [
       "listAccountIds",
@@ -71,6 +74,14 @@ describe("msteamsPlugin", () => {
     ] as const) {
       expect(msteamsSetupPlugin.config[key]).toBe(msteamsPlugin.config[key]);
     }
+
+    expect(msteamsPlugin.directory?.self).toBe(msteamsDirectoryContractPlugin.directory.self);
+    expect(msteamsPlugin.directory?.listPeers).toBe(
+      msteamsDirectoryContractPlugin.directory.listPeers,
+    );
+    expect(msteamsPlugin.directory?.listGroups).toBe(
+      msteamsDirectoryContractPlugin.directory.listGroups,
+    );
   });
 
   it("exposes approval auth through approvalCapability", () => {

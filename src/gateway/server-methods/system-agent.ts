@@ -602,6 +602,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             surface: "gateway",
             verifiedInference: inference.binding,
             operatorApprovalOnly: params.delegation !== undefined,
+            ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),
           });
           // `reset: true` keeps the durable logbook but deliberately starts
           // model context clean; only ordinary fresh sessions receive its tail.

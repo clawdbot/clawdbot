@@ -135,7 +135,9 @@ export type TestChatPane = HTMLElement & {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) => Promise<void>;
+  headerPlacementMovingKey: string | null;
   headerPlacementReclaimingKey: string | null;
+  moveHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
@@ -148,6 +150,27 @@ export type TestChatPane = HTMLElement & {
     workspaceGit: boolean,
   ) => TemplateResult;
 };
+
+type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
+  request?: (method: string, params?: unknown) => unknown;
+};
+
+export function createGatewayBrowserClientFixture(
+  overrides: GatewayBrowserClientFixtureOverrides = {},
+): GatewayBrowserClient {
+  return overrides as typeof overrides & GatewayBrowserClient;
+}
+
+type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch" | "state"> & {
+  patch?: (...args: Parameters<NonNullable<SessionCapability["patch"]>>) => unknown;
+  state?: Partial<SessionCapability["state"]>;
+};
+
+export function createSessionCapabilityFixture(
+  overrides: SessionCapabilityFixtureOverrides = {},
+): SessionCapability {
+  return overrides as typeof overrides & SessionCapability;
+}
 
 export function createSessionContext(
   client: GatewayBrowserClient,

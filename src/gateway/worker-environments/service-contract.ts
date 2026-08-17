@@ -5,6 +5,10 @@ import type {
   WorkerProfile,
 } from "../../plugins/capability-provider.types.js";
 import type {
+  WorkerPlacementMoveSource,
+  WorkerPlacementMoveTarget,
+} from "./placement-move-intent.js";
+import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
 } from "./placement-record.js";
@@ -86,6 +90,7 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  idempotencyKey?: string;
   deviceId?: string;
   machineClass?: string;
   inheritedProfile?: {
@@ -94,10 +99,20 @@ export type WorkerPlacementDispatchRequest = {
   };
 };
 
+export type WorkerPlacementMoveDestination = Pick<
+  WorkerPlacementDispatchRequest,
+  "profileId" | "executionMode" | "deviceId" | "inheritedProfile"
+>;
+
 export type WorkerPlacementReclaimRequest = {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+};
+
+export type WorkerPlacementMoveRequest = WorkerPlacementReclaimRequest & {
+  source: WorkerPlacementMoveSource;
+  target: WorkerPlacementMoveTarget;
 };
 
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
@@ -106,6 +121,10 @@ export type WorkerPlacementDispatchContract = {
   dispatch(
     request: WorkerPlacementDispatchRequest,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
+  move?(
+    request: WorkerPlacementMoveRequest,
+    onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+  ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "active" }>>;
   reclaim?(
     request: WorkerPlacementReclaimRequest,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>>;

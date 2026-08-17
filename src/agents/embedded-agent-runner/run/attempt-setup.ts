@@ -22,6 +22,7 @@ import {
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -432,6 +433,9 @@ export function installEmbeddedAttemptContextGuards(input: {
       maxBytes: MAX_IMAGE_BYTES,
       maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
       workspaceOnly: input.effectiveFsWorkspaceOnly,
+      localRoots: input.effectiveFsWorkspaceOnly
+        ? undefined
+        : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
       sandbox:
         input.sandbox?.enabled && input.sandbox.fsBridge
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }

@@ -101,6 +101,16 @@ export function normalizeBoardMetadata(
   );
   const icon = normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
   const color = normalizeBoundedString(input.color, fallback?.color, 40, "board color");
+  let automationJobId = fallback?.automationJobId;
+  if (Object.hasOwn(input, "automationJobId")) {
+    automationJobId = normalizeOptionalString(input.automationJobId);
+    if (!automationJobId) {
+      throw new Error("automation job id must be a non-empty string.");
+    }
+    if (automationJobId.length > 128) {
+      throw new Error("automation job id must be 128 characters or fewer.");
+    }
+  }
   const defaultWorkspace = Object.hasOwn(input, "defaultWorkspace")
     ? normalizeWorkspace(input.defaultWorkspace, fallback?.defaultWorkspace)
     : fallback?.defaultWorkspace;
@@ -118,6 +128,7 @@ export function normalizeBoardMetadata(
     ...(description ? { description } : {}),
     ...(icon ? { icon } : {}),
     ...(color ? { color } : {}),
+    ...(automationJobId ? { automationJobId } : {}),
     ...(defaultWorkspace ? { defaultWorkspace } : {}),
     ...(orchestration ? { orchestration } : {}),
     createdAt: fallback?.createdAt ?? now,

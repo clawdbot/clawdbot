@@ -214,6 +214,7 @@ function buildFilterCheckRequest(params: {
 }): ApprovalRequest {
   if (params.metadata.approvalKind === "plugin") {
     return {
+      approvalKind: "plugin",
       id: params.metadata.approvalId,
       request: {
         title: "Plugin Approval Required",
@@ -226,6 +227,7 @@ function buildFilterCheckRequest(params: {
     };
   }
   return {
+    approvalKind: "exec",
     id: params.metadata.approvalId,
     request: {
       command: "",

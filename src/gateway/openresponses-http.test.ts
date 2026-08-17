@@ -1973,6 +1973,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
                 port,
                 { stream, model: "openclaw", input: "hi" },
                 {
+                  "x-forwarded-for": "198.51.100.42",
                   "x-forwarded-proto": "https",
                   "x-forwarded-user": "operator@example.com",
                   "x-openclaw-scopes": scopes,
@@ -1990,6 +1991,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           agentCommandMock.mockClear();
           agentCommandMock.mockResolvedValue({ payloads: [{ text: "hello" }] } as never);
           const forwardedHeaders = {
+            "x-forwarded-for": "198.51.100.42",
             "x-forwarded-proto": "https",
             authorization: "Bearer forwarded-untrusted",
           };
@@ -2042,6 +2044,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
             port,
             { model: "openclaw", input: "hi" },
             {
+              "x-forwarded-for": "198.51.100.42",
               "x-forwarded-proto": "https",
               "x-openclaw-scopes": "operator.admin, operator.write",
               "x-openclaw-sender-is-owner": "true",

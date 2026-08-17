@@ -204,7 +204,7 @@ function computeRetryDelayMs(
   classification: ReturnType<typeof classifyMSTeamsSendError>,
   opts: Required<MSTeamsSendRetryOptions>,
 ): number {
-  if (classification.retryAfterMs != null) {
+  if (classification.kind === "replay-safe" && classification.retryAfterMs != null) {
     return clampMs(classification.retryAfterMs, opts.maxDelayMs);
   }
   const exponential = opts.baseDelayMs * 2 ** Math.max(0, attempt - 1);
@@ -212,7 +212,7 @@ function computeRetryDelayMs(
 }
 
 function shouldRetry(classification: ReturnType<typeof classifyMSTeamsSendError>): boolean {
-  return classification.kind === "throttled" || classification.kind === "transient";
+  return classification.kind === "replay-safe";
 }
 
 export function renderReplyPayloadsToMessages(

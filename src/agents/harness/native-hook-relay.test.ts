@@ -11,6 +11,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
+  createAgentRuntimeApprovalAuthorityValidator,
+  mintAgentRuntimeIdentityToken,
+} from "../../gateway/agent-runtime-identity-token.js";
+import { validateAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
@@ -21,7 +26,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   closeAdmittedRunDelegatedAuthority,
-  isRetainedAdmittedRunDelegatedAuthorityActive,
+  getAdmittedRunDelegatedAuthority,
 } from "../admitted-run-context.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as nativeHookRelayBridge from "./native-hook-relay-bridge.js";
@@ -458,6 +463,10 @@ describe("native hook relay registry", () => {
     const { admittedRunContext, hostCapabilities } = await createAdmittedHostCapabilityTestFixture({
       runId: "run-retained-child",
     });
+    const delegatedAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+    if (!delegatedAuthority) {
+      throw new Error("Expected admitted delegated authority");
+    }
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
@@ -527,6 +536,23 @@ describe("native hook relay registry", () => {
     expect(afterToolCall).toHaveBeenCalledOnce();
 
     expect(closeAdmittedRunDelegatedAuthority(admittedRunContext)).toBe(true);
+    expect(validateAgentRunDelegatedAuthority(delegatedAuthority)).toBe(false);
+    await expect(
+      mintAgentRuntimeIdentityToken({
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        operationalRunInstance: admittedRunContext.operationalRunInstance,
+      }),
+    ).rejects.toThrow("requires active delegated run authority");
+    expect(
+      createAgentRuntimeApprovalAuthorityValidator()({
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        operationalRunInstance: admittedRunContext.operationalRunInstance,
+        delegatedAuthority: { kind: "local", ...delegatedAuthority },
+      }),
+    ).toBe(false);
     relay.unregister();
     await expect(
       invokeNativeHookRelay({
@@ -605,6 +631,10 @@ describe("native hook relay registry", () => {
       }
       const { admittedRunContext, hostCapabilities } =
         await createAdmittedHostCapabilityTestFixture({ runId: `run-retained-${cause}` });
+      const delegatedAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+      if (!delegatedAuthority) {
+        throw new Error("Expected admitted delegated authority");
+      }
       const controller = new AbortController();
       const relay = registerRetainedNativeHookRelay({
         provider: "codex",
@@ -624,6 +654,7 @@ describe("native hook relay registry", () => {
       });
 
       closeAdmittedRunDelegatedAuthority(admittedRunContext);
+      expect(validateAgentRunDelegatedAuthority(delegatedAuthority)).toBe(false);
       relay.unregister();
       await expect(
         invokeNativeHookRelay({
@@ -633,7 +664,6 @@ describe("native hook relay registry", () => {
           rawPayload: { agent_id: "child-thread", tool_name: "Bash", tool_input: {} },
         }),
       ).resolves.toMatchObject({ exitCode: 0 });
-      expect(isRetainedAdmittedRunDelegatedAuthorityActive(admittedRunContext)).toBe(true);
 
       if (cause === "abort") {
         controller.abort();
@@ -642,7 +672,6 @@ describe("native hook relay registry", () => {
       }
       expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
       expect(testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
-      expect(isRetainedAdmittedRunDelegatedAuthorityActive(admittedRunContext)).toBe(false);
       await expect(
         invokeNativeHookRelay({
           provider: "codex",
@@ -722,7 +751,6 @@ describe("native hook relay registry", () => {
     relay.unregister();
 
     expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
-    expect(isRetainedAdmittedRunDelegatedAuthorityActive(admittedRunContext)).toBe(false);
     expect(onDispose).not.toHaveBeenCalled();
     await expect(
       invokeNativeHookRelay({
@@ -954,7 +982,7 @@ describe("native hook relay registry", () => {
     ).toThrow("bridge setup failed");
     expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     expect(testing.getNativeHookRelayBridgeRecordForTests(relayId)).toBeUndefined();
-    expect(isRetainedAdmittedRunDelegatedAuthorityActive(admittedRunContext)).toBe(false);
+    expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
 
     bridgeFailure.mockRestore();
     const successor = registerNativeHookRelay({

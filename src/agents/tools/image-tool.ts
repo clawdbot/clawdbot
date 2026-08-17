@@ -496,9 +496,6 @@ function providerUsesRuntimeModelAugment(params: {
   if (!provider) {
     return false;
   }
-  if (bundledStaticCatalogProviderUsesRuntimeAugment({ provider })) {
-    return true;
-  }
   const config = params.cfg ?? {};
   const preparedSnapshot =
     params.metadataSnapshot &&
@@ -518,6 +515,16 @@ function providerUsesRuntimeModelAugment(params: {
       env: process.env,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     });
+  if (
+    bundledStaticCatalogProviderUsesRuntimeAugment({
+      provider,
+      cfg: params.cfg,
+      ...(snapshot ? { metadataSnapshot: snapshot } : {}),
+      workspaceDir: params.workspaceDir,
+    })
+  ) {
+    return true;
+  }
   if (!snapshot) {
     return false;
   }

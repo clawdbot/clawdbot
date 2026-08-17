@@ -252,6 +252,9 @@ describe("gateway startup import boundaries", () => {
     const hookStart = serverImpl.indexOf('name: "gateway_stop plugin hooks"', closeStart);
     const reloadStopStart = serverImpl.indexOf('name: "close prelude fence"', closeStart);
     const terminalStopStart = serverImpl.indexOf('name: "terminal sessions"', closeStart);
+    const closePreludeStart = serverImpl.indexOf('name: "gateway close prelude"', closeStart);
+    const lateSidecarJoinStart = serverImpl.indexOf('name: "late sidecar cleanup"', closeStart);
+    const gatewayCloseStart = serverImpl.indexOf('name: "gateway close"', lateSidecarJoinStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
     const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
@@ -264,6 +267,8 @@ describe("gateway startup import boundaries", () => {
     expect(reloadStopStart).toBeGreaterThan(closeStart);
     expect(reloadStopStart).toBeLessThan(terminalStopStart);
     expect(reloadStopStart).toBeLessThan(hookStart);
+    expect(lateSidecarJoinStart).toBeGreaterThan(closePreludeStart);
+    expect(lateSidecarJoinStart).toBeLessThan(gatewayCloseStart);
     expect(serverImpl.slice(closeStart, hookStart)).not.toContain("await import(");
     expect(markHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(

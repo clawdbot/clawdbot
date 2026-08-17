@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
+import type {
+  WorkerPlacementDispatchRequest,
+  WorkerPlacementMoveRequest,
+} from "./service-contract.js";
 
 type DispatchService = WorkerPlacementDispatchService;
 
@@ -12,6 +15,14 @@ const REQUEST: WorkerPlacementDispatchRequest = {
   agentId: "main",
   profileId: "test",
   executionMode: "worker-turn",
+};
+
+const MOVE_REQUEST: WorkerPlacementMoveRequest = {
+  sessionId: REQUEST.sessionId,
+  sessionKey: REQUEST.sessionKey,
+  agentId: REQUEST.agentId,
+  source: { generation: 4, environmentId: "worker-source", ownerEpoch: 7 },
+  target: { kind: "gateway" },
 };
 
 describe("worker placement dispatch coordinator", () => {
@@ -119,6 +130,42 @@ describe("worker placement dispatch coordinator", () => {
       dispatchError,
     );
     expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes a move against new dispatches", async () => {
+    const moveStarted = createDeferredCore();
+    const releaseMove = createDeferredCore();
+    const dispatch = vi.fn().mockResolvedValue({ state: "active" });
+    const move = vi.fn(async () => {
+      moveStarted.resolve();
+      await releaseMove.promise;
+      return { state: "local" };
+    });
+    const service = {
+      dispatch,
+      forceDestroyEnvironment: vi.fn(),
+      move,
+      reclaim: vi.fn(),
+      reconcile: vi.fn(),
+      reconcileActive: vi.fn(),
+    } as unknown as DispatchService;
+    const coordinated = coordinateWorkerPlacementDispatch(service);
+
+    const moving = coordinated.move(MOVE_REQUEST);
+    await moveStarted.promise;
+    const retry = coordinated.move(MOVE_REQUEST);
+    await expect(
+      coordinated.move({ ...MOVE_REQUEST, target: { kind: "profile", profileId: "other" } }),
+    ).rejects.toThrow(`Session ${MOVE_REQUEST.sessionKey} is already moving to another target`);
+    const dispatching = coordinated.dispatch(REQUEST);
+    expect(dispatch).not.toHaveBeenCalled();
+    releaseMove.resolve();
+
+    const [moveResult, retryResult] = await Promise.all([moving, retry]);
+    expect(retryResult).toBe(moveResult);
+    await dispatching;
+    expect(move).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledOnce();
   });
 
   it("coalesces full sweeps but runs a fresh targeted pass with its environment id", async () => {

@@ -55,7 +55,15 @@ export function loadConfigFromContext(
           timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
         });
       }
-      return migratePersistedImplicitMainRoster({}).config as OpenClawConfig;
+      // A missing config is the fresh-install default path: materialize the
+      // same runtime defaults an empty {} config gets, or out-of-box behavior
+      // (compaction safeguard, session/cron defaults) silently diverges.
+      return materializeConfigForLoad(
+        context,
+        coerceConfig(migratePersistedImplicitMainRoster({}).config),
+        {},
+        undefined,
+      );
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = deps.json5.parse(raw);

@@ -1434,7 +1434,7 @@ describe("main-session-restart-recovery", () => {
     ).toBe(2);
   });
 
-  it("rekeys recovery identity after a prior-lifecycle recovery was admitted", async () => {
+  it("preserves recovery identity when a prior-lifecycle delivery run rotates", async () => {
     const previousRecoveryRunId = "recovery-run-a";
     const sourceRunId = "channel-run";
     const previousExecutionIdentity = createExecutionIdentityAdmissionToken(previousRecoveryRunId, {
@@ -1487,13 +1487,7 @@ describe("main-session-restart-recovery", () => {
         });
         expect(gatewayAdmission?.consume(dispatchedRunId)).toEqual({
           accepted: true,
-          token: {
-            tokenVersion: 1,
-            contextId: previousExecutionIdentity.contextId,
-            executionId: previousExecutionIdentity.executionId,
-            runId: dispatchedRunId,
-            createdAt: previousExecutionIdentity.createdAt,
-          },
+          token: previousExecutionIdentity,
         });
         const recoveryMessage = {
           role: "user" as const,
@@ -1523,20 +1517,15 @@ describe("main-session-restart-recovery", () => {
       idempotencyKey: dispatchedRunId,
       to: "discord:dm:123",
     });
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      mainRestartRecovery: {
-        executionIdentity: {
-          tokenVersion: 1,
-          contextId: previousExecutionIdentity.contextId,
-          executionId: previousExecutionIdentity.executionId,
-          runId: dispatchedRunId,
-          createdAt: previousExecutionIdentity.createdAt,
-        },
-      },
+    const recoveredEntry = loadSessionEntry({ sessionKey, storePath });
+    expect(recoveredEntry).toMatchObject({
       restartRecoveryDeliveryContext: discordDeliveryContext,
       restartRecoveryDeliveryRunId: dispatchedRunId,
       restartRecoveryDeliverySourceRunId: sourceRunId,
     });
+    expect(recoveredEntry?.mainRestartRecovery?.executionIdentity).toEqual(
+      previousExecutionIdentity,
+    );
     const transcript = await loadTestTranscript(sessionKey, storePath);
     expect(
       transcript

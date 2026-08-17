@@ -2,6 +2,7 @@
 # Usage: powershell -c "irm https://openclaw.ai/install.ps1 | iex"
 #        powershell -c "& ([scriptblock]::Create((irm https://openclaw.ai/install.ps1))) -Tag beta -NoOnboard -DryRun"
 
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Tag = "latest",
     [ValidateSet("npm", "git")]
@@ -9,10 +10,29 @@ param(
     [string]$GitDir,
     [switch]$NoOnboard,
     [switch]$NoGitUpdate,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Help) {
+    @"
+Usage:
+  powershell -File install.ps1 [options]
+  & ([scriptblock]::Create((irm https://openclaw.ai/install.ps1))) [options]
+
+Options:
+  -InstallMethod npm|git  Install method (default: npm)
+  -Tag <tag|version>      OpenClaw version or dist-tag (default: latest)
+  -GitDir <path>          Git checkout directory
+  -NoOnboard              Skip onboarding
+  -NoGitUpdate            Skip git pull
+  -DryRun                 Print actions only
+  -Help                   Show this help
+"@ | Write-Output
+    return
+}
 
 $script:InstallExitCode = 0
 
@@ -20,7 +40,6 @@ function Fail-Install {
     param([int]$Code = 1)
 
     $script:InstallExitCode = $Code
-    return $false
 }
 
 function Test-BooleanSuccessResult {
@@ -91,9 +110,7 @@ function Resolve-NodeOptionsWithMinOldSpace {
 }
 
 function Complete-Install {
-    param([bool]$Succeeded)
-
-    if ($Succeeded) {
+    if ($script:InstallExitCode -eq 0) {
         return
     }
 
@@ -180,20 +197,13 @@ function Initialize-InstallerTempDirectory {
     $env:TMP = $tempDirectory
 }
 
-Initialize-InstallerTempDirectory
-
-Write-Host ""
-Write-Host "  OpenClaw Installer" -ForegroundColor Cyan
-Write-Host ""
-
 # Check if running in PowerShell
 if ($PSVersionTable.PSVersion.Major -lt 5) {
     Write-Host "Error: PowerShell 5+ required" -ForegroundColor Red
-    Complete-Install -Succeeded:$false
+    Fail-Install
+    Complete-Install
     return
 }
-
-Write-Host "[OK] Windows detected" -ForegroundColor Green
 
 if (-not $PSBoundParameters.ContainsKey("InstallMethod")) {
     if (-not [string]::IsNullOrWhiteSpace($env:OPENCLAW_INSTALL_METHOD)) {
@@ -226,17 +236,43 @@ if ([string]::IsNullOrWhiteSpace($GitDir)) {
     $GitDir = (Join-Path $userHome "openclaw")
 }
 
+Initialize-InstallerTempDirectory
+
+Write-Host ""
+Write-Host "  OpenClaw Installer" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "[OK] Windows detected" -ForegroundColor Green
+
 # Check for Node.js
 function Test-NodeVersionSupported {
     param([string]$Version)
 
-    $versionMatch = [regex]::Match($Version, '^v?(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)')
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return $false
+    }
+    # This standalone installer runs before OpenClaw exists on disk. Mirror the
+    # release grammar in node-version.mjs; parity cases guard this boundary.
+    $versionMatch = [regex]::Match(
+        $Version,
+        '^\s*v?(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\s*$'
+    )
     if (-not $versionMatch.Success) {
         return $false
     }
-    $major = [int]$versionMatch.Groups["major"].Value
-    $minor = [int]$versionMatch.Groups["minor"].Value
-    $patch = [int]$versionMatch.Groups["patch"].Value
+    $major = 0L
+    $minor = 0L
+    $patch = 0L
+    $maxSafeInteger = 9007199254740991L
+    if (
+        -not [long]::TryParse($versionMatch.Groups["major"].Value, [ref]$major) -or
+        -not [long]::TryParse($versionMatch.Groups["minor"].Value, [ref]$minor) -or
+        -not [long]::TryParse($versionMatch.Groups["patch"].Value, [ref]$patch) -or
+        $major -gt $maxSafeInteger -or
+        $minor -gt $maxSafeInteger -or
+        $patch -gt $maxSafeInteger
+    ) {
+        return $false
+    }
     if ($major -eq 22) {
         return ($minor -gt 22 -or ($minor -eq 22 -and $patch -ge 3))
     }
@@ -1679,7 +1715,8 @@ function Remove-LegacySubmodule {
 function Main {
     if ($InstallMethod -ne "npm" -and $InstallMethod -ne "git") {
         Write-Host "Error: invalid -InstallMethod (use npm or git)." -ForegroundColor Red
-        return (Fail-Install -Code 2)
+        Fail-Install -Code 2
+        return
     }
 
     if ($DryRun) {
@@ -1705,7 +1742,8 @@ function Main {
     # Step 1: Node.js
     if (-not (Check-Node)) {
         if (-not (Install-Node)) {
-            return (Fail-Install)
+            Fail-Install
+            return
         }
 
         # Verify installation
@@ -1713,7 +1751,8 @@ function Main {
             Write-Host ""
             Write-Host "Error: Node.js installation may require a terminal restart" -ForegroundColor Red
             Write-Host "Please close this terminal, open a new one, and run this installer again." -ForegroundColor Yellow
-            return (Fail-Install)
+            Fail-Install
+            return
         }
     }
 
@@ -1731,7 +1770,8 @@ function Main {
         $finalGitDir = $GitDir
         $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
         if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
-            return (Fail-Install)
+            Fail-Install
+            return
         }
     } else {
         $gitWrapper = Join-Path (Join-Path $env:USERPROFILE ".local\\bin") "openclaw.cmd"
@@ -1741,7 +1781,8 @@ function Main {
         }
         $npmInstallResults = @(Install-OpenClaw)
         if (-not (Test-BooleanSuccessResult -Results $npmInstallResults)) {
-            return (Fail-Install)
+            Fail-Install
+            return
         }
     }
 
@@ -1849,6 +1890,5 @@ function Main {
     return $true
 }
 
-$mainResults = @(Main)
-$installSucceeded = Test-BooleanSuccessResult -Results $mainResults
-Complete-Install -Succeeded:$installSucceeded
+$null = Main
+Complete-Install

@@ -59,6 +59,7 @@ describe("method scope resolution", () => {
     ["sessions.create", ["operator.write"]],
     ["sessions.dispatch", ["operator.admin"]],
     ["sessions.reclaim", ["operator.admin"]],
+    ["sessions.move", ["operator.admin"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["sessions.patchMany", ["operator.write"]],

@@ -50,7 +50,11 @@ type ApprovalTurnSourceFields = {
   turnSourceAccountId?: string | null;
 };
 
-type RequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields> = {
+type RequestedApprovalEvent<
+  TPayload extends ApprovalTurnSourceFields,
+  TKind extends "exec" | "plugin" = "exec" | "plugin",
+> = {
+  approvalKind?: TKind;
   id: string;
   request: TPayload;
   createdAtMs: number;
@@ -137,10 +141,15 @@ export function registerPendingApprovalRecord<TPayload>(params: {
 }
 
 /** Builds the gateway event payload broadcast when an approval starts waiting. */
-export function buildRequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields>(
+export function buildRequestedApprovalEvent<
+  TPayload extends ApprovalTurnSourceFields,
+  TKind extends "exec" | "plugin",
+>(
   record: ExecApprovalRecord<TPayload>,
-): RequestedApprovalEvent<TPayload> {
+  approvalKind?: TKind,
+): RequestedApprovalEvent<TPayload, TKind> {
   return {
+    ...(approvalKind ? { approvalKind } : {}),
     id: record.id,
     request: record.request,
     createdAtMs: record.createdAtMs,

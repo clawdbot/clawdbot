@@ -190,6 +190,17 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
   if (!runId) {
     return;
   }
+  if (item.kind === "steered") {
+    // A started target may exist only as an optimistic queue row. Preserve it
+    // before the landed steer or stable history can invert the user turns.
+    const targetRunId = item.steerTargetRunId?.trim() || item.pendingRunId;
+    const target = state.chatQueue.find(
+      (candidate) => candidate.kind !== "steered" && candidate.sendRunId === targetRunId,
+    );
+    if (target) {
+      preserveQueuedUserTurn(state, target);
+    }
+  }
   const content = buildUserChatMessageContentBlocks(
     item.text,
     durableDeliveredAttachments(item.attachments),
@@ -265,17 +276,6 @@ export function retireSteeredChipsForRequestRun(
   );
   let firstPersistedSteerIndex: number | undefined;
   for (const item of landed) {
-    // A started active turn can still exist only as an optimistic queue row.
-    // Promote that target before its landed steer so stable transcript history
-    // cannot render the newer steer ahead of the original prompt. Older persisted
-    // chips used pendingRunId as both identities, so retain it as the migration fallback.
-    const targetRunId = item.steerTargetRunId?.trim() || item.pendingRunId;
-    const target = state.chatQueue.find(
-      (candidate) => candidate.id !== item.id && candidate.sendRunId === targetRunId,
-    );
-    if (target) {
-      preserveQueuedUserTurn(state, target);
-    }
     const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
     if (
       persistedIndex >= 0 &&

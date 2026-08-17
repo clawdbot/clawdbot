@@ -289,6 +289,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         runId: params.runId,
         approvalReviewerDeviceId: params.approvalReviewerDeviceId,
         agentDir,
+        preparedModelRuntime: params.preparedModelRuntime,
         cwd: input.effectiveCwd ?? input.effectiveWorkspace,
         workspaceDir: input.effectiveWorkspace,
         spawnWorkspaceDir:

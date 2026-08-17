@@ -206,6 +206,8 @@ export type AgentHarnessSideQuestionParams = {
   hostCapabilities?: AgentHarnessHostCapabilities;
   /** Host-resolved sandbox snapshot for this side execution. */
   sandbox?: import("../sandbox/types.js").SandboxContext | null;
+  /** Prepared plugin/model generation that owns this side execution. */
+  preparedModelRuntime?: import("../prepared-model-runtime.types.js").PreparedModelRuntimeSnapshot;
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   agentDir: string;
   provider: string;

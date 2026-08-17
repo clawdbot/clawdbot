@@ -4,13 +4,14 @@ import {
   addApprovalReactionHintToText,
   approvalReactionDecisionSetsMatch,
   buildApprovalReactionHint,
+  buildApprovalReactionDeliveredBindingMarker,
   createApprovalReactionTargetStore,
   listApprovalReactionBindings,
   normalizeApprovalReactionDecision,
+  readApprovalReactionDecisionList,
   readApprovalReactionDeliveredBinding,
   readApprovalReactionPresentationBinding,
   resolveTypedApprovalReactionTarget,
-  type ApprovalReactionDecisionBinding,
   type ApprovalReactionDeliveryBinding,
   type ApprovalReactionTargetRecord,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
@@ -43,8 +44,6 @@ import { normalizeIMessageHandle } from "./targets.js";
 const PERSISTENT_NAMESPACE = "imessage.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
-
-type IMessageApprovalReactionBinding = ApprovalReactionDecisionBinding;
 
 type IMessageApprovalReactionResolution = {
   approvalId: string;
@@ -101,17 +100,12 @@ function readPersistedTarget(value: unknown): IMessageApprovalReactionTarget | n
   if (
     !target ||
     typeof target.approvalId !== "string" ||
-    !Array.isArray(target.allowedDecisions) ||
     (target.approvalKind !== "exec" && target.approvalKind !== "plugin")
   ) {
     return null;
   }
-  const allowedDecisions = target.allowedDecisions
-    .map((valueValue) =>
-      typeof valueValue === "string" ? normalizeApprovalReactionDecision(valueValue) : null,
-    )
-    .filter((valueLocal): valueLocal is ExecApprovalReplyDecision => Boolean(valueLocal));
-  if (allowedDecisions.length === 0) {
+  const allowedDecisions = readApprovalReactionDecisionList(target.allowedDecisions);
+  if (!allowedDecisions) {
     return null;
   }
   return {
@@ -130,12 +124,6 @@ const imessageApprovalReactionTargets =
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget,
   });
-
-function listIMessageApprovalReactionBindings(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): IMessageApprovalReactionBinding[] {
-  return listApprovalReactionBindings({ allowedDecisions });
-}
 
 type IMessageApprovalDeliveryBinding = ApprovalReactionDeliveryBinding & {
   approvalSlug: string;
@@ -222,13 +210,12 @@ export function addIMessageApprovalReactionHintToStructuredPayload(params: {
     }),
     channelData: {
       ...params.payload.channelData,
-      [IMESSAGE_APPROVAL_DELIVERY_BINDING_KEY]: {
-        version: 1,
+      [IMESSAGE_APPROVAL_DELIVERY_BINDING_KEY]: buildApprovalReactionDeliveredBindingMarker({
         approvalId: metadata.approvalId,
         approvalSlug: metadata.approvalSlug,
         approvalKind: metadata.approvalKind,
         allowedDecisions: metadata.allowedDecisions,
-      },
+      }),
     },
   };
 }
@@ -247,9 +234,9 @@ export function registerIMessageApprovalReactionTarget(params: {
   const accountId = params.accountId.trim();
   const messageId = params.messageId.trim();
   const approvalId = params.approvalId.trim();
-  const allowedDecisions = listIMessageApprovalReactionBindings(params.allowedDecisions).map(
-    (binding) => binding.decision,
-  );
+  const allowedDecisions = listApprovalReactionBindings({
+    allowedDecisions: params.allowedDecisions,
+  }).map((binding) => binding.decision);
   if (
     !accountId ||
     !messageId ||

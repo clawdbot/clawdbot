@@ -507,11 +507,11 @@ async function executeScriptCronJob(
   streamBatch?: string,
   assertRunCurrent?: () => void,
 ) {
-  if (state.deps.cronConfig?.triggers?.enabled !== true) {
+  if (state.deps.cronConfig?.triggers?.enabled === false) {
     return {
       status: "error" as const,
       error:
-        "cron script payload execution is disabled; set cron.triggers.enabled=true to allow unattended scripts",
+        "cron script payload execution is disabled because the operator set cron.triggers.enabled: false; remove it or set it to true to allow unattended scripts",
     };
   }
   if (!state.deps.runScriptJob) {

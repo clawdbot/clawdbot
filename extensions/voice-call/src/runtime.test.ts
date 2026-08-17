@@ -242,7 +242,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.realtimeHandlerCtorArgs.length = 0;
     mocks.realtimeHandlerRegisterToolHandler.mockReset();
     mocks.realtimeHandlerSetPublicUrl.mockReset();
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockResolvedValue({
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
       provider: { id: "openai" },
       providerConfig: { model: "gpt-realtime" },
     });
@@ -365,39 +365,95 @@ describe("createVoiceCallRuntime lifecycle", () => {
       } as never,
     });
 
-    const resolveInstructions = mocks.realtimeHandlerCtorArgs[0]?.[7];
-    if (typeof resolveInstructions !== "function") {
-      throw new Error("expected per-call realtime instruction resolver");
+    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[3];
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+    if (typeof resolveCallRegistration !== "function") {
+      throw new Error("expected per-call realtime registration resolver");
     }
     expect(runtime.config.agentId).toBe("operator");
-    const defaultInstructions = resolveInstructions({
+    const defaultRegistration = resolveCallRegistration({
       callId: "call-default",
       direction: "outbound",
       from: "+15550001111",
       to: "+15550002222",
     });
-    expect(defaultInstructions).toContain("- Agent id: operator");
+    expect(defaultRegistration.agentId).toBe("operator");
+    expect(defaultRegistration.instructions).toContain("- Agent id: operator");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(fullConfig, "operator");
 
-    const supportInstructions = resolveInstructions({
+    const supportRegistration = resolveCallRegistration({
       callId: "call-support",
       agentId: "support",
       direction: "outbound",
       from: "+15550001111",
       to: "+15550002222",
     });
-    expect(supportInstructions).toContain("- Agent id: support");
-    expect(supportInstructions).toContain("- Name: Support Voice");
-    expect(supportInstructions).not.toContain("Main Voice");
+    expect(supportRegistration.agentId).toBe("support");
+    expect(supportRegistration.instructions).toContain("- Agent id: support");
+    expect(supportRegistration.instructions).toContain("- Name: Support Voice");
+    expect(supportRegistration.instructions).not.toContain("Main Voice");
 
-    const unknownInstructions = resolveInstructions({
+    const unknownRegistration = resolveCallRegistration({
       callId: "call-unknown",
       agentId: "unknown",
       direction: "outbound",
       from: "+15550001111",
       to: "+15550002222",
     });
-    expect(unknownInstructions).not.toContain("OpenClaw agent voice context:");
+    expect(unknownRegistration.instructions).not.toContain("OpenClaw agent voice context:");
+  });
+
+  it("selects realtime provider readiness from the routed call owner", async () => {
+    const config = createBaseConfig();
+    config.agentId = "main";
+    config.realtime.enabled = true;
+    config.numbers["+15550009999"] = { agentId: "support" };
+    const fullConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "support" }] },
+    } as OpenClawConfig;
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(
+      ({ agentId }: { agentId?: string }) => {
+        if (agentId !== "support") {
+          throw new Error(`OpenAI realtime is not configured for ${agentId ?? "unknown"}`);
+        }
+        return {
+          provider: { id: "openai-support" },
+          providerConfig: { model: "gpt-realtime", owner: agentId },
+        };
+      },
+    );
+
+    await expect(
+      createVoiceCallRuntime({
+        config,
+        coreConfig: {} as OpenClawConfig,
+        fullConfig,
+        agentRuntime: {} as never,
+      }),
+    ).resolves.toMatchObject({ config: { agentId: "main" } });
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+
+    const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[3];
+    if (typeof resolveCallRegistration !== "function") {
+      throw new Error("expected per-call realtime registration resolver");
+    }
+    const registration = resolveCallRegistration({
+      callId: "call-support",
+      agentId: "support",
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      metadata: { numberRouteKey: "+15550009999" },
+    });
+
+    expect(registration).toMatchObject({
+      agentId: "support",
+      provider: { id: "openai-support" },
+      providerConfig: { model: "gpt-realtime", owner: "support" },
+    });
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agentId: "support" }),
+    );
   });
 
   it.each(["twilio", "telnyx", "plivo"] as const)(

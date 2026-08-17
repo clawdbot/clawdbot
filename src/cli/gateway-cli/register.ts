@@ -116,6 +116,7 @@ function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TI
 async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
+    sharedStateMode: "read-only",
   });
 }
 
@@ -696,14 +697,12 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             try {
               result = await callGatewayCli("health", rpcOpts);
             } catch (error) {
-              const [{ emitReachableGatewayAuthDiagnostic }, { readBestEffortConfig }] =
-                await Promise.all([
-                  (deps.loadGatewayHealthModule ?? loadGatewayHealthModule)(),
-                  loadConfigModule(),
-                ]);
+              const { emitReachableGatewayAuthDiagnostic, readBestEffortHealthConfig } = await (
+                deps.loadGatewayHealthModule ?? loadGatewayHealthModule
+              )();
               const handled = await emitReachableGatewayAuthDiagnostic({
                 error,
-                config: rpcOpts.config ?? (await readBestEffortConfig()),
+                config: rpcOpts.config ?? (await readBestEffortHealthConfig()),
                 runtime: defaultRuntime,
                 timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
                 token: rpcOpts.token,

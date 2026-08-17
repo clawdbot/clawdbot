@@ -5,6 +5,7 @@
 
 import crypto from "node:crypto";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyModelOverrideWithAuthProfileCompatibility,
@@ -75,14 +76,7 @@ function resolveVoiceAgentToolsAllow(
   config: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  const agents = isRecord(config.agents) ? config.agents : undefined;
-  const list = Array.isArray(agents?.list) ? agents.list : [];
-  const agent = list.find((entry) => isRecord(entry) && entry.id === agentId);
-  if (!isRecord(agent)) {
-    return undefined;
-  }
-
-  return readExplicitToolsAllow(isRecord(agent.tools) ? agent.tools : undefined);
+  return readExplicitToolsAllow(resolveAgentConfig(config, agentId)?.tools);
 }
 
 const VOICE_SPOKEN_OUTPUT_CONTRACT = [

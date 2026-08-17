@@ -72,6 +72,11 @@ function logMSTeamsOutboundFailure(params: {
     });
 }
 
+function toMSTeamsOutboundResult(result: MSTeamsSendResult) {
+  const { conversationId, ...delivery } = result;
+  return { ...delivery, target: { kind: "conversation" as const, id: conversationId } };
+}
+
 function resolveMSTeamsThreadTarget(to: string, threadId?: string | number | null) {
   const normalizedThreadId = threadId == null ? "" : String(threadId).trim();
   const graphChannelId = to.includes("/") ? to.slice(to.indexOf("/") + 1) : "";
@@ -203,7 +208,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
           to: deliveryTarget,
           card: presentationCard as Record<string, unknown>,
         });
-        return attachChannelToResult("msteams", result);
+        return attachChannelToResult("msteams", toMSTeamsOutboundResult(result));
       }
       const mediaUrls = normalizeStringEntries(
         resolvePayloadMediaUrls({
@@ -217,7 +222,9 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
           text,
           mediaUrls,
           onResult: async (deliveryResult) => {
-            await onDeliveryResult?.(attachChannelToResult("msteams", deliveryResult));
+            await onDeliveryResult?.(
+              attachChannelToResult("msteams", toMSTeamsOutboundResult(deliveryResult)),
+            );
           },
           send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
             await send(deliveryTarget, textLocal, {
@@ -228,7 +235,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
             }),
         });
         if (result) {
-          return attachChannelToResult("msteams", result);
+          return attachChannelToResult("msteams", toMSTeamsOutboundResult(result));
         }
       }
       if (text.trim()) {
@@ -244,9 +251,11 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         let result: Awaited<ReturnType<MSTeamsTextSendFn>>;
         for (const chunk of chunks) {
           result = await send(deliveryTarget, chunk);
-          await onDeliveryResult?.(attachChannelToResult("msteams", result));
+          await onDeliveryResult?.(
+            attachChannelToResult("msteams", toMSTeamsOutboundResult(result)),
+          );
         }
-        return attachChannelToResult("msteams", result!);
+        return attachChannelToResult("msteams", toMSTeamsOutboundResult(result!));
       }
       throw new Error("MS Teams payload send requires text, media, or a presentation card.");
     } catch (error) {
@@ -264,7 +273,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     sendText: async ({ cfg, to, text, accountId, deps, threadId }) => {
       try {
         const send = resolveMSTeamsTextSend({ cfg, accountId, deps });
-        return await send(resolveMSTeamsThreadTarget(to, threadId), text);
+        return toMSTeamsOutboundResult(await send(resolveMSTeamsThreadTarget(to, threadId), text));
       } catch (error) {
         logMSTeamsOutboundFailure({
           kind: "text send",
@@ -289,12 +298,14 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     }) => {
       try {
         const send = resolveMSTeamsMediaSend({ cfg, accountId, deps });
-        return await send(resolveMSTeamsThreadTarget(to, threadId), text, {
-          mediaUrl,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
-        });
+        return toMSTeamsOutboundResult(
+          await send(resolveMSTeamsThreadTarget(to, threadId), text, {
+            mediaUrl,
+            mediaAccess,
+            mediaLocalRoots,
+            mediaReadFile,
+          }),
+        );
       } catch (error) {
         logMSTeamsOutboundFailure({
           kind: "media send",

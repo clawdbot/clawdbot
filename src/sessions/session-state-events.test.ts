@@ -584,6 +584,25 @@ describe("session state events", () => {
     expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set());
   });
 
+  it("does not register a group routed into the configured main session", () => {
+    const database = createDatabaseOptions();
+    const mainSessionKey = "agent:main:work";
+
+    expect(
+      registerMainSessionGroupWatch(
+        {
+          sessionKey: mainSessionKey,
+          agentId: "main",
+          mainKey: "work",
+          entry: { sessionId: "session-main", updatedAt: 100, chatType: "group" },
+          dmScope: "main",
+        },
+        database,
+      ),
+    ).toBe(false);
+    expect(listAmbientGroupWatchTargets(mainSessionKey, database)).toEqual(new Set());
+  });
+
   it("revokes ambient watches outside main scope but preserves explicit watches", () => {
     const database = createDatabaseOptions();
     registerMainSessionGroupWatch(

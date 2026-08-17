@@ -299,7 +299,7 @@ export async function runCodexAppServerSideQuestion(
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     sideRunParams,
     params.sandbox ?? undefined,
-    { sandboxExecServerEnabled },
+    { agentId: sideRunParams.agentId, sandboxExecServerEnabled },
   );
   const sandboxEnvironmentRequired = shouldRequireCodexSandboxExecServerEnvironment({
     sandbox: params.sandbox ?? undefined,
@@ -310,6 +310,7 @@ export async function runCodexAppServerSideQuestion(
     config: sideRunParams.config,
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
     sessionId: sideRunParams.sessionId,
+    agentId: sideRunParams.agentId,
     sandbox: params.sandbox,
     sandboxEnvironmentSelected: sandboxEnvironmentRequired,
     surface: "/btw side-question mode",
@@ -982,6 +983,7 @@ function buildSideRunAttemptParams(
     authStorage: params.preparedRuntimeAuth.authStorage,
     authProfileStore: params.preparedRuntimeAuth.authProfileStore,
     modelRegistry: params.preparedRuntimeAuth.modelRegistry,
+    preparedModelRuntime: params.preparedModelRuntime,
     ...(params.preparedRuntimeAuth.resolvedApiKey
       ? { resolvedApiKey: params.preparedRuntimeAuth.resolvedApiKey }
       : {}),
@@ -1048,6 +1050,7 @@ async function createCodexSideToolBridge(input: {
         resolvedWorkspace: input.params.workspaceDir ?? input.cwd,
       }),
       config: input.params.cfg,
+      preparedModelRuntime: input.params.preparedModelRuntime,
       abortSignal: input.signal,
       modelProvider: runtimeModel.provider,
       modelId: input.params.model,

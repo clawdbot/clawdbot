@@ -272,8 +272,22 @@ describe("ensureConfigReady", () => {
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
       observe: false,
-      skipPluginValidation: true,
+      pluginValidation: "core-only",
     });
+  });
+
+  it("validates config without observing health, plugins, or startup migrations", async () => {
+    await ensureConfigReady({
+      runtime: makeRuntime() as never,
+      commandPath: ["nodes", "approve"],
+      validateConfigOnly: true,
+    });
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+      observe: false,
+      pluginValidation: "core-only",
+    });
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
   });
 
   it("keeps remote gateway call config reads non-observing", async () => {

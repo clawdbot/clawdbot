@@ -152,7 +152,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const inference = createWorkerInferenceManager({
     execute: options.executeInference,
     getConfig: options.getConfig,
-    now,
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   const inferenceWithDrain = inference as typeof inference & {
@@ -161,6 +160,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
+  let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler((claim) =>
+    inference.cancelClaim(claim),
+  );
   let stopping = false;
 
   const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
@@ -386,6 +388,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     interval = undefined;
     unsubscribeSessionIdentityMutation?.();
     unsubscribeSessionIdentityMutation = undefined;
+    unsubscribeTurnClaimClosed?.();
+    unsubscribeTurnClaimClosed = undefined;
     await inference.stop();
     credentialBroker.clear();
     options.liveEvents?.clear();

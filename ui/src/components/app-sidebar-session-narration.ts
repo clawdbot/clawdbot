@@ -63,6 +63,10 @@ export type SidebarNarrationSyncInput = {
   agentId: string;
 };
 
+// TRANSITIONAL(marker-retirement): live narration strips inline markers because
+// streamed drafts still carry them mid-run; persisted data is already clean.
+// Drop the stripInlineDirectiveTagsForDisplay call when the visibleReplies
+// default flips to "message_tool".
 function normalizeSidebarNarrationText(text: string): string | null {
   const displayText = stripSuppressedControlReplyToken(
     stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),

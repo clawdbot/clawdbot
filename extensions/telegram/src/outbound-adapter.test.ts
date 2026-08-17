@@ -182,7 +182,11 @@ describe("telegramOutbound", () => {
     expect((firstOptions.promptContextProjectionPlan as { cursor: unknown }).cursor).toBe(
       (secondOptions.promptContextProjectionPlan as { cursor: unknown }).cursor,
     );
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-2",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it.each([
@@ -240,7 +244,11 @@ describe("telegramOutbound", () => {
 
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "- Retry");
     expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-buttons",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("forwards prompt-context sources on durable payload sends", async () => {
@@ -277,7 +285,11 @@ describe("telegramOutbound", () => {
       },
       finalPart: true,
     });
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-final", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-final",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("detaches stale prompt-context provenance after a durable hook rewrite", async () => {
@@ -332,7 +344,11 @@ describe("telegramOutbound", () => {
       gatewayClientScopes: undefined,
     });
     expect(sendMessageTelegramMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ channel: "telegram", messageId: "777", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "777",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("applies reaction payloads before sending visible text", async () => {
@@ -474,7 +490,11 @@ describe("telegramOutbound", () => {
 
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "quiet");
     expect(options.silent).toBe(true);
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-silent", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-silent",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("does not plain-text sanitize Telegram HTML before durable delivery", async () => {
@@ -606,7 +626,11 @@ describe("telegramOutbound", () => {
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "voice caption");
     expect(options.mediaUrl).toBe("file:///tmp/note.ogg");
     expect(options.asVoice).toBe(true);
-    expect(result).toEqual({ channel: "telegram", messageId: "tg-voice", chatId: "12345" });
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-voice",
+      target: { kind: "chat", id: "12345" },
+    });
   });
 
   it("forwards videoAsNote payload media to Telegram video-note sends", async () => {
@@ -629,7 +653,7 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({
       channel: "telegram",
       messageId: "tg-video-note",
-      chatId: "12345",
+      target: { kind: "chat", id: "12345" },
     });
   });
 
@@ -703,7 +727,7 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({
       channel: "telegram",
       messageId: "tg-location",
-      chatId: "12345",
+      target: { kind: "chat", id: "12345" },
     });
   });
 
@@ -750,7 +774,7 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({
       channel: "telegram",
       messageId: "tg-location",
-      chatId: "12345",
+      target: { kind: "chat", id: "12345" },
     });
   });
 

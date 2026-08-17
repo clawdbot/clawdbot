@@ -4,7 +4,10 @@
  * These details cross client/server boundaries, so readers normalize untrusted
  * payloads before using them in reconnect decisions or user-facing messages.
  */
-import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
+import {
+  isProtocolRecord,
+  normalizeOptionalProtocolString,
+} from "./protocol-value-normalization.js";
 
 function normalizeOptionalConnectDetailStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
@@ -36,6 +39,7 @@ export const ConnectErrorDetailCodes = {
   AUTH_TAILSCALE_PROXY_MISSING: "AUTH_TAILSCALE_PROXY_MISSING",
   AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED",
   AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH",
+  AUTH_IDENTITY_HEADER_REQUIRED: "AUTH_IDENTITY_HEADER_REQUIRED",
   CONTROL_UI_BUILD_MISMATCH: "CONTROL_UI_BUILD_MISMATCH",
   CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
   PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
@@ -163,6 +167,9 @@ const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
+  if (reason?.startsWith("trusted_proxy_missing_header_")) {
+    return ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED;
+  }
   switch (reason) {
     case "token_missing":
       return ConnectErrorDetailCodes.AUTH_TOKEN_MISSING;
@@ -223,7 +230,7 @@ export function resolveDeviceAuthConnectErrorDetailCode(
 
 /** Reads a non-empty detail code from an untrusted error details payload. */
 export function readConnectErrorDetailCode(details: unknown): string | null {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return null;
   }
   const code = (details as { code?: unknown }).code;
@@ -249,7 +256,7 @@ export function readControlUiBuildMismatchId(details: unknown): string | null {
 
 /** Extracts normalized retry advice from untrusted connect-error details. */
 export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return {};
   }
   const raw = details as {
@@ -406,7 +413,7 @@ export function readPairingConnectErrorDetails(
   if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return null;
   }
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return null;
   }
   const raw = details as {

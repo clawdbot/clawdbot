@@ -56,10 +56,8 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { refreshPageChat, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { detailSlotOpen } from "./components/chat-detail-slot.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
-import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
@@ -647,24 +645,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
     this.sessionPanelToggles.flush();
-    this.seedSessionDiffSidebar();
-  }
-
-  private seedSessionDiffSidebar(): void {
-    const state = this.state;
-    const detailOpen =
-      state?.sidebarLayout.open === true && detailSlotOpen(state.sidebarLayout) && this.presented;
-    if (!state || !detailOpen || state.sidebarContent !== null) {
-      return;
-    }
-    const content = resolveSessionDiffSidebarContent(state);
-    if (!content) {
-      return;
-    }
-    // The null check is the per-pane/session transition latch. Assign content
-    // only: activating or opening the panel would override user intent.
-    state.sidebarContent = content;
-    state.requestUpdate?.();
   }
 
   override disconnectedCallback() {

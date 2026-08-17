@@ -1,10 +1,11 @@
 import type { GatewayNativeApprovalMethod } from "./approval-gateway-runtime-methods.js";
 import type { ApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import type { ApprovalRequest } from "./approval-types.js";
+import type { ExecApprovalResolved } from "./exec-approvals.js";
+import type { PluginApprovalResolved } from "./plugin-approvals.js";
 
 export type GatewayApprovalEventKind = "exec" | "plugin";
-export type GatewayApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+export type GatewayApprovalRequest = ApprovalRequest;
 export type GatewayApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 
 export type GatewayApprovalEventSubscriber = {

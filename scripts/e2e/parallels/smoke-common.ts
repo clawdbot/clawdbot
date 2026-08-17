@@ -70,11 +70,14 @@ interface CommonSmokeSummary {
 export abstract class SmokeRunController<TOptions extends SmokeRunOptions & SmokeHostOptions> {
   protected hostIp = "";
   protected hostPort = 0;
+  protected options: TOptions;
   protected runDir = "";
   protected server: HostServer | null = null;
   protected tgzDir = "";
 
-  protected constructor(protected options: TOptions) {}
+  protected constructor(options: TOptions) {
+    this.options = options;
+  }
 
   protected abstract runFreshLane(): Promise<void>;
   protected abstract runUpgradeLane(): Promise<void>;

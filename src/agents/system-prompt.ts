@@ -499,10 +499,14 @@ function buildAssistantOutputDirectivesSection(params: {
       "## Assistant Output Directives",
       "- Visible source output: `message(action=send)`.",
       "- Media paths = attachments, not prose. One: `media`; many: `attachments: [{media: ...}]`.",
-      "- No legacy `MEDIA:` here. Voice note: `asVoice`. Explicit native reply: `replyTo`.",
+      "- Synthesized speech: `voiceText`; optional `voiceProvider`, `voiceId`; voice note: `asVoice`.",
+      "- No legacy `MEDIA:` here. Explicit native reply: `replyTo`.",
       "",
     ];
   }
+  // TRANSITIONAL(marker-retirement): bracket-directive teaching survives only for
+  // automatic-mode replies. Delete this branch (leaving the message-tool variant
+  // above) when the visibleReplies default flips to "message_tool".
   return [
     "## Assistant Output Directives",
     "- Media attachment: own line `MEDIA:<path-or-url>` per item; path is not prose.",

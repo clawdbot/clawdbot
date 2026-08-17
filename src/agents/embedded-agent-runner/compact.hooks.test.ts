@@ -1171,6 +1171,79 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("keeps manifest-profiled plugin tools executable during compaction", async () => {
+    const toolName = "profiled_plugin_tool";
+    const metadataSnapshot = {
+      ...getCurrentPluginMetadataSnapshotMock(),
+      workspaceDir: "/tmp/workspace",
+      plugins: [
+        {
+          id: "profiled-plugin",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "workspace",
+          rootDir: "/tmp/workspace/profiled-plugin",
+          source: "/tmp/workspace/profiled-plugin/index.js",
+          manifestPath: "/tmp/workspace/profiled-plugin/openclaw.plugin.json",
+          contracts: { tools: [toolName] },
+          toolMetadata: { [toolName]: { profiles: ["coding"] } },
+        } satisfies PluginManifestRecord,
+      ],
+    };
+    const preparedModelRuntime = {
+      agentId: "main",
+      agentDir: "/tmp/agents/main/agent",
+      config: { tools: { profile: "coding" } },
+      workspaceDir: "/tmp/workspace",
+      metadataSnapshot,
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    } as never;
+    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
+      snapshot: preparedModelRuntime,
+      release: vi.fn(),
+    });
+    createOpenClawCodingToolsMock.mockReturnValueOnce([
+      {
+        name: toolName,
+        label: "Profiled plugin tool",
+        description: "Profiled plugin tool test fixture",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+      },
+    ] as never);
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+      config: { tools: { profile: "coding" } },
+    });
+
+    expect(result.ok).toBe(true);
+    const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {});
+    expect(
+      (toolOptions.preparedModelRuntime as { metadataSnapshot?: unknown }).metadataSnapshot,
+    ).toBe(metadataSnapshot);
+    expect(
+      (
+        toolOptions.conversationCapabilityProfile as {
+          policy?: { explicitToolAllowlist?: string[] };
+        }
+      ).policy?.explicitToolAllowlist,
+    ).toContain(toolName);
+    const sessionOptions = expectRecordFields(mockCallArg(createAgentSessionMock), {});
+    expect(sessionOptions.tools).toContain(toolName);
+    expect(
+      (sessionOptions.customTools as Array<{ name: string }>).map((tool) => tool.name),
+    ).toContain(toolName);
+  });
+
   it.each([
     { input: ["text"], modelHasVision: false },
     { input: ["text", "image"], modelHasVision: true },

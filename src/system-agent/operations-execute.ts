@@ -413,7 +413,10 @@ export async function executeSystemAgentOperation(
             return await createAgentForOperation({
               name: operation.agentId,
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
-              provenance: { createdVia: "agent", creatorAgentId: SYSTEM_AGENT_ID },
+              provenance: {
+                createdVia: "agent",
+                creatorAgentId: operation.requesterAgentId ?? SYSTEM_AGENT_ID,
+              },
             });
           });
           if (result.status === "error") {

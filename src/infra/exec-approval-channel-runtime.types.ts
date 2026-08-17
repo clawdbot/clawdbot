@@ -1,9 +1,10 @@
 // Defines channel-native approval runtime contracts.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ApprovalRequestInput, NormalizedApprovalRequest } from "./approval-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import type { PluginApprovalResolved } from "./plugin-approvals.js";
 
-type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequestEvent = ApprovalRequestInput;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
 
 /** Approval event families a channel-native approval runtime can subscribe to. */
@@ -22,15 +23,18 @@ export type ExecApprovalChannelRuntimeAdapter<
   /** Defaults to exec-only; include plugin when the adapter can handle plugin approvals. */
   eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
   isConfigured: () => boolean;
-  shouldHandle: (request: TRequest) => boolean;
-  deliverRequested: (request: TRequest) => Promise<TPending[]>;
+  shouldHandle: (request: NormalizedApprovalRequest<TRequest>) => boolean;
+  deliverRequested: (request: NormalizedApprovalRequest<TRequest>) => Promise<TPending[]>;
   beforeGatewayClientStart?: () => Promise<void> | void;
   finalizeResolved: (params: {
-    request: TRequest;
+    request: NormalizedApprovalRequest<TRequest>;
     resolved: TResolved;
     entries: TPending[];
   }) => Promise<void>;
-  finalizeExpired?: (params: { request: TRequest; entries: TPending[] }) => Promise<void>;
+  finalizeExpired?: (params: {
+    request: NormalizedApprovalRequest<TRequest>;
+    entries: TPending[];
+  }) => Promise<void>;
   onStopped?: () => Promise<void> | void;
   nowMs?: () => number;
 };

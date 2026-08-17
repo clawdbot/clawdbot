@@ -6,6 +6,7 @@ import type {
   SessionClassification,
   SessionPeerKind,
   SessionPlacement,
+  SessionPlacementMove,
   SessionRow,
   SessionRunStatus,
   SessionSharingRole,
@@ -121,6 +122,7 @@ export type GatewaySessionRow = {
   lastActivityAt?: number;
   sessionId?: string;
   placement?: SessionPlacement;
+  placementMove?: SessionPlacementMove;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   restartRecoveryStatus?: "tombstoned";

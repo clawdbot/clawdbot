@@ -292,6 +292,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional route session overrides for conversations matched by this binding. Use this when a narrow route should keep the same agent but isolate session continuity differently.",
   "bindings[].session.dmScope":
     'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
+  "bindings[].session.groupScope":
+    'Optional group/channel session scope override for this route binding. Use "main" to merge only selected rooms into the agent main session while other rooms keep the global "per-group" default.',
   "bindings[].match":
     "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
   "bindings[].match.channel":

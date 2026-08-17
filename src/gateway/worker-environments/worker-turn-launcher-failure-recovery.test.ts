@@ -10,12 +10,14 @@ import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcr
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { placementTurnOwner } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
   type WorkerTunnelHandle,
 } from "./tunnel-contract.js";
+import { failHandedOffTurn } from "./worker-turn-failure.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -42,6 +44,51 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 describe("worker turn launcher failure recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "releases an exact %s claim after another lifecycle owner starts draining",
+    async (executionMode) => {
+      seedActivePlacement(executionMode);
+      const active = placements.get(SESSION_ID);
+      if (active?.state !== "active") {
+        throw new Error("expected active placement");
+      }
+      const turnClaim = placements.claimTurn({
+        sessionId: active.sessionId,
+        sessionKey: active.sessionKey,
+        agentId: active.agentId,
+        claimId: `move-${executionMode}-claim`,
+        runId: `move-${executionMode}-run`,
+        owner: placementTurnOwner(active),
+      });
+      const draining = placements.startDrain({
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation,
+      });
+      const stopTunnel = vi.fn(async () => {});
+      const destroy = vi.fn(async () => attachedEnvironment());
+
+      await failHandedOffTurn({
+        environments: { ...unusedEnvironments(), stopTunnel, destroy },
+        placements,
+        placement: active,
+        turnClaim,
+        error: new Error("turn interrupted for placement move"),
+      });
+
+      expect(placements.get(SESSION_ID)).toMatchObject({
+        state: "draining",
+        generation: draining.generation,
+        environmentId: active.environmentId,
+        activeOwnerEpoch: active.activeOwnerEpoch,
+        turnClaim: null,
+      });
+      expect(stopTunnel).not.toHaveBeenCalled();
+      expect(destroy).not.toHaveBeenCalled();
+    },
+  );
 
   it("projects a stale Gateway build teardown and records its durable placement reason", async () => {
     seedActivePlacement();
@@ -163,7 +210,9 @@ describe("worker turn launcher failure recovery", () => {
       environments,
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
       runActivationBarrier: async ({ activate }) => activate(),
-      runReclaimBarrier: async ({ reclaim }) => await reclaim(root),
+      runMoveBarrier: async ({ begin }) => begin(),
+      resolveMoveDestination: async () => undefined,
+      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
       workspaceOperations,
       resolveWorkspacePath: async () => root,
       reportWorkspaceResultConflict: async () => {},

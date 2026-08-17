@@ -12,6 +12,7 @@ import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
+import { isToolResultError } from "./tool-result-error.js";
 import { compactToolSearchCatalogEntry, createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -260,8 +261,10 @@ describe("createNodePluginTools", () => {
           { type: "text", text: "first" },
           { type: "text", text: "second" },
           { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
+          { type: "image", data: 42, mimeType: "image/png" },
         ],
         structuredContent: { hits: 2 },
+        isError: true,
       },
     });
 
@@ -286,12 +289,24 @@ describe("createNodePluginTools", () => {
     expect(tool.executionMode).toBe("sequential");
     expect(getPluginToolMeta(tool)?.mcp?.node).toEqual({ id: "node-1" });
     expect(result.content).toEqual([
+      { type: "text", text: 'structuredContent:\n{\n  "hits": 2\n}' },
       { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
-      { type: "text", text: "first" },
-      { type: "text", text: "second" },
       { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
-      { type: "text", text: '{\n  "hits": 2\n}' },
+      { type: "text", text: '{"type":"image","data":42,"mimeType":"image/png"}' },
     ]);
+    expect(result.details).toEqual({
+      content: [
+        { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
+        { type: "text", text: "first" },
+        { type: "text", text: "second" },
+        { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
+        { type: "image", data: 42, mimeType: "image/png" },
+      ],
+      structuredContent: { hits: 2 },
+      isError: true,
+      status: "error",
+    });
+    expect(isToolResultError(result)).toBe(true);
   });
 
   it("projects node MCP schemas and calls through the exact namespace catalog entry", async () => {

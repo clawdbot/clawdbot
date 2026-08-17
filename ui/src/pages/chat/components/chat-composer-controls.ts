@@ -1,6 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -23,7 +22,7 @@ export type ChatRunControlsProps = {
   hasAttachments?: boolean;
   isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
-  sendShortcut: ChatSendShortcut;
+  steerNowEnabled: boolean;
   suggestionComposer?: boolean;
   sending: boolean;
   voiceActive?: boolean;
@@ -38,7 +37,6 @@ export type ChatRunControlsProps = {
   onPrimaryActionPointerDown?: (event: PointerEvent) => void;
   onAbort?: () => void;
   onSend: () => void;
-  onStoreDraft: (draft: string) => void;
   onToggleVoice?: () => void;
   onToggleCamera?: () => void;
   microphonePicker?: TemplateResult | typeof nothing;
@@ -220,21 +218,12 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         : interruptsActiveRun
           ? t("chat.runControls.sendMessage")
           : t("chat.runControls.queueMessage");
-  const queueSteerShortcutAvailable =
-    props.canAbort &&
-    props.canSend &&
-    hasComposedContent &&
-    props.followUpMode === "queue" &&
-    props.sendShortcut === "enter";
+  const queueSteerShortcutAvailable = props.steerNowEnabled && props.canSend && hasComposedContent;
   const activeRunActionTooltip = queueSteerShortcutAvailable
     ? `${activeRunActionLabel} ⏎ · ${t("chat.queue.steer")} ${t("chat.sendShortcutModifierEnter")}`
     : activeRunActionLabel;
-  const storeDraftAndSend = () => {
-    if (props.draft.trim()) {
-      props.onStoreDraft(props.draft);
-    }
-    props.onSend();
-  };
+  // Lit passes the click event to handlers; keep it out of the scalar send override.
+  const send = () => props.onSend();
   const abortAction = props.canAbort
     ? html`
         <openclaw-tooltip .content=${t("chat.runControls.stop")}>
@@ -262,7 +251,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       <button
         class="chat-send-btn"
         @pointerdown=${props.onPrimaryActionPointerDown}
-        @click=${storeDraftAndSend}
+        @click=${send}
         ?disabled=${!props.canSend || props.sending}
         aria-label=${activeRunActionDescription}
       >
@@ -279,7 +268,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       <button
         class="chat-send-btn"
         @pointerdown=${props.onPrimaryActionPointerDown}
-        @click=${storeDraftAndSend}
+        @click=${send}
         disabled
         aria-label=${emptySendDescription}
       >

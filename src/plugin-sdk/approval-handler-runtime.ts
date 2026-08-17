@@ -2,6 +2,7 @@
  * Runtime SDK subpath for approval handler adapters and approval view text helpers.
  */
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeApprovalRequest } from "../infra/approval-types.js";
 import type {
   ExpiredApprovalView,
   ResolvedApprovalView,
@@ -74,10 +75,11 @@ export function buildChannelApprovalExpiredText(params: {
   request: ApprovalRequest;
   view: ExpiredApprovalView;
 }): string {
-  if (params.view.approvalKind === "plugin") {
-    return buildPluginApprovalExpiredMessage(params.request as PluginApprovalRequest);
+  const request = normalizeApprovalRequest(params.request);
+  if (request.approvalKind === "plugin") {
+    return buildPluginApprovalExpiredMessage(request);
   }
-  return `⏱️ Exec approval expired. ID: ${params.request.id}`;
+  return `⏱️ Exec approval expired. ID: ${request.id}`;
 }
 
 /** Resolves the account id prepared for approval routing with planned/context fallback order. */

@@ -681,7 +681,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       cfg: {
         agents: {
           defaults: { reasoningDefault: "off" },
-          list: [{ id: "Ops", reasoningDefault: "stream" }],
+          entries: { Ops: { reasoningDefault: "stream" } },
         },
       },
     });

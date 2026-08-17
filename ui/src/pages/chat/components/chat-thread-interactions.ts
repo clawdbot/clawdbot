@@ -354,7 +354,37 @@ function createMessageActionContextButton(params: {
   return { element: tooltip, button };
 }
 
-export function handleTranscriptSelection(event: PointerEvent, props: TranscriptInteractionProps) {
+function toggleTouchMessageMeta(event: PointerEvent): void {
+  const transcript = event.currentTarget;
+  const target = event.target;
+  if (
+    event.pointerType !== "touch" ||
+    !(transcript instanceof HTMLElement) ||
+    !(target instanceof Element)
+  ) {
+    return;
+  }
+  const group = target.closest(".chat-group--with-footer");
+  if (
+    !(group instanceof HTMLElement) ||
+    !transcript.contains(group) ||
+    target.closest("a, button, details, input, label, select, textarea, [contenteditable]")
+  ) {
+    return;
+  }
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed) {
+    return;
+  }
+  const reveal = !group.classList.contains("chat-group--meta-revealed");
+  for (const revealed of transcript.querySelectorAll(".chat-group--meta-revealed")) {
+    revealed.classList.remove("chat-group--meta-revealed");
+  }
+  group.classList.toggle("chat-group--meta-revealed", reveal);
+}
+
+export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
+  toggleTouchMessageMeta(event);
   if (
     typeof props.onCompanionQuestion !== "function" ||
     typeof props.onCompanionPrefill !== "function"

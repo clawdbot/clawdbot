@@ -196,15 +196,10 @@ describe("staged worker placement result recovery", () => {
       current: "worker\n",
     });
     placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
-    const binding = {
-      sessionId: claim.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      runId: claim.runId,
-    };
+    const binding = claim;
     expect(
       placementStore.beginWorkerSessionToolOperation({
-        binding,
+        claim: binding,
         toolName: "sessions_send",
         toolCallId: "running-session-operation-call",
         requestDigest: "running-session-operation-digest",
@@ -230,7 +225,7 @@ describe("staged worker placement result recovery", () => {
     expect(placementStore.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({
-      state: "active",
+      state: "draining",
       turnClaim: { claimId: claim.claimId },
     });
     expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);

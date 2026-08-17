@@ -186,6 +186,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     clientGatewayUrl: string;
     scope: ChatPaneConnectionScope;
   } | null = null;
+  @litState() protected headerPlacementMovingKey: string | null = null;
   @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
@@ -373,7 +374,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected historyObserverBootstrap = false;
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
-  protected historyBootstrapPagesLoaded = 0;
   protected historyIntentConsumed = false;
   protected historyIntentTimer: number | null = null;
   protected historyTouchY: number | null = null;

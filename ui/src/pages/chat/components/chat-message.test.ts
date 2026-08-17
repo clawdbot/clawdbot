@@ -2974,9 +2974,10 @@ describe("grouped chat rendering", () => {
     renderAssistantMessage(
       container,
       createAssistantMessage(
-        "[[reply_to_current]]Here is the image.\nMEDIA:https://example.com/photo.png\nMEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
+        "Here is the image.\nMEDIA:https://example.com/photo.png\nMEDIA:https://example.com/voice.ogg",
         {
           id: "assistant-media-inline",
+          openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
         },
       ),
       { showToolCalls: false, onOpenImage },

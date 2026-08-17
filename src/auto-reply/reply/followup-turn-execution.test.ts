@@ -136,7 +136,7 @@ describe("executeFollowupTurn", () => {
     });
     expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
     expect(onExecutionStarted).toHaveBeenCalledOnce();
-    expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
+    expect(onAgentRunStart).toHaveBeenCalledWith("run-1", undefined);
   });
 
   it("ignores verbosity loaded from a replacement session generation", async () => {

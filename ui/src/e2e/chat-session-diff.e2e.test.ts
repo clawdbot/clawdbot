@@ -205,6 +205,43 @@ describeControlUiE2e("session diff panel", () => {
     await waitForSessionDiff(page);
   });
 
+  it("requests the default session diff once across subsequent pane renders", async () => {
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      methodResponses: {
+        "sessions.files.list": {
+          sessionKey: "main",
+          root: "/tmp/checkout",
+          gitCheckout: true,
+          files: [],
+          browser: { path: "", entries: [] },
+        },
+        "sessions.diff": SESSION_DIFF_RESPONSE,
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+
+    await openChatSidePanelType(page, "Files");
+    await openChatSidePanelType(page, "Review");
+    await waitForSessionDiff(page);
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(1);
+
+    await openChatSidePanelType(page, "Tasks");
+    await expect
+      .poll(() => page.locator(".tabstrip-tab__label").allTextContents())
+      .toContain("Tasks");
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
+  });
+
   it("loads the session diff into a persisted empty Review panel", async () => {
     const sessionKey = "agent:main:persisted-review";
     const context = await newBrowserContext();
@@ -515,6 +552,10 @@ describeControlUiE2e("session diff panel", () => {
 
     const panel = page.locator(".session-diff");
     await expect.poll(() => panel.count()).toBe(1);
+    const panelSurface = page.locator(".side-panel").filter({ has: panel });
+    await expect
+      .poll(() => panelSurface.evaluate((element) => element.getBoundingClientRect().width))
+      .toBe(480);
     await expect
       .poll(() => panel.locator(".session-diff__branch-label").textContent())
       .toBe("main → feature/panel");

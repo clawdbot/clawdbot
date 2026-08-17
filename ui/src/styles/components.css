@@ -4,6 +4,7 @@
 
 .connect-splash {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100vh;
@@ -13,6 +14,12 @@
   /* Stay invisible past fast handshakes so a quick connect paints nothing. */
   opacity: 0;
   animation: fade-in 0.3s var(--ease-out) 0.2s forwards;
+}
+
+.connect-splash__status {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 openclaw-session-owner-chip {
@@ -5673,12 +5680,14 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-.session-row-fork-indicator {
+.sidebar-session-fork-indicator {
   display: inline-flex;
+  margin-right: 4px;
   color: var(--muted);
+  vertical-align: -2px;
 }
 
-.session-row-fork-indicator svg {
+.sidebar-session-fork-indicator svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -5687,9 +5696,7 @@ td.data-table-key-col {
 }
 
 /* Attribute badges (attached automation, approval, cloud placement):
-   muted metadata that sits after the title inside the row link, outside the
-   trail/action overlap cell, so touch devices (which hide the trail) and
-   hovered rows keep them. */
+   muted metadata grouped in the row's second-line endcap. */
 .session-row-badges {
   display: inline-flex;
   align-items: center;
@@ -5703,8 +5710,9 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.session-row-badge--queued {
+.session-row-badge--attention {
   gap: 2px;
+  color: var(--warn);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }

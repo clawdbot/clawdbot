@@ -3903,6 +3903,11 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       rmSync(path.join(root, "scripts"), { recursive: true });
       expect(fingerprint()).toBe(baseline);
 
+      writeFileSync(path.join(root, "node-version.mjs"), "export {};\n");
+      expect(fingerprint()).not.toBe(baseline);
+      rmSync(path.join(root, "node-version.mjs"));
+      expect(fingerprint()).toBe(baseline);
+
       // Formatting, key order, and scripts that pnpm install never executes
       // should keep the existing dependency snapshot warm.
       writeManifest({

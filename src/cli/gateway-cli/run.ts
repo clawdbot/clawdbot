@@ -1113,13 +1113,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
-  const tailscaleOverride =
-    tailscaleMode || opts.tailscaleResetOnExit
-      ? {
-          ...(tailscaleMode ? { mode: tailscaleMode } : {}),
-          ...(opts.tailscaleResetOnExit ? { resetOnExit: true } : {}),
-        }
-      : undefined;
+  const tailscaleOverride = tailscaleMode ? { mode: tailscaleMode } : undefined;
 
   gatewayLog.info("starting...");
   startupTrace.mark("cli.gateway-loop");

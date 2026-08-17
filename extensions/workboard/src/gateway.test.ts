@@ -43,7 +43,8 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
+    const store = new WorkboardStore(createMemoryStore());
+    registerWorkboardGatewayMethods({ api, store });
 
     expect([...methods.keys()]).toEqual([
       "workboard.cards.list",
@@ -117,6 +118,22 @@ describe("workboard gateway methods", () => {
       scope: "operator.write",
     });
 
+    const boardRespond = vi.fn();
+    await methods.get("workboard.boards.upsert")?.handler({
+      params: { id: "planning", automationJobId: "job-categorize-planning" },
+      respond: boardRespond,
+    } as never);
+    expect(boardRespond.mock.calls[0]?.[0]).toBe(true);
+    await expect(store.listBoards()).resolves.toMatchObject({
+      boards: [
+        expect.objectContaining({ id: "default" }),
+        expect.objectContaining({
+          id: "planning",
+          automationJobId: "job-categorize-planning",
+        }),
+      ],
+    });
+
     const createHandler = methods.get("workboard.cards.create")?.handler;
     const listHandler = methods.get("workboard.cards.list")?.handler;
     const createRespond = vi.fn();
@@ -133,7 +150,9 @@ describe("workboard gateway methods", () => {
     await listHandler?.({ params: {}, respond: listRespond } as never);
     expect(listRespond.mock.calls[0]?.[1]).toMatchObject({
       cards: [expect.objectContaining({ title: "Investigate queue drift" })],
-      boards: [expect.objectContaining({ id: "default", total: 1, active: 1 })],
+      boards: expect.arrayContaining([
+        expect.objectContaining({ id: "default", total: 1, active: 1 }),
+      ]),
     });
 
     const eventsRespond = vi.fn();

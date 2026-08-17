@@ -710,7 +710,6 @@ function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
-    onNewSession: () => undefined,
     onClearHistory: () => undefined,
     onOpenSessionCheckpoints: () => undefined,
     agentsList: null,

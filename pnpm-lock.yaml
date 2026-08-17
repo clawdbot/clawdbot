@@ -538,6 +538,9 @@ importers:
       ws:
         specifier: 8.21.1
         version: 8.21.1
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1230,12 +1233,6 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
-
-  extensions/media-understanding-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
 
   extensions/memory-core:
     dependencies:
@@ -2193,12 +2190,20 @@ importers:
       ws:
         specifier: 8.21.1
         version: 8.21.1
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/gateway-protocol:
     dependencies:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
+    devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/llm-core:
     dependencies:

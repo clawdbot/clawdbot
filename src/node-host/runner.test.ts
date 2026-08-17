@@ -954,6 +954,7 @@ describe("runNodeHost", () => {
   it.each([
     ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
     ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+    ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",

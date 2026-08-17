@@ -4,6 +4,12 @@ import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
 import { cleanupWorkboardRunWorktree } from "./src/dispatcher-workspace.js";
+import {
+  createWorkboardLifecycleService,
+  readWorkboardLifecycleSessions,
+  syncWorkboardAgentEnded,
+  syncWorkboardSubagentEnded,
+} from "./src/lifecycle-sync.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
@@ -19,6 +25,12 @@ export default definePluginEntry({
     const store = WorkboardStore.openSqlite();
     api.session.controls.registerControlUiDescriptor({
       surface: "widget",
+      id: "board",
+      label: "Workboard board",
+      requiredScopes: ["operator.read"],
+    });
+    api.session.controls.registerControlUiDescriptor({
+      surface: "widget",
       id: "card",
       label: "Workboard card",
       requiredScopes: ["operator.write"],
@@ -32,14 +44,26 @@ export default definePluginEntry({
     registerWorkboardGatewayMethods({ api, store });
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));
+    api.registerService(
+      createWorkboardLifecycleService({
+        store,
+        readSessions: async () => await readWorkboardLifecycleSessions(api.runtime.gateway),
+      }),
+    );
     api.on("subagent_ended", async (event) => {
-      if (event.runId) {
-        await cleanupWorkboardRunWorktree({
-          store,
-          worktrees: api.runtime.worktrees,
-          runId: event.runId,
-        });
-      }
+      await Promise.all([
+        syncWorkboardSubagentEnded({ store, event }),
+        event.runId
+          ? cleanupWorkboardRunWorktree({
+              store,
+              worktrees: api.runtime.worktrees,
+              runId: event.runId,
+            })
+          : undefined,
+      ]);
+    });
+    api.on("agent_end", async (event, context) => {
+      await syncWorkboardAgentEnded({ store, event, context });
     });
     api.registerCli(
       async ({ program }) => {

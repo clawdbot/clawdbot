@@ -229,7 +229,7 @@ Hybrid is the normal degraded-capacity mode. If Blacksmith is down: rerun the fa
 gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
 ```
 
-Hosted paths use the same setup exercised by manual dispatches and fork pull requests. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Node and plateau lanes deliberately keep this backend-neutral Actions-cache profile when they run on Blacksmith because preflight remains hosted. The exact workspace dependency cache intentionally stays off when preflight is hosted: GitHub can roll the runner image and Node patch between preflight and fanout in one workflow, while the safe exact key then misses; the ordinary store archive is only slightly smaller and pnpm's measured relink is already single-digit seconds. Vitest transform and Node compile caches still use the upstream Actions cache API, which Blacksmith proxies; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the planner still elects one semantic transform-cache writer. Core oxlint splits into five deterministic hosted stripes, with extension/scripts lint and optional UI and format checks in the existing `check-lint` row. The 14 serial core test-type graphs likewise split into five `check-test-types-core-*` stripes (two overlapped graphs per stripe), leaving the extensions/root/scripts type tail in the `check-test-types` row; targets without stripe support keep the whole lane in that row.
+Hosted paths use the same setup exercised by manual dispatches and fork pull requests. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Node and plateau lanes deliberately keep this backend-neutral Actions-cache profile when they run on Blacksmith because preflight remains hosted. The exact workspace dependency cache intentionally stays off when preflight is hosted: GitHub can roll the runner image and Node patch between preflight and fanout in one workflow, while the safe exact key then misses; the ordinary store archive is only slightly smaller and pnpm's measured relink is already single-digit seconds. The Node toolchain itself is also cached through that API: Blacksmith's image tracks an older runner-images snapshot whose toolcache Node patches (measured 2026-08-16: 20.20.0, 22.22.0, 24.13.0) sit just under this repo's `engines` floor, so every job otherwise re-downloads Node from nodejs.org. Restores are prefix-keyed and saves carry the resolved patch, because an exact-key hit suppresses the post-job save and would pin the first payload forever once the floor advanced past it. A restored payload below the floor is rejected, pruned, and replaced. Vitest transform and Node compile caches still use the upstream Actions cache API, which Blacksmith proxies; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the planner still elects one semantic transform-cache writer. Core oxlint splits into five deterministic hosted stripes, with extension/scripts lint and optional UI and format checks in the existing `check-lint` row. The 14 serial core test-type graphs likewise split into five `check-test-types-core-*` stripes (two overlapped graphs per stripe), leaving the extensions/root/scripts type tail in the `check-test-types` row; targets without stripe support keep the whole lane in that row.
 
 The compact Node planner keeps separate Blacksmith and standard 4-core hosted timing ownership. The `github` profile targets 90/95 seconds of serial group work for the hosted large/small source runner classes and applies a 1.6x median scaling fallback only to unmeasured groups. Hybrid keeps the expanded topology and hosted-derived splitting for groups above the unchanged 150-second ceiling, so hosted retries do not inherit an indivisible hosted wall pole. Its attempt-1 packing scales the Blacksmith hints by 0.87: the unscaled all-Blacksmith push plan totals 4,723 predicted seconds, while complete Blacksmith runs `31945998653` and `31949756966` measured 3,742.046 and 3,756.674 seconds of shard work (79.230% and 79.540%). The 0.87 factor is 9.379% above the higher observed ratio. With the direct outlier hints below, 0.85 yields 45 nondist jobs and 0.86 is the first two-decimal factor yielding 46; 0.87 stays one point above that rounding cliff while preserving the 46-job plan. Direct sampled hints cover the doctor and cron-service outliers, while a 140-second floor and singleton bin protect the observed `agentic-gateway-core-3` tail. During rebalance, native hybrid groups use scaled Blacksmith stripe hints; only synthesized hosted stripes retain their divided parent weight. Failed and timeout-and-retry samples are excluded from refreshes. Whole-config groups with registered file listers (agent support, gateway methods, runtime config, isolated unit fast) split into file-weighted hosted stripes. The subprocess-heavy tooling family uses seven balanced stripes projecting to roughly 115 hosted seconds per stripe.
 
@@ -752,13 +752,14 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mts` and
 ## Testbox validation
 
 Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Agent
-sessions keep one/few focused tests and cheap static checks local only for
-trusted source when the existing dependency install is ready. They use Crabbox for larger suites and
-computationally intensive work, including builds, typechecks, lint fan-out,
-Docker, package lanes, E2E, live proof, and CI parity. Trusted maintainer heavy
-proof defaults to `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
-workflow hydrates provider and agent credentials, so untrusted contributor or
-fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
+sessions run trusted development tests, changed gates, typecheck/lint, and
+builds locally by default. They use Crabbox when the environment is part of the
+proof: clean-machine, install/package, Docker, E2E, live, desktop, cross-OS, or
+CI-parity work, or when the operator explicitly requests remote proof. Crabbox
+is not generic compute offload. `.crabbox.yaml` defaults remote proof to
+`blacksmith-testbox`. Its configured workflow hydrates provider and agent
+credentials, so untrusted contributor or fork code must use secretless fork CI
+or sanitized direct AWS Crabbox instead.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
@@ -784,8 +785,9 @@ Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
 quota issues, or explicit owned-capacity testing.
 
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
-first heavy command is ready, reuse the returned `tbx_...` id for later heavy
-commands, sync the current checkout on every run, and stop it before handoff.
+first environment-sensitive command is ready, reuse the returned `tbx_...` id
+for later remote commands, sync the current checkout on every run, and stop it
+before handoff.
 
 Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
 one-shot Testboxes. The built-in sync sanity check fails fast when
@@ -801,7 +803,7 @@ millisecond value for unusually large local diffs.
 Before a first run, check the wrapper from the repo root:
 
 ```bash
-pnpm crabbox:run -- --help | sed -n '1,120p'
+node scripts/crabbox-wrapper.mjs run --help | sed -n '1,120p'
 ```
 
 The repo wrapper refuses a stale Crabbox binary that does not advertise the selected provider, and Blacksmith-backed runs require Crabbox 0.22.0 or newer so the wrapper gets the current Testbox sync, queue, and cleanup behavior. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
@@ -817,7 +819,7 @@ version="$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//')" \
   && go build -C ../crabbox -trimpath -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}" -o bin/crabbox ./cmd/crabbox
 ```
 
-The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Changed gate:
+The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \
@@ -832,8 +834,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm check:changed"
 ```
 
-Focused test rerun on Testbox when local dependencies are unavailable or the
-target fans out:
+Focused test rerun when clean-machine behavior is part of the proof:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \
@@ -844,7 +845,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm test <path-or-filter>"
 ```
 
-Full suite:
+Full suite on an explicitly requested clean machine:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \

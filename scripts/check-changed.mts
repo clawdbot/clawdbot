@@ -30,11 +30,7 @@ import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-fa
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
-import {
-  acquireLocalHeavyCheckLockSync,
-  resolveLocalHeavyCheckEnv,
-  withLocalHeavyCheckLockHeld,
-} from "./lib/local-heavy-check-runtime.mts";
+import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
@@ -60,12 +56,8 @@ type TargetedLintOptions = {
 };
 
 type ChangedCheckDelegateOptions = {
-  cwd?: string;
   result?: ChangedLaneResult;
   diffRefsReady?: boolean;
-  interactive?: boolean;
-  platform?: NodeJS.Platform;
-  virtualized?: boolean;
 };
 
 type ChangedCheckRunOptions = ChangedCheckPlanOptions & {
@@ -156,8 +148,8 @@ if (!isDirectRun()) {
   await ensureChangedCheckRuntimeDependencies(["package.json"]);
 }
 
-export function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
-  return withLocalHeavyCheckLockHeld(resolveLocalHeavyCheckEnv(baseEnv));
+function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
+  return resolveLocalCheckEnv(baseEnv);
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
@@ -197,61 +189,6 @@ function shouldSkipAppLintForMissingSwiftlint(options: ChangedCheckPlanOptions =
   return platform !== "darwin" && !swiftlintAvailable;
 }
 
-export function changedCheckLocalDependenciesReady(cwd = process.cwd()) {
-  const nodeModules = path.join(cwd, "node_modules");
-  return (
-    existsSync(path.join(nodeModules, ".modules.yaml")) &&
-    existsSync(path.join(nodeModules, ".bin", "oxfmt")) &&
-    existsSync(path.join(nodeModules, "typescript", "package.json"))
-  );
-}
-
-export function changedCheckRequiresRemote(result?: ChangedLaneResult) {
-  if (!result || result.paths.length === 0) {
-    return false;
-  }
-  if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
-    return true;
-  }
-  if (result.docsOnly) {
-    return false;
-  }
-  return Object.entries(result.lanes).some(
-    ([lane, enabled]) => enabled && lane !== "docs" && lane !== "releaseMetadata",
-  );
-}
-
-function isDedicatedLinuxWorker(
-  env: NodeJS.ProcessEnv,
-  options: Pick<ChangedCheckDelegateOptions, "interactive" | "platform" | "virtualized">,
-) {
-  if ((options.platform ?? process.platform) !== "linux") {
-    return false;
-  }
-  const role = env.AGENT_HOST_ROLE?.trim().toLowerCase();
-  if (role === "worker") {
-    return true;
-  }
-  if (role === "workstation") {
-    return false;
-  }
-  if (env.DISPLAY || env.WAYLAND_DISPLAY || env.SSH_TTY) {
-    return false;
-  }
-  if (options.interactive ?? process.stdin.isTTY) {
-    return false;
-  }
-  if (options.virtualized !== undefined) {
-    return options.virtualized;
-  }
-  try {
-    execFileSync("systemd-detect-virt", ["--quiet"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function shouldDelegateChangedCheckToCrabbox(
   argv: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
@@ -276,18 +213,12 @@ export function shouldDelegateChangedCheckToCrabbox(
   if (isOpenEndedTruthyValue(env.OPENCLAW_TESTBOX)) {
     return true;
   }
-  if (isDedicatedLinuxWorker(env, options)) {
-    return !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd());
-  }
   // Release metadata plans diff the supplied commits after classification. A missing
   // ref needs the hydrated remote checkout even when the explicit path itself is cheap.
   if (result.lanes.releaseMetadata && options.diffRefsReady === false) {
     return true;
   }
-  return (
-    changedCheckRequiresRemote(result) ||
-    !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd())
-  );
+  return false;
 }
 
 function changedCheckDiffRefsReady({
@@ -767,6 +698,10 @@ export function createChangedCheckPlan(
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
+  if (runAll || lanes.scripts || result.paths.includes("scripts/check-script-erasability.mjs")) {
+    add("script TypeScript erasability", ["check:script-erasability"]);
+  }
+
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
       "release-metadata:check",
@@ -1047,41 +982,30 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
     return 0;
   }
   await ensureChangedCheckRuntimeDependencies(result.paths);
-  const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
+  const baseEnv = resolveLocalCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
   const plan = createChangedCheckPlan(result, {
     ...options,
     env: childEnv,
   });
-  const releaseLock = options.dryRun
-    ? () => {}
-    : acquireLocalHeavyCheckLockSync({
-        cwd: process.cwd(),
-        env: baseEnv,
-        toolName: "check:changed",
-      });
 
-  try {
-    printPlan(result, plan, options);
+  printPlan(result, plan, options);
 
-    if (options.dryRun) {
-      return 0;
-    }
-
-    const timings: ChangedCheckTiming[] = [];
-    for (const command of plan.commands) {
-      const status = await runPlanCommand(command, timings);
-      if (status !== 0) {
-        printSummary(timings, options);
-        return status;
-      }
-    }
-
-    printSummary(timings, options);
+  if (options.dryRun) {
     return 0;
-  } finally {
-    releaseLock();
   }
+
+  const timings: ChangedCheckTiming[] = [];
+  for (const command of plan.commands) {
+    const status = await runPlanCommand(command, timings);
+    if (status !== 0) {
+      printSummary(timings, options);
+      return status;
+    }
+  }
+
+  printSummary(timings, options);
+  return 0;
 }
 
 function sameArgs(left: string[], right: string[]) {
@@ -1132,7 +1056,7 @@ export function createPnpmManagedCommand<T extends ChangedCheckCommand>(
   command: T,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
+  const commandEnv = command.env ?? resolveLocalCheckEnv(env);
   if (isOpenEndedTruthyValue(commandEnv.CI) || isOpenEndedTruthyValue(commandEnv.GITHUB_ACTIONS)) {
     const shimmedEnv = prependCorepackPnpmShim(commandEnv);
     return {
@@ -1195,7 +1119,7 @@ async function runCommand(
     status = await runManagedCommand({
       bin: command.bin,
       args: command.args,
-      env: command.env ?? resolveLocalHeavyCheckEnv(),
+      env: command.env ?? resolveLocalCheckEnv(),
     });
   } catch (error) {
     console.error(error);
@@ -1323,7 +1247,6 @@ async function main() {
       });
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
-          cwd: process.cwd(),
           result,
           diffRefsReady: result.lanes.releaseMetadata
             ? args.staged ||
