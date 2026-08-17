@@ -105,7 +105,7 @@ type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
-  timeout?: number;
+  timeoutSeconds?: number;
   pty?: boolean;
   elevated?: boolean;
   host?: string;
@@ -115,6 +115,45 @@ type ExecToolArgs = Record<string, unknown> & {
 };
 
 const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
+
+/**
+ * Normalize the legacy `timeout` alias to the canonical `timeoutSeconds` field.
+ *
+ * Schema evolution renamed `timeout` -> `timeoutSeconds`, but downstream callers
+ * (MCP tool registrations, code-mode -> openclaw:core:terminal wrappers, older
+ * cron templates) still emit `timeout`, sometimes as a string ("120") when
+ * JSON-merged through a config file. Accept both, coerce strings to numbers,
+ * drop the deprecated alias. If both fields are present, `timeoutSeconds` wins
+ * (the canonical field) and `timeout` is dropped silently.
+ */
+export function normalizeExecTimeoutAlias<T extends Record<string, unknown>>(
+  params: T,
+): T & { timeoutSeconds?: number } {
+  if (params === null || typeof params !== "object" || Array.isArray(params)) {
+    return params as T & { timeoutSeconds?: number };
+  }
+  const obj = params as Record<string, unknown>;
+  if (!Object.hasOwn(obj, "timeout")) {
+    return params as T & { timeoutSeconds?: number };
+  }
+  const raw = obj.timeout;
+  if (raw === undefined || raw === null) {
+    const { timeout: _drop, ...rest } = obj;
+    return rest as T & { timeoutSeconds?: number };
+  }
+  let coerced: number | undefined;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    coerced = raw;
+  } else if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) coerced = parsed;
+  }
+  const { timeout: _drop, ...rest } = obj;
+  if (coerced !== undefined && !Object.hasOwn(obj, "timeoutSeconds")) {
+    return { ...rest, timeoutSeconds: coerced } as T & { timeoutSeconds?: number };
+  }
+  return rest as T & { timeoutSeconds?: number };
+}
 
 function buildSubprocessChannelContext(
   channelContext: PluginHookChannelContext | undefined,
@@ -1503,19 +1542,26 @@ export function createExecTool(
     parameters: execSchema,
     prepareBeforeToolCallParams: async (args, context) => {
       const params = await prepareParamsWithResolvedExecWorkdir(args);
-      const workdirState = getResolvedExecWorkdirPreparedState(params);
+      // Normalize legacy `timeout` (alias) to `timeoutSeconds`. The runtime schema
+      // renamed `timeout` -> `timeoutSeconds` but downstream callers (MCP tool
+      // registrations, code-mode -> terminal wrappers, older cron templates)
+      // still emit `timeout`, sometimes as a string ("120") when JSON-merged
+      // through a config file. Accept both, coerce strings to numbers, drop the
+      // deprecated alias before downstream execution.
+      const normalized = normalizeExecTimeoutAlias(params);
+      const workdirState = getResolvedExecWorkdirPreparedState(normalized);
       if (workdirState?.resolution.kind === "unavailable") {
-        return params;
+        return normalized;
       }
-      if (!isExecToolArgsObject(params)) {
-        return params;
+      if (!isExecToolArgsObject(normalized)) {
+        return normalized;
       }
-      if (shouldDeferResolveExecEnvUntilWorkdirValidated(params)) {
-        return markDeferredResolveExecEnvPrepared(params, {
+      if (shouldDeferResolveExecEnvUntilWorkdirValidated(normalized)) {
+        return markDeferredResolveExecEnvPrepared(normalized, {
           hookContext: context.hookContext as HookContext | undefined,
         });
       }
-      return prepareParamsWithResolvedExecEnv(params, {
+      return prepareParamsWithResolvedExecEnv(normalized, {
         hookContext: context.hookContext as HookContext | undefined,
       });
     },
@@ -1882,7 +1928,7 @@ export function createExecTool(
             strictInlineEval: defaults?.strictInlineEval,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
-            timeoutSec: params.timeout,
+            timeoutSec: params.timeoutSeconds,
             defaultTimeoutSec,
             approvalRunningNoticeMs,
             warnings,
@@ -1905,7 +1951,7 @@ export function createExecTool(
             pathPrepend: defaultPathPrepend,
             requestedEnv,
             pty: params.pty === true && !sandbox,
-            timeoutSec: params.timeout,
+            timeoutSec: params.timeoutSeconds,
             defaultTimeoutSec,
             security,
             ask,
@@ -1955,7 +2001,10 @@ export function createExecTool(
           warnings.push(foregroundFallbackWarning);
         }
 
-        const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+        const explicitTimeoutSec =
+          typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
+            ? params.timeoutSeconds
+            : null;
         effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 

@@ -25,10 +25,24 @@ export const execSchema = Type.Object({
     }),
   ),
   background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
-  timeout: Type.Optional(
+  timeoutSeconds: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds (optional, kills process on expiry)",
+      description:
+        "Timeout in seconds (optional, kills process on expiry). Preferred over the legacy `timeout` alias.",
     }),
+  ),
+  // Deprecated alias for `timeoutSeconds`. Kept for backward compatibility with
+  // legacy MCP tool registrations, code-mode runtime wrappers, and older cron
+  // templates that still emit `timeout`. Normalized to `timeoutSeconds` in
+  // `prepareBeforeToolCallParams`; downstream runtime reads only `timeoutSeconds`.
+  timeout: Type.Optional(
+    Type.Union(
+      [Type.Number(), Type.String()],
+      {
+        description:
+          "DEPRECATED: use `timeoutSeconds` instead. Kept for backward compatibility; numbers and numeric strings are accepted and normalized.",
+      },
+    ),
   ),
   pty: Type.Optional(
     Type.Boolean({
