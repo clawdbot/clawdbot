@@ -1234,12 +1234,6 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/media-understanding-core:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/memory-core:
     dependencies:
       chokidar:

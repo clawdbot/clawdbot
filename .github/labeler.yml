@@ -387,10 +387,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-wiki/**"
-"extensions: media-understanding-core":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/media-understanding-core/**"
 "extensions: oc-path":
   - changed-files:
       - any-glob-to-any-file:
