@@ -14,6 +14,7 @@ import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-au
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -665,7 +666,12 @@ export async function runConfigureWizard(
         }
       }
       const target = resolveSetupTarget();
-      const targetEntry = nextConfig.agents?.entries?.[target.agentId];
+      const authoredEntryKey = Object.keys(nextConfig.agents?.entries ?? {}).find(
+        (key) => normalizeAgentId(key) === target.agentId,
+      );
+      const targetEntry = authoredEntryKey
+        ? nextConfig.agents?.entries?.[authoredEntryKey]
+        : undefined;
       nextConfig =
         targetEntry !== undefined
           ? {
@@ -674,7 +680,7 @@ export async function runConfigureWizard(
                 ...nextConfig.agents,
                 entries: {
                   ...nextConfig.agents?.entries,
-                  [target.agentId]: { ...targetEntry, workspace: workspaceDir },
+                  [authoredEntryKey ?? target.agentId]: { ...targetEntry, workspace: workspaceDir },
                 },
               },
             }

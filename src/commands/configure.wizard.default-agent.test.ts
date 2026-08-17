@@ -168,7 +168,7 @@ describe("runConfigureWizard default-agent ownership", () => {
           systemAgent: { agentId: "main" },
         },
         entries: {
-          main: {
+          MAIN: {
             agentDir: "/tmp/main-agent",
           },
           ops: {
@@ -198,7 +198,7 @@ describe("runConfigureWizard default-agent ownership", () => {
         nextConfig: expect.objectContaining({
           agents: expect.objectContaining({
             entries: expect.objectContaining({
-              main: expect.objectContaining({ workspace: "/tmp/new-main-workspace" }),
+              MAIN: expect.objectContaining({ workspace: "/tmp/new-main-workspace" }),
             }),
           }),
         }),
