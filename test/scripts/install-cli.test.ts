@@ -15,6 +15,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
+import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   writeNpmBeforePolicyFixture,
@@ -248,27 +250,25 @@ describe("install-cli.sh", () => {
     expect(script).toContain('cleanup_legacy_submodules "$repo_dir"');
   });
 
-  it("accepts only Node versions with the WAL-reset corruption fix", () => {
+  it("matches the canonical release-label contract for installed Node runtimes", () => {
     expect(script).toContain("SELECT sqlite_version() AS version");
-    const result = runInstallCliShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      set +e
-      for version in 22.22.2 22.22.3 23.11.0 24.14.1 24.15.0 25.8.1 25.9.0 26.0.0; do
-        node_version_is_supported "$version"
-        printf '%s=%s\n' "$version" "$?"
-      done
-    `);
+    const result = runInstallCliShell(
+      [
+        "set -euo pipefail",
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "set +e",
+        ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
+          `node_release_version_is_supported ${JSON.stringify(version)}`,
+          `printf '${index}=%s\\n' "$?"`,
+        ]),
+      ].join("\n"),
+    );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("22.22.2=1");
-    expect(result.stdout).toContain("22.22.3=0");
-    expect(result.stdout).toContain("23.11.0=1");
-    expect(result.stdout).toContain("24.14.1=1");
-    expect(result.stdout).toContain("24.15.0=0");
-    expect(result.stdout).toContain("25.8.1=1");
-    expect(result.stdout).toContain("25.9.0=0");
-    expect(result.stdout).toContain("26.0.0=0");
+    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
+      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
+      expect(result.stdout, version).toContain(`${index}=${expectedStatus}`);
+    }
   });
 
   it("reuses the minimum supported runtime unless a newer version was explicitly requested", () => {
