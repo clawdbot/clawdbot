@@ -1508,11 +1508,12 @@ describe("update-cli", () => {
     tempDirsToCleanup.clear();
   });
 
-  it("reads the initial update config without plugin schema validation", async () => {
+  it("reads the initial update config without schema validation or observation", async () => {
     await updateCommand({ yes: true, restart: false });
 
     expect(vi.mocked(readConfigFileSnapshot).mock.calls[0]?.[0]).toEqual({
       skipPluginValidation: true,
+      observe: false,
     });
   });
 
@@ -7879,6 +7880,7 @@ describe("update-cli", () => {
 
       await updateWizardCommand({});
 
+      expect(readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
     });

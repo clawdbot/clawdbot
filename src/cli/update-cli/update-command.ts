@@ -169,10 +169,9 @@ async function updateCommandInternal(
     return;
   }
   if (opts.dryRun !== true) {
-    // Startup migrations belong to the freshly installed Doctor, but mutable updates
-    // must retain their read-only ownership fence before inspecting package state.
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
+      recoverOrphanedSidecars: false,
     });
   }
   const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
@@ -229,7 +228,7 @@ async function updateCommandInternal(
 
   let configSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: true,
-    ...(opts.dryRun === true ? { observe: false } : {}),
+    observe: false,
   });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
@@ -604,6 +603,11 @@ async function updateCommandInternal(
     }
   }
 
+  // Startup migrations belong to the freshly installed Doctor. Admit shared-state
+  // mutation only after every pre-install refusal has passed.
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
   await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
 
   const showProgress = !opts.json && process.stdout.isTTY;

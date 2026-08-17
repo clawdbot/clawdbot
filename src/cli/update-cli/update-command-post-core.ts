@@ -55,6 +55,8 @@ import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/ins
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { printResult } from "./progress.js";
 import {
@@ -161,6 +163,9 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   }
 
   assertConfigWriteAllowedInCurrentMode();
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
 
   const root = await resolveUpdateRoot();
   let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });

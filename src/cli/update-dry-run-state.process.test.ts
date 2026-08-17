@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -47,7 +48,7 @@ function snapshotDatabaseArtifacts(snapshot: string[]): string[] {
   return snapshot.filter((entry) => /^f .*\.sqlite(?:-(?:wal|shm))? /.test(entry));
 }
 
-function runUpdateProcess(root: string, args: string[]) {
+function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   const configPath = path.join(root, "config", "openclaw.json");
   const stateDir = path.join(root, "state");
   const entryPath = fileURLToPath(new URL("../entry.ts", import.meta.url));
@@ -79,6 +80,7 @@ function runUpdateProcess(root: string, args: string[]) {
       all_proxy: undefined,
       http_proxy: undefined,
       https_proxy: undefined,
+      ...env,
     },
     maxBuffer: 4 * 1024 * 1024,
     timeout: 60_000,
@@ -178,6 +180,31 @@ describe("update process state", () => {
     expect(result.error).toBeUndefined();
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toMatch(/--timeout must be a positive integer/iu);
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
+  it("keeps an orphaned SQLite journal immutable when a managed handoff is refused", async () => {
+    const root = tempDirs.make("openclaw-update-refused-handoff-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "state");
+    const metaPath = path.join(root, "handoff.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
+    await fs.writeFile(configPath, '{ "gateway": { "mode": "local" } }\n');
+    await fs.writeFile(path.join(stateDir, "state", "openclaw.sqlite-journal"), "orphan journal\n");
+    await fs.writeFile(
+      metaPath,
+      `${JSON.stringify({ version: 1, meta: { root: path.join(root, "wrong-install") } })}\n`,
+    );
+    const before = await snapshotTree(root);
+
+    const result = runUpdateProcess(root, ["update", "--no-restart", "--json"], {
+      [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/Managed update handoff root mismatch/iu);
     expect(await snapshotTree(root)).toEqual(before);
   });
 

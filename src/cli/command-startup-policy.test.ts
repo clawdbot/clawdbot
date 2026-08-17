@@ -107,6 +107,10 @@ describe("command-startup-policy", () => {
       { argv: ["node", "openclaw", "update"], commandPath: ["update"] },
       { argv: ["node", "openclaw", "--update"], commandPath: ["update"] },
       {
+        argv: ["node", "openclaw", "--profile", "work", "update"],
+        commandPath: ["update"],
+      },
+      {
         argv: ["node", "openclaw", "update", "--dry-run"],
         commandPath: ["update"],
       },
