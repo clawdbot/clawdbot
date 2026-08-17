@@ -9,7 +9,6 @@ import {
   type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
   type WorkerDispatchPlacementStore,
-  type WorkerDrainingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
@@ -58,6 +57,7 @@ type WorkerLocalDispatchBarrier = (params: {
   startDispatch: () => WorkerDispatchPlacement;
 }) => Promise<WorkerDispatchPlacement>;
 
+type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
 type WorkerPlacementReclaimBarrier = (
   params: WorkerPlacementReclaimRequest & {
@@ -128,12 +128,13 @@ function isExactAttachedEnvironment(
   environment: ReturnType<WorkerDispatchEnvironmentService["get"]>,
   placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
 ): boolean {
-  return (
-    environment?.environmentId === placement.environmentId &&
+  return Boolean(
+    environment &&
+    environment.environmentId === placement.environmentId &&
     environment.state === "attached" &&
     environment.ownerEpoch === placement.activeOwnerEpoch &&
     environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === placement.sessionId
+    environment.attachedSessionIds[0] === placement.sessionId,
   );
 }
 

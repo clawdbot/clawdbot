@@ -3,7 +3,6 @@ import type {
   WorkerDispatchEnvironmentService,
   WorkerDispatchPlacement,
   WorkerDispatchPlacementStore,
-  WorkerDrainingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import type {
   WorkerPlacementMoveIntent,
@@ -17,6 +16,7 @@ import type {
 } from "./service-contract.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 
+type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerMovePlacement = Extract<WorkerDispatchPlacement, { state: "local" | "active" }>;
 type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
 

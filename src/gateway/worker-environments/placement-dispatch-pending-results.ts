@@ -3,6 +3,7 @@ import {
   type PlacementFailureActions,
   type WorkerActivationBarrier,
   type WorkerDispatchEnvironmentService,
+  type WorkerDispatchPlacement,
   type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
 import { placementTurnOwner } from "./placement-record.js";
@@ -76,9 +77,14 @@ function pendingWorkerLossError(
   return new Error(`Pending cloud workspace result lost its worker: ${sessionId}`);
 }
 
+type WorkerOwnedPendingPlacement = Extract<
+  WorkerDispatchPlacement,
+  { state: "active" | "draining" }
+>;
+
 function completeRecoveredWorkspaceTeardown(params: {
   placements: WorkerDispatchPlacementStore;
-  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement;
+  placement: WorkerOwnedPendingPlacement;
   turnClaim: WorkerSessionTurnClaim;
 }) {
   const move = params.placements.getPlacementMove(params.placement.sessionId);
