@@ -764,7 +764,7 @@ describe("pw-session ensurePageState", () => {
     expect(isDownloadStartingNavigationError(new Error("Navigation failed"))).toBe(false);
   });
 
-  it("bounds console and page-error state while tracking network requests", () => {
+  it("bounds page-controlled text while tracking network requests", () => {
     const { page, handlers } = fakePage();
     const state = ensurePageState(page);
 
@@ -780,9 +780,9 @@ describe("pw-session ensurePageState", () => {
 
     const req = {
       method: () => "GET",
-      url: () => "https://example.com/api",
+      url: () => oversized,
       resourceType: () => "xhr",
-      failure: () => ({ errorText: "net::ERR_FAILED" }),
+      failure: () => ({ errorText: oversized }),
     } as unknown as import("playwright-core").Request;
 
     const resp = {
@@ -799,6 +799,7 @@ describe("pw-session ensurePageState", () => {
 
     const consoleEntry = state.console.at(-1);
     const errorEntry = state.errors.at(-1);
+    const request = state.requests.at(-1);
     for (const value of [
       consoleEntry?.type,
       consoleEntry?.text,
@@ -806,18 +807,17 @@ describe("pw-session ensurePageState", () => {
       errorEntry?.message,
       errorEntry?.name,
       errorEntry?.stack,
+      request?.url,
+      request?.failureText,
     ]) {
       expect(value?.length).toBeLessThanOrEqual(2048);
       expect(value).not.toContain("tail");
       expect(value?.charCodeAt((value?.length ?? 0) - 1)).not.toBe(0xd83d);
     }
-    const request = state.requests.at(-1);
     expect(request?.method).toBe("GET");
-    expect(request?.url).toBe("https://example.com/api");
     expect(request?.resourceType).toBe("xhr");
     expect(request?.status).toBe(500);
     expect(request?.ok).toBe(false);
-    expect(request?.failureText).toBe("net::ERR_FAILED");
   });
 
   it("drops state on page close", () => {

@@ -269,7 +269,7 @@ export function ensurePageState(page: Page): PageState {
         id,
         timestamp: new Date().toISOString(),
         method: req.method(),
-        url: req.url(),
+        url: truncateObservedPageText(req.url()),
         resourceType: req.resourceType(),
       });
       if (state.requests.length > MAX_NETWORK_REQUESTS) {
@@ -298,7 +298,8 @@ export function ensurePageState(page: Page): PageState {
       if (!rec) {
         return;
       }
-      rec.failureText = req.failure()?.errorText;
+      const failureText = req.failure()?.errorText;
+      rec.failureText = failureText ? truncateObservedPageText(failureText) : undefined;
       rec.ok = false;
     });
     page.on("dialog", (dialog: Dialog) => {
