@@ -133,7 +133,11 @@ class AgentsPage
     agentId: string;
   } | null = null;
   private normalizedLocation = "";
-  private readonly githubIdentity = new GitHubIdentityController(this);
+  private readonly githubIdentity = new GitHubIdentityController({
+    requestUpdate: () => this.requestUpdate(),
+    runExternalMutation: (task, options) =>
+      this.context.runtimeConfig.runExternalMutation(task, options),
+  });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => this.resetForClientChange(),

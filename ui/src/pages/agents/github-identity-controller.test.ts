@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  createRuntimeConfigCapability,
+  type RuntimeConfigCapability,
+} from "../../lib/config/runtime-config-capability.ts";
 import { GitHubIdentityController } from "./github-identity-controller.js";
 
 const availableStatus = {
@@ -13,8 +17,7 @@ const availableStatus = {
 
 afterEach(() => vi.unstubAllGlobals());
 
-function createController() {
-  const host = { requestUpdate: vi.fn() };
+function createController(behavior: { beforeDispatch?: () => void; refreshError?: string } = {}) {
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const client = {
     request: vi.fn(async (method: string, params: Record<string, unknown>) => {
@@ -28,7 +31,44 @@ function createController() {
       throw new Error(`unexpected method ${method}`);
     }),
   } as unknown as GatewayBrowserClient;
+  const runExternalMutation: RuntimeConfigCapability["runExternalMutation"] = async (
+    task,
+    mutationOptions = {},
+  ) => {
+    behavior.beforeDispatch?.();
+    if (mutationOptions.canDispatch && !mutationOptions.canDispatch()) {
+      return {
+        ok: false,
+        reason: "unavailable",
+        error: mutationOptions.dispatchError ?? "Access changed.",
+      };
+    }
+    try {
+      return {
+        ok: true,
+        value: await task(client),
+        refresh: behavior.refreshError ? { ok: false, error: behavior.refreshError } : { ok: true },
+      };
+    } catch (error) {
+      return { ok: false, reason: "error", error: String(error) };
+    }
+  };
+  const host = { requestUpdate: vi.fn(), runExternalMutation };
   return { controller: new GitHubIdentityController(host), client, requests };
+}
+
+function createStatusOnlyController(
+  client: GatewayBrowserClient,
+  requestUpdate = vi.fn(),
+): GitHubIdentityController {
+  return new GitHubIdentityController({
+    requestUpdate,
+    runExternalMutation: async () => ({
+      ok: false,
+      reason: "unavailable",
+      error: "Mutation unavailable in status-only test.",
+    }),
+  });
 }
 
 function sync(
@@ -115,6 +155,123 @@ describe("GitHubIdentityController", () => {
     expect(controller.draft.token).toBe("");
   });
 
+  it("deletes a stored handoff when configurability changes before dispatch", async () => {
+    const behavior: { beforeDispatch?: () => void } = {};
+    const { controller, client, requests } = createController(behavior);
+    behavior.beforeDispatch = () => sync(controller, client, {}, { configurable: false });
+    sync(controller, client);
+    controller.setDraft("token", "one-use-token");
+
+    await controller.configure();
+
+    expect(requests.map((entry) => entry.method)).toEqual([
+      "secrets.store.set",
+      "secrets.store.delete",
+    ]);
+    expect(controller.configurable).toBe(false);
+    expect(controller.error).toBeNull();
+  });
+
+  it("keeps a consumed handoff successful while surfacing its refresh warning", async () => {
+    const { controller, client, requests } = createController({
+      refreshError: "authoritative config refresh unavailable",
+    });
+    sync(controller, client);
+    controller.setDraft("token", "one-use-token");
+
+    await controller.configure();
+
+    expect(requests.map((entry) => entry.method)).toEqual([
+      "secrets.store.set",
+      "tools.github.configure",
+    ]);
+    expect(controller.status).toEqual(availableStatus);
+    expect(controller.draft.token).toBe("");
+    expect(controller.error).toContain("GitHub identity was updated");
+    expect(controller.error).toContain("authoritative config refresh unavailable");
+  });
+
+  it.each([
+    { mode: "managed" as const, expectedProfileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+    { mode: "inherit" as const, expectedProfileId: undefined },
+  ])("flushes a pending config draft before $mode and refreshes both edits", async (action) => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    let hashCounter = 1;
+    let storedConfig: Record<string, unknown> = {
+      pendingEdit: "original",
+      tools: { github: { profileId: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } },
+    };
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      order.push(method);
+      if (method === "config.get") {
+        return {
+          config: storedConfig,
+          sourceConfig: storedConfig,
+          raw: JSON.stringify(storedConfig),
+          hash: `hash-${hashCounter}`,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.set") {
+        storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+        hashCounter += 1;
+        return { hash: `hash-${hashCounter}` };
+      }
+      if (method === "secrets.store.set" || method === "secrets.store.delete") {
+        return { ok: true };
+      }
+      if (method === "tools.github.configure") {
+        const configure = params as { mode: "managed" | "inherit" };
+        storedConfig = {
+          ...storedConfig,
+          tools:
+            configure.mode === "managed" ? { github: { profileId: action.expectedProfileId } } : {},
+        };
+        hashCounter += 1;
+        return availableStatus;
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const runtimeConfig = createRuntimeConfigCapability({
+      snapshot: { client, phase: "connected", sessionKey: "main" },
+      subscribe: () => () => undefined,
+    });
+    await runtimeConfig.ensureLoaded();
+    order.length = 0;
+    runtimeConfig.patchForm(["pendingEdit"], action.mode);
+    const host = {
+      requestUpdate: vi.fn(),
+      runExternalMutation: runtimeConfig.runExternalMutation,
+    };
+    const controller = new GitHubIdentityController(host);
+    sync(controller, client, runtimeConfig.state.configForm ?? {});
+    if (action.mode === "managed") {
+      controller.setDraft("token", "one-use-token");
+      await controller.configure();
+    } else {
+      await controller.inherit();
+    }
+
+    expect(order).toEqual([
+      ...(action.mode === "managed" ? ["secrets.store.set"] : []),
+      "config.set",
+      "tools.github.configure",
+      "config.get",
+    ]);
+    expect(runtimeConfig.state.configForm).toMatchObject({ pendingEdit: action.mode });
+    expect(
+      (
+        runtimeConfig.state.configForm as {
+          tools?: { github?: { profileId?: string } };
+        }
+      ).tools?.github?.profileId,
+    ).toBe(action.expectedProfileId);
+    runtimeConfig.dispose();
+  });
+
   it("configures in an insecure context with getRandomValues but no randomUUID", async () => {
     vi.stubGlobal("crypto", {
       getRandomValues: <T extends Uint8Array>(array: T): T => {
@@ -177,7 +334,7 @@ describe("GitHubIdentityController", () => {
             }),
         ),
       } as unknown as GatewayBrowserClient;
-      const controller = new GitHubIdentityController(host);
+      const controller = createStatusOnlyController(client, host.requestUpdate);
       sync(controller, client);
       const pending = controller.verify();
       sync(controller, client, {}, revisions);
@@ -228,7 +385,7 @@ describe("GitHubIdentityController", () => {
         }),
     );
     const client = { request } as unknown as GatewayBrowserClient;
-    const controller = new GitHubIdentityController(host);
+    const controller = createStatusOnlyController(client, host.requestUpdate);
     const config = (profileId: string) => ({ tools: { github: { profileId } } });
     sync(controller, client, config("ghp_11111111111111111111111111111111"));
     const initial = controller.verify();
@@ -253,7 +410,7 @@ describe("GitHubIdentityController", () => {
     const client = {
       request: vi.fn(async () => ({ ...availableStatus, agentId: "reviewer" })),
     } as unknown as GatewayBrowserClient;
-    const controller = new GitHubIdentityController(host);
+    const controller = createStatusOnlyController(client, host.requestUpdate);
     sync(controller, client);
     await controller.verify();
     expect(controller.status).toBeNull();

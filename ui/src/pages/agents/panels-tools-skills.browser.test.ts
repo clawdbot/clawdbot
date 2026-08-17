@@ -9,7 +9,14 @@ import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
 installBrowserHistoryIsolation();
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
-  const githubIdentity = new GitHubIdentityController({ requestUpdate: () => undefined });
+  const githubIdentity = new GitHubIdentityController({
+    requestUpdate: () => undefined,
+    runExternalMutation: async () => ({
+      ok: false,
+      reason: "unavailable",
+      error: "Mutation unavailable in rendering test.",
+    }),
+  });
   githubIdentity.sync({
     client: null,
     connected: false,

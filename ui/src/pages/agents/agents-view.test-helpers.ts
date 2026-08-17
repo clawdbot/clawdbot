@@ -83,7 +83,14 @@ export function createAgentViewTestProps(
       error: null,
       result: null,
     },
-    githubIdentity: new GitHubIdentityController({ requestUpdate: () => undefined }),
+    githubIdentity: new GitHubIdentityController({
+      requestUpdate: () => undefined,
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "Mutation unavailable in rendering test.",
+      }),
+    }),
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
     modelCatalog: [],

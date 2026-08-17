@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 
@@ -15,6 +16,11 @@ type RequestOwner = {
   clientRevision: number;
   agentRevision: number;
   requestRevision: number;
+};
+
+type GitHubIdentityHost = {
+  requestUpdate: () => void;
+  runExternalMutation: RuntimeConfigCapability["runExternalMutation"];
 };
 
 function configFingerprint(value: unknown): string {
@@ -56,7 +62,7 @@ export class GitHubIdentityController {
   };
   private draftDirty: Record<GitHubIdentityScope, boolean> = { system: false, agent: false };
   private configFingerprints: Record<GitHubIdentityScope, string> = { system: "", agent: "" };
-  constructor(private readonly host: { requestUpdate: () => void }) {}
+  constructor(private readonly host: GitHubIdentityHost) {}
 
   private queueVerification() {
     if (this.verificationQueued || !this.supported || !this.connected || !this.agentId) {
@@ -196,6 +202,43 @@ export class GitHubIdentityController {
     await client.request("secrets.store.delete", { name: secretName }).catch(() => undefined);
   }
 
+  private runConfigureMutation(owner: RequestOwner, params: Record<string, unknown>) {
+    return this.host.runExternalMutation(
+      (client) => {
+        if (client !== owner.client) {
+          throw new Error("Connection changed before the GitHub identity update started.");
+        }
+        return client.request<ToolsGitHubStatusResult>("tools.github.configure", params);
+      },
+      {
+        canDispatch: () => this.isCurrent(owner) && this.configurable,
+        dispatchError: "Access changed before the GitHub identity update started.",
+      },
+    );
+  }
+
+  private applyMutationStatus(
+    owner: RequestOwner,
+    scope: GitHubIdentityScope,
+    status: ToolsGitHubStatusResult,
+    nextDraft: GitHubIdentityDraft,
+    refreshError: string | null,
+  ) {
+    if (!this.isCurrent(owner)) {
+      return;
+    }
+    if (status.agentId !== owner.agentId) {
+      throw new Error("Gateway returned GitHub identity status for a different agent.");
+    }
+    this.status = status;
+    this.drafts = { ...this.drafts, [scope]: nextDraft };
+    this.draftDirty = { ...this.draftDirty, [scope]: false };
+    this.tokenRevealed = false;
+    this.error = refreshError
+      ? `GitHub identity was updated, but its configuration refresh failed: ${refreshError}`
+      : null;
+  }
+
   async verify() {
     if (!this.supported || this.loading || this.busy) {
       return;
@@ -265,7 +308,7 @@ export class GitHubIdentityController {
         await this.deleteSetupHandoff(owner.client, secretName);
         return;
       }
-      const status = await owner.client.request<ToolsGitHubStatusResult>("tools.github.configure", {
+      const mutation = await this.runConfigureMutation(owner, {
         scope,
         agentId: owner.agentId,
         mode: "managed",
@@ -279,15 +322,17 @@ export class GitHubIdentityController {
             }
           : {}),
       });
-      if (this.isCurrent(owner)) {
-        if (status.agentId !== owner.agentId) {
-          throw new Error("Gateway returned GitHub identity status for a different agent.");
-        }
-        this.status = status;
-        this.drafts = { ...this.drafts, [scope]: { ...draft, token: "" } };
-        this.draftDirty = { ...this.draftDirty, [scope]: false };
-        this.tokenRevealed = false;
+      if (!mutation.ok) {
+        throw new Error(mutation.error);
       }
+      stored = false;
+      this.applyMutationStatus(
+        owner,
+        scope,
+        mutation.value,
+        { ...draft, token: "" },
+        mutation.refresh.ok ? null : mutation.refresh.error,
+      );
     } catch (error) {
       if (stored) {
         await this.deleteSetupHandoff(owner.client, secretName);
@@ -317,19 +362,22 @@ export class GitHubIdentityController {
     this.error = null;
     this.host.requestUpdate();
     try {
-      const status = await owner.client.request<ToolsGitHubStatusResult>("tools.github.configure", {
+      const mutation = await this.runConfigureMutation(owner, {
         scope,
         agentId: owner.agentId,
         mode: "inherit",
       });
+      if (!mutation.ok) {
+        throw new Error(mutation.error);
+      }
       if (this.isCurrent(owner)) {
-        if (status.agentId !== owner.agentId) {
-          throw new Error("Gateway returned GitHub identity status for a different agent.");
-        }
-        this.status = status;
-        this.drafts = { ...this.drafts, [scope]: readDraft(undefined) };
-        this.draftDirty = { ...this.draftDirty, [scope]: false };
-        this.tokenRevealed = false;
+        this.applyMutationStatus(
+          owner,
+          scope,
+          mutation.value,
+          readDraft(undefined),
+          mutation.refresh.ok ? null : mutation.refresh.error,
+        );
         if (scope === "agent") {
           this.scope = "system";
         }
