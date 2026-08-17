@@ -220,7 +220,7 @@ export async function runBrowserHatchHandoff(
   if (params.suppressTokenOutput === true || params.config.gateway?.controlUi?.enabled === false) {
     return { handedOff: false, reason: "target-unavailable" };
   }
-  const browserSupport = await detectBrowserOpenSupport({ env, platform });
+  const browserSupport = await detectBrowserOpenSupport(deps);
   const canOpenBrowser = browserSupport.ok;
   let target: BrowserHatchTarget;
   try {

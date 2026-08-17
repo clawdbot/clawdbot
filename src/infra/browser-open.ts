@@ -75,7 +75,7 @@ export async function resolveBrowserOpenCommand(
   }
 
   if (platform === "linux") {
-    const wsl = await isWSL({ env, platform });
+    const wsl = await isWSL(environment);
     if (!hasDisplay && !wsl) {
       return { argv: null, reason: "no-display" };
     }

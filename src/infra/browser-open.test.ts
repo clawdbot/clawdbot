@@ -5,10 +5,11 @@ import type { SpawnResult } from "../process/exec-result.js";
 
 type DetectBinary = typeof import("./detect-binary.js").detectBinary;
 
-const { detectBinaryMock, getWindowsInstallRootsMock, runCommandWithTimeoutMock } = vi.hoisted(
-  () => ({
+const { detectBinaryMock, getWindowsInstallRootsMock, readFileMock, runCommandWithTimeoutMock } =
+  vi.hoisted(() => ({
     detectBinaryMock: vi.fn<DetectBinary>(async () => false),
     getWindowsInstallRootsMock: vi.fn(() => ({ systemRoot: "C:\\Windows" })),
+    readFileMock: vi.fn(async () => "6.8.0-generic"),
     runCommandWithTimeoutMock: vi.fn<() => Promise<SpawnResult>>(async () => ({
       stdout: "",
       stderr: "",
@@ -17,8 +18,7 @@ const { detectBinaryMock, getWindowsInstallRootsMock, runCommandWithTimeoutMock 
       killed: false,
       termination: "exit",
     })),
-  }),
-);
+  }));
 
 vi.mock("./detect-binary.js", () => ({
   detectBinary: detectBinaryMock,
@@ -35,13 +35,25 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: runCommandWithTimeoutMock,
 }));
 
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    default: { ...actual, readFile: readFileMock },
+    readFile: readFileMock,
+  };
+});
+
 import { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand } from "./browser-open.js";
+import { resetWSLStateForTests } from "./wsl.js";
 
 afterEach(() => {
+  resetWSLStateForTests();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   detectBinaryMock.mockReset().mockResolvedValue(false);
   getWindowsInstallRootsMock.mockReset().mockReturnValue({ systemRoot: "C:\\Windows" });
+  readFileMock.mockReset().mockResolvedValue("6.8.0-generic");
   runCommandWithTimeoutMock.mockReset().mockResolvedValue({
     stdout: "",
     stderr: "",
@@ -95,6 +107,26 @@ describe("openUrl", () => {
 });
 
 describe("resolveBrowserOpenCommand", () => {
+  it("retains process-level WSL detection caching through the resolver", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("DISPLAY", "");
+    vi.stubEnv("WAYLAND_DISPLAY", "");
+    vi.stubEnv("WSL_INTEROP", "");
+    vi.stubEnv("WSL_DISTRO_NAME", "");
+    vi.stubEnv("WSLENV", "");
+
+    await expect(resolveBrowserOpenCommand()).resolves.toEqual({
+      argv: null,
+      reason: "no-display",
+    });
+    await expect(resolveBrowserOpenCommand()).resolves.toEqual({
+      argv: null,
+      reason: "no-display",
+    });
+
+    expect(readFileMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reports display-less WSL support only when wslview is installed", async () => {
     detectBinaryMock.mockImplementation(async (binary) => binary === "wslview");
 
