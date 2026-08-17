@@ -146,6 +146,50 @@ describe("msteams config schema", () => {
     expect(res.success).toBe(true);
   });
 
+  it.each([
+    {
+      name: "root",
+      config: { webhook: { port: 65536 } },
+      path: ["webhook", "port"],
+    },
+    {
+      name: "named account",
+      config: {
+        tenantId: "tenant-id",
+        accounts: {
+          support: {
+            appId: "support-app-id",
+            appPassword: "support-secret",
+            webhook: { port: 65536 },
+          },
+        },
+      },
+      path: ["accounts", "support", "webhook", "port"],
+    },
+  ])("rejects $name webhook ports above the TCP range", ({ config, path }) => {
+    const res = MSTeamsConfigSchema.safeParse(config);
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues).toEqual(expect.arrayContaining([expect.objectContaining({ path })]));
+    }
+  });
+
+  it("accepts the highest TCP port for a named account", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        support: {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 65535 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
   it("rejects named Teams bot accounts with duplicate canonical account ids", () => {
     const res = MSTeamsConfigSchema.safeParse({
       tenantId: "tenant-id",
