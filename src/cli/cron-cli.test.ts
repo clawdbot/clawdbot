@@ -1,6 +1,10 @@
 // Cron CLI tests cover cron command registration and schedule output.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CRON_JOB_SCRATCH_MAX_BYTES } from "../cron/scratch-contract.js";
 import type { CronJob } from "../cron/types.js";
 import { registerCronCli } from "./cron-cli.js";
 
@@ -338,6 +342,199 @@ async function runCronRunAndCaptureExit(params: {
 }
 
 describe("cron cli", () => {
+  describe("scratch preflight and compare-and-swap ownership", () => {
+    it.each(["", "   ", "0x10", "1e2", "1.5", "-1", "9007199254740992"])(
+      "rejects invalid revision %j before contacting the Gateway",
+      async (revision) => {
+        await expectCronCommandExit([
+          "cron",
+          "scratch",
+          "job-1",
+          "--set",
+          "updated",
+          "--expected-revision",
+          revision,
+        ]);
+
+        expectRuntimeErrorContaining("--expected-revision must be a non-negative integer");
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      },
+    );
+
+    it("rejects invalid read-only revisions without opening a Gateway connection", async () => {
+      await expectCronCommandExit(["cron", "scratch", "job-1", "--expected-revision", "invalid"]);
+
+      expectRuntimeErrorContaining("--expected-revision must be a non-negative integer");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    });
+
+    it("rejects read-only revision preconditions before contacting the Gateway", async () => {
+      await expectCronCommandExit(["cron", "scratch", "job-1", "--expected-revision", "7"]);
+
+      expectRuntimeErrorContaining("--expected-revision requires --set, --file, or --unset");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    });
+
+    it("rejects missing scratch files before contacting the Gateway", async () => {
+      const missingPath = path.join(os.tmpdir(), "openclaw-cron-scratch-missing-never-create.txt");
+
+      await expectCronCommandExit(["cron", "scratch", "job-1", "--file", missingPath]);
+
+      expectRuntimeErrorContaining("ENOENT");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    });
+
+    it("rejects oversized scratch files before contacting the Gateway", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-scratch-preflight-"));
+      const filename = path.join(root, "oversized.txt");
+      try {
+        await fs.writeFile(filename, Buffer.alloc(CRON_JOB_SCRATCH_MAX_BYTES + 1));
+
+        await expectCronCommandExit(["cron", "scratch", "job-1", "--file", filename]);
+
+        expectRuntimeErrorContaining(`exceeds ${CRON_JOB_SCRATCH_MAX_BYTES} bytes`);
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects oversized multibyte inline scratch before contacting the Gateway", async () => {
+      const oversized = "é".repeat(Math.floor(CRON_JOB_SCRATCH_MAX_BYTES / 2) + 1);
+
+      await expectCronCommandExit(["cron", "scratch", "job-1", "--set", oversized]);
+
+      expectRuntimeErrorContaining(`exceeds ${CRON_JOB_SCRATCH_MAX_BYTES} bytes`);
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { label: "set", mutation: ["--set", "exact text\n"], content: "exact text\n" },
+      { label: "unset", mutation: ["--unset"], content: null },
+    ])(
+      "uses one Gateway write when $label has an explicit revision",
+      async ({ mutation, content }) => {
+        resetGatewayMock();
+        callGatewayFromCli.mockResolvedValue({ ok: true, currentRevision: 8, maxBytes: 262_144 });
+
+        await buildProgram().parseAsync(
+          ["cron", "scratch", "job-1", ...mutation, "--expected-revision", "7"],
+          { from: "user" },
+        );
+
+        expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+        expect(callGatewayFromCli).toHaveBeenCalledWith(
+          "cron.scratch.set",
+          expect.any(Object),
+          { id: "job-1", content, expectedRevision: 7 },
+          undefined,
+        );
+      },
+    );
+
+    it.each([
+      ["0", 0],
+      ["+7", 7],
+      ["0007", 7],
+      [" 7 ", 7],
+    ])("keeps canonical decimal revision %j", async (revision, expectedRevision) => {
+      resetGatewayMock();
+      callGatewayFromCli.mockResolvedValue({ ok: true });
+
+      await buildProgram().parseAsync(
+        ["cron", "scratch", "job-1", "--unset", "--expected-revision", revision],
+        { from: "user" },
+      );
+
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+      expect(callGatewayFromCli.mock.calls[0]?.[2]).toMatchObject({ expectedRevision });
+    });
+
+    it("preserves exact file content with an explicit compare-and-swap revision", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-scratch-valid-"));
+      const filename = path.join(root, "scratch.txt");
+      try {
+        await fs.writeFile(filename, " first line\nsecond line\n");
+        resetGatewayMock();
+        callGatewayFromCli.mockResolvedValue({ ok: true });
+
+        await buildProgram().parseAsync(
+          ["cron", "scratch", "job-1", "--file", filename, "--expected-revision", "0"],
+          { from: "user" },
+        );
+
+        expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+        expect(callGatewayFromCli.mock.calls[0]?.[2]).toEqual({
+          id: "job-1",
+          content: " first line\nsecond line\n",
+          expectedRevision: 0,
+        });
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("accepts inline multibyte scratch at the exact 256 KiB boundary", async () => {
+      const content = "é".repeat(CRON_JOB_SCRATCH_MAX_BYTES / 2);
+      resetGatewayMock();
+      callGatewayFromCli.mockResolvedValue({ ok: true });
+
+      await buildProgram().parseAsync(
+        ["cron", "scratch", "job-1", "--set", content, "--expected-revision", "0"],
+        { from: "user" },
+      );
+
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+      expect(callGatewayFromCli.mock.calls[0]?.[2]).toEqual({
+        id: "job-1",
+        content,
+        expectedRevision: 0,
+      });
+    });
+
+    it("keeps implicit revision reads before the compare-and-swap write", async () => {
+      resetGatewayMock();
+      callGatewayFromCli.mockImplementation(async (method: string) =>
+        method === "cron.scratch.get"
+          ? { scratch: null, currentRevision: 12, maxBytes: CRON_JOB_SCRATCH_MAX_BYTES }
+          : { ok: true, currentRevision: 13, maxBytes: CRON_JOB_SCRATCH_MAX_BYTES },
+      );
+
+      await buildProgram().parseAsync(["cron", "scratch", "job-1", "--set", "updated"], {
+        from: "user",
+      });
+
+      expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+        "cron.scratch.get",
+        "cron.scratch.set",
+      ]);
+      expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
+        id: "job-1",
+        content: "updated",
+        expectedRevision: 12,
+      });
+    });
+
+    it("preserves read-only scratch retrieval and exact raw content", async () => {
+      resetGatewayMock();
+      callGatewayFromCli.mockResolvedValue({
+        scratch: { content: " exact text\n", revision: 4, updatedAtMs: 1 },
+        currentRevision: 4,
+        maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
+      });
+      const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        await buildProgram().parseAsync(["cron", "scratch", "job-1"], { from: "user" });
+
+        expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+        expect(callGatewayFromCli.mock.calls[0]?.[0]).toBe("cron.scratch.get");
+        expect(output).toHaveBeenCalledWith(" exact text\n");
+      } finally {
+        output.mockRestore();
+      }
+    });
+  });
+
   it("documents the gateway-host timezone default for cron --tz help", () => {
     const program = buildProgram();
     const cronCommand = program.commands.find((command) => command.name() === "cron");

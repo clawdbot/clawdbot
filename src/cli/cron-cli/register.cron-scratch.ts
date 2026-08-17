@@ -1,6 +1,8 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
+import { assertCronJobScratchContent } from "../../cron/scratch-contract.js";
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import { handleCronCliError, printCronJson } from "./shared.js";
@@ -46,10 +48,16 @@ export function registerCronScratchCommand(cron: Command) {
           if (mutations > 1) {
             throw new Error("choose only one of --set, --file, or --unset");
           }
-          const current = (await callGatewayFromCli("cron.scratch.get", opts, {
-            id: String(id),
-          })) as ScratchGetResult;
+          const explicitRevision = parseExpectedRevision(opts.expectedRevision);
+          if (mutations === 0 && explicitRevision !== undefined) {
+            throw new Error("--expected-revision requires --set, --file, or --unset");
+          }
+          const readScratch = async () =>
+            (await callGatewayFromCli("cron.scratch.get", opts, {
+              id: String(id),
+            })) as ScratchGetResult;
           if (mutations === 0) {
+            const current = await readScratch();
             if (opts.json) {
               printCronJson(current);
             } else if (current.scratch) {
@@ -57,14 +65,15 @@ export function registerCronScratchCommand(cron: Command) {
             }
             return;
           }
-
-          const explicitRevision = parseExpectedRevision(opts.expectedRevision);
-          const expectedRevision = explicitRevision ?? current.currentRevision;
           const content = opts.unset
             ? null
             : opts.file !== undefined
               ? await readCronScratchContent(String(opts.file))
               : String(opts.set ?? "");
+          if (content !== null) {
+            assertCronJobScratchContent(content);
+          }
+          const expectedRevision = explicitRevision ?? (await readScratch()).currentRevision;
           const result = (await callGatewayFromCli("cron.scratch.set", opts, {
             id: String(id),
             content,
