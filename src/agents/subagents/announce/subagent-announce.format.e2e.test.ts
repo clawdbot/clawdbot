@@ -1456,6 +1456,15 @@ describe("subagent announce formatting", () => {
         expectedStatus: "timed out",
         spawnMode: undefined,
       },
+      {
+        childSessionId: "child-session-direct-timeout-cause",
+        requesterSessionId: "requester-session-timeout-cause",
+        childRunId: "run-direct-completion-timeout-cause",
+        replyText: "partial output",
+        outcome: { status: "timeout", error: "child run failed before completing" } as const,
+        expectedStatus: "timed out: child run failed before completing",
+        spawnMode: undefined,
+      },
     ] as const;
 
     for (const testCase of cases) {

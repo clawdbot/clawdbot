@@ -776,4 +776,62 @@ describe("applySubagentWaitOutcome", () => {
       elapsedMs: 50,
     });
   });
+
+  it("keeps the failure cause on pending-error timeout wait snapshots", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        pendingError: true,
+        error: "model returned an unrecoverable tool-call sequence",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      error: "model returned an unrecoverable tool-call sequence",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("leaves genuine budget timeouts without a cause", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("ignores wait error text when the run did not end in a pending error", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        error: "waited too long",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
 });

@@ -457,7 +457,9 @@ export async function runSubagentAnnounceFlow(params: {
       outcome.status === "ok"
         ? "completed; ready for parent review"
         : outcome.status === "timeout"
-          ? "timed out"
+          ? outcome.error
+            ? `timed out: ${outcome.error}`
+            : "timed out"
           : outcome.status === "error"
             ? `failed: ${outcome.error || "unknown error"}`
             : "finished with unknown status";
