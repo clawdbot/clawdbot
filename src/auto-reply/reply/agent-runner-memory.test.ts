@@ -2979,6 +2979,46 @@ describe("runMemoryFlushIfNeeded", () => {
     },
   );
 
+  it("accounts for provider-visible history beyond the recent read bounds", async () => {
+    await writeTestSessionTranscript({
+      rootDir,
+      events: Array.from({ length: 250 }, (_, index) => ({
+        type: "message" as const,
+        message: {
+          role: "user" as const,
+          content: index < 50 ? "x".repeat(8_192) : "small",
+        },
+      })),
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      modelContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBeGreaterThan(100_000);
+  });
+
   it("does not use the active run sessionFile when the session entry has no transcript path", async () => {
     const sessionFile = path.join(rootDir, "active-run-session.jsonl");
     await fs.writeFile(

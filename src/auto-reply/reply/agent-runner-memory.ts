@@ -653,9 +653,8 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         storePath: params.storePath,
       },
       {
-        mode: "recent",
-        maxMessages: 200,
-        maxBytes: 1024 * 1024,
+        mode: "full",
+        reason: "preflight-compaction-estimate",
       },
     )) as AgentMessage[];
     const estimatedTokens = await estimateProviderPromptTokensFromMessages(
