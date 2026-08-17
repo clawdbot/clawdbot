@@ -752,13 +752,14 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mts` and
 ## Testbox validation
 
 Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Agent
-sessions keep one/few focused tests and cheap static checks local only for
-trusted source when the existing dependency install is ready. They use Crabbox for larger suites and
-computationally intensive work, including builds, typechecks, lint fan-out,
-Docker, package lanes, E2E, live proof, and CI parity. Trusted maintainer heavy
-proof defaults to `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
-workflow hydrates provider and agent credentials, so untrusted contributor or
-fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
+sessions run trusted development tests, changed gates, typecheck/lint, and
+builds locally by default. They use Crabbox when the environment is part of the
+proof: clean-machine, install/package, Docker, E2E, live, desktop, cross-OS, or
+CI-parity work, or when the operator explicitly requests remote proof. Crabbox
+is not generic compute offload. `.crabbox.yaml` defaults remote proof to
+`blacksmith-testbox`. Its configured workflow hydrates provider and agent
+credentials, so untrusted contributor or fork code must use secretless fork CI
+or sanitized direct AWS Crabbox instead.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
@@ -784,8 +785,9 @@ Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
 quota issues, or explicit owned-capacity testing.
 
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
-first heavy command is ready, reuse the returned `tbx_...` id for later heavy
-commands, sync the current checkout on every run, and stop it before handoff.
+first environment-sensitive command is ready, reuse the returned `tbx_...` id
+for later remote commands, sync the current checkout on every run, and stop it
+before handoff.
 
 Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
 one-shot Testboxes. The built-in sync sanity check fails fast when
@@ -801,7 +803,7 @@ millisecond value for unusually large local diffs.
 Before a first run, check the wrapper from the repo root:
 
 ```bash
-pnpm crabbox:run -- --help | sed -n '1,120p'
+node scripts/crabbox-wrapper.mjs run --help | sed -n '1,120p'
 ```
 
 The repo wrapper refuses a stale Crabbox binary that does not advertise the selected provider, and Blacksmith-backed runs require Crabbox 0.22.0 or newer so the wrapper gets the current Testbox sync, queue, and cleanup behavior. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
@@ -817,7 +819,7 @@ version="$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//')" \
   && go build -C ../crabbox -trimpath -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}" -o bin/crabbox ./cmd/crabbox
 ```
 
-The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Changed gate:
+The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \
@@ -832,8 +834,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm check:changed"
 ```
 
-Focused test rerun on Testbox when local dependencies are unavailable or the
-target fans out:
+Focused test rerun when clean-machine behavior is part of the proof:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \
@@ -844,7 +845,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm test <path-or-filter>"
 ```
 
-Full suite:
+Full suite on an explicitly requested clean machine:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \
