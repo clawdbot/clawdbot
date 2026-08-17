@@ -15,6 +15,8 @@ import OpenClawProtocol
 @MainActor
 @Observable
 final class OnboardingAISetupModel {
+    static let setupDetectionRequestTimeoutMs = 40_000
+
     /// Device-code providers advertise windows up to 15 minutes. Keep transport
     /// alive long enough for approval plus the post-login inference probe.
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
@@ -613,7 +615,7 @@ extension OnboardingAISetupModel {
             let data = try await gateway.request(
                 method: "openclaw.setup.detect",
                 params: [:],
-                timeoutMs: 20000,
+                timeoutMs: Double(Self.setupDetectionRequestTimeoutMs),
                 ifCurrentServerLease: lease)
             guard await self.gateway.isCurrentServerLease(lease),
                   self.isCurrentAttempt(context),
@@ -1027,7 +1029,7 @@ extension OnboardingAISetupModel {
         originalServerLease: GatewayConnection.ServerLease) async -> Bool
     {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(30))
+        let deadline = clock.now.advanced(by: .seconds(45))
         var delayMs = 250
         while clock.now < deadline {
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return false }
@@ -1049,7 +1051,7 @@ extension OnboardingAISetupModel {
                     timeoutMs: Self.remainingMilliseconds(
                         until: deadline,
                         clock: clock,
-                        cappedAt: 10000))
+                        cappedAt: Self.setupDetectionRequestTimeoutMs))
             {
                 self.serverLease = replacementLease
                 return true
@@ -1421,7 +1423,7 @@ extension OnboardingAISetupModel {
         guard let data = try? await gateway.request(
             method: "openclaw.setup.detect",
             params: [:],
-            timeoutMs: 10000,
+            timeoutMs: Double(Self.setupDetectionRequestTimeoutMs),
             ifCurrentServerLease: lease),
             token == attemptToken,
             let result = try? JSONDecoder().decode(DetectResult.self, from: data),

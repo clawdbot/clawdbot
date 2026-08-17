@@ -156,7 +156,7 @@ describe("model setup first-run redirect", () => {
     expect(request).toHaveBeenCalledWith(
       "openclaw.setup.detect",
       { agentId: "main" },
-      expect.objectContaining({ timeoutMs: 20_000 }),
+      expect.objectContaining({ timeoutMs: 40_000 }),
     );
     expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
     expect(
