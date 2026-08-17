@@ -10,6 +10,7 @@ import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { toDotPath } from "../shared/dot-path.js";
@@ -495,13 +496,13 @@ export function handleConfigMutationError(params: {
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
 }) {
+  const message = formatErrorMessage(params.err);
   if (params.options.dryRun && params.options.json) {
     if (params.err instanceof ConfigSetDryRunValidationError) {
       writeRuntimeJson(params.runtime, params.err.result);
       params.runtime.exit(1);
       return;
     }
-    const message = params.err instanceof Error ? params.err.message : String(params.err);
     const result: ConfigSetDryRunResult = {
       ok: false,
       operations: 0,
@@ -513,10 +514,10 @@ export function handleConfigMutationError(params: {
       errors: [{ kind: "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
-    params.runtime.error(danger(String(params.err)));
+    params.runtime.error(danger(message));
     params.runtime.exit(1);
     return;
   }
-  params.runtime.error(danger(String(params.err)));
+  params.runtime.error(danger(message));
   params.runtime.exit(1);
 }

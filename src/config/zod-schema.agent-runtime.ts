@@ -923,7 +923,6 @@ export const AgentEntrySchema = z
     tts: AgentTtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
-    contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),

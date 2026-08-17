@@ -107,7 +107,6 @@ export {
 } from "./src/gateway-child.js";
 export {
   buildQaSuiteSummaryJson,
-  qaSuiteProgressTesting,
   type QaSuiteResult,
   type QaSuiteRunParams,
   type QaSuiteScenarioResult,

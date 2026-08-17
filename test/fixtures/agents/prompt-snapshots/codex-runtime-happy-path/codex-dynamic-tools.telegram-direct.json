@@ -27,6 +27,7 @@
           "type": "boolean"
         },
         "asVoice": {
+          "description": "Send audio as a voice note; combines with voiceText.",
           "type": "boolean"
         },
         "attachments": {
@@ -129,6 +130,18 @@
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "voiceId": {
+          "description": "Per-send speech voice override.",
+          "type": "string"
+        },
+        "voiceProvider": {
+          "description": "Per-send speech provider override.",
+          "type": "string"
+        },
+        "voiceText": {
+          "description": "Text to synthesize; message remains visible.",
+          "type": "string"
         }
       },
       "required": ["action"],
@@ -138,7 +151,7 @@
     "type": "function"
   },
   {
-    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. `visible=true`: persistent sidebar dashboard session; use when the user asks to create/open a thread; subagent only; omit `mode` (no `mode=\"run\"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. Session listing/addressing obeys `tools.sessions.visibility` (tree: current session + own spawn subtree; reads also cover any watched same-agent group sessions). Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work while run result returns.",
+    "description": "Spawn clean child; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. `visible=true`: persistent sidebar dashboard session; use when the user asks to create/open a thread; subagent only; omit `mode` (no `mode=\"run\"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line. Session listing/addressing obeys `tools.sessions.visibility` (tree: current session + own spawn subtree; the main session sees all sessions of its agent). Inherits parent workspace. Native task arrives as first `[Subagent Task]`. Native transcript needed: `context=\"fork\"`; else omit/isolated. Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers. After spawn, do non-overlap work while run result returns.",
     "inputSchema": {
       "properties": {
         "agentId": {
@@ -262,7 +275,7 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nADD: {name?,schedule,payload,sessionTarget?,pacing?,delivery?,enabled?}. Required: schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after run.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: run carries this chat's context, result lands here. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- agentTurn {kind:\"agentTurn\",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.\n- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.\n\nDELIVERY {mode:\"none\"|\"announce\"|\"webhook\",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). webhook posts finished-run event to URL in `to`. To keep announce delivery and also POST completion, use mode:\"announce\" with completionDestination:{mode:\"webhook\",to:\"https://...\"}.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
+        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after run.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n- {kind:\"stream\",command:[argv],mode?:\"line\"|\"match\",match?}: fires on supervised process output; disabled only when cron.triggers.enabled=false.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: run carries this chat's context, result lands here. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- agentTurn {kind:\"agentTurn\",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.\n- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.\n- script {kind:\"script\",script,timeoutSeconds?,toolBudget?}: main|isolated only; disabled only when cron.triggers.enabled=false.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGER (condition watcher on every/cron): {script,once?}; available unless cron.triggers.enabled=false — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call(\"exec\",{command:\"...\"}).\n\nDELIVERY {mode:\"none\"|\"announce\"|\"webhook\",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:\"none\". webhook posts finished-run event to URL in `to`. To keep announce delivery and also POST completion, use mode:\"announce\" with completionDestination:{mode:\"webhook\",to:\"https://...\"}.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
         "inputSchema": {
           "additionalProperties": true,
           "properties": {
@@ -594,7 +607,7 @@
                     },
                     "kind": {
                       "description": "Payload kind",
-                      "enum": ["systemEvent", "agentTurn"],
+                      "enum": ["systemEvent", "agentTurn", "script"],
                       "type": "string"
                     },
                     "lightContext": {
@@ -616,6 +629,10 @@
                       ],
                       "description": "Model override, or null to clear"
                     },
+                    "script": {
+                      "description": "Headless code-mode script",
+                      "type": "string"
+                    },
                     "text": {
                       "description": "systemEvent text",
                       "type": "string"
@@ -627,6 +644,11 @@
                     "timeoutSeconds": {
                       "minimum": 0,
                       "type": "number"
+                    },
+                    "toolBudget": {
+                      "description": "Maximum script tool calls",
+                      "minimum": 1,
+                      "type": "integer"
                     },
                     "toolsAllow": {
                       "anyOf": [
@@ -658,6 +680,23 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; disabled when cron.triggers.enabled=false)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
                       "maximum": 8640000000000000,
@@ -670,7 +709,19 @@
                     },
                     "kind": {
                       "description": "Schedule kind",
-                      "enum": ["at", "every", "cron"],
+                      "enum": ["at", "every", "cron", "stream"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
                       "type": "string"
                     },
                     "staggerMs": {
@@ -700,6 +751,28 @@
                 "sessionTarget": {
                   "description": "main | isolated | current (agentTurn default) | session:<id>",
                   "type": "string"
+                },
+                "trigger": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "once": {
+                          "type": "boolean"
+                        },
+                        "script": {
+                          "maxLength": 65536,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": ["script"],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "wakeMode": {
                   "description": "Wake timing",
@@ -783,7 +856,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -1094,7 +1167,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`, or `message` with an explicit channel and target. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available. watch:true: notice arrives when others later change target session.",
+        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available. watch:true: notice arrives when others later change target session.",
         "inputSchema": {
           "properties": {
             "agentId": {
@@ -1278,10 +1351,15 @@
     "name": "openclaw_direct",
     "tools": [
       {
-        "description": "End turn after subagent spawn; results arrive next message.",
+        "description": "End turn after subagent spawn; results arrive next message. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
         "inputSchema": {
           "properties": {
+            "acknowledgment": {
+              "description": "Optional waiting reply for an otherwise-silent interactive parent turn.",
+              "type": "string"
+            },
             "message": {
+              "description": "Private context for the resumed turn; not sent to the user.",
               "type": "string"
             }
           },

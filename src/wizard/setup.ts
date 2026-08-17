@@ -7,8 +7,7 @@ import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
 import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError } from "../config/config.js";
-import { createMergePatch } from "../config/merge-patch.js";
-import { applyMergePatch } from "../config/merge-patch.js";
+import { createMergePatch, applyMergePatch } from "../config/merge-patch.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
@@ -253,9 +252,7 @@ async function runSetupWizardOnce(
           }
           const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
           if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
-            throw new ConfigMutationConflictError("config changed during migration promotion", {
-              currentHash: latest.hash ?? null,
-            });
+            throw new ConfigMutationConflictError("config changed during migration promotion");
           }
           return await writeWizardConfigFile(cfg, {
             allowConfigSizeDrop: true,
@@ -604,7 +601,9 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
-    const { setupChannels } = await import("../commands/onboard-channels.js");
+    const { createChannelSetupTransaction, setupChannels } =
+      await import("../commands/onboard-channels.js");
+    const channelSetup = createChannelSetupTransaction({ runtime });
     const quickstartAllowFromChannels =
       flow === "quickstart"
         ? listChannelPlugins()
@@ -620,12 +619,19 @@ async function runSetupWizardOnce(
       skipConfirm: flow === "quickstart",
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
+      onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
     });
+    nextConfig = await channelSetup.commit(
+      nextConfig,
+      async (config) => await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
+    );
   }
 
-  nextConfig = await writeSetupConfigFile(nextConfig, {
-    allowConfigSizeDrop: false,
-  });
+  if (opts.skipChannels) {
+    nextConfig = await writeSetupConfigFile(nextConfig, {
+      allowConfigSizeDrop: false,
+    });
+  }
   let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);

@@ -24,7 +24,7 @@ import {
 import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
 import {
-  assertCodexRestrictedToolSurfaceHasNoManagedHooks,
+  assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   buildCodexRingZeroThreadConfigPatch,
   CODEX_RING_ZERO_BASE_INSTRUCTIONS,
   readCodexInheritedMcpServerNames,
@@ -107,6 +107,8 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ringZeroActive ||
     messageOnlySourceReply ||
     params.params.pluginHarnessToolPolicyRestricted === true;
+  const imageGenerationDenied =
+    params.params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate") === true;
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
     throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }
@@ -115,9 +117,16 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal),
       )
     : [];
-  if (restrictedToolSurface) {
-    await lifecycleTiming.measure("restricted-tool-surface-config-requirements-read", () =>
-      assertCodexRestrictedToolSurfaceHasNoManagedHooks(params.client, params.signal),
+  if (restrictedToolSurface || imageGenerationDenied) {
+    await lifecycleTiming.measure("tool-policy-config-requirements-read", () =>
+      assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+        params.client,
+        {
+          restrictedToolSurface,
+          additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
+        },
+        params.signal,
+      ),
     );
   }
   const ringZeroConfigFingerprint = ringZeroActive

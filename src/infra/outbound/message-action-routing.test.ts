@@ -495,6 +495,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         actions: {
           describeMessageTool: () => ({ actions: ["channel-delete", "channel-info"] }),
+          providerOwnedReadGates: true,
           supportsAction: ({ action }) => action === "channel-delete" || action === "channel-info",
           requiresTrustedRequesterSender: ({ action, toolContext }) =>
             Boolean(toolContext) && action === "channel-delete",

@@ -238,7 +238,6 @@ function setRawCliBackendForPrepareTest(backend: CliBackendPlugin & { pluginId: 
 type CliContextBudgetTestCase = {
   name: string;
   provider: string;
-  agentContextTokens?: number;
   expectedContextTokens: number;
   model: string;
   modelAliases?: Record<string, string>;
@@ -249,16 +248,8 @@ describe("prepareCliRunContext", () => {
 
   it.each<CliContextBudgetTestCase>([
     {
-      name: "Claude CLI with a selected-agent cap",
-      provider: "claude-cli",
-      agentContextTokens: 80_000,
-      expectedContextTokens: 80_000,
-      model: "claude-opus-4-7",
-    },
-    {
       name: "a Claude CLI user alias",
       provider: "claude-cli",
-      agentContextTokens: undefined,
       expectedContextTokens: 100_000,
       model: "large",
       modelAliases: { large: "claude-opus-4-7" },
@@ -266,7 +257,6 @@ describe("prepareCliRunContext", () => {
     {
       name: "a Claude CLI-native alias",
       provider: "claude-cli",
-      agentContextTokens: undefined,
       expectedContextTokens: 100_000,
       model: "claude-opus-4-7",
       modelAliases: { "claude-opus-4-7": "deployment-large" },
@@ -274,7 +264,6 @@ describe("prepareCliRunContext", () => {
     {
       name: "a generic CLI backend alias",
       provider: "fixture-cli",
-      agentContextTokens: undefined,
       expectedContextTokens: 100_000,
       model: "claude-opus-4-7",
     },
@@ -294,17 +283,11 @@ describe("prepareCliRunContext", () => {
       model: testCase.model,
       config: {
         ...baseConfig,
-        agents: {
-          ...baseConfig.agents,
-          ...(testCase.agentContextTokens
-            ? { list: [{ id: "main", contextTokens: testCase.agentContextTokens }] }
-            : {}),
-        },
+        agents: baseConfig.agents,
         models: {
           providers: {
             "fixture-anthropic": {
               baseUrl: "https://api.anthropic.com",
-              contextTokens: 200_000,
               models: [
                 {
                   id: "claude-opus-4-7",

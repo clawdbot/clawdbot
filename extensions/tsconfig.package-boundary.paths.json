@@ -356,9 +356,6 @@
       "openclaw/plugin-sdk/video-generation-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/video-generation-runtime.d.ts"
       ],
-      "openclaw/plugin-sdk/video-generation-core": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/video-generation-core.d.ts"
-      ],
       "openclaw/plugin-sdk/realtime-transcription": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-transcription.d.ts"
       ],

@@ -12,6 +12,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-page-attachment-handoff.test.ts",
   "ui/src/pages/chat/chat-pane-attachment-handoff.test.ts",
   "ui/src/pages/chat/chat-pane-board.test.ts",
+  "ui/src/pages/chat/chat-pane-catalog.test.ts",
   "ui/src/pages/chat/chat-pane-history.test.ts",
   "ui/src/pages/chat/chat-pane-identity.test.ts",
   "ui/src/pages/chat/chat-pane-lifecycle.test.ts",

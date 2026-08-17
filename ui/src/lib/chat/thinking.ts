@@ -4,7 +4,6 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModelCore,
 } from "../../../../src/auto-reply/thinking.shared.js";
-// Control UI module implements thinking behavior.
 import type {
   GatewaySessionRow,
   GatewayThinkingLevelOption,
@@ -13,6 +12,8 @@ import type {
 } from "../../api/types.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
+// Control UI module implements thinking behavior.
+import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
 
@@ -216,7 +217,10 @@ export function resolveChatThinkingSelectState(params: {
   sessionsResult: SessionsListResult | null;
 }): ChatThinkingSelectState {
   const session =
-    params.session ?? params.sessionsResult?.sessions?.find((row) => row.key === params.sessionKey);
+    params.session ??
+    params.sessionsResult?.sessions?.find((row) =>
+      areUiSessionKeysEquivalent(row.key, params.sessionKey),
+    );
   const persisted = session?.thinkingLevel;
   const currentOverride =
     typeof persisted === "string" && persisted.trim()

@@ -87,7 +87,10 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
-import { resolveProviderAuthOverview } from "./list.auth-overview.js";
+import {
+  formatProviderAuthProfileCounts,
+  resolveProviderAuthOverview,
+} from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import type { AuthProbeSummary } from "./list.probe.js";
 import type { ProviderAuthOverview } from "./list.types.js";
@@ -1526,12 +1529,7 @@ export async function modelsStatusCommand(
         ),
       );
       if (entry.profiles.count > 0) {
-        bits.push(
-          formatKeyValue(
-            "profiles",
-            `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey})`,
-          ),
-        );
+        bits.push(formatKeyValue("profiles", formatProviderAuthProfileCounts(entry.profiles)));
         if (entry.profiles.labels.length > 0) {
           bits.push(colorize(rich, theme.info, entry.profiles.labels.join(", ")));
         }

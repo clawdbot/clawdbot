@@ -130,10 +130,14 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 describe("registerStatusHealthSessionsCommands", () => {
-  async function runCli(args: string[]) {
+  function createProgram() {
     const program = new Command();
     registerStatusHealthSessionsCommands(program);
-    await program.parseAsync(args, { from: "user" });
+    return program;
+  }
+
+  async function runCli(args: string[]) {
+    await createProgram().parseAsync(args, { from: "user" });
   }
 
   beforeEach(() => {
@@ -245,6 +249,19 @@ describe("registerStatusHealthSessionsCommands", () => {
       agent: "work",
       allAgents: false,
     });
+  });
+
+  it("documents explicit selection for multi-agent session-store commands", () => {
+    const sessions = createProgram().commands.find((command) => command.name() === "sessions");
+    const list = sessions?.commands.find((command) => command.name() === "list");
+    const cleanup = sessions?.commands.find((command) => command.name() === "cleanup");
+
+    expect(list?.options.find((option) => option.long === "--agent")?.description).toBe(
+      "Agent id to inspect (required for multiple explicit agents)",
+    );
+    expect(cleanup?.options.find((option) => option.long === "--agent")?.description).toBe(
+      "Agent id to maintain (required for multiple explicit agents)",
+    );
   });
 
   it("runs sessions command with --all-agents forwarding", async () => {

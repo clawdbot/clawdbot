@@ -542,7 +542,7 @@ export async function executeSetDefaultModel(
     run: async (ctx) => {
       const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigModule();
       const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
-        await import("./setup-apply.js");
+        await import("./setup-model-selection.js");
       const targetAgentId = operation.agentId;
       const snapshot = await readConfigFileSnapshot();
       // Route projection and the live probes below all take the same optional

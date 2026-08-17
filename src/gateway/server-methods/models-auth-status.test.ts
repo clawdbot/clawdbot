@@ -1010,6 +1010,8 @@ describe("models.authStatus", () => {
   });
 
   it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
+    const runtimeConfig = {};
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     const profile = {
       profileId: "claude-cli",
       provider: "claude-cli",
@@ -1044,6 +1046,7 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
       providers: ["anthropic"],
       agentDir: "/tmp/agent",
+      config: runtimeConfig,
       timeoutMs: 3500,
     });
     let result: ModelAuthStatusResult | undefined;
@@ -1087,6 +1090,7 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
       providers: ["deepseek"],
       agentDir: "/tmp/agent",
+      config: expect.any(Object),
       timeoutMs: 3500,
     });
     let result: ModelAuthStatusResult | undefined;
@@ -1225,6 +1229,7 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenLastCalledWith({
       providers: ["openai"],
       agentDir: "/tmp/rebound-agent",
+      config: expect.any(Object),
       timeoutMs: 3500,
     });
   });

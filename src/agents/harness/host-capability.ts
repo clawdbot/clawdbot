@@ -1,10 +1,10 @@
 import path from "node:path";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
   getAdmittedRunDelegatedAuthority,
-  isRetainedAdmittedRunDelegatedAuthorityActive,
-  retainAdmittedRunDelegatedAuthority,
+  retainAdmittedRunBeforeToolCallRecovery,
 } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import { bindAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
@@ -229,15 +229,6 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   const withCaller = async <T>(run: () => Promise<T>): Promise<T> =>
     await withGatewayToolCallerIdentity(callerIdentity, run);
-  const assertRetainedActive = () => {
-    if (
-      attempt.abortSignal?.aborted ||
-      attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
-      !isRetainedAdmittedRunDelegatedAuthorityActive(attempt.admittedRunContext)
-    ) {
-      throw new Error("agent harness retained host policy is no longer active");
-    }
-  };
   const runBeforeToolCallWithAssertion = async (
     assertCurrent: () => void,
     {
@@ -255,29 +246,36 @@ export function createAgentHarnessHostCapabilities(params: {
     const actionHookContext = actionCwd
       ? Object.freeze({ ...hookContext, cwd: actionCwd })
       : hookContext;
-    const result = await withCaller(
-      async () =>
-        await runBeforeToolCallHook({
-          ...request,
-          approvalMode: hostApprovalMode,
-          ctx: actionHookContext,
-        }),
-    );
+    const result = await runBeforeToolCallHook({
+      ...request,
+      approvalMode: hostApprovalMode,
+      ctx: actionHookContext,
+    });
     assertCurrent();
     return result;
   };
   const runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"] = async (request) =>
-    await runBeforeToolCallWithAssertion(assertActive, request);
+    await withCaller(async () => await runBeforeToolCallWithAssertion(assertActive, request));
   retainedBeforeToolCallRunners.set(runBeforeToolCall, () => {
-    const release = retainAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
-    return release
-      ? Object.freeze({
-          assertActive: assertRetainedActive,
-          release,
-          runBeforeToolCall: async (request) =>
-            await runBeforeToolCallWithAssertion(assertRetainedActive, request),
-        })
-      : undefined;
+    const recovery = retainAdmittedRunBeforeToolCallRecovery(attempt.admittedRunContext);
+    if (!recovery) {
+      return undefined;
+    }
+    const assertRecoveryActive = () => {
+      if (
+        attempt.abortSignal?.aborted ||
+        attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance
+      ) {
+        throw new Error("agent harness retained host policy is no longer active");
+      }
+      recovery.assertActive();
+    };
+    return Object.freeze({
+      assertActive: assertRecoveryActive,
+      release: recovery.release,
+      runBeforeToolCall: async (request) =>
+        await runBeforeToolCallWithAssertion(assertRecoveryActive, request),
+    });
   });
 
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
@@ -310,6 +308,24 @@ export function createAgentHarnessHostCapabilities(params: {
           .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
           .map((tool) => gateBoundTool(tool, assertActive))
       );
+    },
+    prepareMutableFileApproval: async (request) => {
+      assertActive();
+      const prepared = await prepareSystemRunMutableFileApproval(request);
+      assertActive();
+      if (!prepared.ok) {
+        return prepared;
+      }
+      return Object.freeze({
+        ok: true,
+        requiresOneShot: prepared.requiresOneShot,
+        revalidate: async () => {
+          assertActive();
+          const current = await prepared.revalidate();
+          assertActive();
+          return current;
+        },
+      });
     },
     runBeforeToolCall,
     requestApproval: async (request) => {

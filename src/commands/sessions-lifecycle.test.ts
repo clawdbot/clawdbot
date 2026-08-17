@@ -153,6 +153,10 @@ describe("sessions lifecycle commands", () => {
       expect(runtime.writeJson).toHaveBeenCalledWith(
         {
           ok: false,
+          error: {
+            type: "cli_error",
+            message: `Session ${_operation} did not complete for every requested key.`,
+          },
           operation: _operation,
           dryRun: false,
           results: [
@@ -315,6 +319,10 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
         ok: false,
+        error: {
+          type: "cli_error",
+          message: "Session delete did not complete for every requested key.",
+        },
         operation: "delete",
         dryRun: false,
         results: [
@@ -354,6 +362,10 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
         ok: false,
+        error: {
+          type: "cli_error",
+          message: "Session delete did not complete for every requested key.",
+        },
         operation: "delete",
         dryRun: false,
         results: [

@@ -68,19 +68,13 @@ type GatewayRequestContextParams = {
   nodeUnsubscribeAll: GatewayRequestContext["nodeUnsubscribeAll"];
   hasConnectedTalkNode: GatewayRequestContext["hasConnectedTalkNode"];
   clients: Set<GatewayRequestContextClient>;
+  isConnectionActive: NonNullable<GatewayRequestContext["isConnectionActive"]>;
   invalidateDeviceTransports?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },
   ) => void;
   disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
-  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
-  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: {
-    deviceId: string;
-    publicKey: string;
-    scopes: string[];
-  }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   nodeDesktopService?: import("./desktop/node-source.js").NodeDesktopService;
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
@@ -227,8 +221,7 @@ export function createGatewayRequestContext(
     nodeUnsubscribe: params.nodeUnsubscribe,
     nodeUnsubscribeAll: params.nodeUnsubscribeAll,
     hasConnectedTalkNode: params.hasConnectedTalkNode,
-    isConnectionActive: (connId) =>
-      [...params.clients].some((client) => client.connId === connId && !client.invalidated),
+    isConnectionActive: params.isConnectionActive,
     hasExecApprovalClients: (excludeConnId?: string) => {
       for (const gatewayClient of params.clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
@@ -371,9 +364,6 @@ export function createGatewayRequestContext(
     },
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
-    claimControlUiDeviceAuthMigration: params.claimControlUiDeviceAuthMigration,
-    releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
-    completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
     ...(params.nodeDesktopService
       ? { [NODE_DESKTOP_SERVICE_CONTEXT]: params.nodeDesktopService }

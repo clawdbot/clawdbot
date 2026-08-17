@@ -120,7 +120,7 @@ function baseProfileContext() {
       type: "page",
     })),
     focusTab: vi.fn(async () => {}),
-    closeTab: vi.fn(async () => {}),
+    closeTab: vi.fn(async (targetId: string) => targetId),
     stopRunningBrowser: vi.fn(async () => ({ stopped: false })),
     resetProfile: vi.fn(async () => ({ moved: false, from: "" })),
   };
@@ -320,8 +320,23 @@ describe("browser tab routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
+    expect(response.body).toEqual({ ok: true, targetId: "T1" });
     expect(profileCtx.closeTab).toHaveBeenCalledWith("T1", { exactTargetId: true });
+  });
+
+  it("returns the canonical target id resolved behind a friendly close reference", async () => {
+    const profileCtx = createProfileContext({
+      closeTab: vi.fn(async () => "T1_RAW"),
+    });
+
+    const response = await callTabsDelete({
+      profileCtx,
+      targetId: "docs",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true, targetId: "T1_RAW" });
+    expect(profileCtx.closeTab).toHaveBeenCalledWith("docs", undefined);
   });
 
   it("rejects unknown target id modes before mutating a tab", async () => {

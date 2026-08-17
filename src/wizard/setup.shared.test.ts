@@ -26,7 +26,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       },
       tailscale: {
         mode: "serve",
-        resetOnExit: true,
       },
     },
   };
@@ -39,7 +38,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       gatewayToken: "explicit-token",
       gatewayPassword: "explicit-password",
       tailscale: "off",
-      tailscaleResetOnExit: false,
     });
 
     expect(result).toEqual({
@@ -51,7 +49,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       token: "explicit-token",
       password: "explicit-password",
       customBindHost: "192.0.2.10",
-      tailscaleResetOnExit: false,
     });
   });
 
@@ -65,7 +62,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       token: "stored-token",
       password: "stored-password",
       customBindHost: "192.0.2.10",
-      tailscaleResetOnExit: true,
     });
   });
 

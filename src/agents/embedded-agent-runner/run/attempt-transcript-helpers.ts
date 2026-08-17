@@ -28,8 +28,7 @@ function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boo
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const record = message as unknown as { stopReason?: unknown; errorMessage?: unknown };
-  return record.stopReason === "error" && record.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
+  return message.stopReason === "error" && message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
 }
 
 export function removeTrailingMidTurnPrecheckAssistantError(params: {

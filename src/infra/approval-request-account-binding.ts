@@ -12,7 +12,10 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
-import type { ApprovalRequestChannelRouteClass } from "./approval-types.js";
+import {
+  resolveApprovalRequestKind,
+  type ApprovalRequestChannelRouteClass,
+} from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
@@ -30,7 +33,9 @@ function resolveApprovalForwardAccountIds(params: {
   defaultAccountId?: string | null;
 }): string[] {
   const forwarding =
-    "command" in params.request.request ? params.cfg.approvals?.exec : params.cfg.approvals?.plugin;
+    resolveApprovalRequestKind(params.request) === "exec"
+      ? params.cfg.approvals?.exec
+      : params.cfg.approvals?.plugin;
   const channel = normalizeOptionalChannel(params.channel);
   if (!forwarding?.enabled || (forwarding.mode !== "targets" && forwarding.mode !== "both")) {
     return [];
@@ -60,7 +65,9 @@ function hasApprovalForwardTarget(params: {
   channel?: string | null;
 }): boolean {
   const forwarding =
-    "command" in params.request.request ? params.cfg.approvals?.exec : params.cfg.approvals?.plugin;
+    resolveApprovalRequestKind(params.request) === "exec"
+      ? params.cfg.approvals?.exec
+      : params.cfg.approvals?.plugin;
   if (
     !forwarding?.enabled ||
     (forwarding.mode !== "targets" && forwarding.mode !== "both") ||

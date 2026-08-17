@@ -182,7 +182,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "communications", "talk", "devices"],
+    routes: ["connection", "channels", "communications", "talk", "devices", "cloud-workers"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
@@ -237,6 +237,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   plugins: "puzzle",
   "skill-workshop": "wrench",
   devices: "monitorSmartphone",
+  "cloud-workers": "server",
   chat: "messageSquare",
   dashboard: "layoutDashboard",
   dashboards: "layoutDashboard",
@@ -349,6 +350,10 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.skillWorkshop",
   },
   devices: { titleKey: "tabs.devices", subtitleKey: "subtitles.devices" },
+  "cloud-workers": {
+    titleKey: "tabs.cloudWorkers",
+    subtitleKey: "subtitles.cloudWorkers",
+  },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },

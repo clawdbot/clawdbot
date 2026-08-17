@@ -47,6 +47,7 @@ function consolePriority(level: string) {
   switch (level) {
     case "error":
       return 3;
+    case "warn":
     case "warning":
       return 2;
     case "info":

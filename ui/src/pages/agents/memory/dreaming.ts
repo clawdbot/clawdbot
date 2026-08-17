@@ -11,6 +11,7 @@ import type { ConfigSnapshot } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import {
   canCallGatewayMethod,
   isGatewayMethodAdvertised,
@@ -433,7 +434,7 @@ async function loadDreamingResource<Key extends DreamingResourceKey>(
     state[agentKey] = agentId;
   } catch (error) {
     if (state.resourceRequests[key] === request && resolveSelectedAgentId(state) === agentId) {
-      state[errorKey] = String(error);
+      state[errorKey] = formatUiError(error);
     }
   } finally {
     if (state.resourceRequests[key] === request) {
@@ -503,7 +504,7 @@ async function runDreamDiaryAction(
     };
     return true;
   } catch (err) {
-    const message = String(err);
+    const message = formatUiError(err);
     state.dreamingStatusError = message;
     state.lastError = message;
     state.dreamDiaryActionArchivePath = null;

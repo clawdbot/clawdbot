@@ -282,7 +282,6 @@ const preparedModelRuntimeLeaseContext = {
   getGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingReplacement: () => pendingModelRuntimeReplacement,
   prepareSnapshot: prepareModelRuntimeSnapshot,
-  publishSnapshot: publishPreparedModelRuntimeSnapshot,
 };
 
 /** Acquires the exact writable workspace generation at agent-run admission. */
@@ -631,7 +630,17 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   pendingAuthMutations.push(normalizedEvent);
   void enqueuePreparedModelRuntimePublication(async () => {
+    // A pending replacement gate means a queued config publication owns the next generation:
+    // it drains queued auth mutations against the new config and rebuilds/announces the
+    // dispatch publication. Rebuilding here would revive stale owners with the old config or
+    // throw on them, emitting a spurious failed/published event that wedges chat metadata.
+    if (pendingModelRuntimeReplacement) {
+      return;
+    }
     await drainPendingAuthMutations();
+    if (pendingModelRuntimeReplacement) {
+      return;
+    }
     replyDispatchPublication.rebuild(owners.values());
     notifyPreparedModelRuntimePublication({ phase: "published" });
   }).catch((error: unknown) => {

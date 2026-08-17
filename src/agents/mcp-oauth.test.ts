@@ -3,8 +3,7 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
 import { createRequest, createResponse } from "../gateway/server-http.test-harness.js";
@@ -20,8 +19,11 @@ import {
   type McpOAuthIdentity,
 } from "./mcp-oauth-identity.js";
 import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
-import { readMcpOAuthPendingAuthorization as readPending } from "./mcp-oauth-store.js";
-import { readMcpOAuthStore, updateMcpOAuthStore } from "./mcp-oauth-store.js";
+import {
+  readMcpOAuthPendingAuthorization as readPending,
+  readMcpOAuthStore,
+  updateMcpOAuthStore,
+} from "./mcp-oauth-store.js";
 import {
   clearMcpOAuthCredentials,
   clearMcpOAuthServer,

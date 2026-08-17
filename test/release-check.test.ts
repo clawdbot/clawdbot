@@ -790,7 +790,6 @@ describe("collectMissingPackPaths", () => {
       for (const relativePath of [
         "facade-activation-check.runtime.js",
         "extensions/image-generation-core/runtime-api.js",
-        "extensions/media-understanding-core/runtime-api.js",
       ]) {
         const filePath = join(distDir, relativePath);
         mkdirSync(dirname(filePath), { recursive: true });

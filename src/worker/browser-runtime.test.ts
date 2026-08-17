@@ -82,6 +82,27 @@ describe("worker Browser runtime", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  it("uses the build-composed Browser runtime without filesystem discovery", async () => {
+    const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({
+      tool: { name: "browser" },
+      dispose: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await createWorkerBrowserToolRuntime({
+      descriptor: {
+        cdpUrl: "http://127.0.0.1:9222",
+        launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      },
+      sessionKey: "worker:session-1",
+      stateDir: "/tmp/worker-state",
+      workspaceDir: "/tmp/workspace",
+      runtime: { createAttachedBrowserToolRuntime },
+    });
+
+    expect(createAttachedBrowserToolRuntime).toHaveBeenCalledOnce();
+    expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
+  });
+
   it("surfaces launcher failure without loading another browser route", async () => {
     const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({
       tool: { name: "browser" },

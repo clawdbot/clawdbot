@@ -1,4 +1,3 @@
-import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -14,12 +13,11 @@ import {
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
 } from "../../worker/node-supervisor-protocol.js";
-import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
+import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
@@ -211,7 +209,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const findNode = async (params: {
     transport: NodeWorkerSupervisorTransport;
     deviceId: string;
-    expectedWorkerRuns?: WorkerAdmissionHandshake;
+    requireLaunchAvailability?: boolean;
     signal: AbortSignal;
   }): Promise<NodeWorkerSupervisorNodeProof> => {
     let nodes: readonly NodeWorkerSupervisorNodeProof[];
@@ -229,9 +227,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const node = nodes.find(
       (candidate) =>
         candidate.nodeId === params.deviceId &&
-        (!params.expectedWorkerRuns ||
-          (candidate.workerRuns &&
-            sameWorkerBuild(candidate.workerRuns, params.expectedWorkerRuns))),
+        (!params.requireLaunchAvailability || candidate.workerHost.capacity === "available"),
     );
     if (!node) {
       throw new NodeWorkerLaunchTransportError(
@@ -249,7 +245,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       | typeof NODE_WORKER_SUPERVISOR_STATUS_COMMAND
       | typeof NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
     payload: unknown;
-    expectedWorkerRuns?: WorkerAdmissionHandshake;
+    requireLaunchAvailability?: boolean;
     isAuthorized: () => boolean;
     deadline: OperationDeadline;
     onDispatchReady?: () => void;
@@ -288,7 +284,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       const node = await findNode({
         transport,
         deviceId: params.deviceId,
-        expectedWorkerRuns: params.expectedWorkerRuns,
+        requireLaunchAvailability: params.requireLaunchAvailability,
         signal,
       });
       const operation = transport.invoke({
@@ -311,11 +307,12 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       const result = await raceWithSignal(operation, signal);
       if (!result.ok) {
         const code = result.error?.code ?? "UNAVAILABLE";
+        if (code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE) {
+          throw new WorkerRunnerCapacityError();
+        }
         throw new NodeWorkerLaunchTransportError(
           code,
-          code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-            ? "device worker capacity remained full"
-            : `node worker supervisor invocation failed (${code})`,
+          `node worker supervisor invocation failed (${code})`,
         );
       }
       return parseInvokeReceipt(result.payloadJSON);
@@ -451,7 +448,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
-            ...(!pollStatus ? { expectedWorkerRuns: input.descriptor.admission.handshake } : {}),
+            ...(!pollStatus ? { requireLaunchAvailability: true } : {}),
             isAuthorized: stableRequest.isDispatchAuthorized,
             deadline: attemptDeadline,
             ...(!pollStatus
@@ -500,10 +497,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       }
       // The node authors this result only after its durable claim stayed absent.
       // Transport dispatch is therefore not launch ambiguity and needs no cancel.
-      if (
-        error instanceof NodeWorkerLaunchTransportError &&
-        error.code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-      ) {
+      if (error instanceof WorkerRunnerCapacityError) {
         throw error;
       }
       if (!mayHaveLaunched) {

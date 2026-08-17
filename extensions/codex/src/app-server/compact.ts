@@ -8,7 +8,8 @@ import {
   type CompactEmbeddedAgentSessionParams,
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -63,6 +64,7 @@ type CodexAppServerCompactOptions = {
   pluginConfig?: unknown;
   clientFactory?: CodexAppServerClientFactory;
   allowNonManualNativeRequest?: boolean;
+  nativeCompactionRequest?: "required_preflight" | "after_context_engine";
   nativeCompletionTimeoutMs?: number;
   nativeInterruptGraceMs?: number;
 };
@@ -375,23 +377,14 @@ function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionP
   for (const entry of readCompactionOverrideEntries(params)) {
     const localProvider =
       typeof entry.record.provider === "string" ? entry.record.provider.trim() : "";
-    const inheritedProvider =
-      !localProvider && typeof entry.inheritedRecord?.provider === "string"
-        ? entry.inheritedRecord.provider.trim()
-        : "";
-    const providerPath = localProvider
-      ? `${entry.path}.compaction.provider`
-      : inheritedProvider && entry.inheritedPath
-        ? `${entry.inheritedPath}.compaction.provider`
-        : undefined;
     if (typeof entry.record.model === "string" && entry.record.model.trim()) {
       ignored.add(`${entry.path}.compaction.model`);
     }
     if (typeof entry.record.thinkingLevel === "string" && entry.record.thinkingLevel.trim()) {
       ignored.add(`${entry.path}.compaction.thinkingLevel`);
     }
-    if (providerPath) {
-      ignored.add(providerPath);
+    if (localProvider) {
+      ignored.add(`${entry.path}.compaction.provider`);
     }
   }
   return [...ignored];
@@ -400,36 +393,14 @@ function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionP
 function readCompactionOverrideEntries(params: CompactEmbeddedAgentSessionParams): Array<{
   path: string;
   record: Record<string, unknown>;
-  inheritedRecord?: Record<string, unknown>;
-  inheritedPath?: string;
 }> {
   const entries: Array<{
     path: string;
     record: Record<string, unknown>;
-    inheritedRecord?: Record<string, unknown>;
-    inheritedPath?: string;
   }> = [];
   const defaultRecord = asOptionalRecord(params.config?.agents?.defaults?.compaction);
   if (defaultRecord) {
     entries.push({ path: "agents.defaults", record: defaultRecord });
-  }
-  const agentId = readAgentIdFromSessionKey(params.sessionKey ?? params.sandboxSessionKey);
-  if (!agentId) {
-    return entries;
-  }
-  const agents = Array.isArray(params.config?.agents?.list) ? params.config.agents.list : [];
-  const activeAgent = agents.find((agent) => {
-    const id = typeof agent?.id === "string" ? agent.id.trim().toLowerCase() : "";
-    return id === agentId;
-  });
-  const agentRecord = asOptionalRecord(activeAgent?.compaction);
-  if (agentRecord) {
-    entries.push({
-      path: `agents.list.${agentId}`,
-      record: agentRecord,
-      inheritedRecord: defaultRecord,
-      inheritedPath: "agents.defaults",
-    });
   }
   return entries;
 }
@@ -468,6 +439,7 @@ async function compactCodexNativeThread(
     config: params.config,
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
     sessionId: params.sessionId,
+    agentId: params.agentId,
     sandbox,
     surface: "native compaction",
   });
@@ -664,6 +636,7 @@ async function compactCodexNativeThread(
                 result: skippedCodexNativeCompactionResult(params, {
                   reason: "codex app-server compaction aborted before native compaction",
                   code: "aborted_before_native_compaction",
+                  request: options.nativeCompactionRequest ?? "after_context_engine",
                   expectedThreadId: binding.threadId,
                   currentThreadId: currentBinding?.threadId,
                 }),
@@ -671,7 +644,7 @@ async function compactCodexNativeThread(
             }
             if (!currentBinding || !isSameNativeCompactionBinding(currentBinding, binding)) {
               embeddedAgentLog.warn(
-                "skipping codex app-server compaction because the thread binding changed",
+                "codex app-server compaction could not use the thread binding because it changed",
                 {
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
@@ -679,20 +652,30 @@ async function compactCodexNativeThread(
                   currentThreadId: currentBinding?.threadId,
                 },
               );
+              // A binding change between the initial read and the native request
+              // is a stale-binding race. For required-preflight (and the
+              // non-manual CLI path) it must surface as the canonical
+              // recoverable failure so the caller falls back to the context
+              // engine instead of treating an uncompacted ok:true skip as a
+              // completed turn. Only a genuine post-context-engine request may
+              // skip, because the context engine has already compacted.
+              const isRequiredPreflight = options.nativeCompactionRequest === "required_preflight";
               return {
                 started: false as const,
-                result: options.allowNonManualNativeRequest
-                  ? skippedCodexNativeCompactionResult(params, {
-                      reason: "codex app-server binding changed before native compaction",
-                      code: "binding_changed_before_native_compaction",
-                      expectedThreadId: binding.threadId,
-                      currentThreadId: currentBinding?.threadId,
-                    })
-                  : failedCodexThreadBindingCompactionResult(params, {
-                      threadId: binding.threadId,
-                      reason: "codex app-server binding changed before native compaction",
-                      recovery: "stale_thread_binding",
-                    }),
+                result:
+                  options.allowNonManualNativeRequest && !isRequiredPreflight
+                    ? skippedCodexNativeCompactionResult(params, {
+                        reason: "codex app-server binding changed before native compaction",
+                        code: "binding_changed_before_native_compaction",
+                        request: options.nativeCompactionRequest ?? "after_context_engine",
+                        expectedThreadId: binding.threadId,
+                        currentThreadId: currentBinding?.threadId,
+                      })
+                    : failedCodexThreadBindingCompactionResult(params, {
+                        threadId: currentBinding?.threadId ?? binding.threadId,
+                        reason: "codex app-server binding changed before native compaction",
+                        recovery: "stale_thread_binding",
+                      }),
               };
             }
             binding = currentBinding;
@@ -829,7 +812,7 @@ async function compactCodexNativeThread(
           completed: true,
           ...(options.allowNonManualNativeRequest
             ? {
-                request: "after_context_engine",
+                request: options.nativeCompactionRequest ?? "after_context_engine",
                 trigger: params.trigger ?? "unknown",
               }
             : {}),
@@ -843,6 +826,7 @@ async function compactCodexNativeThread(
         return skippedCodexNativeCompactionResult(params, {
           reason: "codex app-server compaction aborted before native compaction",
           code: "aborted_before_native_compaction",
+          request: options.nativeCompactionRequest ?? "after_context_engine",
           expectedThreadId: initialBinding.threadId,
           currentThreadId: binding.threadId,
         });
@@ -880,6 +864,7 @@ function skippedCodexNativeCompactionResult(
   skipped: {
     reason: string;
     code: string;
+    request?: "required_preflight" | "after_context_engine";
     expectedThreadId?: string;
     currentThreadId?: string;
   },
@@ -891,7 +876,7 @@ function skippedCodexNativeCompactionResult(
       backend: "codex-app-server",
       skipped: true,
       reason: skipped.code,
-      request: "after_context_engine",
+      request: skipped.request ?? "after_context_engine",
       trigger: params.trigger ?? "unknown",
       ...(skipped.expectedThreadId ? { expectedThreadId: skipped.expectedThreadId } : {}),
       ...(skipped.currentThreadId ? { currentThreadId: skipped.currentThreadId } : {}),

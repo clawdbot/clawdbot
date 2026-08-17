@@ -8,7 +8,7 @@ import {
   dispatchCronDeliveryMock,
   getCliSessionBindingMock,
   isCliProviderMock,
-  lookupContextTokensMock,
+  resolveContextTokensForModelMock,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
   makeCronSession,
@@ -409,7 +409,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      lookupContextTokensMock.mockReturnValue(undefined);
+      resolveContextTokensForModelMock.mockReturnValue(undefined);
 
       const result = await runSkillFilterCase();
 
@@ -424,13 +424,16 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      lookupContextTokensMock.mockReturnValue(512_000);
+      resolveContextTokensForModelMock.mockReturnValue(512_000);
 
       const result = await runSkillFilterCase();
 
       expect(result.status).toBe("ok");
       expect(session.sessionEntry.contextTokens).toBe(512_000);
-      expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-5.4", {
+      expect(resolveContextTokensForModelMock).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        provider: "openai",
+        model: "gpt-5.4",
         allowAsyncLoad: false,
       });
     });

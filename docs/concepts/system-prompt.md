@@ -48,7 +48,7 @@ The prompt is compact, with fixed sections:
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level plus the `/reasoning` toggle hint.
 
-Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Heartbeats**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
+Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Heartbeats**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
 
 Tooling also carries long-running-work guidance:
 

@@ -52,30 +52,7 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
     expect(contextTokens).toBe(272_000);
   });
 
-  it("caps an oversized override without raising a lower override", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            models: [{ id: "gpt-5.5", contextWindow: 272_000 }],
-          },
-        },
-      },
-    } as never;
-    const resolveOverride = (contextTokensOverride: number) =>
-      statusSummaryRuntime.resolveContextTokensForModel({
-        cfg,
-        provider: "openai",
-        model: "gpt-5.5",
-        contextTokensOverride,
-        fallbackContextTokens: 999,
-      });
-
-    expect(resolveOverride(1_000_000)).toBe(272_000);
-    expect(resolveOverride(128_000)).toBe(128_000);
-  });
-
-  it("caps cold-cache overrides with prepared static catalog metadata", () => {
+  it("uses prepared static catalog metadata with a cold cache", () => {
     expect(
       statusSummaryRuntime.resolveContextTokensForModel({
         cfg: {},
@@ -83,7 +60,6 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
         model: "gpt-5.5",
         modelContextWindow: 1_000_000,
         modelContextTokens: 272_000,
-        contextTokensOverride: 1_000_000,
         fallbackContextTokens: 200_000,
       }),
     ).toBe(272_000);
@@ -104,7 +80,6 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
         provider: "openai",
         model: "gpt-5.5",
         modelContextTokens: 272_000,
-        contextTokensOverride: 1_000_000,
       }),
     ).toBe(272_000);
   });
@@ -128,27 +103,24 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
         } as never,
         provider: "google-gemini-cli",
         model: "gemini-3.1-pro-preview",
-        contextTokensOverride: 2_000_000,
       }),
     ).toBe(1_000_000);
   });
 
-  it("uses provider defaults and fixed Anthropic windows when capping overrides", () => {
+  it("uses per-model windows and fixed Anthropic contracts", () => {
     expect(
       statusSummaryRuntime.resolveContextTokensForModel({
         cfg: {
           models: {
             providers: {
               ollama: {
-                contextWindow: 32_000,
-                models: [{ id: "qwen3.5:9b" }],
+                models: [{ id: "qwen3.5:9b", contextWindow: 32_000 }],
               },
             },
           },
         } as never,
         provider: "ollama",
         model: "qwen3.5:9b",
-        contextTokensOverride: 100_000,
       }),
     ).toBe(32_000);
 
@@ -163,10 +135,8 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
             },
           },
         } as never,
-        sourceCfg: {},
         provider: "anthropic",
         model: "claude-sonnet-4-6",
-        contextTokensOverride: 1_200_000,
       }),
     ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
@@ -196,7 +166,6 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
           } as never,
           provider: "anthropic",
           model: "claude-sonnet-4-6",
-          contextTokensOverride: 1_200_000,
         }),
       ).toBe(expected);
     },

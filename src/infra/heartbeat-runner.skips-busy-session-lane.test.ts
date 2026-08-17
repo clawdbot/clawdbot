@@ -9,7 +9,6 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedRunTesting,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
-import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { recordReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
@@ -17,7 +16,6 @@ import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-ru
 import type { OpenClawConfig } from "../config/config.js";
 import { markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import type { CommandLaneSnapshot } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
@@ -111,17 +109,6 @@ function runHeartbeat(
       ...deps,
     } as HeartbeatDeps,
   });
-}
-
-function createBusyLaneSnapshot(lane: string): CommandLaneSnapshot {
-  return {
-    lane,
-    activeCount: 1,
-    queuedCount: 0,
-    maxConcurrent: 1,
-    draining: false,
-    generation: 0,
-  };
 }
 
 describe("heartbeat runner skips when target session lane is busy", () => {
@@ -304,11 +291,10 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
-  it("does not return lanes-busy for global subagent-lane work alone", async () => {
+  it("does not skip for global subagent-lane work alone", async () => {
     // The global Subagent lane has no agent identity in its name — a stalled
     // subagent on any one agent must not silently disable every other
-    // agent's heartbeat. Per-agent attribution comes from the session-keyed
-    // lane variants exercised below.
+    // agent's heartbeat.
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig(storePath);
       cfg.agents!.defaults!.heartbeat = { every: "30m", target: "last" };
@@ -320,50 +306,6 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         {},
         {
           getQueueSize: vi.fn((lane?: string) => (lane === CommandLane.Subagent ? 1 : 0)),
-          getCommandLaneSnapshots: vi.fn(() => []),
-        },
-      );
-
-      expect(result.status).not.toBe("skipped");
-    });
-  });
-
-  it("runs despite work in this agent's nested session lane", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.agents!.defaults!.heartbeat = { every: "30m", target: "last" };
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      const nestedSessionLane = resolveNestedAgentLaneForSession("agent:main:telegram:123");
-
-      const result = await runHeartbeat(
-        cfg,
-        replySpy,
-        {},
-        {
-          getCommandLaneSnapshots: vi.fn(() => [createBusyLaneSnapshot(nestedSessionLane)]),
-        },
-      );
-
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("does not return lanes-busy for another agent's session-scoped nested lane", async () => {
-    // Per-agent scoping: a zombie subagent or nested run belonging to a
-    // different agent must not block this agent's heartbeat.
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.agents!.defaults!.heartbeat = { every: "30m", target: "last" };
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      const nestedSessionLane = resolveNestedAgentLaneForSession("agent:other:telegram:123");
-
-      const result = await runHeartbeat(
-        cfg,
-        replySpy,
-        {},
-        {
-          getCommandLaneSnapshots: vi.fn(() => [createBusyLaneSnapshot(nestedSessionLane)]),
         },
       );
 

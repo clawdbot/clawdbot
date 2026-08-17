@@ -35,6 +35,7 @@ export function createHost(overrides?: Partial<MutableHost>): MutableHost {
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [],
     chatToolMessages: [],
+    guardianNotices: [],
     toolStreamSyncTimer: null,
     sessions: {
       state: { modelOverrides },
