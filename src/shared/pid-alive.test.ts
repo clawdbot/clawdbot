@@ -223,10 +223,42 @@ describe("process start times", () => {
     });
   });
 
-  it("returns null on unsupported platforms", () => {
+  it("parses Windows file-lock owner start times as epoch seconds", () => {
+    const execSpy = vi
+      .spyOn(childProcess, "execFileSync")
+      .mockReturnValue("2026-08-17T07:00:00.0000000Z\n");
+
+    return withMockedPlatform("win32", async () => {
+      expect(getFileLockProcessStartTime(42)).toBe(Date.UTC(2026, 7, 17, 7, 0, 0) / 1000);
+      expect(execSpy).toHaveBeenCalledWith(
+        "powershell",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          '(Get-Process -Id 42).StartTime.ToUniversalTime().ToString("o")',
+        ],
+        expect.objectContaining({
+          encoding: "utf8",
+          timeout: 3000,
+        }),
+      );
+    });
+  });
+
+  it("fails conservatively when the Windows file-lock start-time probe fails", () => {
+    vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
+      throw new Error("powershell spawn failed");
+    });
+
+    return withMockedPlatform("win32", async () => {
+      expect(getFileLockProcessStartTime(42)).toBeNull();
+    });
+  });
+
+  it("keeps the Linux procfs start-time helper Linux-only on win32", () => {
     return withMockedPlatform("win32", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
-      expect(getFileLockProcessStartTime(process.pid)).toBeNull();
     });
   });
 

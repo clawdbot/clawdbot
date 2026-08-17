@@ -3,6 +3,7 @@ import childProcess from "node:child_process";
 import fsSync from "node:fs";
 
 const DARWIN_PS_TIMEOUT_MS = 1000;
+const WINDOWS_PS_TIMEOUT_MS = 3000;
 
 function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
@@ -78,6 +79,36 @@ function getDarwinProcessStartTime(pid: number): number | null {
   }
 }
 
+function getWindowsProcessStartTime(pid: number): number | null {
+  try {
+    const startedAt = childProcess
+      .execFileSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString("o")`,
+        ],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: WINDOWS_PS_TIMEOUT_MS,
+        },
+      )
+      .trim();
+    if (!startedAt) {
+      return null;
+    }
+    // PowerShell's "o" round-trip format is a culture-invariant ISO 8601 UTC
+    // timestamp, so parsing stays independent of the host locale and timezone.
+    const startedAtMs = Date.parse(startedAt);
+    return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Read the Linux procfs start identity used by Linux-owned runtime state. */
 export function getProcessStartTime(pid: number): number | null {
   if (!isValidPid(pid)) {
@@ -109,5 +140,11 @@ export function getFileLockProcessStartTime(pid: number): number | null {
   if (!isValidPid(pid)) {
     return null;
   }
-  return process.platform === "darwin" ? getDarwinProcessStartTime(pid) : getProcessStartTime(pid);
+  if (process.platform === "darwin") {
+    return getDarwinProcessStartTime(pid);
+  }
+  if (process.platform === "win32") {
+    return getWindowsProcessStartTime(pid);
+  }
+  return getProcessStartTime(pid);
 }
