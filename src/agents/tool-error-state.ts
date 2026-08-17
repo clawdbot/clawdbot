@@ -1,10 +1,10 @@
 import type { ToolErrorSummary, ToolRecoverySummary } from "./tool-error-summary.js";
 import { isSameToolMutationAction } from "./tool-mutation.js";
 
-type ToolSuccessState =
-  | { kind: "clear" }
-  | { kind: "recovered"; lastToolRecovery: ToolRecoverySummary }
-  | { kind: "unresolved"; lastToolError: ToolErrorSummary };
+type ToolSuccessState = {
+  lastToolError?: ToolErrorSummary;
+  lastToolRecovery?: ToolRecoverySummary;
+};
 
 type ToolErrorState = {
   recordFailure: (failure: ToolErrorSummary) => ToolErrorSummary;
@@ -45,21 +45,20 @@ export function createToolErrorState(): ToolErrorState {
     recordSuccess(success) {
       if (unresolvedMutations.length === 0) {
         nonMutatingFailure = undefined;
-        return lastToolRecovery ? { kind: "recovered", lastToolRecovery } : { kind: "clear" };
+        return lastToolRecovery ? { lastToolRecovery } : {};
       }
       const unresolvedCount = unresolvedMutations.length;
       unresolvedMutations = unresolvedMutations.filter(
         (entry) => !isSameToolMutationAction(entry, success),
       );
-      const unresolved = current();
-      if (unresolved) {
-        return { kind: "unresolved", lastToolError: unresolved };
-      }
       if (unresolvedMutations.length < unresolvedCount) {
         lastToolRecovery = { toolName: success.toolName };
-        return { kind: "recovered", lastToolRecovery };
       }
-      return { kind: "clear" };
+      const lastToolError = current();
+      return {
+        ...(lastToolError ? { lastToolError } : {}),
+        ...(lastToolRecovery ? { lastToolRecovery } : {}),
+      };
     },
   };
 }

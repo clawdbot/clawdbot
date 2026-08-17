@@ -36,6 +36,7 @@ describe("tool terminal outcome observer", () => {
       error: "A failed",
       actionFingerprint: expect.stringContaining("to=channel:a"),
     });
+    expect(afterB.lastToolRecovery).toEqual({ toolName: "message" });
     expect(
       observe({ toolName: "heartbeat_respond", arguments: {}, outcome: "success" }).lastToolError,
     ).toMatchObject({ error: "A failed" });

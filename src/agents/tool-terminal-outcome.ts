@@ -88,9 +88,8 @@ export function createToolTerminalObserver(
           ...success,
           ...(fileTarget ? { fileTarget } : {}),
         });
-        lastToolError = successState.kind === "unresolved" ? successState.lastToolError : undefined;
-        lastToolRecovery =
-          successState.kind === "recovered" ? successState.lastToolRecovery : undefined;
+        lastToolError = successState.lastToolError;
+        lastToolRecovery = successState.lastToolRecovery;
       }
     }
 

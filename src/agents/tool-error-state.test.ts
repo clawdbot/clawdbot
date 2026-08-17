@@ -26,12 +26,11 @@ describe("unresolved tool mutation errors", () => {
     expect(JSON.stringify(bothFailed)).not.toContain(actionA.error);
 
     const afterBRecovers = state.recordSuccess(actionB);
-    expect(afterBRecovers).toEqual({
-      kind: "unresolved",
+    expect(afterBRecovers).toMatchObject({
       lastToolError: actionA,
+      lastToolRecovery: { toolName: "message" },
     });
     expect(state.recordSuccess(actionA)).toEqual({
-      kind: "recovered",
       lastToolRecovery: { toolName: "message" },
     });
   });
@@ -70,8 +69,8 @@ describe("unresolved tool mutation errors", () => {
 
     expect(latest.error).toBe("A failed again");
     expect(state.recordSuccess(actionA)).toMatchObject({
-      kind: "unresolved",
       lastToolError: { error: "B failed" },
+      lastToolRecovery: { toolName: "message" },
     });
   });
 });
